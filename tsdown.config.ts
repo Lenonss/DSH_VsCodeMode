@@ -14,8 +14,13 @@ import type { UserConfig } from 'tsdown'
  * (module CSS virtualization, same pattern as the family preset).
  */
 
-/** Package id stamped into the __ModuleLoader__ handoff and style tags. */
-const ID = 'dsh-vscode-mode'
+/** Package id stamped into the __ModuleLoader__ handoff and style tags.
+ * MUST equal the loader-entry name in the profile (cordis.patch.yml insert
+ * `name:`), otherwise the web shell reports:
+ *   loaded without registering "<entry name>" via __ModuleLoader__.load
+ * (install name @dsh-external/dsh-edit-review — keep in sync with package.json
+ *  deps alias + profiles/web/cordis.patch.yml). */
+const ID = '@dsh-external/dsh-edit-review'
 
 /** Browser platform modules resolved from the loader module table. */
 const CLIENT_EXTERNALS = [

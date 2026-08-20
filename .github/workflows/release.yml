@@ -42,11 +42,15 @@ jobs:
           files: '*.tgz'
           generate_release_notes: true
 
-      # 仅当仓库配置了 NPM_TOKEN 时发布到 npm（否则跳过，GitHub Release 通道不受影响）
+      # 仅当仓库配置了 NPM_TOKEN 时发布到 npm（env 传入、脚本内判断；
+      # GitHub Actions 的 secrets 上下文不允许出现在 if 条件，解析即失败）
       - name: Publish to npm
-        if: ${{ secrets.NPM_TOKEN != '' }}
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
+          if [ -z "${NPM_TOKEN}" ]; then
+            echo "NPM_TOKEN secret not configured — skipping npm publish (GitHub Release still attached)."
+            exit 0
+          fi
           npm config set //registry.npmjs.org/:_authToken="${NPM_TOKEN}"
           npm publish
