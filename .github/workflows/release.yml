@@ -1,0 +1,52 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.3.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install deps
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Test
+        run: pnpm test
+
+      - name: Build (host + client)
+        run: pnpm build
+
+      - name: Pack tgz
+        run: npm pack
+
+      - name: GitHub Release (attach tgz)
+        uses: softprops/action-gh-release@v2
+        with:
+          files: '*.tgz'
+          generate_release_notes: true
+
+      # 仅当仓库配置了 NPM_TOKEN 时发布到 npm（否则跳过，GitHub Release 通道不受影响）
+      - name: Publish to npm
+        if: ${{ secrets.NPM_TOKEN != '' }}
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          npm config set //registry.npmjs.org/:_authToken="${NPM_TOKEN}"
+          npm publish

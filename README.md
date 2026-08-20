@@ -1,90 +1,95 @@
-# @dsh-external/dsh-edit-review
+# dsh-vscode-mode
 
-仿 VSCode 的 **Agent 文件编辑器 + 差异审查**插件：
+> 原 `@dsh-external/dsh-edit-review`（编辑差异审查）重构而来——DSH 上的**类 VSCode 编码体验**。
 
-- **中央「文件编辑」页签**（`conversation.view`，会话中间顶部，VSCode 式）：点击后中间区域变成
-  VSCode 风格编辑区——**顶部只有文件页签 + 搜索框**（页签带脏点/关闭/「+」输入路径打开任意工作区文件，
-  localStorage v2 记忆；`Ctrl+P` 快速打开搜索框）。编辑器本体 = **Monaco Editor**（语法高亮/行号/minimap/
-  `Ctrl+F` 查找/`Ctrl+G` 跳行/`Ctrl+S` 保存/700ms 防抖自动保存），底部状态栏（路径/语言/Ln,Col/保存状态）。
-- **差异 UI 收敛为圆角悬浮框**（交修要求）：
-  - **DiffBox**：每个已打开且有差异的文件**底部**挂一个圆角矩形悬浮框——per-file hunk 列表
-    （L 范围 + `-n/+n` + 采纳/不采纳 + 点击跳转）+ 全部采纳/全部不采纳 + 回滚 + 可选「◈ 对比」
-    （Monaco DiffEditor 全文件对比，`edrv.original` 重建"修改前"内容）+ 「其他差异文件」小节
-    （点击手动打开并跳到差异）。
-  - **DiffLauncher**：全局差异总览（所有待处理差异文件，点击打开并跳转）+ 归档浏览/批次回滚，
-    圆角下拉，由状态栏「⚠ 差异 N 文件」chip 或 header 角标触发。
-  - **仅在当前工作区存在差异时显示**：header 差异角标（`conversation.session.header.utilities`，id
-    `edrv-diff-badge`）与状态栏差异 chip 都以 `edrv.list` 非空为前提，全部处理完后自动隐藏；无差异时
-    编辑器是纯净的文件编辑器（只留页签+搜索框）。
-  - **不再自动打开全部差异文件**：差异文件仅在用户手动操作（搜索框、DiffBox「其他差异文件」、
-    Launcher、header 角标）时作为页签打开并定位；`edrv:refresh` 从不自动补页签。
+仿 VSCode 的 **Agent 文件编辑器 + 差异审查** DSH 插件：
 
-## 源码结构 / 构建（本机无 DSH checkout）
+- **中央「文件编辑」页签**（`conversation.view`，VSCode 式）：文件页签（脏点/关闭/「+」打开）+ `Ctrl+P`
+  快速打开（QuickOpen）+ **Monaco Editor**（语法高亮/行号/minimap/`Ctrl+F`/`Ctrl+G`/`Ctrl+S`/700ms 防抖自动保存）+
+  状态栏（路径/语言/Ln,Col/保存状态）。
+- **差异审查**：Host 捕获 agent 的 `edit`/`write`（`tools/result`），客户端以**圆角悬浮框**（DiffBox）
+  逐文件列出差异（采纳 Keep / 不采纳 Undo / 跳转 / 回滚 / 归档对比），header 差异角标 + 状态栏 chip
+  （DiffLauncher 全局总览 + 归档/批次回滚）。状态持久化到工作区旁车（`.dsh-edit-review.json`，重启不丢）。
+- **Monaco 离线分发**：`assets/vendor/monaco` AMD 构建随包发布，经 `/edrv/vendor/*` 前缀路由提供，全离线可用。
 
-```
-src/index.ts         Host 半（ESM 命名导出 name/inject/apply）
-src/client/index.ts  Client 半（TS 源）
-lib/index.js         Host 产物（tsc 编译）
-lib/client.js        Client 产物（tsdown 打包）
-assets/vendor/monaco Monaco Editor AMD 构建（随包分发，离线可用，/edrv/vendor/* 提供）
-```
-
-本机桌面版无 DSH 源码 checkout，构建走两条本地命令：
+## 安装（官方 `dsh plugin` 方式，三选一）
 
 ```bash
-# Host：tsc（typescript + @types/node 装在 .tmp-build/，typeRoots 指向它）
-node .tmp-build/node_modules/typescript/lib/tsc.js -p tsconfig.json --typeRoots ".../.tmp-build/node_modules/@types"
+# ① Git 安装（clone + prepare 构建；推荐打固定 tag）
+dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.1.0
 
-# Client：tsdown（D:\temp\edrv-build 内的 tsdown 运行时）
-node D:\temp\edrv-build\node_modules\tsdown\dist\run.mjs
+# ② npm 注册表（发布到 npm 后）
+dsh plugin --profile web add dsh-vscode-mode
+
+# ③ GitHub Release tgz 直装
+dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.1.0/dsh-vscode-mode-0.1.0.tgz
 ```
 
-Client 半保存即生效：`dsh-client-hmr` 轮询 lib/client.js，浏览器自动重载模块（无需刷新页面）。
-**Host 半（src/index.ts → lib/index.js）改动需重启 DSH 应用**（Node ESM 模块缓存）。
+> `dsh plugin ...` 是 pnpm 转发器：git 安装会克隆仓库、执行该包 `prepare` 脚本（tsdown 双面构建）后安装，
+> 再按 `dsh.bundle` 声明自动加入 profile 的 bundles 层。若 pnpm 提示构建脚本需批准，按提示把 key
+> 加到 `~/.dsh/profiles/<profile>/pnpm-workspace.yaml` 的 `allowBuilds` 后重跑。
 
-## 安装 / 更新 / 卸载
+更新：`dsh plugin --profile web update dsh-vscode-mode`；卸载：`dsh plugin --profile web remove dsh-vscode-mode`。
 
-- 安装：`dev_install_package {dir: packages/dsh-edit-review}`（写 profile package.json link 依赖 +
-  `dsh.profile.bundles` 条目 + node_modules junction + loader.create 热装配；重启后由 bundles 自动装配）
-- 更新代码后：同步 src/lib → `dev_reload_package {packageName: "dsh-edit-review"}`（热重载）
-- 卸载：`dev_uninject_plugin {match: "dsh-edit-review"}`
+## 开发构建（自足，无需 DSH 源码 checkout）
+
+```bash
+pnpm install          # 安装 devDeps（typescript/tsdown/@types/node/@types/react/react/vitest）
+pnpm build            # tsdown 双面：lib/index.js（host esm）+ lib/client.js（client cjs）
+pnpm typecheck        # tsc --noEmit
+pnpm test             # vitest 纯函数用例
+npm pack              # 产物 tgz（含 lib/assets/src/cordis.patch.yml）
+```
+
+`scripts/build.sh` 已被 `dev_build_plugin` 等注入工具调用（本地标准构建）。
+`prepare` 脚本 = 构建，git 安装 / npm publish 都会自动执行。
+
+## CI（GitHub Actions）
+
+- `.github/workflows/ci.yml`：push/PR → install → typecheck → test → build → `npm pack` 校验 + 上传 tgz。
+- `.github/workflows/release.yml`：打 `v*` tag → 同上构建 → GitHub Release（附 tgz）→
+  **若配置了 `NPM_TOKEN` secret** 则同时 `npm publish`（npm 通道）。
+  未配 NPM_TOKEN 时仅 GitHub Release 通道，不影响安装。
+
+## 源码结构
+
+```
+src/
+├── index.ts            Host 入口：name/inject/apply（薄装配）
+├── shared/             ★ 双面契约（禁 node/react）：types.ts（记录/归档/摘要）+ rpc.ts（11 个方法类型化）
+├── model.ts            Host 纯域逻辑（可单测）：normalize/markDecision/resolved/summary/reconstruct/批次/归档
+├── store.ts            Host 存储层：sidecar 读写合并 + 归档持久化 + stale 检测
+├── workspace.ts        Host 工作区文件扫描（TTL 缓存）+ 快速打开搜索
+├── revert.ts           Host 回滚/删除（fs + subprocess，fs.contains 边界校验）
+├── registry.ts         Host 每工作区记录桶注册表
+├── rpc.ts              Host RPC 分发表（类型化 handler 表替代巨型 switch）
+├── routes.ts           Host webServer 路由（/edrv/rpc、/edrv/assets/*、/edrv/vendor/*）
+└── client/
+    ├── index.ts        Client 入口：slot 注册（inject=['slots','timer']）
+    ├── rpc.ts          Client 类型化 fetch 包装 + 诊断日志
+    ├── events.ts       窗口事件助手（edrv:refresh/open-editor/show-launcher）
+    ├── state/          records.ts（摘要/计数/空差异）+ regions.ts（差异区域/行裁剪）纯函数
+    ├── monaco/         loader.ts（AMD 加载/语言映射）+ diffRender.ts（差异自绘渲染器）
+    ├── styles/editor.css  编辑区样式（tsdown CSS-inline 注入）
+    └── ui/             EditorView（编排）/ QuickOpen / DiffBox / DiffBarEmpty / DiffLauncher / DiffBadge
+```
+
+**扩展缝（VSCode 化后续迭代）**：新能力 = `shared/rpc.ts` 加方法 + `src/rpc.ts` 加 handler +
+`client/ui/` 加组件，其余模块零改动；`monaco/*` 是可复用的编辑器服务（资源树/对比/诊断面板共用）。
 
 ## 架构要点
 
-- **捕获**：Host 监听 `tools/result`，对 `edit`/`write` 取 `result.value`（完整 before/after）+
-  `result.meta.diffs`（hunk 级），落记录。
-- **持久化**：工作区旁车 `.dsh-edit-review.json`（version 2，按工作区 cwd 分桶，写前合并，
-  重启/换会话不丢；v1 自动迁移）。决策/`superseded`（手动编辑覆盖）均持久化。
-- **RPC**：静态包无 `harness.handle`，Host 注册 webServer 精确路由 `/edrv/rpc`
-  （方法 `edrv.list/accept/reject/read/original/save/archiveList/archiveRead/rollback/searchFiles`），
-  Client 同源 `fetch('/edrv/rpc')`。
-  `edrv.original` = 重建"本批次修改前"内容（pending 块按新→旧反解，失败回退最早 before），供「◈ 对比」原始侧。
-  `edrv.searchFiles` = 快速打开搜索：工作区文件清单（subprocess 扫描，缓存 TTL 60s，排除
-  node_modules/.git/dist/build/vendor/.tmp/.cache/coverage 等，上限 6000）按 query 包含匹配
-  （basename 命中优先），恒并入活跃差异路径（差异文件保证可搜到），上限 50 条。
-- **Monaco 分发**：`assets/vendor/monaco/vs` 为官方 AMD 构建（min 版，nls 仅保留 zh-cn），
-  Host 注册前缀路由 `/edrv/vendor/*`（路径穿越防护 + 按扩展名 MIME）。Client 动态注入 loader.js →
-  `require.config({paths:{vs:'/edrv/vendor/monaco/vs'}})` → `require(['vs/editor/editor.main'])`，
-  全离线可用（worker 经同一路由加载）。
-- **图标**：header 差异角标经 `/edrv/assets/compare-idle.png`、`/edrv/assets/compare-select.png` 提供
-  （`no-cache`）。默认读插件包内 `assets/`；需要自定义换图时，profile 的 `cordis.patch.yml` 覆盖
-  `config.imageDir`。
-- **回滚**：edit 单 hunk 用 `callHunk`（old/new 精确串）经 fs.editText 反替换；write/整调用用
-  `before` 整文件恢复；新建文件拒绝 = subprocess 删除（路径先经 fs.contains 校验工作区边界）。
-- **Client 挂点**：
-  - `conversation.view`（id `edrv-editor`，order 5，label「文件编辑」）——**中央编辑区页签**：仅激活视图
-    挂载；顶部=文件页签+搜索框，差异 UI=文件底部圆角悬浮框（DiffBox）+ 全局差异下拉（DiffLauncher）。
-  - `conversation.session.header.utilities`（id `edrv-diff-badge`，差异角标，仅工作区有差异时显示，
-    点击打开编辑区并拉起 DiffLauncher）。
-  - 已移除：`conversation.chat.turnTail`（回合内联审查条）与 `details`（右侧整文件差异列）——差异 UI
-    统一收敛到编辑区圆角悬浮框（官方内建 details 列回归）。
-- **事件**：`edrv:refresh`（差异状态变化，触发角标/DiffBox 重拉）、`edrv:open-editor`（带 path 直达打开
-  页签）、`edrv:show-launcher`（打开 DiffLauncher）。编辑区与角标各自 5s 轮询 `edrv.list`（卸载即清）。
-- **批次 / 融合 / 归档**：每个文件有批次号（batch），每次新 edit/write 该文件 batch 递增到最新；
-  文件被再次修改时（batch 递增），早于最新批次的未归档差异一律"融合"归档（内容已含其效果 / 已被新修改取代），
-  审查只关注最新批次。每条差异在操作完成（采纳/拒绝/被覆盖）后**立即单条归档**到工作区旁车
-  `.dsh-edit-review-archive.json`（按 path+batch 合并批次，含每 hunk 决策与 before）。
-  「归档」页（DiffLauncher 内 tab）按批次浏览（RPC `edrv.archiveList` / `edrv.archiveRead`）。
-- **内置回滚**：DiffBox「⟲ 回滚」把当前文件恢复到修改前状态（活跃差异归档）；DiffLauncher「归档」页
-  每条目「回滚」把文件恢复到此批次之前；回滚本身也写入归档（reason=已回滚）。
-  ⚠️ 批次/归档/回滚逻辑与 RPC 依赖 host 重启生效（Node ESM 模块缓存，进程内无法热换主机模块）。
+- **捕获**：Host 监听 `tools/result`，对 `edit`/`write` 取 `result.value` + `result.meta.diffs` 落记录。
+- **持久化**：工作区旁车 `.dsh-edit-review.json`（version 2，按 cwd 分桶，写前合并，v1 自动迁移）；
+  归档 `.dsh-edit-review-archive.json`（按 path+batch 合并批次，含每 hunk 决策与 before）。
+- **RPC**：静态包经 webServer 精确路由 `/edrv/rpc`，Client 同源 fetch；载荷形状由 `shared/rpc` 类型化。
+- **批次/融合/归档**：每次新 edit/write 递增文件 batch，早于最新批次的未归档差异自动"融合"归档；
+  每条差异处理完成（采纳/拒绝/被覆盖）立即单条归档；DiffLauncher「归档」页按批次浏览 + 回滚。
+- **Client 挂点**：`conversation.view`（id `edrv-editor`）+ `conversation.session.header.utilities`
+  （id `edrv-diff-badge`）。内部路由/slot/事件/CSS 前缀沿用 `edrv-*`（防回归），包身份为 `dsh-vscode-mode`。
+- **⚠️ Host 改动需重启 DSH 应用**（Node ESM 模块缓存）；Client 经 `dsh-client-hmr` 热重载。
+
+## 开发 / 卸载（超级模组注入器，开发期可选）
+
+- 热装配：`dev_install_package {dir: packages/dsh-edit-review}`；更新：`dev_reload_package {packageName: "dsh-vscode-mode"}`
+- 卸载：`dev_uninject_plugin {match: "dsh-vscode-mode"}`（生产环境用 `dsh plugin remove`）

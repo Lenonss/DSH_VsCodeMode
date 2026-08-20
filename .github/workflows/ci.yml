@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.3.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install deps
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Test
+        run: pnpm test
+
+      - name: Build (host + client)
+        run: pnpm build
+
+      - name: Pack tgz (verify package assembles)
+        run: npm pack
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dsh-vscode-mode-tgz
+          path: '*.tgz'
+          if-no-files-found: error
