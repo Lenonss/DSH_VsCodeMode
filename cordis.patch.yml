@@ -1,0 +1,5 @@
+# dsh-edit-review bundle 层 overlay：空列表，不插入任何插件行。
+# 插件装配由 profile 用户层 cordis.patch.yml 的 insert 完成（可带自定义 config，
+# 如 imageDir），此处仅满足 dsh.bundle.patch 声明校验；
+# 若 bundle 层与用户层同时 insert 同一 id，会触发 duplicate loader entry id。
+[]

@@ -1,0 +1,15 @@
+# 依赖与构建产物
+node_modules/
+lib/
+*.tsbuildinfo
+*.tgz
+.tmp-build/
+
+# 运行时 sidecar / 调试日志（审查插件写在工作区的旁车，不入库）
+.dsh-edit-review.json
+.dsh-edit-review-archive.json
+.dsh-edit-review-debug.log
+
+# 本地环境
+.DS_Store
+Thumbs.db

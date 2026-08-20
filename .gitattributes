@@ -1,0 +1,13 @@
+# 统一换行符：文本一律 LF（GitHub 上 monaco vendor 资源保持稳定）
+* text=auto eol=lf
+
+# 二进制资源
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.tgz binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.ico binary
