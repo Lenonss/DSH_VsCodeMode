@@ -1,5 +1,21 @@
-# dsh-edit-review bundle 层 overlay：空列表，不插入任何插件行。
-# 插件装配由 profile 用户层 cordis.patch.yml 的 insert 完成（可带自定义 config，
-# 如 imageDir），此处仅满足 dsh.bundle.patch 声明校验；
-# 若 bundle 层与用户层同时 insert 同一 id，会触发 duplicate loader entry id。
-[]
+# dsh bundle patch：标准 bundle 自挂载。
+#
+# 只要任意 DSH profile 把本包加进 dsh.profile.bundles（`dsh plugin add` 即自动完成），
+# 重启后这里就把插件行插入 loader 树 —— 不再依赖用户往 profile 用户层
+# cordis.patch.yml 手写 insert（旧的非标准设计，已废弃）。
+#
+# 行的 `name` 必须是包名原样：它既是 Host 半的 Node 导入说明符（经 package main
+# 解析到 lib/index.js），也是 dsh-client-modules 扫描"浏览器半"的键（经
+# exports["./client"] 解析到 lib/client.js，见本包 dsh.client 声明）——所以
+# Host/Client 两个半共享这一行即可，无需第二个 loader 行。
+#
+# `id` 是稳定身份：profile 用户层（或任何更晚的补丁层）用该 id 做"id 定向覆盖"
+# 即可合并自定义 config（例如自定义图标目录）：
+#   - id: dsh-vscode-mode
+#     config:
+#       imageDir: /path/to/icons
+# 注意：是覆盖（override），不是再 insert 一次同 id 的行，否则触发
+# duplicate loader entry id 启动失败。
+- insert:
+    - id: dsh-vscode-mode
+      name: 'dsh-vscode-mode'

@@ -29,6 +29,23 @@ dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/
 > 再按 `dsh.bundle` 声明自动加入 profile 的 bundles 层。若 pnpm 提示构建脚本需批准，按提示把 key
 > 加到 `~/.dsh/profiles/<profile>/pnpm-workspace.yaml` 的 `allowBuilds` 后重跑。
 
+**安装即生效，无需任何手动配置**：本包自带的 `cordis.patch.yml` 是标准 bundle 自挂载补丁
+（`- insert: { id: dsh-vscode-mode, name: dsh-vscode-mode }`），加入 bundles 层后重启
+DSH 即自动把插件行挂进 loader 树，**不要**再往 profile 用户层 `cordis.patch.yml` 手写
+`insert`（旧的非标准做法，会与本 bundle 行撞同一 id，触发 duplicate loader entry id 启动失败）。
+
+自定义配置（如图标目录 `imageDir`）用 **id 定向覆盖**合并到 bundle 行上，而不是再 insert 一次：
+
+```yaml
+# ~/.dsh/profiles/<profile>/cordis.patch.yml（用户层，应用顺序在 bundle 层之后）
+- id: dsh-vscode-mode
+  config:
+    imageDir: C:/Users/me/Pictures   # 可选，默认读插件包内 assets/
+```
+
+> 迁移提示：若你之前按旧版指引在 profile 用户层手写过 `insert`（id 恰为 `dsh-vscode-mode`），
+> 升级后请把那一段 `insert` 改成上面的 id 定向覆盖（或直接删除），避免与本 bundle 行重复装配。
+
 更新：`dsh plugin --profile web update dsh-vscode-mode`；卸载：`dsh plugin --profile web remove dsh-vscode-mode`。
 
 ## 开发构建（自足，无需 DSH 源码 checkout）
