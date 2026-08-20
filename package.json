@@ -1,7 +1,31 @@
 {
   "name": "dsh-vscode-mode",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "DSH 上的类 VSCode 编码体验：Monaco 中央编辑器（文件页签/QuickOpen/状态栏）+ Agent 编辑差异审查（整文件差异/采纳/拒绝/归档/回滚），状态持久化到工作区旁车",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek",
+    "deepseek-harness",
+    "plugin",
+    "vscode",
+    "editor",
+    "monaco",
+    "monaco-editor",
+    "diff",
+    "diff-review",
+    "code-review",
+    "diff-viewer",
+    "files"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Lenonss/DSH_VsCodeMode.git"
+  },
+  "homepage": "https://github.com/Lenonss/DSH_VsCodeMode",
+  "bugs": {
+    "url": "https://github.com/Lenonss/DSH_VsCodeMode/issues"
+  },
   "type": "module",
   "engines": {
     "node": "^22.19.0 || >=24.0.0"
