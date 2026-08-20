@@ -13,7 +13,7 @@ import { cwdOf } from './registry.js'
 import type { Registry } from './registry.js'
 import type { Ctx } from './store.js'
 
-export const name = "@dsh-external/dsh-edit-review"
+export const name = "dsh-vscode-mode"
 export const inject = ['sessions', 'fs', 'webServer']
 
 /**
