@@ -242,7 +242,7 @@ function ensureEdrvStyles() {
   if (edrvStylesDone || typeof document === 'undefined') return
   edrvStylesDone = true
   const tag = document.createElement('style')
-  tag.dataset.plugin = '@dsh-external/dsh-edit-review'
+  tag.dataset.plugin = 'dsh-vscode-mode'
   tag.dataset.pluginCss = 'edrv-editor'
   tag.textContent = [
     /* 浅色主题（对齐参考图：#f8f8f8 近白底 + 薄荷绿药丸 + 青绿文字 + 三文鱼 undo + 浅灰边框）：

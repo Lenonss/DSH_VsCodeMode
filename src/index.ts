@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url'
  *       webServer 声明进 inject：其 init 异步，不声明会在启动竞态下 get 到 undefined 导致路由静默缺失。
  * 作者 ddj 2026-08-18
  */
-export const name = "@dsh-external/dsh-edit-review"
+export const name = "dsh-vscode-mode"
 export const inject = ['sessions', 'fs', 'webServer']
 
 const IMG_ROUTES = [

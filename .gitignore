@@ -4,6 +4,7 @@ lib/
 *.tsbuildinfo
 *.tgz
 .tmp-build/
+.pnpm-store/
 
 # 运行时 sidecar / 调试日志（审查插件写在工作区的旁车，不入库）
 .dsh-edit-review.json
