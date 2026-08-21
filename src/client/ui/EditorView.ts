@@ -35,6 +35,8 @@ export function EditorView(props) {
   const [content, setContent] = React.useState(null)
   const [status, setStatus] = React.useState('')
   const [error, setError] = React.useState(null)
+  const [loadError, setLoadError] = React.useState(null)
+  const [loadStage, setLoadStage] = React.useState({ progress: 0, message: '准备加载编辑器…' })
   const [openInput, setOpenInput] = React.useState(false)
   const [pathDraft, setPathDraft] = React.useState('')
   const [cursor, setCursor] = React.useState('')
@@ -118,11 +120,27 @@ export function EditorView(props) {
 
   const loadContent = (path, sid) => {
     const seq = ++loadSeqRef.current
+    setLoadError(null)
+    setLoadStage({ progress: monaco ? 72 : 12, message: '读取文件内容…' })
     rpc('edrv.read', { sessionId: sid, path }).then((res) => {
       if (seq !== loadSeqRef.current || path !== active) return
-      if (res && res.ok) { setContent(res.content); setStatus('已加载') }
-      else { setError(res?.error ? String(res.error) : '读取失败'); setStatus('读取失败') }
-    }).catch((e) => { if (seq === loadSeqRef.current) { setError('read异常:' + String(e)); setStatus('读取失败') } })
+      if (res && res.ok) {
+        setContent(res.content)
+        setLoadStage((prev) => ({ progress: Math.max(84, prev.progress), message: '文件已读取，准备创建编辑器…' }))
+        setStatus('已加载')
+      } else {
+        const message = res?.error ? String(res.error) : '读取失败'
+        setLoadError(message)
+        setError(message)
+        setStatus('读取失败')
+      }
+    }).catch((e) => {
+      if (seq !== loadSeqRef.current) return
+      const message = 'read异常:' + String(e)
+      setLoadError(message)
+      setError(message)
+      setStatus('读取失败')
+    })
   }
 
   // 挂载轮询 + 事件订阅
@@ -173,14 +191,27 @@ export function EditorView(props) {
 
   React.useEffect(() => {
     if (!active) return
-    setContent(null); setStatus('加载中…')
+    setContent(null)
+    setLoadError(null)
+    setLoadStage({ progress: 10, message: '准备读取文件…' })
+    setStatus('加载中…')
     loadContent(active, sessionId)
   }, [active, sessionId])
 
   React.useEffect(() => {
     if (monaco || monacoErr) return
     let alive = true
-    loadMonaco().then((m) => { if (alive) setMonaco(m) }).catch((e) => { if (alive) { setMonacoErr(String(e?.message ?? e)); setStatus('Monaco 不可用') } })
+    const onProgress = (stage) => {
+      if (!alive) return
+      const progress = stage.phase === 'ready' ? 70 : Math.round(10 + stage.progress * 0.6)
+      setLoadStage((prev) => ({ progress: Math.max(prev.progress, progress), message: stage.message }))
+    }
+    loadMonaco(onProgress).then((m) => { if (alive) setMonaco(m) }).catch((e) => {
+      if (alive) {
+        setMonacoErr(String(e?.message ?? e))
+        setStatus('Monaco 不可用')
+      }
+    })
     return () => { alive = false }
   }, [monaco, monacoErr])
 
@@ -235,12 +266,14 @@ export function EditorView(props) {
     const ed = editorRef.current
     const model = getModel(active, content)
     if (ed.getModel() !== model) ed.setModel(model)
+    setLoadStage((prev) => ({ progress: Math.max(96, prev.progress), message: '创建编辑器视图…' }))
   }, [monaco, active, content])
 
   // 行内差异自绘（decorations / view zones / minus overlay）→ diffRenderer
   React.useEffect(() => {
     if (!monaco || !editorRef.current || !active || content === null) return
     diffRendererRef.current.render(monaco, editorRef.current, pendingRegions, sessionId)
+    setLoadStage({ progress: 100, message: '编辑器已就绪' })
   }, [monaco, active, content, pendingRegions])
 
   React.useEffect(() => () => {
@@ -525,19 +558,48 @@ export function EditorView(props) {
 
   const otherFiles = sum.pendingFiles.filter((f) => f.path !== active)
 
+  /**
+   * 渲染编辑器/文件加载进度面板。
+   * @author ddj 2026年08月22号
+   * @param message 当前加载阶段
+   * @param progress 阶段进度
+   * @param retry 可选重试回调
+   * @returns 加载面板 React 元素
+   */
+  const loadingBody = (message, progress, retry) => React.createElement('div', { className: 'edrv-empty edrv-loading', 'aria-live': 'polite' },
+    React.createElement('div', { className: 'edrv-loading-title' }, message),
+    React.createElement('div', {
+      className: 'edrv-progress',
+      role: 'progressbar',
+      'aria-label': '编辑器加载进度',
+      'aria-valuemin': 0,
+      'aria-valuemax': 100,
+      'aria-valuenow': progress,
+    }, React.createElement('div', { className: 'edrv-progress-value', style: { width: Math.max(0, Math.min(100, progress)) + '%' } })),
+    React.createElement('div', { className: 'edrv-loading-percent' }, Math.round(progress) + '%'),
+    retry ? React.createElement('button', { className: 'edrv-pill edrv-pill-ghost', onClick: retry }, '重试') : null)
+
   let body
   if (!monaco && !monacoErr) {
-    body = React.createElement('div', { className: 'edrv-empty' }, '正在加载 Monaco 编辑器…')
+    body = loadingBody(loadStage.message, loadStage.progress)
   } else if (monacoErr) {
     body = React.createElement('div', { className: 'edrv-empty' },
       React.createElement('div', null, 'Monaco 编辑器加载失败：' + String(monacoErr)),
-      React.createElement('div', { style: { fontSize: 11 } }, '请确认插件包 assets/vendor/monaco 完整（/edrv/vendor 路由可达）'))
+      React.createElement('div', { style: { fontSize: 11 } }, '请确认插件包 assets/vendor/monaco 完整（/edrv/vendor 路由可达）'),
+      React.createElement('button', { className: 'edrv-pill edrv-pill-ghost', onClick: () => { setMonacoErr(null); setLoadStage({ progress: 0, message: '准备重试 Monaco…' }) } }, '重试'))
   } else if (!active) {
     body = React.createElement('div', { className: 'edrv-empty' },
       React.createElement('div', null, '暂无打开的文件'),
       React.createElement('div', { style: { fontSize: 12 } }, '使用右上搜索框 (Ctrl+P) 打开工作区文件；agent 修改文件后顶部会出现差异角标'))
+  } else if (content === null && loadError) {
+    body = loadingBody('文件加载失败：' + loadError, 0, () => {
+      setLoadError(null)
+      setContent(null)
+      setLoadStage({ progress: 10, message: '重新读取文件…' })
+      loadContent(active, sessionId)
+    })
   } else if (content === null) {
-    body = React.createElement('div', { className: 'edrv-empty' }, '加载中…')
+    body = loadingBody(loadStage.message || '读取文件内容…', loadStage.progress)
   } else {
     body = React.createElement('div', { className: 'edrv-monaco-host' },
       React.createElement('div', { ref: ensureEditor }))

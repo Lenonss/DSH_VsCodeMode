@@ -7,6 +7,46 @@
 
 export const MONACO_BASE = '/edrv/vendor/monaco/vs'
 let monacoPromise = null
+let monacoStage = { phase: 'idle', progress: 0, message: '准备加载 Monaco…' }
+const stageListeners = new Set()
+
+/**
+ * Monaco 加载阶段：这是阶段进度而非网络字节进度，避免误导用户。
+ * @author ddj 2026年08月22号
+ */
+export const MONACO_STAGES = {
+  loader: { progress: 18, message: '加载 Monaco 引导模块…' },
+  core: { progress: 72, message: '加载编辑器核心模块…' },
+  ready: { progress: 100, message: 'Monaco 编辑器已就绪' },
+  error: { progress: 0, message: 'Monaco 编辑器加载失败' },
+}
+
+/**
+ * 发布 Monaco 加载阶段，监听器异常不得影响编辑器加载。
+ * @author ddj 2026年08月22号
+ * @param phase 阶段名
+ * @param progress 阶段百分比
+ * @param message 用户可读状态
+ */
+function publishStage(phase, progress, message) {
+  monacoStage = { phase, progress, message }
+  for (const listener of stageListeners) {
+    try { listener(monacoStage) } catch (error) { /* UI 回调异常忽略 */ }
+  }
+}
+
+/**
+ * 订阅 Monaco 加载阶段。
+ * @author ddj 2026年08月22号
+ * @param listener 阶段回调
+ * @returns 取消订阅函数
+ */
+function subscribeStage(listener) {
+  if (typeof listener !== 'function') return () => {}
+  stageListeners.add(listener)
+  listener(monacoStage)
+  return () => stageListeners.delete(listener)
+}
 
 /** 扩展名 → Monaco language id（常见语言；未知回退 plaintext）。 */
 export const LANG_BY_EXT = {
@@ -40,19 +80,26 @@ export function langOf(path) {
  * @author ddj 2026年08月20号
  * @returns Promise<object> window.monaco
  */
-export function loadMonaco() {
+export function loadMonaco(onProgress) {
+  const unsubscribe = subscribeStage(onProgress)
   if (!monacoPromise) {
+    publishStage('loader', MONACO_STAGES.loader.progress, MONACO_STAGES.loader.message)
     monacoPromise = new Promise((resolve, reject) => {
+      const fail = (error) => {
+        monacoPromise = null
+        publishStage('error', MONACO_STAGES.error.progress, MONACO_STAGES.error.message)
+        reject(error)
+      }
       const boot = () => {
         try {
           window.require.config({ paths: { vs: MONACO_BASE } })
-          window.require(['vs/editor/editor.main'], () => resolve(window.monaco), (err) => {
-            monacoPromise = null
-            reject(new Error('Monaco 模块加载失败：' + String(err)))
-          })
+          publishStage('core', MONACO_STAGES.core.progress, MONACO_STAGES.core.message)
+          window.require(['vs/editor/editor.main'], () => {
+            publishStage('ready', MONACO_STAGES.ready.progress, MONACO_STAGES.ready.message)
+            resolve(window.monaco)
+          }, (err) => fail(new Error('Monaco 模块加载失败：' + String(err))))
         } catch (error) {
-          monacoPromise = null
-          reject(error)
+          fail(error)
         }
       }
       const existing = document.querySelector('script[data-edrv-monaco-loader]')
@@ -62,10 +109,10 @@ export function loadMonaco() {
         s.src = MONACO_BASE + '/loader.js'
         s.dataset.edrvMonacoLoader = '1'
         s.onload = boot
-        s.onerror = () => { monacoPromise = null; reject(new Error('Monaco loader 加载失败')) }
+        s.onerror = () => fail(new Error('Monaco loader 加载失败'))
         document.head.appendChild(s)
       }
     })
   }
-  return monacoPromise
+  return monacoPromise.finally(unsubscribe)
 }

@@ -86,8 +86,15 @@ export function createDiffRenderer(log) {
         const lineH = editor.getOption(monaco.editor.EditorOption.lineHeight) || 20
         let li = null
         try { li = editor.getLayoutInfo() } catch (e) { /* ignore */ }
-        const left = li ? li.decorationsLeft : 0
+        const rawLeft = li ? li.decorationsLeft : 0
         const width = li && li.decorationsWidth > 0 ? li.decorationsWidth : 16
+        // decorationsLeft 是 Monaco 内部坐标，需限制在宿主根节点内，避免窄窗口/边框
+        // 或布局尚未完成时把减号绘制到编辑器左、右边界之外。
+        const maxLeft = Math.max(0, root.clientWidth - width)
+        // 字符本身有少量字体侧向留白；给标记列留出 4px 内缩，避免减号半个
+        // 字符落到 Monaco 根节点左边框外，同时仍限制右侧不越界。
+        const markerInset = 12
+        const left = Math.max(0, Math.min(maxLeft, rawLeft + markerInset))
         const lineCount = editor.getModel().getLineCount()
         let itemIdx = 0
         let zi = 0
@@ -100,7 +107,8 @@ export function createDiffRenderer(log) {
           for (let i = 0; i < z.n; i++) {
             const item = document.createElement('div')
             item.className = 'edrv-minus-item'
-            item.textContent = '-'
+            // 使用 CSS 线段代替文本字符，避免不同字体的侧向留白把 “-” 绘制到边界外。
+            item.textContent = ''
             item.style.width = width + 'px'
             item.style.height = lineH + 'px'
             item.dataset.zone = String(zi)
@@ -130,7 +138,14 @@ export function createDiffRenderer(log) {
             const edRect = root.getBoundingClientRect()
             const st = editor.getScrollTop() || 0
             const items = overlay.querySelectorAll('.edrv-minus-item')
+            let correctedLeft = left
+            try {
+              const layout = editor.getLayoutInfo()
+              const markerWidth = layout.decorationsWidth > 0 ? layout.decorationsWidth : width
+              correctedLeft = Math.max(0, Math.min(Math.max(0, root.clientWidth - markerWidth), (layout.decorationsLeft || 0) + 12))
+            } catch (e) { /* 保留首次布局计算结果 */ }
             for (const item of items) {
+              item.style.left = correctedLeft + 'px'
               const zIndex = Number(item.dataset.zone)
               const rIndex = Number(item.dataset.row)
               const z = createdZones[zIndex]
