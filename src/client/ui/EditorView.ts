@@ -55,7 +55,10 @@ export function EditorView(props) {
   const lineRegionMapRef = React.useRef(new Map()) // 行 → 区域 映射（hover 命中）
   const hoverKeyRef = React.useRef(null) // 当前 hover 区域 key（区域不变不重渲染）
   const hoverTopRef = React.useRef(null) // 当前 hover 浮窗 top（滚动后位置变化才重定位）
+  const hoverRightRef = React.useRef(null) // 浮窗右侧避让 Monaco 缩略栏
   const hideTimerRef = React.useRef(null) // 延迟隐藏计时器（防闪烁）
+  const hoverEditorRef = React.useRef(false) // 鼠标是否仍在编辑器命中区
+  const hoverPanelRef = React.useRef(false) // 鼠标是否已进入 Keep/Undo 浮层
   const batchBusyRef = React.useRef(false) // 批量 Keep All/Undo All 防重入
   const diffRendererRef = React.useRef(null)
   if (!diffRendererRef.current) diffRendererRef.current = createDiffRenderer((sid, t) => dbg(sid, t))
@@ -292,29 +295,34 @@ export function EditorView(props) {
     // 防闪烁：① 区域不变不 setState（浮窗锚定差异块起始行，不跟随鼠标）；② 延迟隐藏；
     // ③ 浮窗自身 onMouseEnter 取消隐藏计时（鼠标在浮窗与编辑器间移动不闪）。
     const hideSoon = () => {
-      if (hideTimerRef.current) return
+      if (hoverEditorRef.current || hoverPanelRef.current || hideTimerRef.current) return
       hideTimerRef.current = setTimeout(() => {
         hideTimerRef.current = null
+        if (hoverEditorRef.current || hoverPanelRef.current) return
         hoverKeyRef.current = null
         hoverTopRef.current = null
         setHoverAct(null)
       }, 180)
     }
     ed.onMouseMove((e) => {
+      hoverEditorRef.current = true
       const line = e?.target?.position?.lineNumber
       const map = lineRegionMapRef.current
-      if (!line || !map.size) { hideSoon(); return }
+      if (!line || !map.size) { hoverEditorRef.current = false; hideSoon(); return }
       const hit = map.get(line)
-      if (!hit) { hideSoon(); return }
+      if (!hit) { hoverEditorRef.current = false; hideSoon(); return }
       const key = callIdAttr(hit.callId, hit.idx)
       const top = Math.max(0, ed.getTopForLineNumber(Math.max(1, hit.start)) - ed.getScrollTop())
-      if (hoverKeyRef.current === key && hoverTopRef.current === top) return // 同区域同位置不重复更新
+      const layout = ed.getLayoutInfo()
+      const minimapLeft = layout.minimap?.minimapLeft || 0
+      const right = minimapLeft > 0 ? Math.max(12, layout.width - minimapLeft + 8) : Math.max(12, layout.verticalScrollbarWidth + 8)
+      if (hoverKeyRef.current === key && hoverTopRef.current === top && hoverRightRef.current === right) return // 同区域同位置不重复更新
       hoverKeyRef.current = key
       hoverTopRef.current = top
+      hoverRightRef.current = right
       if (hideTimerRef.current) { clearTimeout(hideTimerRef.current); hideTimerRef.current = null }
-      setHoverAct({ region: hit, top })
+      setHoverAct({ region: hit, top, right })
     })
-    ed.onMouseLeave(hideSoon)
     editorRef.current = ed
   }, [])
 
@@ -370,6 +378,20 @@ export function EditorView(props) {
     if (!active) return
     loadContent(active, sessionId)
     refreshRecords()
+  }
+
+  /**
+   * 关闭当前差异浮窗并清理 hover 锚点。
+   * @author ddj 2026年08月21号
+   */
+  const dismissHover = () => {
+    hoverKeyRef.current = null
+    hoverTopRef.current = null
+    hoverRightRef.current = null
+    hoverEditorRef.current = false
+    hoverPanelRef.current = false
+    if (hideTimerRef.current) { clearTimeout(hideTimerRef.current); hideTimerRef.current = null }
+    setHoverAct(null)
   }
 
   /**
@@ -524,12 +546,23 @@ export function EditorView(props) {
   const hoverEl = (hoverAct && !launcherOpen)
     ? React.createElement('div', {
         className: 'edrv-hoveract',
-        style: { top: hoverAct.top, right: 12 },
-        onMouseEnter: () => { if (hideTimerRef.current) { clearTimeout(hideTimerRef.current); hideTimerRef.current = null } },
-        onMouseLeave: () => { const t = setTimeout(() => { hideTimerRef.current = null; hoverKeyRef.current = null; hoverTopRef.current = null; setHoverAct(null) }, 180); hideTimerRef.current = t },
+        style: { top: hoverAct.top, right: hoverAct.right ?? 12 },
+        onMouseEnter: () => { hoverPanelRef.current = true; if (hideTimerRef.current) { clearTimeout(hideTimerRef.current); hideTimerRef.current = null } },
+        onMouseMove: () => { hoverPanelRef.current = true; if (hideTimerRef.current) { clearTimeout(hideTimerRef.current); hideTimerRef.current = null } },
+        onMouseLeave: () => {
+          hoverPanelRef.current = false
+          if (hoverEditorRef.current || hideTimerRef.current) return
+          hideTimerRef.current = setTimeout(() => {
+            hideTimerRef.current = null
+            if (hoverEditorRef.current || hoverPanelRef.current) return
+            hoverKeyRef.current = null
+            hoverTopRef.current = null
+            setHoverAct(null)
+          }, 420)
+        },
       },
-        React.createElement('button', { className: 'edrv-pill edrv-pill-keep', onClick: () => actHunk(hoverAct.region, false) }, '✓ Keep'),
-        React.createElement('button', { className: 'edrv-pill edrv-pill-undo', onClick: () => actHunk(hoverAct.region, true) }, '↩ Undo'))
+        React.createElement('button', { className: 'edrv-pill edrv-pill-keep', onClick: () => { dismissHover(); actHunk(hoverAct.region, false) } }, '✓ Keep'),
+        React.createElement('button', { className: 'edrv-pill edrv-pill-undo', onClick: () => { dismissHover(); actHunk(hoverAct.region, true) } }, '↩ Undo'))
     : null
 
   const overlay = launcherOpen
