@@ -12,6 +12,15 @@
   （DiffLauncher 全局总览 + 归档/批次回滚）。状态持久化到工作区旁车（`.dsh-edit-review.json`，重启不丢）。
 - **Monaco 离线分发**：`assets/vendor/monaco` AMD 构建随包发布，经 `/edrv/vendor/*` 前缀路由提供，全离线可用。
 
+## 界面截图
+
+![dsh-vscode-mode 编辑差异审查界面](docs/screenshots/img1.png)
+
+> dsh-vscode-mode 的**编辑差异审查**界面：`cordis.patch.yml`（CodeGraph 配置）差异对比，
+> 底部 Keep / Undo（保留 / 撤销）按钮控制采纳。
+> Edit-review UI of dsh-vscode-mode: diff view of the `cordis.patch.yml` CodeGraph
+> configuration with Keep / Undo controls.
+
 ## 安装（官方 `dsh plugin` 方式，三选一）
 
 ```bash
