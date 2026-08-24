@@ -28,6 +28,7 @@ import { listMcp, refreshMcp, removeMcp, saveMcp, toggleMcp } from './mcp.js'
 import { listProjects, projectRefresh, projectRemove, projectSave, projectToggle } from './mcpProject.js'
 import { normalizeFileOpenTool, FILE_OPEN_DEFAULT, FILE_OPEN_SETTINGS_NS } from './fileOpenSettings.js'
 import { buildReport } from './compat.js'
+import { readDevForm, setDevForm } from './devForm.js'
 
 /** cwd → Promise 链：串行化 debug 日志追加（fs read+write 非原子，避免并发丢行）。 */
 const debugWriteQueues = new Map<string, Promise<void>>()
@@ -324,6 +325,16 @@ export function buildHandlers(ctx: Ctx, registry: Registry, searcher = newSearch
       }
     },
     'compat': async () => ({ ok: true, report: await buildReport(ctx) }),
+    'vscode.devFormGet': async () => ({ ok: true, devForm: readDevForm() }),
+    'vscode.devFormSet': async (args) => {
+      try {
+        const result = await setDevForm(ctx, args.enabled === true, args.path)
+        if (!result.ok) return { ok: false, error: result.error ?? '切换开发形态失败' }
+        return { ok: true, devForm: readDevForm(), restart: result.restart }
+      } catch (error) {
+        return { ok: false, error: String(error) }
+      }
+    },
   }
 }
 

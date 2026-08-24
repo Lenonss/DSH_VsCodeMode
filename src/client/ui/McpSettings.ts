@@ -119,11 +119,14 @@ function ProjectGroup({ project, busy, onAdd, onRefresh, onToggle, onRemove }) {
   return React.createElement('section', { className: 'vsm-project' }, head, body)
 }
 
-/** 通用设置：选择当前对话文件链接的打开器。 */
+/** 通用设置：选择当前对话文件链接的打开器 + 开发形态开关。 */
 function GeneralSettings({ registry }) {
   const [tool, setTool] = React.useState(AUTO_OPEN_TOOL)
   const [busy, setBusy] = React.useState(false)
   const [error, setError] = React.useState('')
+  const [devForm, setDevForm] = React.useState(null)
+  const [devBusy, setDevBusy] = React.useState(false)
+  const [devMessage, setDevMessage] = React.useState('')
   const settings = React.useContext(SettingsContext)
   const snapshot = settings?.getSnapshot?.()
   const loading = !snapshot || snapshot.status === 'loading'
@@ -137,19 +140,42 @@ function GeneralSettings({ registry }) {
     onChange()
     return settings?.subscribe?.(onChange)
   }, [settings])
+  React.useEffect(() => {
+    rpc('vscode.devFormGet', {}).then((result) => {
+      if (result.ok) setDevForm(result.devForm)
+    }).catch(() => { /* 开发形态查询失败静默 */ })
+  }, [])
   const save = (value) => {
     setTool(value); setBusy(true); setError('')
     if (!settings?.set) { setError('设置服务不可用'); setBusy(false); return }
     settings.set('fileOpenTool', value).catch((e) => setError(String(e))).finally(() => setBusy(false))
   }
+  const closeDevForm = () => {
+    if (!window.confirm('关闭开发形态：插件将切换为正式版安装（版本依赖 + 删除工作区链接），pnpm 装配后需重启 DSH 生效。确认关闭？')) return
+    setDevBusy(true)
+    setDevMessage('')
+    rpc('vscode.devFormSet', { enabled: false }).then((result) => {
+      if (!result.ok) { setDevMessage('关闭失败：' + String(result.error)); return }
+      setDevForm(result.devForm)
+      setDevMessage(result.restart ? '已切换为正式版，重启 DSH 后生效。' : '已关闭开发形态。')
+    }).catch((e) => setDevMessage('关闭失败：' + String(e))).finally(() => setDevBusy(false))
+  }
   const options = [{ id: AUTO_OPEN_TOOL, label: '自动选择', description: '按当前已注册工具自动选择' }, ...availableOpeners(registry).map((item) => ({ id: item.id, label: item.label, description: item.description }))]
   const currentOption = options.some((item) => item.id === tool) ? tool : AUTO_OPEN_TOOL
+  const devFormRow = devForm?.enabled ? React.createElement('div', { className: 'vsm-general-row' },
+    React.createElement('span', null, '开发形态', React.createElement('small', { className: 'vsm-devform-note' }, '工作区链接安装：' + devForm.path)),
+    React.createElement('div', { className: 'vsm-devform-actions' },
+      devMessage && React.createElement('small', { className: 'vsm-devform-msg' }, devMessage),
+      React.createElement('button', { className: 'vsm-devform-close', disabled: devBusy, onClick: closeDevForm }, devBusy ? '切换中…' : '关闭开发形态'),
+    ),
+  ) : null
   return React.createElement('section', { className: 'vsm-general-page' },
     React.createElement('h2', null, '通用'),
     React.createElement('p', null, '配置 DSH 对话中文件链接的打开工具。工具由当前运行时自动扫描。'),
     unavailable && React.createElement('div', { className: 'vsm-mcp-error vsm-mcp-banner' }, '设置服务暂不可用，当前使用自动选择。'),
     error && React.createElement('div', { className: 'vsm-mcp-error vsm-mcp-banner' }, error),
     React.createElement('label', { className: 'vsm-general-row' }, React.createElement('span', null, '文件链接使用工具'), React.createElement('select', { value: currentOption, disabled: loading || unavailable || notReady || busy || snapshot?.writable === false, onChange: (event) => save(event.target.value) }, options.map((item) => React.createElement('option', { key: item.id, value: item.id }, item.label))), loading && React.createElement('small', null, '读取中…')),
+    devFormRow,
   )
 }
 
@@ -171,10 +197,15 @@ function CompatSection({ getSummary }) {
     React.createElement('span', { className: 'vsm-compat-note' }, item.note ?? (item.active ? '正常' : '未生效')),
   ))
   const warnings = report?.warnings ?? []
+  const devForm = report?.devForm
   return React.createElement('section', { className: 'vsm-general-page' },
     React.createElement('h2', null, '兼容性'),
     React.createElement('p', null, '检测与其他插件 / DSH 版本的适配状态与已知问题。' + (report?.pluginVersion ? '（插件版本 ' + report.pluginVersion + '）' : '')),
     error && React.createElement('div', { className: 'vsm-mcp-error vsm-mcp-banner' }, error),
+    devForm?.enabled && React.createElement(React.Fragment, null,
+      React.createElement('h3', { className: 'vsm-compat-h3' }, '开发形态'),
+      React.createElement('div', { className: 'vsm-compat-item ok' }, React.createElement('span', { className: 'vsm-compat-name' }, '开发形态开启（工作区链接安装）'), React.createElement('span', { className: 'vsm-compat-note' }, devForm.path)),
+    ),
     React.createElement('h3', { className: 'vsm-compat-h3' }, '外部插件与服务'),
     renderItems(report?.external),
     React.createElement('h3', { className: 'vsm-compat-h3' }, '客户端适配'),

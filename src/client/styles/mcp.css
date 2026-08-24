@@ -101,3 +101,12 @@
 .vsm-compat-item.warn .vsm-compat-name::before{content:"● ";color:var(--dsw-alias-state-warn-primary,#e5b93f)}
 .vsm-compat-name{font-weight:500;min-width:0}
 .vsm-compat-note{color:var(--dsw-alias-label-tertiary,#9aa5b1);font-size:12px;text-align:right;min-width:0}
+
+/* 开发形态开关 */
+.vsm-devform-note{display:block;margin-top:4px;font-size:11px;color:var(--dsw-alias-label-tertiary,#9aa5b1);word-break:break-all}
+.vsm-devform-actions{display:flex;flex-direction:column;align-items:flex-end;gap:6px;min-width:0}
+.vsm-devform-msg{color:var(--dsw-alias-state-warn-primary,#e5b93f);font-size:11px;text-align:right}
+.vsm-general-row button{border:1px solid var(--dsw-alias-border-l2,#555);border-radius:6px;padding:6px 12px;background:none;color:var(--dsw-alias-label-primary,#eee);cursor:pointer;font-size:12px;white-space:nowrap}
+.vsm-general-row button:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover,#ffffff14)}
+.vsm-general-row button:disabled{opacity:.55;cursor:default}
+.vsm-general-row button.vsm-devform-close{color:var(--dsw-alias-state-error-primary,#f07878);border-color:var(--dsw-alias-state-error-secondary,#d9534f55)}

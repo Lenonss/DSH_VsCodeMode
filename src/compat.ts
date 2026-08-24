@@ -11,6 +11,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { entriesOf } from './mcp.js'
 import { loadSettingsDeps } from './fileOpenSettings.js'
+import { readDevForm } from './devForm.js'
 import type { CompatAdapter, CompatReport } from './shared/compat.js'
 import type { Ctx } from './store.js'
 
@@ -36,7 +37,7 @@ export function entryHash(id: string): string | undefined {
 }
 
 /** 读取随包 package.json 版本号（缺失/解析失败降级为空串）。 */
-function pluginVersionOf(): string {
+export function pluginVersionOf(): string {
   try {
     const file = join(dirname(fileURLToPath(import.meta.url)), '..', 'package.json')
     const pkg = JSON.parse(readFileSync(file, 'utf8')) as { version?: unknown }
@@ -142,5 +143,5 @@ export async function buildReport(
   for (const guard of guards) {
     if (!guard.active && guard.note) warnings.push(guard.note)
   }
-  return { pluginVersion: options?.version ?? pluginVersionOf(), external, guards, warnings }
+  return { pluginVersion: options?.version ?? pluginVersionOf(), external, guards, warnings, devForm: readDevForm() }
 }

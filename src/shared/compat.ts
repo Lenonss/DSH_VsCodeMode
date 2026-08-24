@@ -11,10 +11,17 @@ export interface CompatAdapter {
   note?: string
 }
 
+/** 开发形态信息：profile 中以 link: 依赖 + junction 指向工作区的安装形态。 */
+export interface DevFormInfo {
+  enabled: boolean
+  path?: string
+}
+
 /** 兼容性报告：host 侧构建（RPC edrv.compat 返回），client 侧补充本地适配项后展示。 */
 export interface CompatReport {
   pluginVersion: string
   external: CompatAdapter[]
   guards: CompatAdapter[]
   warnings: string[]
+  devForm?: DevFormInfo
 }

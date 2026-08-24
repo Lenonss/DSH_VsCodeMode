@@ -88,6 +88,7 @@ src/
 ├── shared/             ★ 双面契约（禁 node/react）：types.ts（记录/归档/摘要）+ rpc.ts（11 个方法类型化）
 │                       + compat.ts（兼容性报告形状）+ mcp.ts（MCP 契约）
 ├── compat.ts           ★ Host 兼容层：身份常量、外部插件探测、路由/重复装配护栏、依赖守卫、兼容性报告
+├── devForm.ts          Host 开发形态管理：link:/junction 安装切换（RPC vscode.devForm* + 设置页开关）
 ├── model.ts            Host 纯域逻辑（可单测）：normalize/markDecision/resolved/summary/reconstruct/批次/归档
 ├── store.ts            Host 存储层：sidecar 读写合并 + 归档持久化 + stale 检测
 ├── workspace.ts        Host 工作区文件扫描（TTL 缓存）+ 快速打开搜索
@@ -112,6 +113,22 @@ src/
 护栏检测 `/edrv` 路由前缀冲突与本插件重复装配（duplicate loader entry），
 `@deepseek-ai/dsh-settings` / `schemastery` 以动态加载引入（缺失时插件仍可加载，设置持久化降级）。
 「VSCodeMode」设置页 →「兼容性」子 Tab 或 RPC `edrv.compat` 可查看完整报告。
+
+**开发形态（`src/devForm.ts`）**：开发 = profile 中以 `link:` 依赖 + junction 指向工作区的安装。
+「VSCodeMode」设置页 → 通用 里在开发形态开启时显示「关闭开发形态」开关（切回正式版安装，重启生效）；
+AI 后续开发时可通过 RPC 自动开启/关闭：
+
+```bash
+# 读取当前形态（compat 报告亦含 devForm 字段）
+curl -s -X POST http://127.0.0.1:3080/edrv/rpc -H 'content-type: application/json' \
+  -d '{"method":"vscode.devFormGet","args":{}}'
+# 开启开发形态（link 到工作区；path 必填，重启后生效）
+curl -s -X POST http://127.0.0.1:3080/edrv/rpc -H 'content-type: application/json' \
+  -d '{"method":"vscode.devFormSet","args":{"enabled":true,"path":"D:/Work/ToolsDev/DeepSeekHarnessPlugin/packages/dsh-edit-review"}}'
+# 关闭开发形态（改回 ^<version> + 删 junction + pnpm install，重启后生效）
+curl -s -X POST http://127.0.0.1:3080/edrv/rpc -H 'content-type: application/json' \
+  -d '{"method":"vscode.devFormSet","args":{"enabled":false}}'
+```
 
 **扩展缝（VSCode 化后续迭代）**：新能力 = `shared/rpc.ts` 加方法 + `src/rpc.ts` 加 handler +
 `client/ui/` 加组件，其余模块零改动；`monaco/*` 是可复用的编辑器服务（资源树/对比/诊断面板共用）。
