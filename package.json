@@ -1,6 +1,6 @@
 {
   "name": "dsh-vscode-mode",
-  "version": "0.1.12",
+  "version": "0.1.14",
   "description": "DSH 上的类 VSCode 编码体验：Monaco 中央编辑器（文件页签/QuickOpen/状态栏）+ Agent 编辑差异审查（整文件差异/采纳/拒绝/归档/回滚），状态持久化到工作区旁车",
   "keywords": [
     "dsh",
@@ -39,6 +39,9 @@
     "cordis.patch.yml"
   ],
   "license": "BSD-3-Clause",
+  "dependencies": {
+    "@vscode/ripgrep": "^1.18.0"
+  },
   "peerDependencies": {
     "@deepseek-ai/dsh-client-ui-slots": ">=0.0.1-rc.1 <0.1.0 || >=0.1.0-rc.1 <0.2.0-0",
     "@deepseek-ai/dsh-llm": ">=0.0.1-rc.1 <0.1.0 || >=0.1.0-rc.1 <0.2.0-0",

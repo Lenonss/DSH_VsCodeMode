@@ -8,6 +8,7 @@
 import { registerRoutes } from './routes.js'
 import { captureToolResult } from './capture.js'
 import { handleRpc } from './rpc.js'
+import { newSearcher } from './search/orchestrator.js'
 import { installIsolation } from './mcpIsolation.js'
 import { dropFileIndex } from './workspace.js'
 import { cwdOf } from './registry.js'
@@ -25,6 +26,7 @@ export const inject = ['sessions', 'fs', 'webServer', 'loader', 'tools', 'worksp
  */
 export function apply(ctx: Ctx, config?: unknown): void {
   const registry: Registry = new Map()
+  const searcher = newSearcher(ctx)
 
   ctx.on('tools/result', (exec: unknown, result: unknown) => {
     void captureToolResult(ctx, registry, exec, result)
@@ -35,10 +37,11 @@ export function apply(ctx: Ctx, config?: unknown): void {
     if (cwd) {
       registry.delete(cwd)
       dropFileIndex(cwd)
+      searcher.dispose(cwd)
     }
   })
 
-  registerRoutes(ctx, config, (method, args) => handleRpc(ctx, registry, method, args))
+  registerRoutes(ctx, config, (method, args) => handleRpc(ctx, registry, method, args, searcher))
   installIsolation(ctx)
 
   ctx.logger?.info?.('[' + name + '] 编辑差异审查已装配（/edrv/rpc 路由就绪，项目 MCP 隔离已启用）')

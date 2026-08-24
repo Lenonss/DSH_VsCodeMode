@@ -21,7 +21,8 @@ import {
 import { archiveEntryFor, markDecision, recordResolved, reconstructOriginal } from './model.js'
 import type { Registry } from './registry.js'
 import { bucketOf, cwdOf, sessionOf } from './registry.js'
-import { listWorkspaceFiles } from './workspace.js'
+import type { SearchOrchestrator } from './search/orchestrator.js'
+import { newSearcher } from './search/orchestrator.js'
 import { restoreFile, revertCall, revertHunk } from './revert.js'
 import { listMcp, refreshMcp, removeMcp, saveMcp, toggleMcp } from './mcp.js'
 import { listProjects, projectRefresh, projectRemove, projectSave, projectToggle } from './mcpProject.js'
@@ -63,7 +64,7 @@ async function requireSession(ctx: Ctx, sessionId: string | undefined): Promise<
 }
 
 /** 各方法 handler 表（类型由 shared/rpc 的 RpcHandlerMap 约束）。 */
-export function buildHandlers(ctx: Ctx, registry: Registry): RpcHandlerMap {
+export function buildHandlers(ctx: Ctx, registry: Registry, searcher = newSearcher(ctx)): RpcHandlerMap {
   return {
     'edrv.list': async (args) => {
       const sc = await requireSession(ctx, args.sessionId)
@@ -260,27 +261,11 @@ export function buildHandlers(ctx: Ctx, registry: Registry): RpcHandlerMap {
     'edrv.searchFiles': async (args) => {
       const sc = await requireSession(ctx, args.sessionId)
       if ('err' in sc) return { ok: false, error: sc.err }
-      const query = String(args.query ?? '').trim().toLowerCase()
-      const files: string[] = []
-      if (query.length >= 2) {
-        const bucket = await bucketOf(registry, ctx, sc.cwd)
-        const pool = new Set<string>()
-        // 活跃差异路径恒并入（保证差异文件一定可搜到，即使工作区扫描不可用）
-        for (const rec of bucket.values()) if (rec.path) pool.add(rec.path)
-        const listed = await listWorkspaceFiles(ctx, sc.session, sc.cwd)
-        if (listed) for (const f of listed) pool.add(f)
-        const score = (p: string): number => {
-          const pl = p.toLowerCase()
-          const base = pl.split(/[\\/]/).pop() || ''
-          if (base.includes(query)) return 0
-          if (pl.includes(query)) return 1
-          return -1
-        }
-        const hit = [...pool].filter((p) => score(p) >= 0)
-        hit.sort((a, b) => (score(a) - score(b)) || (a < b ? -1 : 1))
-        files.push(...hit.slice(0, 50))
-      }
-      return { ok: true, files, truncated: files.length >= 50 }
+      const bucket = await bucketOf(registry, ctx, sc.cwd)
+      const activePaths: string[] = []
+      for (const record of bucket.values()) if (record.path) activePaths.push(record.path)
+      const result = await searcher.search({ session: sc.session, cwd: sc.cwd, query: args.query, activePaths })
+      return { ok: true, ...result }
     },
     'mcp.list': async () => ({ ok: true, ...listMcp(ctx) }),
     'mcp.save': async (args) => {
@@ -331,8 +316,9 @@ export async function handleRpc<M extends RpcMethod>(
   registry: Registry,
   method: M,
   args: RpcRequestMap[M],
+  searcher = newSearcher(ctx),
 ): Promise<RpcResult<M>> {
-  const handlers = buildHandlers(ctx, registry)
+  const handlers = buildHandlers(ctx, registry, searcher)
   const handler = handlers[method]
   if (!handler) return { ok: false, error: '未知方法: ' + String(method) } as RpcResult<M>
   return handler(args)
