@@ -56,7 +56,7 @@ export function diffRegions(records: RecordView[], content: string | null): Regi
       for (let i = 0; i < rec.hunks.length; i++) {
         const h = preciseHunk(rec, i)
         if (!h || noopHunk(rec, h)) continue
-        regions.push({ callId: rec.callId, idx: i, start: 1, end: Math.max(1, lines.length), oldLines: [], newLines: lines.slice(), whole: true, status: statusAt(rec, i), create: true, rec, superseded: rec.superseded === true })
+        regions.push({ callId: rec.callId, idx: i, start: 1, end: lines.length + 1, oldLines: [], newLines: lines.slice(), whole: true, status: statusAt(rec, i), create: true, rec, superseded: rec.superseded === true })
       }
       continue
     }

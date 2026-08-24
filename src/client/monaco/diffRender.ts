@@ -28,7 +28,7 @@ export function createDiffRenderer(log) {
     const decos = []
     for (const r of pendingRegions) {
       if (r.start === undefined || r.end === undefined) continue
-      if (!r.create && r.newLines && r.newLines.length) {
+      if (r.newLines && r.newLines.length) {
         decos.push({
           range: new monaco.Range(r.start, 1, Math.max(r.start, r.end - 1), 1),
           options: { isWholeLine: true, className: 'edrv-mn-add-line', linesDecorationsClassName: 'edrv-mn-gutter-add' },

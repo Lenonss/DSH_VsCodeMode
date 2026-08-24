@@ -50,8 +50,18 @@ describe('diffRegions', () => {
     expect(regs).toHaveLength(1)
     expect(regs[0].whole).toBe(true)
     expect(regs[0].start).toBe(1)
-    expect(regs[0].end).toBe(2)
+    expect(regs[0].end).toBe(3) // 开区间 end = start + 行数，覆盖含尾行的全部行
     expect(regs[0].create).toBe(true)
+    expect(regs[0].newLines).toEqual(['line1', 'line2'])
+  })
+  it('空文件 create 产出仅占位、无新增行', () => {
+    const r = rec({ create: true, hunks: [{ oldText: null, newText: '' }], decisions: { call: 'pending', perHunk: ['pending'] } })
+    const regs = diffRegions([r], '')
+    expect(regs).toHaveLength(1)
+    expect(regs[0].whole).toBe(true)
+    expect(regs[0].start).toBe(1)
+    expect(regs[0].end).toBe(1)
+    expect(regs[0].newLines).toEqual([])
   })
   it('edit 命中 newText 计算行范围', () => {
     const r = rec({ hunks: [{ oldText: 'x', newText: 'AAA' }], decisions: { call: 'pending', perHunk: ['pending'] } })
