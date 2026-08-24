@@ -17,14 +17,16 @@ import { EditorView } from './ui/EditorView.js'
 import { DiffBadge } from './ui/DiffBadge.js'
 import { McpSettings } from './ui/McpSettings.js'
 import { rpc } from './rpc.js'
+import { loadMonaco } from './monaco/loader.js'
 import { createFileOpenerRegistry, scanSidebar, type FileOpenContext } from './fileOpeners.js'
 import type { FileOpenerRegistry } from './fileOpeners.js'
 import { installOpenPathRouter, vscodeOpener, autoValue } from './openPathRouter.js'
 import { SettingsContext } from './settingsContext.js'
 import { SIDEBAR_PLUGIN, pickSettingsBinder, registerSlotSafely } from './compat.js'
+import { createAddToConversation } from './addToConversation.js'
 import type { CompatAdapter } from '../shared/compat.js'
 
-export const inject = ['slots', 'timer', 'locale', 'connection', 'remote', 'workspaces', 'sessions', 'settingsScope', 'webUiSettings']
+export const inject = ['slots', 'timer', 'locale', 'connection', 'remote', 'workspaces', 'sessions', 'conversation', 'settingsScope', 'webUiSettings']
 
 /**
  * 装配客户端：注册中央编辑区视图与 header 差异角标。
@@ -34,6 +36,16 @@ export const inject = ['slots', 'timer', 'locale', 'connection', 'remote', 'work
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function apply(ctx: any): void {
   const schedule = (fn: () => void, ms: number) => ctx.timeout(fn, ms)
+
+  // Monaco 预热：DSH 启动后后台加载编辑器核心（模块级 promise 去重），用户点开「文件编辑」页签即用，
+  // 不再等页签挂载后才首次拉取 /edrv/vendor/*。requestIdleCallback 让出首屏带宽，缺省回退延时调度；
+  // 预热失败静默吞掉（loader 失败会重置 promise，页签打开时仍走原有加载/重试路径）。
+  if (typeof window !== 'undefined') {
+    const preloadMonaco = () => loadMonaco(() => {}).catch(() => {})
+    if (typeof window.requestIdleCallback === 'function') window.requestIdleCallback(preloadMonaco, { timeout: 2000 })
+    else schedule(preloadMonaco, 300)
+  }
+
   const registry: FileOpenerRegistry = createFileOpenerRegistry()
   const workspaces = ctx.get('workspaces')
   const sessions = ctx.get('sessions')
@@ -41,6 +53,8 @@ export function apply(ctx: any): void {
   const binder = pickSettingsBinder(ctx)
   const settings = binder.scope
   let selected = autoValue('auto')
+  /** 「添加到对话」动作集：编辑区/Tab 右键菜单注入文件引用与代码块（conversation 服务缺失时各动作安全降级）。 */
+  const addToConversation = createAddToConversation(ctx)
 
   /** 客户端侧兼容摘要（与 host 报告合并展示；惰性求值保证 HMR 后仍新鲜）。 */
   const compatSummary = (): CompatAdapter[] => [
@@ -92,7 +106,7 @@ export function apply(ctx: any): void {
     order: 5,
     label: '文件编辑',
     inject: (sessionId: string) => ({ sessionId }),
-  }, (props: unknown) => React.createElement(EditorView, Object.assign({}, props, { schedule })))
+  }, (props: unknown) => React.createElement(EditorView, Object.assign({}, props, { schedule, addToConversation })))
 
   // header 差异角标：仅当前工作区存在差异时渲染
   registerSlotSafely(ctx, { name: 'conversation.session.header.utilities', id: 'edrv-diff-badge', order: 90, label: '差异' },

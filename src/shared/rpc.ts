@@ -21,11 +21,28 @@ export const RPC_PATH = '/edrv/rpc'
 /** 决策作用域：call=整条记录，hunk=单个差异块。 */
 export type RpcScope = 'call' | 'hunk'
 
+/** 一条批量决策项（decideBatch 的 items 元素，与 accept/reject 单条参数同构）。 */
+export interface DecideItem {
+  callId: string
+  scope?: RpcScope
+  hunkIndex?: number
+  decision: 'accepted' | 'rejected'
+}
+
+/** 批量决策逐项结果。 */
+export interface DecideResult {
+  callId: string
+  ok: boolean
+  error?: string
+  record?: RecordView
+}
+
 /** 每个方法的请求参数（sessionId 为公共可选字段）。 */
 export interface RpcRequestMap {
-  'edrv.list': { sessionId?: string; callIds?: string[] }
+  'edrv.list': { sessionId?: string; callIds?: string[]; skipStale?: boolean }
   'edrv.accept': { sessionId?: string; callId: string; scope?: RpcScope; hunkIndex?: number }
   'edrv.reject': { sessionId?: string; callId: string; scope?: RpcScope; hunkIndex?: number }
+  'edrv.decideBatch': { sessionId?: string; items: DecideItem[] }
   'edrv.read': { sessionId?: string; path: string }
   'edrv.original': { sessionId?: string; path: string }
   'edrv.save': { sessionId?: string; path: string; content: string }
@@ -58,6 +75,7 @@ export interface RpcOkMap {
   'edrv.list': { records: RecordView[] }
   'edrv.accept': { record: RecordView }
   'edrv.reject': { record: RecordView }
+  'edrv.decideBatch': { results: DecideResult[] }
   'edrv.read': { content: string; size: number }
   'edrv.original': { content: string; size: number; stale: StaleHunk[]; fallback: boolean }
   'edrv.save': object

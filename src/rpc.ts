@@ -4,7 +4,7 @@
  * 新功能 = shared/rpc.ts 加方法 + 这里加一个 handler，不改其他模块。
  * 作者 ddj 2026-08-20
  */
-import type { RpcHandlerMap, RpcMethod, RpcRequestMap, RpcResult } from './shared/rpc.js'
+import type { DecideItem, DecideResult, RpcHandlerMap, RpcMethod, RpcRequestMap, RpcResult, RpcScope } from './shared/rpc.js'
 import type { DiffRecord, RecordView } from './shared/types.js'
 import type { Ctx, Session } from './store.js'
 import {
@@ -66,6 +66,52 @@ async function requireSession(ctx: Ctx, sessionId: string | undefined): Promise<
   return { session, cwd }
 }
 
+/**
+ * 批量决策核心：一次会话/桶解析 + 逐项处理 + 统一落盘（accept/reject 单条与 decideBatch 共用）。
+ * rejected 项先做回滚，失败记入该项 error 且不改决策；本批次新增"已解决"记录一次性归档，
+ * 有任何成功项则整桶只写盘一次，避免逐条读写整个 sidecar。
+ * @author ddj 2026年08月25号
+ * @param items 决策项（按数组顺序处理，rejected 的先后即回滚顺序）
+ * @returns 逐项结果（ok 项含更新后的记录视图）
+ */
+async function applyDecisions(
+  ctx: Ctx,
+  session: Session,
+  cwd: string,
+  bucket: Map<string, DiffRecord>,
+  items: DecideItem[],
+): Promise<DecideResult[]> {
+  const results: DecideResult[] = []
+  const resolved: DiffRecord[] = []
+  let changed = false
+  for (const item of items) {
+    const record = bucket.get(item.callId)
+    if (!record) {
+      results.push({ callId: item.callId, ok: false, error: '记录不存在' })
+      continue
+    }
+    if (item.decision === 'rejected') {
+      const scope: RpcScope = item.scope ?? 'call'
+      const outcome = scope === 'hunk' ? await revertHunk(ctx, session, record, item.hunkIndex ?? -1) : await revertCall(ctx, session, record)
+      if (!outcome.ok) {
+        results.push({ callId: item.callId, ok: false, error: outcome.error })
+        continue
+      }
+    }
+    const wasResolved = recordResolved(record)
+    markDecision(record, item.scope ?? 'call', item.hunkIndex, item.decision)
+    changed = true
+    if (!wasResolved && recordResolved(record)) resolved.push(record)
+    results.push({ callId: item.callId, ok: true, record: recView(record) })
+  }
+  if (resolved.length) {
+    const reason = items.some((item) => item.decision === 'rejected') ? '已处理（回滚）' : '已处理'
+    await archiveRecords(ctx, session, cwd, bucket, resolved, reason, { deferSave: true })
+  }
+  if (changed) await saveBucket(ctx, cwd, bucket, session)
+  return results
+}
+
 /** 各方法 handler 表（类型由 shared/rpc 的 RpcHandlerMap 约束）。 */
 export function buildHandlers(ctx: Ctx, registry: Registry, searcher = newSearcher(ctx)): RpcHandlerMap {
   return {
@@ -74,7 +120,7 @@ export function buildHandlers(ctx: Ctx, registry: Registry, searcher = newSearch
       if ('err' in sc) return { ok: false, error: sc.err }
       const bucket = await bucketOf(registry, ctx, sc.cwd)
       const want = Array.isArray(args.callIds) ? new Set(args.callIds) : null
-      if (!want) await autoArchiveStale(ctx, sc.session, sc.cwd, bucket) // 全量轮询时自动清理 stale 幽灵差异
+      if (!want && args.skipStale !== true) await autoArchiveStale(ctx, sc.session, sc.cwd, bucket) // 全量轮询时自动清理 stale 幽灵差异（批量决策后的即时刷新可 skipStale 跳过）
       const out: RecordView[] = []
       for (const rec of bucket.values()) {
         // 面板全量查询过滤已归档；聊天条按 callId 查询保留（状态徽章仍需正确显示）
@@ -89,27 +135,26 @@ export function buildHandlers(ctx: Ctx, registry: Registry, searcher = newSearch
       const sc = await requireSession(ctx, args.sessionId)
       if ('err' in sc) return { ok: false, error: sc.err }
       const bucket = await bucketOf(registry, ctx, sc.cwd)
-      const record = bucket.get(args.callId)
-      if (!record) return { ok: false, error: '记录不存在' }
-      markDecision(record, args.scope ?? 'call', args.hunkIndex, 'accepted')
-      if (recordResolved(record)) await archiveRecords(ctx, sc.session, sc.cwd, bucket, [record], '已处理')
-      else await saveBucket(ctx, sc.cwd, bucket, sc.session)
-      return { ok: true, record: recView(record) }
+      const results = await applyDecisions(ctx, sc.session, sc.cwd, bucket, [{ callId: args.callId, scope: args.scope, hunkIndex: args.hunkIndex, decision: 'accepted' }])
+      const item = results[0]
+      if (!item?.ok) return { ok: false, error: item?.error ?? '操作失败' }
+      return { ok: true, record: item.record! }
     },
     'edrv.reject': async (args) => {
       const sc = await requireSession(ctx, args.sessionId)
       if ('err' in sc) return { ok: false, error: sc.err }
       const bucket = await bucketOf(registry, ctx, sc.cwd)
-      const record = bucket.get(args.callId)
-      if (!record) return { ok: false, error: '记录不存在' }
-      const scope = args.scope ?? 'call'
-      const outcome = scope === 'hunk' ? await revertHunk(ctx, sc.session, record, args.hunkIndex ?? -1) : await revertCall(ctx, sc.session, record)
-      if (!outcome.ok) return { ok: false, error: outcome.error }
-      markDecision(record, scope, args.hunkIndex, 'rejected')
-      record.at = new Date().toISOString()
-      if (recordResolved(record)) await archiveRecords(ctx, sc.session, sc.cwd, bucket, [record], '已处理（回滚）')
-      else await saveBucket(ctx, sc.cwd, bucket, sc.session)
-      return { ok: true, record: recView(record) }
+      const results = await applyDecisions(ctx, sc.session, sc.cwd, bucket, [{ callId: args.callId, scope: args.scope, hunkIndex: args.hunkIndex, decision: 'rejected' }])
+      const item = results[0]
+      if (!item?.ok) return { ok: false, error: item?.error ?? '操作失败' }
+      return { ok: true, record: item.record! }
+    },
+    'edrv.decideBatch': async (args) => {
+      const sc = await requireSession(ctx, args.sessionId)
+      if ('err' in sc) return { ok: false, error: sc.err }
+      const bucket = await bucketOf(registry, ctx, sc.cwd)
+      const results = await applyDecisions(ctx, sc.session, sc.cwd, bucket, Array.isArray(args.items) ? args.items : [])
+      return { ok: true, results }
     },
     'edrv.read': async (args) => {
       const sc = await requireSession(ctx, args.sessionId)

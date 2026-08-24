@@ -223,7 +223,10 @@ export async function appendArchiveEntries(ctx: Ctx, cwd: string, entries: Array
   }
 }
 
-/** 归档记录：标记 archived、按批次写入归档、落盘工作区桶。 */
+/**
+ * 归档记录：标记 archived、按批次写入归档、落盘工作区桶。
+ * @param opts.deferSave 为 true 时只写归档、不落盘桶（由批量调用方统一 saveBucket 一次）
+ */
 export async function archiveRecords(
   ctx: Ctx,
   session: Session,
@@ -231,6 +234,7 @@ export async function archiveRecords(
   bucket: Map<string, DiffRecord>,
   recs: DiffRecord[],
   reason: string,
+  opts?: { deferSave?: boolean },
 ): Promise<void> {
   if (!recs.length) return
   const fresh = recs.filter((r) => !r.archived)
@@ -238,5 +242,5 @@ export async function archiveRecords(
   const entries: Array<ReturnType<typeof archiveEntryFor>> = []
   for (const list of groupByBatch(recs).values()) entries.push(archiveEntryFor(list, cwd, reason))
   await appendArchiveEntries(ctx, cwd, entries, session)
-  if (fresh.length) await saveBucket(ctx, cwd, bucket, session)
+  if (fresh.length && !opts?.deferSave) await saveBucket(ctx, cwd, bucket, session)
 }

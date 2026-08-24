@@ -26,6 +26,7 @@ import { DiffLauncher } from './DiffLauncher.js'
 export function EditorView(props) {
   const sessionId = props?.sessionId
   const schedule = props.schedule
+  const addToConversation = props.addToConversation
   const [monaco, setMonaco] = React.useState(null)
   const [monacoErr, setMonacoErr] = React.useState(null)
   const [records, setRecords] = React.useState({})
@@ -45,6 +46,7 @@ export function EditorView(props) {
   const [hoverAct, setHoverAct] = React.useState(null) // { region, top } 编辑区 hover 差异块的 Keep/Undo 浮层
   const [diffIdx, setDiffIdx] = React.useState(0) // 当前文件内差异位置（x/x 显示）
   const [fileIdx, setFileIdx] = React.useState(0) // 全局差异文件位置（x/x 文件 显示）
+  const [tabMenu, setTabMenu] = React.useState(null) // Tab 右键菜单 { x,y,path }（编辑区右键走 Monaco 原生菜单，无此浮层）
   const editorRef = React.useRef(null)
   const monacoRef = React.useRef(null)
   const modelsRef = React.useRef(new Map())
@@ -62,6 +64,7 @@ export function EditorView(props) {
   const hoverEditorRef = React.useRef(false) // 鼠标是否仍在编辑器命中区
   const hoverPanelRef = React.useRef(false) // 鼠标是否已进入 Keep/Undo 浮层
   const batchBusyRef = React.useRef(false) // 批量 Keep All/Undo All 防重入
+  const menuHandlersRef = React.useRef(null) // 右键菜单动作的最新闭包（Monaco addAction 空依赖回调读取）
   const diffRendererRef = React.useRef(null)
   if (!diffRendererRef.current) diffRendererRef.current = createDiffRenderer((sid, t) => dbg(sid, t))
 
@@ -108,9 +111,9 @@ export function EditorView(props) {
     })
   }
 
-  const refreshRecords = () => {
+  const refreshRecords = (skipStale) => {
     if (!sessionId) return
-    rpc('edrv.list', { sessionId }).then((res) => {
+    rpc('edrv.list', { sessionId, ...(skipStale ? { skipStale: true } : {}) }).then((res) => {
       if (!res || !res.ok || !Array.isArray(res.records)) return
       const map = {}
       for (const r of res.records) {
@@ -200,6 +203,14 @@ export function EditorView(props) {
     setStatus('加载中…')
     loadContent(active, sessionId)
   }, [active, sessionId])
+
+  // Tab 右键菜单打开时 Esc 关闭
+  React.useEffect(() => {
+    if (!tabMenu) return
+    const onKey = (e) => { if (e.key === 'Escape') dismissMenus() }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [tabMenu])
 
   React.useEffect(() => {
     if (monaco || monacoErr) return
@@ -327,6 +338,40 @@ export function EditorView(props) {
     ed.onDidChangeCursorPosition((e) => {
       setCursor('Ln ' + e.position.lineNumber + ', Col ' + e.position.column)
     })
+    // 编辑区右键 → 注入 Monaco 原生 context menu（与 Go to Definition 等同菜单，避免分离浮层）。
+    // 有选区时额外显示「选中内容」项：context key edrvSelection 由光标选区变化驱动。
+    // 路径/选区在点击时从 model/editor 实时读取（不依赖闭包里的过期 active）。
+    const menuHandlers = () => menuHandlersRef.current
+    const pathOf = (edx) => {
+      const model = edx?.getModel?.()
+      const uriPath = model?.uri?.path
+      return uriPath ? decodeURIComponent(String(uriPath).replace(/^\//, '')) : null
+    }
+    const selectionOf = (edx) => {
+      const s = edx?.getSelection?.()
+      if (!s) return null
+      if (s.startLineNumber === s.endLineNumber && s.startColumn === s.endColumn) return null
+      return { startLine: s.startLineNumber, endLine: s.endLineNumber }
+    }
+    const selKey = ed.createContextKey('edrvSelection', false)
+    ed.onDidChangeCursorSelection((e) => {
+      const s = e?.selection
+      selKey.set(!!(s && (s.startLineNumber !== s.endLineNumber || s.startColumn !== s.endColumn)))
+    })
+    ed.addAction({
+      id: 'edrv.addFileRef', label: '添加文件到对话', contextMenuGroupId: '1_edrv',
+      precondition: 'editorTextFocus',
+      run: (edx) => menuHandlers()?.addRefToChat(pathOf(edx)),
+    })
+    ed.addAction({
+      id: 'edrv.addSelectionRef', label: '添加选中内容为引用', contextMenuGroupId: '1_edrv',
+      precondition: 'edrvSelection',
+      run: (edx) => {
+        const s = selectionOf(edx)
+        const p = pathOf(edx)
+        if (s && p) menuHandlers()?.addRefToChat(p, { startLine: s.startLine, endLine: s.endLine })
+      },
+    })
     // hover 差异块 → 浮出 Keep/Undo（req：鼠标移到编辑区差异块时显示）
     // 防闪烁：① 区域不变不 setState（浮窗锚定差异块起始行，不跟随鼠标）；② 延迟隐藏；
     // ③ 浮窗自身 onMouseEnter 取消隐藏计时（鼠标在浮窗与编辑器间移动不闪）。
@@ -410,10 +455,10 @@ export function EditorView(props) {
     openFile(sum.pendingFiles[next].path, true)
   }
 
-  const reloadFile = () => {
+  const reloadFile = (skipStale) => {
     if (!active) return
     loadContent(active, sessionId)
-    refreshRecords()
+    refreshRecords(skipStale === true)
   }
 
   /**
@@ -454,8 +499,64 @@ export function EditorView(props) {
     })
   }
 
-  const acceptFile = () => { for (const r of pendingRegions) actHunk(r, false) }
-  const undoFile = () => { for (const r of [...pendingRegions].reverse()) actHunk(r, true) }
+  /**
+   * 批量采纳/不采纳：一次 RPC 处理多个差异（Keep 整文件 / Keep All / Undo All）。
+   * 单次 setRecords 合并全部结果，避免逐条往返读写整个 sidecar。
+   * @author ddj 2026年08月25号
+   * @param items 决策项数组（callId/scope/hunkIndex/decision）
+   * @returns Promise<{ok:number; fail:number}> 成功/失败计数
+   */
+  const actMany = (items) => {
+    if (!items.length) return Promise.resolve({ ok: 0, fail: 0 })
+    return rpc('edrv.decideBatch', { sessionId, items }).then((res) => {
+      if (!res || !res.ok || !Array.isArray(res.results)) {
+        setError(res?.error ? String(res.error) : '批量处理失败')
+        return { ok: 0, fail: items.length }
+      }
+      let ok = 0
+      let fail = 0
+      const next = {}
+      for (const item of res.results) {
+        if (item && item.ok) {
+          ok++
+          if (item.record) next[item.callId] = item.record
+        } else {
+          fail++
+        }
+      }
+      setRecords((prev) => Object.assign({}, prev, next))
+      return { ok, fail }
+    }).catch((e) => {
+      setError('批量处理异常:' + String(e))
+      return { ok: 0, fail: items.length }
+    })
+  }
+
+  /**
+   * 决策项构造（与单条 actHunk 的 scope 语义一致：create 记录走 call 作用域）。
+   * @author ddj 2026年08月25号
+   * @param r 差异区域/待处理项（callId/idx/create）
+   * @param reject true=不采纳
+   * @returns decideBatch items 元素
+   */
+  const itemOf = (r, reject) => ({ callId: r.callId, scope: r.create ? 'call' : 'hunk', hunkIndex: r.idx, decision: reject ? 'rejected' : 'accepted' })
+
+  const acceptFile = () => {
+    actMany(pendingRegions.map((r) => itemOf(r, false))).then(({ ok, fail }) => {
+      reloadFile(true)
+      emitRefresh()
+      setStatus('已采纳 ' + ok + ' 处差异' + (fail ? '，' + fail + ' 处失败' : ''))
+      if (fail) setError(fail + ' 处差异处理失败（可能已被后续修改影响），可刷新后重试')
+    })
+  }
+  const undoFile = () => {
+    actMany([...pendingRegions].reverse().map((r) => itemOf(r, true))).then(({ ok, fail }) => {
+      reloadFile(true)
+      emitRefresh()
+      setStatus('已不采纳 ' + ok + ' 处差异' + (fail ? '，' + fail + ' 处失败' : ''))
+      if (fail) setError(fail + ' 处差异处理失败（可能已被后续修改影响），可刷新后重试')
+    })
+  }
 
   // 所有差异文件的待处理 hunk 列表（二级菜单 Keep All / Undo All 用）
   const allPending = React.useMemo(() => {
@@ -473,7 +574,7 @@ export function EditorView(props) {
   }, [records])
 
   /**
-   * 批量处理所有差异文件：采纳全部 / 不采纳全部。不采纳按 at 降序（新改先回滚）串行执行。
+   * 批量处理所有差异文件：采纳全部 / 不采纳全部。不采纳按 at 降序（新改先回滚）排序后一次 RPC。
    * @author ddj 2026年08月20号
    * @param reject true=全部不采纳（回滚），false=全部采纳
    */
@@ -481,19 +582,13 @@ export function EditorView(props) {
     if (batchBusyRef.current || !allPending.length) return
     batchBusyRef.current = true
     const list = reject ? [...allPending].sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : b.idx - a.idx)) : allPending
-    let ok = 0, fail = 0
-    const run = async () => {
-      for (const r of list) {
-        if (await actHunk(r, reject, true)) ok++
-        else fail++
-      }
+    actMany(list.map((r) => itemOf(r, reject))).then(({ ok, fail }) => {
       batchBusyRef.current = false
-      reloadFile()
+      reloadFile(true)
       emitRefresh()
       setStatus((reject ? '已不采纳 ' : '已采纳 ') + ok + ' 处差异' + (fail ? '，' + fail + ' 处失败' : ''))
       if (fail) setError(fail + ' 处差异处理失败（可能已被后续修改影响），可刷新后重试')
-    }
-    run()
+    }).catch(() => { batchBusyRef.current = false })
   }
   const acceptAllFiles = () => actAllPending(false)
   const undoAllFiles = () => actAllPending(true)
@@ -507,6 +602,32 @@ export function EditorView(props) {
       } else setError(res?.error ? String(res.error) : '回滚失败')
     }).catch((e) => setError('回滚异常:' + String(e)))
   }
+
+  /**
+   * 关闭 Tab 右键菜单。
+   * @author ddj 2026年08月25号
+   */
+  const dismissMenus = () => {
+    setTabMenu(null)
+  }
+
+  /** 把「添加到对话」返回状态映射为状态栏文案。
+   * @author ddj 2026年08月25号 */
+  const statusOfAdd = (outcome, okText) => {
+    if (outcome === 'ok') return okText
+    if (outcome === 'busy') return okText + '（输入框忙，已降级纯文本）'
+    return '无法添加到对话（无会话或输入框不可用）'
+  }
+
+  /** 添加文件/选中区引用到对话（异步，状态栏反馈）。 */
+  const addRefToChat = (path, range) => {
+    if (!path) { setStatus('无活动文件'); return }
+    if (!addToConversation) { setStatus('添加到对话不可用'); return }
+    addToConversation.appendReference(sessionId, path, range).then((o) => setStatus(statusOfAdd(o, '已添加文件引用')))
+  }
+
+  // 供 Monaco 原生右键菜单 addAction 读取的最新动作闭包（空依赖回调不随渲染重建）
+  menuHandlersRef.current = { addRefToChat }
 
   const openFile = (path, focusDiff) => {
     if (!path) return
@@ -532,6 +653,11 @@ export function EditorView(props) {
       className: 'edrv-tab' + (t.path === active ? ' edrv-tab-active' : ''),
       title: t.path,
       onClick: () => { if (t.path !== active) { flushSave(); setActive(t.path) } },
+      onContextMenu: (e) => {
+        e.preventDefault()
+        e.stopPropagation()
+        setTabMenu({ x: e.clientX, y: e.clientY, path: t.path })
+      },
     },
       React.createElement('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 180 } }, t.path.split(/[\\/]/).pop() || t.path),
       (dirtyMap[t.path] ? React.createElement('span', { className: 'edrv-tab-dot' }) : null),
@@ -664,6 +790,30 @@ export function EditorView(props) {
               })
             : null))
 
+  // Tab 右键菜单浮层：全屏遮罩（点击/右键关闭）+ 菜单（固定定位，clamp 防越界）。
+  // 编辑区右键走 Monaco 原生 context menu（editor.addAction），不在此渲染浮层。
+  /**
+   * 计算右键菜单固定定位（clamp 防越出视口）。
+   * @author ddj 2026年08月25号
+   */
+  const menuPos = (x, y) => ({
+    left: Math.max(4, Math.min(x, (window.innerWidth || 800) - 224)),
+    top: Math.max(4, Math.min(y, (window.innerHeight || 600) - 176)),
+  })
+  const menuBackdrop = tabMenu
+    ? React.createElement('div', {
+        style: { position: 'fixed', inset: 0, zIndex: 70 },
+        onClick: dismissMenus,
+        onContextMenu: (e) => { e.preventDefault(); dismissMenus() },
+      })
+    : null
+  const tabMenuEl = tabMenu
+    ? React.createElement('div', { className: 'edrv-ctxmenu', style: menuPos(tabMenu.x, tabMenu.y) },
+        React.createElement('button', { className: 'edrv-ctxmenu-item', onClick: () => { addRefToChat(tabMenu.path); dismissMenus() } }, '添加文件到对话'),
+        React.createElement('div', { className: 'edrv-ctxmenu-sep' }),
+        React.createElement('button', { className: 'edrv-ctxmenu-item edrv-ctxmenu-danger', onClick: () => { closeTab(tabMenu.path); dismissMenus() } }, '关闭标签页'))
+    : null
+
   return React.createElement('div', { 'data-edrv-view': '1', style: { height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column', background: 'var(--dsw-alias-bg-base,transparent)', overflow: 'hidden' } },
     pathBar,
     tabRow,
@@ -671,5 +821,7 @@ export function EditorView(props) {
       body,
       hoverEl,
       overlay),
+    menuBackdrop,
+    tabMenuEl,
     statusBar)
 }
