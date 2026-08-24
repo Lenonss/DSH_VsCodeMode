@@ -1,7 +1,9 @@
 /**
  * dsh-vscode-mode client — DSH 对话文件链接的统一打开路由。
- * @author ddj 2026年08月24号
+ * openPath 补丁经 compat.patchMethod 安装（链式恢复，多插件补丁互不踩踏）。
+ * 作者 ddj 2026年08月24号
  */
+import { patchMethod } from './compat.js'
 import { openEditorView } from './events.js'
 import { AUTO_OPEN_TOOL, VSCODE_OPEN_TOOL, type FileOpenContext, type FileOpenerRegistry, isAvailable, selectOpener } from './fileOpeners.js'
 
@@ -20,8 +22,7 @@ export interface OpenPathRouterOptions {
  * @returns 恢复原方法的 disposer
  */
 export function installOpenPathRouter(options: OpenPathRouterOptions): () => void {
-  const original = options.workspaces.openPath
-  const open = async (path: string): Promise<void> => {
+  const open = async (original: (path: string) => Promise<void>, path: string): Promise<void> => {
     const context = options.context()
     const opener = selectOpener(options.registry, options.selected())
     if (!opener || !isAvailable(opener)) return original.call(options.workspaces, path)
@@ -33,8 +34,7 @@ export function installOpenPathRouter(options: OpenPathRouterOptions): () => voi
       else throw error
     }
   }
-  options.workspaces.openPath = open
-  return () => { options.workspaces.openPath = original }
+  return patchMethod(options.workspaces, 'openPath', open as never)
 }
 
 /**

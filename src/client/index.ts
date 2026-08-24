@@ -20,7 +20,9 @@ import { rpc } from './rpc.js'
 import { createFileOpenerRegistry, scanSidebar, type FileOpenContext } from './fileOpeners.js'
 import type { FileOpenerRegistry } from './fileOpeners.js'
 import { installOpenPathRouter, vscodeOpener, autoValue } from './openPathRouter.js'
-import { SettingsContext, getSettingsScope } from './settingsContext.js'
+import { SettingsContext } from './settingsContext.js'
+import { SIDEBAR_PLUGIN, pickSettingsBinder, registerSlotSafely } from './compat.js'
+import type { CompatAdapter } from '../shared/compat.js'
 
 export const inject = ['slots', 'timer', 'locale', 'connection', 'remote', 'workspaces', 'sessions', 'settingsScope', 'webUiSettings']
 
@@ -36,8 +38,16 @@ export function apply(ctx: any): void {
   const workspaces = ctx.get('workspaces')
   const sessions = ctx.get('sessions')
   const originalOpenPath = workspaces?.openPath
-  const settings = getSettingsScope(ctx)
+  const binder = pickSettingsBinder(ctx)
+  const settings = binder.scope
   let selected = autoValue('auto')
+
+  /** 客户端侧兼容摘要（与 host 报告合并展示；惰性求值保证 HMR 后仍新鲜）。 */
+  const compatSummary = (): CompatAdapter[] => [
+    { name: '设置桥', active: settings !== undefined, note: settings !== undefined ? '使用 ' + binder.service + ' 桥' : '未绑定设置服务（fileOpenTool 持久化不可用）' },
+    { name: '文件打开路由（workspaces.openPath）', active: Boolean(workspaces?.openPath), note: 'vscode 打开器优先，失败回退系统打开' },
+    { name: '侧边栏打开器（' + SIDEBAR_PLUGIN + '）', active: registry.get(SIDEBAR_PLUGIN) !== undefined, note: registry.get(SIDEBAR_PLUGIN) !== undefined ? '已注册（优先级 80）' : '未检测到侧边栏打开能力' },
+  ]
 
   ctx.provide('fileOpeners', registry)
   ctx.effect(() => registry.register(vscodeOpener()), 'vscode-mode: file opener')
@@ -76,25 +86,23 @@ export function apply(ctx: any): void {
   }
 
   // 中央「文件编辑」页签：类 VSCode 编辑器（顶部=文件页签+搜索框，差异 UI=文件底部圆角悬浮框）
-  ctx.slots.inject('conversation.view', () => ctx.slots.register({
+  registerSlotSafely(ctx, {
     name: 'conversation.view',
     id: 'edrv-editor',
     order: 5,
     label: '文件编辑',
     inject: (sessionId: string) => ({ sessionId }),
-  }, (props: unknown) => React.createElement(EditorView, Object.assign({}, props, { schedule }))))
+  }, (props: unknown) => React.createElement(EditorView, Object.assign({}, props, { schedule })))
 
   // header 差异角标：仅当前工作区存在差异时渲染
-  ctx.slots.inject('conversation.session.header.utilities', () => ctx.slots.register(
-    { name: 'conversation.session.header.utilities', id: 'edrv-diff-badge', order: 90, label: '差异' },
-    (props: unknown) => React.createElement(DiffBadge, Object.assign({}, props)),
-  ))
+  registerSlotSafely(ctx, { name: 'conversation.session.header.utilities', id: 'edrv-diff-badge', order: 90, label: '差异' },
+    (props: unknown) => React.createElement(DiffBadge, Object.assign({}, props)))
 
   // 设置页中的 VSCodeMode 专属页签，MCP 管理作为该页签的内部子 Tab。
-  ctx.slots.inject('settings.section', () => ctx.slots.register({
+  registerSlotSafely(ctx, {
     name: 'settings.section',
     id: 'vscode-mode',
     order: 30,
     label: 'VSCodeMode',
-  }, () => React.createElement(SettingsContext.Provider, { value: settings }, React.createElement(McpSettings, { openerRegistry: registry }))))
+  }, () => React.createElement(SettingsContext.Provider, { value: settings }, React.createElement(McpSettings, { openerRegistry: registry, compatSummary })))
 }

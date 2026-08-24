@@ -153,9 +153,43 @@ function GeneralSettings({ registry }) {
   )
 }
 
+/** 兼容性小节：host 报告（RPC compat）+ 客户端本地适配项。 */
+function CompatSection({ getSummary }) {
+  const [report, setReport] = React.useState(null)
+  const [error, setError] = React.useState('')
+  React.useEffect(() => {
+    let alive = true
+    rpc('compat', {}).then((result) => {
+      if (!alive) return
+      if (!result.ok) setError(String(result.error))
+      else setReport(result.report)
+    }).catch((e) => { if (alive) setError(String(e)) })
+    return () => { alive = false }
+  }, [])
+  const renderItems = (list) => (list ?? []).map((item) => React.createElement('div', { key: item.name, className: 'vsm-compat-item ' + (item.active ? 'ok' : 'warn') },
+    React.createElement('span', { className: 'vsm-compat-name' }, item.name),
+    React.createElement('span', { className: 'vsm-compat-note' }, item.note ?? (item.active ? '正常' : '未生效')),
+  ))
+  const warnings = report?.warnings ?? []
+  return React.createElement('section', { className: 'vsm-general-page' },
+    React.createElement('h2', null, '兼容性'),
+    React.createElement('p', null, '检测与其他插件 / DSH 版本的适配状态与已知问题。' + (report?.pluginVersion ? '（插件版本 ' + report.pluginVersion + '）' : '')),
+    error && React.createElement('div', { className: 'vsm-mcp-error vsm-mcp-banner' }, error),
+    React.createElement('h3', { className: 'vsm-compat-h3' }, '外部插件与服务'),
+    renderItems(report?.external),
+    React.createElement('h3', { className: 'vsm-compat-h3' }, '客户端适配'),
+    renderItems(getSummary?.() ?? []),
+    React.createElement('h3', { className: 'vsm-compat-h3' }, '护栏'),
+    renderItems(report?.guards),
+    React.createElement('h3', { className: 'vsm-compat-h3' }, '警告'),
+    warnings.length ? warnings.map((w, index) => React.createElement('div', { key: index, className: 'vsm-mcp-error vsm-mcp-banner' }, w)) : React.createElement('div', { className: 'vsm-compat-item ok' }, React.createElement('span', { className: 'vsm-compat-name' }, '未检测到兼容性问题'), React.createElement('span', { className: 'vsm-compat-note' }, '')),
+  )
+}
+
 /** MCP 管理主面板。 */
 export function McpSettings(props) {
   const openerRegistry = props?.openerRegistry ?? { list: () => [] }
+  const compatSummary = props?.compatSummary ?? (() => [])
   const [servers, setServers] = React.useState<MpcServer[]>([])
   const [projects, setProjects] = React.useState<MpcProject[]>([])
   const [loading, setLoading] = React.useState(true)
@@ -252,11 +286,12 @@ export function McpSettings(props) {
   else if (tab === 'general') body = React.createElement(GeneralSettings, { registry: openerRegistry })
   else if (tab === 'mine') body = React.createElement('div', null, servers.length ? servers.map((s) => React.createElement(ServerCard, { key: s.id, server: s, onRefresh: refreshGlobal, onToggle: toggleGlobal, onRemove: removeGlobal })) : React.createElement('div', { className: 'vsm-mcp-empty' }, '还没有配置全局 MCP'))
   else if (tab === 'projects') body = projectBody
+  else if (tab === 'compat') body = React.createElement(CompatSection, { getSummary: compatSummary })
   else body = marketBody
   const form = showForm ? React.createElement(McpForm, { title: '添加全局 MCP', draft, busy, edit, save: saveGlobal, close: () => setShowForm(false) }) : projectForm ? React.createElement(McpForm, { title: '添加项目 MCP · ' + projectForm.title, draft, busy, edit, save: saveProject, close: () => setProjectForm(null) }) : null
   return React.createElement('section', { className: 'vsm-mcp-page' },
     React.createElement('header', { className: 'vsm-mcp-header' }, React.createElement('div', null, React.createElement('h2', null, 'VSCodeMode'), React.createElement('p', null, '管理当前 profile 与各项目的 Model Context Protocol 服务。')), React.createElement('button', { className: 'vsm-primary', onClick: () => { setDraft(EMPTY); setShowForm(true) } }, '+ 添加全局 MCP')),
-    React.createElement('nav', { className: 'vsm-mcp-tabs' }, React.createElement('button', { className: tab === 'general' ? 'active' : '', onClick: () => setTab('general') }, '通用'), React.createElement('button', { className: tab === 'mine' ? 'active' : '', onClick: () => setTab('mine') }, '我的 MCP'), React.createElement('button', { className: tab === 'projects' ? 'active' : '', onClick: () => setTab('projects') }, '项目 MCP'), React.createElement('button', { className: tab === 'market' ? 'active' : '', onClick: () => setTab('market') }, 'MCP 市场')),
+    React.createElement('nav', { className: 'vsm-mcp-tabs' }, React.createElement('button', { className: tab === 'general' ? 'active' : '', onClick: () => setTab('general') }, '通用'), React.createElement('button', { className: tab === 'mine' ? 'active' : '', onClick: () => setTab('mine') }, '我的 MCP'), React.createElement('button', { className: tab === 'projects' ? 'active' : '', onClick: () => setTab('projects') }, '项目 MCP'), React.createElement('button', { className: tab === 'market' ? 'active' : '', onClick: () => setTab('market') }, 'MCP 市场'), React.createElement('button', { className: tab === 'compat' ? 'active' : '', onClick: () => setTab('compat') }, '兼容性')),
     error && React.createElement('div', { className: 'vsm-mcp-error vsm-mcp-banner' }, error),
     body,
     form,

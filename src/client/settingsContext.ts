@@ -1,31 +1,21 @@
 /**
  * dsh-vscode-mode client — 设置 scope 的跨组件上下文。
- * @author ddj 2026年08月24号
+ * 绑定逻辑（webUiSettings 兼容桥 → 官方 settingsScope 降级）统一由 compat 层提供。
+ * 作者 ddj 2026年08月24号
  */
 import React from 'react'
+import { pickSettingsBinder, type SettingsScopeLike } from './compat.js'
 
-export interface SettingsScopeLike {
-  getSnapshot: () => { status?: string; value?: { fileOpenTool?: unknown }; writable?: boolean }
-  subscribe: (listener: () => void) => () => void
-  set: (field: string, value: unknown) => Promise<void>
-}
+export type { SettingsScopeLike }
 
 export const SettingsContext = React.createContext<SettingsScopeLike | undefined>(undefined)
 
 /**
- * 从 Cordis 服务绑定 VSCodeMode 设置 scope。
- * @author ddj 2026年08月24号
- * @param ctx 客户端上下文
- * @returns 设置 scope 或 undefined
- */
-/**
- * 绑定官方设置 scope，优先使用 web-ui 兼容桥。
+ * 从 Cordis 服务绑定 VSCodeMode 设置 scope（兼容桥优先，官方次之）。
  * @author ddj 2026年08月24号
  * @param ctx 客户端服务上下文
- * @returns 设置 scope；未安装设置服务时返回 undefined
+ * @returns 设置 scope 或 undefined
  */
 export function getSettingsScope(ctx: { get: (name: string) => unknown }): SettingsScopeLike | undefined {
-  const service = ctx.get('webUiSettings') ?? ctx.get('settingsScope')
-  const binder = service as { bind?: (spec: { namespace: string }) => SettingsScopeLike } | undefined
-  return binder?.bind?.({ namespace: 'dsh-vscode-mode' })
+  return pickSettingsBinder(ctx).scope
 }

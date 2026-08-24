@@ -13,6 +13,7 @@ import type {
   StaleHunk,
 } from './types.js'
 import type { MpcConfig, MpcProject, MpcProjectSaveInput, MpcServer } from './mcp.js'
+import type { CompatReport } from './compat.js'
 
 /** webServer 精确路由。 */
 export const RPC_PATH = '/edrv/rpc'
@@ -45,6 +46,7 @@ export interface RpcRequestMap {
   'mcp.projectRefresh': { workspacePath: string; serverName: string }
   'vscode.fileOpenSettingsGet': {}
   'vscode.fileOpenSettingsUpdate': { fileOpenTool: string; expectedRevision?: number }
+  'compat': {}
 }
 
 export type RpcMethod = keyof RpcRequestMap
@@ -74,6 +76,7 @@ export interface RpcOkMap {
   'mcp.projectRefresh': { project: MpcProject }
   'vscode.fileOpenSettingsGet': { fileOpenTool: string; revision?: number }
   'vscode.fileOpenSettingsUpdate': { fileOpenTool: string; revision?: number }
+  'compat': { report: CompatReport }
 }
 
 /** 统一响应：{ok:true, ...payload} 或 {ok:false, error}。 */

@@ -84,24 +84,34 @@ npm pack              # 产物 tgz（含 lib/assets/src/cordis.patch.yml）
 
 ```
 src/
-├── index.ts            Host 入口：name/inject/apply（薄装配）
+├── index.ts            Host 入口：name/inject/apply（薄装配，含兼容性报告启动日志）
 ├── shared/             ★ 双面契约（禁 node/react）：types.ts（记录/归档/摘要）+ rpc.ts（11 个方法类型化）
+│                       + compat.ts（兼容性报告形状）+ mcp.ts（MCP 契约）
+├── compat.ts           ★ Host 兼容层：身份常量、外部插件探测、路由/重复装配护栏、依赖守卫、兼容性报告
 ├── model.ts            Host 纯域逻辑（可单测）：normalize/markDecision/resolved/summary/reconstruct/批次/归档
 ├── store.ts            Host 存储层：sidecar 读写合并 + 归档持久化 + stale 检测
 ├── workspace.ts        Host 工作区文件扫描（TTL 缓存）+ 快速打开搜索
 ├── revert.ts           Host 回滚/删除（fs + subprocess，fs.contains 边界校验）
 ├── registry.ts         Host 每工作区记录桶注册表
-├── rpc.ts              Host RPC 分发表（类型化 handler 表替代巨型 switch）
-├── routes.ts           Host webServer 路由（/edrv/rpc、/edrv/assets/*、/edrv/vendor/*）
+├── rpc.ts              Host RPC 分发表（类型化 handler 表替代巨型 switch，含 compat）
+├── routes.ts           Host webServer 路由（/edrv/rpc、/edrv/assets/*、/edrv/vendor/*，带冲突护栏）
 └── client/
     ├── index.ts        Client 入口：slot 注册（inject=['slots','timer']）
+    ├── compat.ts       ★ Client 兼容层：设置桥三级降级（webUiSettings→settingsScope）、slot 安全注册、openPath 链式补丁、外部插件常量
     ├── rpc.ts          Client 类型化 fetch 包装 + 诊断日志
     ├── events.ts       窗口事件助手（edrv:refresh/open-editor/show-launcher）
     ├── state/          records.ts（摘要/计数/空差异）+ regions.ts（差异区域/行裁剪）纯函数
     ├── monaco/         loader.ts（AMD 加载/语言映射）+ diffRender.ts（差异自绘渲染器）
     ├── styles/editor.css  编辑区样式（tsdown CSS-inline 注入）
     └── ui/             EditorView（编排）/ QuickOpen / DiffBox / DiffBarEmpty / DiffLauncher / DiffBadge
+                        / McpSettings（含「兼容性」子 Tab）
 ```
+
+**兼容层（`src/compat.ts` + `src/client/compat.ts`）**：集中处理与其他插件 / DSH 版本的适配——
+运行时探测 `@deepseek-ai/dsh-mcp-client`、设置桥（`webUiSettings` → `settingsScope`）等外部依赖，
+护栏检测 `/edrv` 路由前缀冲突与本插件重复装配（duplicate loader entry），
+`@deepseek-ai/dsh-settings` / `schemastery` 以动态加载引入（缺失时插件仍可加载，设置持久化降级）。
+「VSCodeMode」设置页 →「兼容性」子 Tab 或 RPC `edrv.compat` 可查看完整报告。
 
 **扩展缝（VSCode 化后续迭代）**：新能力 = `shared/rpc.ts` 加方法 + `src/rpc.ts` 加 handler +
 `client/ui/` 加组件，其余模块零改动；`monaco/*` 是可复用的编辑器服务（资源树/对比/诊断面板共用）。

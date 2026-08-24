@@ -2,11 +2,12 @@
  * dsh-vscode-mode client — 文件打开器注册表与自动选择。
  * @author ddj 2026年08月24号
  */
+import { SIDEBAR_PLUGIN } from './compat.js'
 
 export const AUTO_OPEN_TOOL = 'auto'
 export const SYSTEM_OPEN_TOOL = 'system'
 export const VSCODE_OPEN_TOOL = 'dsh-vscode-mode'
-export const SIDEBAR_OPEN_TOOL = 'dsh-better-sidebar'
+export const SIDEBAR_OPEN_TOOL = SIDEBAR_PLUGIN
 
 export interface FileOpenContext {
   sessionId?: string

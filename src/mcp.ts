@@ -1,20 +1,19 @@
 /**
  * dsh-vscode-mode host — MCP 运行时管理适配层。
  * 只操作已装配的 @deepseek-ai/dsh-mcp-client loader entry，不在浏览器侧连接 MCP。
+ * 身份常量（包名/条目前缀/新旧格式判定）统一由 compat 层持有，本模块再导出保持既有 import 面。
  * 作者 ddj 2026年08月22号
  */
+import {
+  LEGACY_PROJECT_PREFIX,
+  MCP_PACKAGE,
+  PROJECT_ENTRY_PREFIX,
+  isProjectEntryId,
+} from './compat.js'
 import type { MpcConfig, MpcServer, MpcTool } from './shared/mcp.js'
 import type { Ctx } from './store.js'
 
-const MCP_PACKAGE = '@deepseek-ai/dsh-mcp-client'
-/** 项目级 MCP 的 loader entry id 固定前缀（区分 profile 全局 MCP；注意 loader id 不能用 ':' 分隔，故用 '.'）。 */
-export const PROJECT_ENTRY_PREFIX = 'vsm-mcp.'
-const LEGACY_PROJECT_PREFIX = 'vsm-mcp:'
-
-/** 判断新旧格式项目 entry id，避免旧残留被显示为全局 MCP。 */
-export function isProjectEntryId(id: string): boolean {
-  return id.startsWith(PROJECT_ENTRY_PREFIX) || id.startsWith(LEGACY_PROJECT_PREFIX)
-}
+export { LEGACY_PROJECT_PREFIX, MCP_PACKAGE, PROJECT_ENTRY_PREFIX, isProjectEntryId }
 
 /** 列出当前 loader 中的 MCP entry。 */
 function entriesOf(ctx: Ctx): any[] {

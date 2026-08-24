@@ -27,6 +27,7 @@ import { restoreFile, revertCall, revertHunk } from './revert.js'
 import { listMcp, refreshMcp, removeMcp, saveMcp, toggleMcp } from './mcp.js'
 import { listProjects, projectRefresh, projectRemove, projectSave, projectToggle } from './mcpProject.js'
 import { normalizeFileOpenTool, FILE_OPEN_DEFAULT, FILE_OPEN_SETTINGS_NS } from './fileOpenSettings.js'
+import { buildReport } from './compat.js'
 
 /** cwd → Promise 链：串行化 debug 日志追加（fs read+write 非原子，避免并发丢行）。 */
 const debugWriteQueues = new Map<string, Promise<void>>()
@@ -322,6 +323,7 @@ export function buildHandlers(ctx: Ctx, registry: Registry, searcher = newSearch
       } catch (error) { return { ok: false, error: String(error) }
       }
     },
+    'compat': async () => ({ ok: true, report: await buildReport(ctx) }),
   }
 }
 

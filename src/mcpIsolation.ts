@@ -4,11 +4,11 @@
  * tools.restrict() 负责模型可见性，tools.guard() 负责执行层兜底拒绝。
  * 作者 ddj 2026年08月22号
  */
-import { PROJECT_ENTRY_PREFIX, entriesOf } from './mcp.js'
+import { LEGACY_PROJECT_PREFIX, entryHash, isProjectEntryId } from './compat.js'
+import { entriesOf } from './mcp.js'
 import { hashWorkspace } from './mcpProject.js'
 import type { Ctx } from './store.js'
 
-const LEGACY_PREFIX = 'vsm-mcp:'
 const UNKNOWN_PROJECT = '__unknown_project__'
 
 type ToolProjects = Map<string, string>
@@ -32,17 +32,11 @@ export function matchWorkspace(cwd: string | undefined, paths: string[]): string
   return matches[0]
 }
 
-/** 根据 entry id 判断是否为新旧格式项目 MCP。 */
-export function isProjectEntry(id: string): boolean {
-  return id.startsWith(PROJECT_ENTRY_PREFIX) || id.startsWith(LEGACY_PREFIX)
-}
+/** 根据 entry id 判断是否为新旧格式项目 MCP（兼容层统一判定）。 */
+export const isProjectEntry = isProjectEntryId
 
-/** 从项目 entry id 解析 workspace hash。 */
-function entryHash(id: string): string | undefined {
-  if (id.startsWith(PROJECT_ENTRY_PREFIX)) return id.slice(PROJECT_ENTRY_PREFIX.length).split('.')[0]
-  if (id.startsWith(LEGACY_PREFIX)) return id.slice(LEGACY_PREFIX.length).split(':')[0]
-  return undefined
-}
+/** 兼容：旧版前缀常量名（mcpIsolation 历史导出，语义不变）。 */
+export const LEGACY_PREFIX = LEGACY_PROJECT_PREFIX
 
 /** 返回一个 agent 不应继承的项目工具名。 */
 export function denyTools(toolProjects: ToolProjects, currentPath: string | undefined): string[] {

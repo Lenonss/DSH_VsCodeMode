@@ -93,3 +93,11 @@
 .vsm-mcp-dialog-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:20px}
 .vsm-mcp-dialog-actions button{padding:8px 14px;border:1px solid var(--dsw-alias-border-l2,#555);border-radius:6px;background:none;color:var(--dsw-alias-label-primary,#eee);cursor:pointer;font-size:13px}
 .vsm-mcp-dialog-actions button:hover{background:var(--dsw-alias-interactive-bg-hover,#ffffff14)}
+
+/* 兼容性小节 */
+.vsm-compat-h3{margin:16px 0 2px;font-size:14px;font-weight:600;color:var(--dsw-alias-label-secondary,#c8c8c8)}
+.vsm-compat-item{display:flex;align-items:baseline;justify-content:space-between;gap:16px;padding:10px 0;border-bottom:1px solid var(--dsw-alias-border-l1,#333);font-size:13px;color:var(--dsw-alias-label-primary,#eee)}
+.vsm-compat-item.ok .vsm-compat-name::before{content:"● ";color:var(--dsw-alias-state-success-primary,#38bd75)}
+.vsm-compat-item.warn .vsm-compat-name::before{content:"● ";color:var(--dsw-alias-state-warn-primary,#e5b93f)}
+.vsm-compat-name{font-weight:500;min-width:0}
+.vsm-compat-note{color:var(--dsw-alias-label-tertiary,#9aa5b1);font-size:12px;text-align:right;min-width:0}

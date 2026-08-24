@@ -6,6 +6,7 @@
 import { readFile } from 'node:fs/promises'
 import { dirname, extname, join, normalize, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { ROUTE_PREFIX, noteOwnRoute, resetOwnRoutes, routeConflict } from './compat.js'
 import { RPC_PATH } from './shared/rpc.js'
 import type { RpcMethod, RpcRequestMap } from './shared/rpc.js'
 import type { Ctx } from './store.js'
@@ -45,22 +46,40 @@ function imageDirOf(config: unknown): string {
 const vendorDir = join(dirname(fileURLToPath(import.meta.url)), '..', 'assets', 'vendor')
 
 /**
- * 注册全部 webServer 路由。
+ * 注册全部 webServer 路由（带兼容护栏：前缀冲突预警 + 注册失败降级跳过）。
  * @author ddj 2026年08月20号
  * @param ctx DSH 上下文
  * @param config 插件配置（可选 imageDir 等）
  * @param handleRpc RPC 分发入口（method,args → RpcResult）
+ * @param onWarning 兼容性警告收集（可选）
  */
 export function registerRoutes(
   ctx: Ctx,
   config: unknown,
   handleRpc: <M extends RpcMethod>(method: M, args: RpcRequestMap[M]) => Promise<unknown>,
+  onWarning?: (warning: string) => void,
 ): void {
   const imgDir = imageDirOf(config)
   const web = ctx.get('webServer')
   if (!web) return
 
-  ctx.effect(() => web.register({
+  resetOwnRoutes()
+  const conflict = routeConflict(web, ROUTE_PREFIX)
+  if (conflict) onWarning?.('兼容性：' + conflict)
+
+  /** 护栏注册：重复路由抛错时降级为警告并跳过，不让单条路由拖垮装配。 */
+  const guarded = (route: { kind: 'exact' | 'prefix'; path: string; handler?: unknown }, label: string): (() => void) | undefined => {
+    try {
+      const dispose = web.register(route)
+      noteOwnRoute(route.kind, route.path)
+      return dispose
+    } catch (error) {
+      onWarning?.('兼容性：' + label + ' 注册失败（' + String(error) + '）')
+      return undefined
+    }
+  }
+
+  ctx.effect(() => guarded({
     kind: 'exact',
     path: RPC_PATH,
     handler: async (req: unknown, res: { statusCode?: number; setHeader: (k: string, v: string) => void; end: (b?: string) => void }) => {
@@ -83,10 +102,10 @@ export function registerRoutes(
         res.end(JSON.stringify({ ok: false, error: String(error) }))
       }
     },
-  }), 'edrv: /edrv/rpc route')
+  }, '/edrv/rpc 精确路由'), 'edrv: routes')
 
   for (const r of IMG_ROUTES) {
-    ctx.effect(() => web.register({
+    ctx.effect(() => guarded({
       kind: 'exact',
       path: r.url,
       handler: async (req: unknown, res: { statusCode?: number; setHeader: (k: string, v: string) => void; end: (b?: string | Uint8Array) => void }) => {
@@ -101,11 +120,11 @@ export function registerRoutes(
           res.end()
         }
       },
-    }), 'edrv: static ' + r.file)
+    }, '静态资源 ' + r.file), 'edrv: routes')
   }
 
   // Monaco Editor AMD 构建：/edrv/vendor/* → assets/vendor/*（路径穿越防护 + 按扩展名 MIME）
-  ctx.effect(() => web.register({
+  ctx.effect(() => guarded({
     kind: 'prefix',
     path: VENDOR_PREFIX,
     handler: async (req: { method?: string; url?: string }, res: { statusCode?: number; setHeader: (k: string, v: string) => void; end: (b?: string | Uint8Array) => void }) => {
@@ -134,5 +153,5 @@ export function registerRoutes(
         res.end()
       }
     },
-  }), 'edrv: /edrv/vendor prefix')
+  }, '/edrv/vendor 前缀路由'), 'edrv: routes')
 }
