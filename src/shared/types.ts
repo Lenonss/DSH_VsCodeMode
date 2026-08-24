@@ -15,6 +15,12 @@ export type Decision = 'pending' | 'accepted' | 'rejected'
 export interface Hunk {
   oldText: string | null
   newText: string
+  /** 执行后快照中的精确范围（可选，旧记录没有）。 */
+  afterStart?: number
+  afterEnd?: number
+  /** 执行前快照中的精确范围（可选，旧记录没有）。 */
+  beforeStart?: number
+  beforeEnd?: number
 }
 
 /** 单条 edit 调用的精确 old/new 串（edit 工具参数原样）。 */
@@ -41,6 +47,15 @@ export interface RecordBase {
   note: string | null
   superseded: boolean
   at: string
+  /** 完整执行后快照；旧 sidecar 缺失时为 undefined。 */
+  after?: string | null
+  /** 执行前/后快照指纹，用于保守冲突判断。 */
+  baseFingerprint?: string | null
+  afterFingerprint?: string | null
+  /** 当前磁盘内容无法安全匹配时保留记录并标记冲突。 */
+  conflict?: boolean
+  /** 记录来自没有快照字段的旧 sidecar。 */
+  legacy?: boolean
 }
 
 /** host 内部完整记录（含持久化专用字段）。 */

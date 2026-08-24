@@ -4,6 +4,7 @@
  * 作者 ddj 2026-08-20
  */
 import type { Hunk, RecordView } from '../../shared/types.js'
+import { locateHunks, lineBefore, preciseHunk, splitLines } from '../../shared/diff.js'
 import { ST, noopHunk, statusAt } from './records.js'
 import type { Status } from './records.js'
 
@@ -25,9 +26,7 @@ export interface Region {
 
 /** 统计 index 之前（不含）的换行数 → 0 基行号。 */
 export function countLinesBefore(text: string, index: number): number {
-  let n = 0
-  for (let i = 0; i < index; i++) if (text.charCodeAt(i) === 10) n++
-  return n
+  return lineBefore(text, index)
 }
 
 /**
@@ -51,29 +50,36 @@ export function trimCommonLines(oldLines: string[], newLines: string[]): { oldLi
 export function diffRegions(records: RecordView[], content: string | null): Region[] {
   const regions: Region[] = []
   if (content === null) return regions
-  const lines = content.split('\n')
+  const lines = splitLines(content)
   for (const rec of records) {
+    if (rec.create) {
+      for (let i = 0; i < rec.hunks.length; i++) {
+        const h = preciseHunk(rec, i)
+        if (!h || noopHunk(rec, h)) continue
+        regions.push({ callId: rec.callId, idx: i, start: 1, end: Math.max(1, lines.length), oldLines: [], newLines: lines.slice(), whole: true, status: statusAt(rec, i), create: true, rec, superseded: rec.superseded === true })
+      }
+      continue
+    }
+    const entries: Array<{ idx: number; hunk: Hunk }> = []
     for (let i = 0; i < rec.hunks.length; i++) {
-      const h: Hunk = rec.hunks[i]
-      if (noopHunk(rec, h)) continue // 空差异（old===new）无实际变化，跳过
-      const status = statusAt(rec, i)
-      if (rec.create) {
-        regions.push({ callId: rec.callId, idx: i, start: 1, end: lines.length, oldLines: [], newLines: lines.slice(), whole: true, status, create: true, rec, superseded: rec.superseded === true })
+      const hunk = preciseHunk(rec, i)
+      if (hunk && !noopHunk(rec, hunk)) entries.push({ idx: i, hunk })
+    }
+    const locations = locateHunks(content, entries.map((entry) => entry.hunk))
+    for (let i = 0; i < entries.length; i++) {
+      const entry = entries[i]
+      const location = locations[i]
+      const status = statusAt(rec, entry.idx)
+      if (!location.matched) {
+        regions.push({ callId: rec.callId, idx: entry.idx, stale: true, status, create: false, oldLines: entry.hunk.oldText === null ? [] : entry.hunk.oldText.split('\n'), newLines: entry.hunk.newText ? entry.hunk.newText.split('\n') : [], rec, superseded: rec.superseded === true })
         continue
       }
-      const precise = rec.toolName === 'edit' && rec.callHunk ? rec.callHunk : h
-      const newText = precise.newText ?? ''
-      const at = content.indexOf(newText)
-      if (at < 0) {
-        regions.push({ callId: rec.callId, idx: i, stale: true, status, create: false, oldLines: [], newLines: [], rec, superseded: rec.superseded === true })
-        continue
-      }
-      const start = countLinesBefore(content, at) + 1
-      const oldLines = precise.oldText === null ? [] : precise.oldText.split('\n')
-      const newLines = newText.split('\n')
+      const start = countLinesBefore(content, location.start) + 1
+      const oldLines = entry.hunk.oldText === null ? [] : entry.hunk.oldText.split('\n')
+      const newLines = entry.hunk.newText.split('\n')
       const trimmed = trimCommonLines(oldLines, newLines)
       const regionStart = start + trimmed.shift
-      regions.push({ callId: rec.callId, idx: i, start: regionStart, end: regionStart + trimmed.newLines.length, oldLines: trimmed.oldLines, newLines: trimmed.newLines, status, create: false, rec, superseded: rec.superseded === true })
+      regions.push({ callId: rec.callId, idx: entry.idx, start: regionStart, end: regionStart + trimmed.newLines.length, oldLines: trimmed.oldLines, newLines: trimmed.newLines, status, create: false, rec, superseded: rec.superseded === true })
     }
   }
   regions.sort((a, b) => (a.start ?? Infinity) - (b.start ?? Infinity))

@@ -8,13 +8,14 @@
 import { registerRoutes } from './routes.js'
 import { captureToolResult } from './capture.js'
 import { handleRpc } from './rpc.js'
+import { installIsolation } from './mcpIsolation.js'
 import { dropFileIndex } from './workspace.js'
 import { cwdOf } from './registry.js'
 import type { Registry } from './registry.js'
 import type { Ctx } from './store.js'
 
 export const name = "dsh-vscode-mode"
-export const inject = ['sessions', 'fs', 'webServer']
+export const inject = ['sessions', 'fs', 'webServer', 'loader', 'tools', 'workspaceRegistry', 'agents']
 
 /**
  * 装配插件：挂事件监听、注册路由。
@@ -38,6 +39,7 @@ export function apply(ctx: Ctx, config?: unknown): void {
   })
 
   registerRoutes(ctx, config, (method, args) => handleRpc(ctx, registry, method, args))
+  installIsolation(ctx)
 
-  ctx.logger?.info?.('[' + name + '] 编辑差异审查已装配（/edrv/rpc 路由就绪）')
+  ctx.logger?.info?.('[' + name + '] 编辑差异审查已装配（/edrv/rpc 路由就绪，项目 MCP 隔离已启用）')
 }

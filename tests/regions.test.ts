@@ -66,6 +66,18 @@ describe('diffRegions', () => {
     const regs = diffRegions([r], 'line1\nline2')
     expect(regs[0].stale).toBe(true)
   })
+  it('重复 newText 的多个 hunk 分别定位', () => {
+    const r = rec({ hunks: [{ oldText: 'old1', newText: 'same' }, { oldText: 'old2', newText: 'same' }], decisions: { call: 'pending', perHunk: ['pending', 'pending'] } })
+    const regs = diffRegions([r], 'same\nkeep\nsame')
+    expect(regs).toHaveLength(2)
+    expect(regs.map((item) => item.start)).toEqual([1, 3])
+  })
+  it('纯删除 hunk 不制造首行新增区域', () => {
+    const r = rec({ hunks: [{ oldText: 'gone', newText: '' }], decisions: { call: 'pending', perHunk: ['pending'] } })
+    const regs = diffRegions([r], 'keep')
+    expect(regs[0].stale).toBe(true)
+    expect(regs[0].newLines).toEqual([])
+  })
   it('空差异跳过', () => {
     const r = rec({ hunks: [{ oldText: 'x', newText: 'x' }], decisions: { call: 'pending', perHunk: ['pending'] } })
     expect(diffRegions([r], 'x')).toHaveLength(0)

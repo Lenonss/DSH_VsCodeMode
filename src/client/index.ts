@@ -15,8 +15,9 @@ import React from 'react'
 import './styles/editor.css'
 import { EditorView } from './ui/EditorView.js'
 import { DiffBadge } from './ui/DiffBadge.js'
+import { McpSettings } from './ui/McpSettings.js'
 
-export const inject = ['slots', 'timer']
+export const inject = ['slots', 'timer', 'locale', 'connection', 'remote']
 
 /**
  * 装配客户端：注册中央编辑区视图与 header 差异角标。
@@ -41,4 +42,12 @@ export function apply(ctx: any): void {
     { name: 'conversation.session.header.utilities', id: 'edrv-diff-badge', order: 90, label: '差异' },
     (props: unknown) => React.createElement(DiffBadge, Object.assign({}, props)),
   ))
+
+  // 设置页中的 VSCodeMode 专属页签，MCP 管理作为该页签的内部子 Tab。
+  ctx.slots.inject('settings.section', () => ctx.slots.register({
+    name: 'settings.section',
+    id: 'vscode-mode',
+    order: 30,
+    label: 'VSCodeMode',
+  }, () => React.createElement(McpSettings)))
 }

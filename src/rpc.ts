@@ -23,6 +23,8 @@ import type { Registry } from './registry.js'
 import { bucketOf, cwdOf, sessionOf } from './registry.js'
 import { listWorkspaceFiles } from './workspace.js'
 import { restoreFile, revertCall, revertHunk } from './revert.js'
+import { listMcp, refreshMcp, removeMcp, saveMcp, toggleMcp } from './mcp.js'
+import { listProjects, projectRefresh, projectRemove, projectSave, projectToggle } from './mcpProject.js'
 
 /** cwd → Promise 链：串行化 debug 日志追加（fs read+write 非原子，避免并发丢行）。 */
 const debugWriteQueues = new Map<string, Promise<void>>()
@@ -40,6 +42,11 @@ function recView(record: DiffRecord): RecordView {
     decisions: record.decisions,
     note: record.note ?? null,
     superseded: record.superseded === true,
+    after: record.after ?? null,
+    baseFingerprint: record.baseFingerprint ?? null,
+    afterFingerprint: record.afterFingerprint ?? null,
+    conflict: record.conflict === true,
+    legacy: record.legacy === true,
     at: record.at,
   }
 }
@@ -274,6 +281,43 @@ export function buildHandlers(ctx: Ctx, registry: Registry): RpcHandlerMap {
         files.push(...hit.slice(0, 50))
       }
       return { ok: true, files, truncated: files.length >= 50 }
+    },
+    'mcp.list': async () => ({ ok: true, ...listMcp(ctx) }),
+    'mcp.save': async (args) => {
+      try { return { ok: true, server: await saveMcp(ctx, args.config) } }
+      catch (error) { return { ok: false, error: String(error) } }
+    },
+    'mcp.remove': async (args) => {
+      try { await removeMcp(ctx, args.id); return { ok: true } }
+      catch (error) { return { ok: false, error: String(error) } }
+    },
+    'mcp.toggle': async (args) => {
+      try { return { ok: true, server: await toggleMcp(ctx, args.id, args.enabled) } }
+      catch (error) { return { ok: false, error: String(error) } }
+    },
+    'mcp.refresh': async (args) => {
+      try { return { ok: true, server: await refreshMcp(ctx, args.id) } }
+      catch (error) { return { ok: false, error: String(error) } }
+    },
+    'mcp.projects': async () => {
+      try { return { ok: true, ...await listProjects(ctx) } }
+      catch (error) { return { ok: false, error: String(error) } }
+    },
+    'mcp.projectSave': async (args) => {
+      try { return { ok: true, project: await projectSave(ctx, args.workspacePath, args.serverName, args.config) } }
+      catch (error) { return { ok: false, error: String(error) } }
+    },
+    'mcp.projectRemove': async (args) => {
+      try { return { ok: true, project: await projectRemove(ctx, args.workspacePath, args.serverName) } }
+      catch (error) { return { ok: false, error: String(error) } }
+    },
+    'mcp.projectToggle': async (args) => {
+      try { return { ok: true, project: await projectToggle(ctx, args.workspacePath, args.serverName, args.enabled) } }
+      catch (error) { return { ok: false, error: String(error) } }
+    },
+    'mcp.projectRefresh': async (args) => {
+      try { return { ok: true, project: await projectRefresh(ctx, args.workspacePath, args.serverName) } }
+      catch (error) { return { ok: false, error: String(error) } }
     },
   }
 }

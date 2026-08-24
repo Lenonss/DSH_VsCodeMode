@@ -37,6 +37,7 @@ export function DiffBox(props) {
     })
     const stale = staleRegions.map((r) => React.createElement('div', { key: 'stale' + callIdAttr(r.callId, r.idx), className: 'edrv-diffrow edrv-diffrow-stale', title: '差异无法定位（文件可能已被手动修改）' },
       React.createElement('span', { className: 'edrv-diffrow-l' }, 'L' + (r.start ?? '?') + ' 无法定位'),
+      React.createElement('span', { className: 'edrv-diffrow-tag' }, '冲突/需刷新'),
       React.createElement('span', { className: 'edrv-diffrow-tag' }, badgeOf(r.status))))
     let othersEl = null
     if (otherFiles.length) {

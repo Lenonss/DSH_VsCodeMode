@@ -11,6 +11,9 @@
   逐文件列出差异（采纳 Keep / 不采纳 Undo / 跳转 / 回滚 / 归档对比），header 差异角标 + 状态栏 chip
   （DiffLauncher 全局总览 + 归档/批次回滚）。状态持久化到工作区旁车（`.dsh-edit-review.json`，重启不丢）。
 - **Monaco 离线分发**：`assets/vendor/monaco` AMD 构建随包发布，经 `/edrv/vendor/*` 前缀路由提供，全离线可用。
+- **MCP 可视化管理**（设置 → VSCodeMode）：子 Tab「我的 MCP」（profile 全局）+「项目 MCP」（各项目根 `.mcp.json`）。
+  项目级 MCP 对齐 Claude Code/Cursor：配置存于项目根目录 `.mcp.json`（`mcpServers`），随仓库共享；
+  可查看各项目连接状态/工具、添加（stdio / streamable-http）、刷新、启用/禁用、删除。工具全局生效。
 
 ## 界面截图
 

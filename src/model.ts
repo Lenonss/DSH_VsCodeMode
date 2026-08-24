@@ -4,6 +4,7 @@
  * 作者 ddj 2026-08-20
  */
 import type { Decision, DiffRecord, Hunk, RecordSummary } from './shared/types.js'
+import { applyLocations, fingerprint, isNoopHunk, locateHunks, preciseHunk } from './shared/diff.js'
 
 /** 工作区记录桶上限（超过后按 at 最旧剔除）。 */
 export const MAX_RECORDS = 200
@@ -19,22 +20,46 @@ export function normalizeRecord(raw: unknown): DiffRecord | null {
   const r = raw as Record<string, unknown>
   if (typeof r.callId !== 'string' || typeof r.path !== 'string') return null
   const hunks: Hunk[] = Array.isArray(r.hunks)
-    ? (r.hunks as unknown[]).filter((h) => h && typeof (h as { newText?: unknown }).newText === 'string') as Hunk[]
+    ? (r.hunks as unknown[]).filter((h) => h && typeof (h as { newText?: unknown }).newText === 'string').map((h) => {
+      const item = h as Record<string, unknown>
+      return {
+        oldText: typeof item.oldText === 'string' ? item.oldText : null,
+        newText: item.newText as string,
+        ...(Number.isInteger(item.afterStart) ? { afterStart: item.afterStart as number } : {}),
+        ...(Number.isInteger(item.afterEnd) ? { afterEnd: item.afterEnd as number } : {}),
+        ...(Number.isInteger(item.beforeStart) ? { beforeStart: item.beforeStart as number } : {}),
+        ...(Number.isInteger(item.beforeEnd) ? { beforeEnd: item.beforeEnd as number } : {}),
+      }
+    })
     : []
   const toolName: DiffRecord['toolName'] = r.toolName === 'write' ? 'write' : 'edit'
+  const rawDecisions = r.decisions && typeof r.decisions === 'object' ? r.decisions as Record<string, unknown> : {}
+  const call = rawDecisions.call === 'accepted' || rawDecisions.call === 'rejected' ? rawDecisions.call : 'pending'
+  const rawPerHunk = Array.isArray(rawDecisions.perHunk) ? rawDecisions.perHunk : []
+  const perHunk = hunks.map((_, i) => {
+    const value = rawPerHunk[i]
+    if (value === 'accepted' || value === 'rejected') return value
+    return call === 'accepted' || call === 'rejected' ? call : 'pending'
+  })
+  const before = typeof r.before === 'string' ? r.before : null
+  const hasAfter = Object.prototype.hasOwnProperty.call(r, 'after')
+  const after = typeof r.after === 'string' ? r.after : null
   return {
     callId: r.callId,
     toolName,
     path: r.path,
-    before: typeof r.before === 'string' ? r.before : null,
+    before,
+    after,
+    baseFingerprint: typeof r.baseFingerprint === 'string' ? r.baseFingerprint : fingerprint(before),
+    afterFingerprint: typeof r.afterFingerprint === 'string' ? r.afterFingerprint : fingerprint(after),
+    legacy: !hasAfter,
+    conflict: r.conflict === true,
     create: r.create === true,
-    callHunk: r.callHunk && typeof (r.callHunk as { oldText?: unknown }).oldText === 'string'
+    callHunk: r.callHunk && typeof (r.callHunk as { oldText?: unknown }).oldText === 'string' && typeof (r.callHunk as { newText?: unknown }).newText === 'string'
       ? { oldText: (r.callHunk as { oldText: string }).oldText, newText: (r.callHunk as { newText: string }).newText }
       : null,
-    hunks: hunks.map((h) => ({ oldText: typeof h.oldText === 'string' ? h.oldText : null, newText: h.newText })),
-    decisions: r.decisions && typeof r.decisions === 'object'
-      ? r.decisions as DiffRecord['decisions']
-      : { call: 'pending', perHunk: hunks.map(() => 'pending' as Decision) },
+    hunks,
+    decisions: { call: call as Decision, perHunk },
     note: typeof r.note === 'string' ? r.note : null,
     superseded: r.superseded === true,
     archived: r.archived === true,
@@ -68,9 +93,17 @@ export function markDecision(record: DiffRecord, scope: string, idx: number | un
 /** 记录是否已无任何待决策差异（superseded 或全部已决策）。 */
 export function recordResolved(record: DiffRecord): boolean {
   if (record.superseded === true) return true
+  const hunks = Array.isArray(record.hunks) ? record.hunks : []
   const perHunk = Array.isArray(record.decisions.perHunk) ? record.decisions.perHunk : []
-  if (perHunk.length) return perHunk.every((v) => v === 'accepted' || v === 'rejected')
-  return record.decisions.call === 'accepted' || record.decisions.call === 'rejected'
+  const count = Math.max(hunks.length, perHunk.length)
+  if (!count) return record.decisions.call === 'accepted' || record.decisions.call === 'rejected'
+  for (let idx = 0; idx < count; idx++) {
+    const precise = preciseHunk(record, idx)
+    const value = perHunk[idx] ?? record.decisions.call
+    if (isNoopHunk(precise) && value === 'pending') return false
+    if (value !== 'accepted' && value !== 'rejected') return false
+  }
+  return true
 }
 
 /**
@@ -80,20 +113,20 @@ export function recordResolved(record: DiffRecord): boolean {
  * @returns 摘要
  */
 export function recSummary(record: DiffRecord): RecordSummary {
+  const hunks = Array.isArray(record.hunks) ? record.hunks : []
   const perHunk = Array.isArray(record.decisions.perHunk) ? record.decisions.perHunk : []
-  const n = Math.max(1, Array.isArray(record.hunks) ? record.hunks.length : 1)
+  const n = Math.max(1, hunks.length, perHunk.length)
   let accepted = 0
   let rejected = 0
   let pending = 0
-  if (perHunk.length) {
-    for (const v of perHunk) {
-      if (v === 'accepted') accepted++
-      else if (v === 'rejected') rejected++
-      else pending++
-    }
-  } else if (record.decisions.call === 'accepted') accepted = n
-  else if (record.decisions.call === 'rejected') rejected = n
-  else pending = n
+  for (let i = 0; i < n; i++) {
+    const hunk = preciseHunk(record, i)
+    const value = perHunk[i] ?? record.decisions.call
+    if (i < hunks.length && isNoopHunk(hunk) && value === 'pending') continue
+    if (value === 'accepted') accepted++
+    else if (value === 'rejected') rejected++
+    else pending++
+  }
   return { accepted, rejected, pending, superseded: record.superseded === true }
 }
 
@@ -106,27 +139,21 @@ export function recSummary(record: DiffRecord): RecordSummary {
  * @returns 重建内容与 stale 定位
  */
 export function reconstructOriginal(records: DiffRecord[], content: string): { content: string; stale: Array<{ callId: string; idx: number }> } {
-  const pending: Array<{ rec: DiffRecord; idx: number }> = []
+  const pending: Array<{ rec: DiffRecord; idx: number; hunk: Hunk }> = []
   for (const rec of records) {
-    const perHunk = Array.isArray(rec.decisions.perHunk) ? rec.decisions.perHunk : []
     for (let i = 0; i < rec.hunks.length; i++) {
-      const st = perHunk.length ? perHunk[i] : rec.decisions.call
-      if (st === 'pending') pending.push({ rec, idx: i })
+      const st = rec.decisions.perHunk[i] ?? rec.decisions.call
+      const hunk = preciseHunk(rec, i)
+      if (st === 'pending' && hunk && !isNoopHunk(hunk)) pending.push({ rec, idx: i, hunk })
     }
   }
   pending.sort((a, b) => (a.rec.at < b.rec.at ? 1 : a.rec.at > b.rec.at ? -1 : 0))
-  let out = content
-  const stale: Array<{ callId: string; idx: number }> = []
-  for (const p of pending) {
-    const h = p.rec.hunks[p.idx]
-    const precise = p.rec.toolName === 'edit' && p.rec.hunks.length <= 1 && p.rec.callHunk ? p.rec.callHunk : h
-    const newText = precise.newText ?? ''
-    const at = out.indexOf(newText)
-    if (at < 0) { stale.push({ callId: p.rec.callId, idx: p.idx }); continue }
-    const oldText = precise.oldText === null ? '' : precise.oldText
-    out = out.slice(0, at) + oldText + out.slice(at + newText.length)
+  const locations = locateHunks(content, pending.map((item) => item.hunk))
+  const rebuilt = applyLocations(content, locations, true)
+  return {
+    content: rebuilt.content,
+    stale: rebuilt.stale.map((idx) => ({ callId: pending[idx].rec.callId, idx: pending[idx].idx })),
   }
-  return { content: out, stale }
 }
 
 /** 文件当前最大批次号（无记录为 0）。 */
@@ -188,6 +215,11 @@ export function archiveEntryFor(recs: DiffRecord[], cwd: string, reason: string)
       decisions: r.decisions,
       note: r.note ?? null,
       before: typeof r.before === 'string' ? r.before : null,
+      after: typeof r.after === 'string' ? r.after : null,
+      baseFingerprint: r.baseFingerprint ?? null,
+      afterFingerprint: r.afterFingerprint ?? null,
+      conflict: r.conflict === true,
+      legacy: r.legacy === true,
       superseded: r.superseded === true,
       batch: Number.isInteger(r.batch) ? r.batch : null,
       at: r.at,

@@ -1,0 +1,87 @@
+/* dsh-vscode-mode MCP 管理界面样式。
+   全部使用 DSH 真实主题变量（--dsw-alias-*），不再用不存在的 fg-* 变量。 */
+.vsm-mcp-page{display:flex;flex-direction:column;gap:18px;width:100%;max-width:920px;box-sizing:border-box;color:var(--dsw-alias-label-primary,#e6e6e6);padding-bottom:32px}
+
+/* 顶部：标题 + 副标题 + 添加按钮 */
+.vsm-mcp-header{display:flex;align-items:flex-start;justify-content:space-between;gap:20px}
+.vsm-mcp-header h2{margin:0 0 4px;font-size:20px;font-weight:600;line-height:1.35;color:var(--dsw-alias-label-primary,#e6e6e6)}
+.vsm-mcp-header p{margin:0;color:var(--dsw-alias-label-tertiary,#9aa5b1);font-size:13px;line-height:1.5}
+.vsm-primary{border:0;border-radius:6px;padding:8px 16px;background:var(--dsw-alias-button-primary-fill,#6d55ff);color:var(--dsw-alias-button-contrast-fill,#fff);font-size:13px;font-weight:500;cursor:pointer;white-space:nowrap}
+.vsm-primary:hover{background:var(--dsw-alias-button-primary-hover,#5a46e6)}
+.vsm-primary:disabled{opacity:.55;cursor:default}
+
+/* 子 Tab：我的 MCP / MCP 市场 */
+.vsm-mcp-tabs{display:flex;gap:24px;border-bottom:1px solid var(--dsw-alias-border-l2,#3a3a3a)}
+.vsm-mcp-tabs button{border:0;background:none;color:var(--dsw-alias-label-tertiary,#9aa5b1);padding:9px 2px 11px;cursor:pointer;font-size:14px;position:relative}
+.vsm-mcp-tabs button:hover{color:var(--dsw-alias-label-secondary,#c8c8c8)}
+.vsm-mcp-tabs button.active{color:var(--dsw-alias-label-primary,#fff);font-weight:500}
+.vsm-mcp-tabs button.active::after{content:"";position:absolute;left:0;right:0;bottom:-1px;height:2px;background:var(--dsw-alias-brand-primary,#6d55ff);border-radius:2px}
+
+/* 服务卡片 */
+.vsm-mcp-card{border:1px solid var(--dsw-alias-border-l2,#3a3a3a);border-radius:10px;padding:14px 16px;margin-bottom:10px;background:var(--dsw-alias-bg-layer-2,transparent);transition:border-color .15s}
+.vsm-mcp-card:hover{border-color:var(--dsw-alias-border-l3,#555)}
+.vsm-mcp-card-head{display:flex;justify-content:space-between;align-items:center;gap:12px}
+.vsm-mcp-title{display:flex;align-items:center;gap:9px;font-weight:600;font-size:14px;color:var(--dsw-alias-label-primary,#e6e6e6);min-width:0}
+.vsm-mcp-source{font-size:11px;font-weight:400;padding:2px 7px;border-radius:4px;background:var(--dsw-alias-bg-mask-2,#ffffff22);color:var(--dsw-alias-label-tertiary,#9aa5b1);flex-shrink:0}
+.vsm-mcp-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;background:var(--dsw-alias-state-error-primary,#e05252)}
+.vsm-mcp-dot.connected{background:var(--dsw-alias-state-success-primary,#38bd75)}
+.vsm-mcp-dot.connecting{background:var(--dsw-alias-state-warn-primary,#e5b93f)}
+.vsm-mcp-dot.disabled{background:var(--dsw-alias-label-tertiary,#9aa5b1)}
+.vsm-mcp-actions{display:flex;align-items:center;gap:4px;flex-shrink:0}
+.vsm-mcp-actions button{border:0;background:none;color:var(--dsw-alias-label-tertiary,#9aa5b1);cursor:pointer;font-size:15px;width:28px;height:28px;border-radius:6px;line-height:1}
+.vsm-mcp-actions button:hover{color:var(--dsw-alias-label-primary,#fff);background:var(--dsw-alias-interactive-bg-hover,#ffffff14)}
+.vsm-mcp-actions button.vsm-danger:hover{color:var(--dsw-alias-state-error-primary,#f07878);background:var(--dsw-alias-interactive-bg-hover-danger,#ff000014)}
+.vsm-switch{font-size:14px !important}
+.vsm-switch.on{color:var(--dsw-alias-state-success-primary,#38bd75)}
+.vsm-mcp-meta{font-size:12px;color:var(--dsw-alias-label-tertiary,#9aa5b1);margin:9px 0}
+.vsm-mcp-error{color:var(--dsw-alias-state-error-primary,#f07878);font-size:12px;margin:8px 0}
+.vsm-mcp-banner{padding:9px 12px;border:1px solid var(--dsw-alias-state-error-secondary,#d9534f55);border-radius:6px;background:var(--dsw-alias-state-error-secondary,#d9534f1a);margin-bottom:10px}
+
+/* 工具 chips */
+.vsm-mcp-tools{display:flex;flex-wrap:wrap;gap:6px}
+.vsm-mcp-chip{font:12px var(--ds-font-family-code,ui-monospace,monospace);padding:4px 8px;border-radius:5px;background:var(--dsw-alias-bg-mask-2,#ffffff14);color:var(--dsw-alias-label-secondary,#c8c8c8);border:1px solid var(--dsw-alias-border-l1,#333)}
+
+/* 空态 / 加载态 */
+.vsm-mcp-empty{text-align:center;padding:56px 20px;color:var(--dsw-alias-label-tertiary,#9aa5b1);border:1px dashed var(--dsw-alias-border-l2,#3a3a3a);border-radius:8px;font-size:13px}
+
+/* 项目搜索下拉框 */
+.vsm-project-picker{position:relative;width:100%;z-index:4}
+.vsm-project-picker-trigger{width:100%;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 12px;border:1px solid var(--dsw-alias-border-l2,#3a3a3a);border-radius:8px;background:var(--dsw-alias-bg-layer-1,transparent);color:var(--dsw-alias-label-primary,#e6e6e6);cursor:pointer;text-align:left}
+.vsm-project-picker-trigger:hover{border-color:var(--dsw-alias-brand-primary,#6d55ff)}
+.vsm-project-picker-label{display:flex;flex-direction:column;min-width:0;font-size:13px;font-weight:500}
+.vsm-project-picker-label small{margin-top:3px;color:var(--dsw-alias-label-tertiary,#9aa5b1);font:11px var(--ds-font-family-code,ui-monospace,monospace);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.vsm-project-picker-arrow{color:var(--dsw-alias-label-tertiary,#9aa5b1);font-size:16px}
+.vsm-project-picker-menu{position:absolute;top:calc(100% + 6px);left:0;right:0;padding:8px;border:1px solid var(--dsw-alias-border-l2,#3a3a3a);border-radius:9px;background:var(--dsw-alias-bg-overlay,#202020);box-shadow:0 12px 36px #0008}
+.vsm-project-picker-search{width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid var(--dsw-alias-border-l2,#555);border-radius:6px;background:var(--dsw-alias-bg-layer-1,#2b2b2b);color:var(--dsw-alias-label-primary,#eee);outline:none}
+.vsm-project-picker-search:focus{border-color:var(--dsw-alias-brand-primary,#6d55ff)}
+.vsm-project-picker-options{max-height:260px;overflow:auto;margin-top:6px}
+.vsm-project-option{display:flex;width:100%;flex-direction:column;gap:3px;padding:8px 9px;border:0;border-radius:6px;background:none;color:var(--dsw-alias-label-primary,#eee);cursor:pointer;text-align:left}
+.vsm-project-option:hover,.vsm-project-option.highlight{background:var(--dsw-alias-interactive-bg-hover,#ffffff14)}
+.vsm-project-option.selected{color:var(--dsw-alias-brand-primary,#6d55ff)}
+.vsm-project-option small{overflow:hidden;color:var(--dsw-alias-label-tertiary,#9aa5b1);font:11px var(--ds-font-family-code,ui-monospace,monospace);text-overflow:ellipsis;white-space:nowrap}
+.vsm-project-picker-empty{padding:18px 8px;color:var(--dsw-alias-label-tertiary,#9aa5b1);font-size:12px;text-align:center}
+
+/* 项目级 MCP 分组 */
+.vsm-project{border:1px solid var(--dsw-alias-border-l2,#3a3a3a);border-radius:12px;margin-bottom:14px;overflow:hidden;background:var(--dsw-alias-bg-layer-1,transparent)}
+.vsm-project-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 16px;border-bottom:1px solid var(--dsw-alias-border-l1,#333);background:var(--dsw-alias-bg-mask-1,#ffffff0a)}
+.vsm-project-title{display:flex;align-items:center;gap:10px;min-width:0}
+.vsm-project-icon{color:var(--dsw-alias-brand-primary,#6d55ff);font-size:15px;flex-shrink:0}
+.vsm-project-name{font-size:14px;font-weight:600;color:var(--dsw-alias-label-primary,#e6e6e6);display:block}
+.vsm-project-path{font-size:11px;color:var(--dsw-alias-label-tertiary,#9aa5b1);font-family:var(--ds-font-family-code,ui-monospace,monospace);display:block;margin-top:2px;word-break:break-all}
+.vsm-primary.vsm-small{padding:5px 12px;font-size:12px}
+.vsm-project-empty{text-align:center;padding:26px 16px;color:var(--dsw-alias-label-tertiary,#9aa5b1);font-size:12px}
+.vsm-project .vsm-mcp-card{border:0;border-radius:0;margin:0;border-bottom:1px solid var(--dsw-alias-border-l1,#333);background:transparent}
+.vsm-project .vsm-mcp-card:last-child{border-bottom:0}
+.vsm-project .vsm-mcp-banner{border-radius:0;margin:0}
+
+/* 新增 MCP 弹窗 */
+.vsm-mcp-modal{position:fixed;inset:0;background:var(--dsw-alias-bg-mask-drop,#000000aa);display:flex;align-items:center;justify-content:center;z-index:50}
+.vsm-mcp-dialog{width:min(560px,calc(100vw - 40px));max-height:88vh;overflow:auto;padding:22px 24px;border-radius:12px;background:var(--dsw-alias-bg-overlay,#202020);border:1px solid var(--dsw-alias-border-l2,#444);box-shadow:0 16px 60px #000c;color:var(--dsw-alias-label-primary,#e6e6e6)}
+.vsm-mcp-dialog h3{margin:0 0 14px;font-size:16px;font-weight:600}
+.vsm-mcp-dialog label{display:flex;flex-direction:column;gap:6px;margin:12px 0;font-size:12px;color:var(--dsw-alias-label-secondary,#aaa)}
+.vsm-mcp-dialog input,.vsm-mcp-dialog select,.vsm-mcp-dialog textarea{font:inherit;color:var(--dsw-alias-label-primary,#eee);background:var(--dsw-alias-bg-layer-1,#2b2b2b);border:1px solid var(--dsw-alias-border-l2,#555);border-radius:6px;padding:8px 10px}
+.vsm-mcp-dialog input:focus,.vsm-mcp-dialog select:focus,.vsm-mcp-dialog textarea:focus{outline:none;border-color:var(--dsw-alias-brand-primary,#6d55ff)}
+.vsm-mcp-dialog textarea{min-height:64px;resize:vertical;font-family:var(--ds-font-family-code,ui-monospace,monospace)}
+.vsm-mcp-dialog-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:20px}
+.vsm-mcp-dialog-actions button{padding:8px 14px;border:1px solid var(--dsw-alias-border-l2,#555);border-radius:6px;background:none;color:var(--dsw-alias-label-primary,#eee);cursor:pointer;font-size:13px}
+.vsm-mcp-dialog-actions button:hover{background:var(--dsw-alias-interactive-bg-hover,#ffffff14)}

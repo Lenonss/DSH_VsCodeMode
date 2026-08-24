@@ -6,6 +6,7 @@
 import type { DiffRecord } from './shared/types.js'
 import type { Ctx, Session } from './store.js'
 import { policyOf, resolveTarget } from './store.js'
+import { applyLocations, locateHunks, preciseHunk } from './shared/diff.js'
 
 export type Result = { ok: true } | { ok: false; error: string }
 
@@ -71,12 +72,18 @@ export async function revertCall(ctx: Ctx, session: Session, record: DiffRecord)
 export async function revertHunk(ctx: Ctx, session: Session, record: DiffRecord, idx: number): Promise<Result> {
   const fs = ctx.get('fs')
   if (!fs) return { ok: false, error: '回滚不可用：缺少 fs' }
-  const hunk = record.hunks[idx]
-  const precise = record.toolName === 'edit' && record.hunks.length <= 1 && record.callHunk ? record.callHunk : hunk
+  const precise = preciseHunk(record, idx)
   if (!precise) return { ok: false, error: '找不到该差异块' }
   try {
     const target = await resolveTarget(ctx, session, record.path)
-    await fs.editText(target, { oldString: precise.newText, newString: precise.oldText === null ? '' : precise.oldText }, void 0, void 0, policyOf(ctx, session))
+    const info = await fs.stat(target)
+    if (!info || info.type !== 'file') return { ok: false, error: '回滚失败：文件不存在' }
+    if ((info.size ?? 0) > 8 * 1024 * 1024) return { ok: false, error: '回滚失败：文件过大，无法安全定位' }
+    const content = await fs.readText(target)
+    const location = locateHunks(content, [precise])[0]
+    if (!location?.matched) return { ok: false, error: '回滚失败：该区域可能已被后续修改影响' }
+    const result = applyLocations(content, [location], true)
+    await fs.writeText(target, result.content, void 0, void 0, policyOf(ctx, session))
     return { ok: true }
   } catch (error) {
     return { ok: false, error: '回滚失败：该区域可能已被后续修改影响（' + String(error) + '）' }

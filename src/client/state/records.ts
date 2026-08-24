@@ -4,6 +4,7 @@
  * 作者 ddj 2026-08-20
  */
 import type { CallHunk, Hunk, RecordView } from '../../shared/types.js'
+import { preciseHunk } from '../../shared/diff.js'
 
 /** 差异决策状态。 */
 export const ST = { PENDING: 'pending', ACCEPTED: 'accepted', REJECTED: 'rejected' } as const
@@ -36,7 +37,9 @@ export function statusAt(rec: RecordView | undefined, idx: number): Status {
 /** hunk 是否为空差异（old===new，无实际内容变化，不可操作）。create 记录不视为空差异。 */
 export function noopHunk(rec: RecordView | undefined, h: Hunk | CallHunk | null | undefined): boolean {
   if (!rec || rec.create === true) return false
-  const precise = rec.toolName === 'edit' && rec.callHunk ? rec.callHunk : h
+  const precise = rec && h && rec.hunks.indexOf(h as Hunk) >= 0
+    ? preciseHunk(rec, rec.hunks.indexOf(h as Hunk))
+    : h
   const oldText = precise?.oldText ?? null
   const newText = precise?.newText ?? null
   return oldText !== null && oldText === newText
@@ -44,7 +47,7 @@ export function noopHunk(rec: RecordView | undefined, h: Hunk | CallHunk | null 
 
 /** 记录是否仍有待处理差异（superseded / 全部已决策 = false）。 */
 export function isRecPending(rec: RecordView): boolean {
-  if (!rec || rec.superseded === true) return false
+  if (!rec || rec.superseded === true || rec.conflict === true) return false
   const perHunk = Array.isArray(rec.decisions?.perHunk) ? rec.decisions.perHunk : []
   if (perHunk.length) {
     // 只认存在至少一个"非空差异且未决策"的 hunk

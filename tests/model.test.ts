@@ -127,6 +127,17 @@ describe('reconstructOriginal', () => {
     const out = reconstructOriginal([a], 'XX A1')
     expect(out.content).toBe('XX AA')
   })
+  it('多个 pending hunk 使用各自文本并按文件位置反解', () => {
+    const a = mk('a', 'AA', 'A1', '2026-08-20T00:00:00.000Z')
+    const b = mk('b', 'BB', 'B1', '2026-08-20T00:01:00.000Z')
+    const out = reconstructOriginal([a, b], 'A1\nB1')
+    expect(out.content).toBe('AA\nBB')
+    expect(out.stale).toEqual([])
+  })
+  it('短 perHunk 不会把未决 hunk 误判为已解决', () => {
+    const r = rec({ hunks: [{ oldText: 'a', newText: 'b' }, { oldText: 'c', newText: 'd' }], decisions: { call: 'pending', perHunk: ['accepted'] } })
+    expect(recordResolved(r)).toBe(false)
+  })
 })
 
 describe('fileMaxBatch / groupByBatch / archiveEntryFor / prune', () => {

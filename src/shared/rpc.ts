@@ -12,6 +12,7 @@ import type {
   RecordView,
   StaleHunk,
 } from './types.js'
+import type { MpcConfig, MpcProject, MpcProjectSaveInput, MpcServer } from './mcp.js'
 
 /** webServer 精确路由。 */
 export const RPC_PATH = '/edrv/rpc'
@@ -32,6 +33,16 @@ export interface RpcRequestMap {
   'edrv.rollback': { sessionId?: string; path: string; batch?: number }
   'edrv.debug': { sessionId?: string; text: string }
   'edrv.searchFiles': { sessionId?: string; query: string }
+  'mcp.list': {}
+  'mcp.save': { config: MpcConfig }
+  'mcp.remove': { id: string }
+  'mcp.toggle': { id: string; enabled: boolean }
+  'mcp.refresh': { id: string }
+  'mcp.projects': {}
+  'mcp.projectSave': MpcProjectSaveInput
+  'mcp.projectRemove': { workspacePath: string; serverName: string }
+  'mcp.projectToggle': { workspacePath: string; serverName: string; enabled: boolean }
+  'mcp.projectRefresh': { workspacePath: string; serverName: string }
 }
 
 export type RpcMethod = keyof RpcRequestMap
@@ -49,6 +60,16 @@ export interface RpcOkMap {
   'edrv.rollback': { path: string; batch: number | null }
   'edrv.debug': object
   'edrv.searchFiles': { files: string[]; truncated: boolean }
+  'mcp.list': { servers: MpcServer[] }
+  'mcp.save': { server: MpcServer }
+  'mcp.remove': object
+  'mcp.toggle': { server: MpcServer }
+  'mcp.refresh': { server: MpcServer }
+  'mcp.projects': { projects: MpcProject[] }
+  'mcp.projectSave': { project: MpcProject }
+  'mcp.projectRemove': { project: MpcProject }
+  'mcp.projectToggle': { project: MpcProject }
+  'mcp.projectRefresh': { project: MpcProject }
 }
 
 /** 统一响应：{ok:true, ...payload} 或 {ok:false, error}。 */

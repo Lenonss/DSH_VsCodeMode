@@ -4,6 +4,8 @@
  * 作者 ddj 2026-08-20
  */
 import type { ArchiveBatch, ArchiveData, DiffRecord, SidecarData } from './shared/types.js'
+import type { ReadState } from './shared/diff.js'
+import { fingerprint, isNoopHunk, locateHunks, preciseHunk } from './shared/diff.js'
 import { archiveEntryFor, groupByBatch, normalizeRecord } from './model.js'
 
 export const SIDECAR = '.dsh-edit-review.json'
@@ -105,21 +107,23 @@ export async function saveBucket(ctx: Ctx, cwd: string, recsMap: Map<string, Dif
  * @author ddj 2026年08月20号
  * @param cache path → 内容（null=缺失/读取失败，''=过大跳过）
  */
-export async function readForCache(ctx: Ctx, session: Session, cache: Map<string, string | null>, path: string): Promise<string | null> {
-  if (cache.has(path)) return cache.get(path) ?? null
+export async function readForCache(ctx: Ctx, session: Session, cache: Map<string, ReadState>, path: string): Promise<ReadState> {
+  const cached = cache.get(path)
+  if (cached) return cached
   const fs = ctx.get('fs')
-  if (!fs) { cache.set(path, null); return null }
+  if (!fs) { const state: ReadState = { kind: 'unavailable' }; cache.set(path, state); return state }
   try {
     const target = await resolveTarget(ctx, session, path)
     const info = await fs.stat(target)
-    if (!info || info.type !== 'file') { cache.set(path, null); return null }
-    if ((info.size ?? 0) > READ_CAP) { cache.set(path, ''); return '' }
-    const content = await fs.readText(target)
-    cache.set(path, content)
-    return content
+    if (!info || info.type !== 'file') { const state: ReadState = { kind: 'missing' }; cache.set(path, state); return state }
+    if ((info.size ?? 0) > READ_CAP) { const state: ReadState = { kind: 'unavailable' }; cache.set(path, state); return state }
+    const state: ReadState = { kind: 'content', content: await fs.readText(target) }
+    cache.set(path, state)
+    return state
   } catch (error) {
-    cache.set(path, null)
-    return null
+    const state: ReadState = { kind: 'unavailable' }
+    cache.set(path, state)
+    return state
   }
 }
 
@@ -128,28 +132,22 @@ export async function readForCache(ctx: Ctx, session: Session, cache: Map<string
  * 或新建文件已不存在，或全为空差异。满足则应由 host 自动归档。
  * @author ddj 2026年08月20号
  */
-export async function recordIsStale(ctx: Ctx, session: Session, cache: Map<string, string | null>, rec: DiffRecord): Promise<boolean> {
+export async function recordIsStale(ctx: Ctx, session: Session, cache: Map<string, ReadState>, rec: DiffRecord): Promise<boolean> {
   if (rec.superseded === true) return true
   if (!Array.isArray(rec.hunks) || !rec.hunks.length) return true
-  const perHunk = Array.isArray(rec.decisions.perHunk) ? rec.decisions.perHunk : []
-  let hasLocatablePending = false
-  for (let i = 0; i < rec.hunks.length; i++) {
-    const st = perHunk.length ? perHunk[i] : rec.decisions.call
-    if (st === 'accepted' || st === 'rejected') continue
-    if (rec.create === true) {
-      const content = await readForCache(ctx, session, cache, rec.path)
-      if (content !== null) { hasLocatablePending = true; break }
-      continue
-    }
-    const precise = rec.toolName === 'edit' && rec.callHunk ? rec.callHunk : rec.hunks[i]
-    const oldText = precise?.oldText ?? null
-    const newText = precise?.newText ?? null
-    if (oldText !== null && oldText === newText) continue
-    if (newText === null || newText === undefined) continue
-    const content = await readForCache(ctx, session, cache, rec.path)
-    if (content !== null && content.indexOf(newText) >= 0) { hasLocatablePending = true; break }
-  }
-  return !hasLocatablePending
+  const state = await readForCache(ctx, session, cache, rec.path)
+  if (state.kind === 'unavailable') return false
+  if (state.kind === 'missing') return true
+  if (rec.create === true) return false
+  const pending = rec.hunks.map((_, idx) => ({ idx, hunk: preciseHunk(rec, idx), status: rec.decisions.perHunk[idx] ?? rec.decisions.call }))
+    .filter((item) => item.status === 'pending' && item.hunk && !isNoopHunk(item.hunk))
+  if (!pending.length) return true
+  const currentFingerprint = fingerprint(state.content)
+  if (rec.afterFingerprint && currentFingerprint === rec.afterFingerprint) { rec.conflict = false; return false }
+  const locations = locateHunks(state.content, pending.map((item) => item.hunk!))
+  if (locations.some((location) => location.matched)) { rec.conflict = false; return false }
+  rec.conflict = true
+  return false
 }
 
 /**
@@ -161,7 +159,7 @@ export async function recordIsStale(ctx: Ctx, session: Session, cache: Map<strin
 export async function autoArchiveStale(ctx: Ctx, session: Session, cwd: string, bucket: Map<string, DiffRecord>): Promise<number> {
   const fs = ctx.get('fs')
   if (!fs) return 0
-  const cache = new Map<string, string | null>()
+  const cache = new Map<string, ReadState>()
   const stale: DiffRecord[] = []
   for (const rec of bucket.values()) {
     if (rec.archived || rec.superseded === true) continue
