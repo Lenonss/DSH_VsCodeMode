@@ -28,6 +28,7 @@ const CLIENT_EXTERNALS = [
   'cordis',
   '@deepseek-ai/dsh-client-ui-slots',
   '@deepseek-ai/dsh-client-runtime/client',
+  '@deepseek-ai/dsh-client-ui-settings',
 ]
 
 /** Host-half modules resolved from the profile tree at runtime. */
@@ -37,6 +38,7 @@ const HOST_EXTERNALS = [
   '@deepseek-ai/dsh-client-ui-slots',
   '@deepseek-ai/dsh-llm',
   '@deepseek-ai/dsh-tools',
+  '@deepseek-ai/dsh-settings',
 ]
 
 /** Virtual-id wrapper keeping plain CSS away from tsdown's own css pipeline. */

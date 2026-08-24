@@ -67,7 +67,7 @@ export function EditorView(props) {
 
   const currentRecords = React.useMemo(() => {
     const list = []
-    for (const rec of Object.values(records)) if (rec.path === active) list.push(rec)
+    for (const rec of Object.values(records)) if (rec.path === active && rec.archived !== true) list.push(rec)
     return list
   }, [records, active])
 
@@ -113,7 +113,10 @@ export function EditorView(props) {
     rpc('edrv.list', { sessionId }).then((res) => {
       if (!res || !res.ok || !Array.isArray(res.records)) return
       const map = {}
-      for (const r of res.records) map[r.callId] = r
+      for (const r of res.records) {
+        if (r.archived === true) continue
+        map[r.callId] = r
+      }
       setRecords(map)
     }).catch((e) => setError('list异常:' + String(e)))
   }

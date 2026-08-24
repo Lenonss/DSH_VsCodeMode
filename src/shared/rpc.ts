@@ -43,6 +43,8 @@ export interface RpcRequestMap {
   'mcp.projectRemove': { workspacePath: string; serverName: string }
   'mcp.projectToggle': { workspacePath: string; serverName: string; enabled: boolean }
   'mcp.projectRefresh': { workspacePath: string; serverName: string }
+  'vscode.fileOpenSettingsGet': {}
+  'vscode.fileOpenSettingsUpdate': { fileOpenTool: string; expectedRevision?: number }
 }
 
 export type RpcMethod = keyof RpcRequestMap
@@ -70,6 +72,8 @@ export interface RpcOkMap {
   'mcp.projectRemove': { project: MpcProject }
   'mcp.projectToggle': { project: MpcProject }
   'mcp.projectRefresh': { project: MpcProject }
+  'vscode.fileOpenSettingsGet': { fileOpenTool: string; revision?: number }
+  'vscode.fileOpenSettingsUpdate': { fileOpenTool: string; revision?: number }
 }
 
 /** 统一响应：{ok:true, ...payload} 或 {ok:false, error}。 */

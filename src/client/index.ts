@@ -16,8 +16,13 @@ import './styles/editor.css'
 import { EditorView } from './ui/EditorView.js'
 import { DiffBadge } from './ui/DiffBadge.js'
 import { McpSettings } from './ui/McpSettings.js'
+import { rpc } from './rpc.js'
+import { createFileOpenerRegistry, scanSidebar, type FileOpenContext } from './fileOpeners.js'
+import type { FileOpenerRegistry } from './fileOpeners.js'
+import { installOpenPathRouter, vscodeOpener, autoValue } from './openPathRouter.js'
+import { SettingsContext, getSettingsScope } from './settingsContext.js'
 
-export const inject = ['slots', 'timer', 'locale', 'connection', 'remote']
+export const inject = ['slots', 'timer', 'locale', 'connection', 'remote', 'workspaces', 'sessions', 'settingsScope', 'webUiSettings']
 
 /**
  * 装配客户端：注册中央编辑区视图与 header 差异角标。
@@ -27,6 +32,48 @@ export const inject = ['slots', 'timer', 'locale', 'connection', 'remote']
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function apply(ctx: any): void {
   const schedule = (fn: () => void, ms: number) => ctx.timeout(fn, ms)
+  const registry: FileOpenerRegistry = createFileOpenerRegistry()
+  const workspaces = ctx.get('workspaces')
+  const sessions = ctx.get('sessions')
+  const originalOpenPath = workspaces?.openPath
+  const settings = getSettingsScope(ctx)
+  let selected = autoValue('auto')
+
+  ctx.provide('fileOpeners', registry)
+  ctx.effect(() => registry.register(vscodeOpener()), 'vscode-mode: file opener')
+  ctx.effect(() => registry.register({
+    id: 'system', label: '系统默认应用', priority: 0,
+    open: (path: string) => originalOpenPath.call(workspaces, path),
+  }), 'vscode-mode: system file opener')
+  ctx.effect(() => {
+    const sidebar = scanSidebar(ctx)
+    return sidebar ? registry.register(sidebar) : undefined
+  }, 'vscode-mode: sidebar file opener')
+  ctx.effect(() => {
+    if (!settings) return undefined
+    const sync = (): void => {
+      const snapshot = settings.getSnapshot()
+      if (snapshot.status === 'loading') return
+      selected = autoValue(snapshot.value?.fileOpenTool)
+      window.dispatchEvent(new CustomEvent('edrv:file-open-tool-change', { detail: { value: selected } }))
+    }
+    sync()
+    return settings.subscribe(sync)
+  }, 'vscode-mode: file opener setting sync')
+  if (workspaces?.openPath) {
+    ctx.effect(() => installOpenPathRouter({
+      workspaces,
+      registry,
+      selected: () => selected,
+      context: () => {
+        const current = sessions?.list?.getSnapshot?.()
+        const sessionId = current?.current
+        const summary = sessionId ? current?.byId?.[sessionId] : undefined
+        return { sessionId, cwd: summary?.cwd } as FileOpenContext
+      },
+      logger: (message: string) => console.warn('[dsh-vscode-mode] ' + message),
+    }), 'vscode-mode: file link routing')
+  }
 
   // 中央「文件编辑」页签：类 VSCode 编辑器（顶部=文件页签+搜索框，差异 UI=文件底部圆角悬浮框）
   ctx.slots.inject('conversation.view', () => ctx.slots.register({
@@ -49,5 +96,5 @@ export function apply(ctx: any): void {
     id: 'vscode-mode',
     order: 30,
     label: 'VSCodeMode',
-  }, () => React.createElement(McpSettings)))
+  }, () => React.createElement(SettingsContext.Provider, { value: settings }, React.createElement(McpSettings, { openerRegistry: registry }))))
 }

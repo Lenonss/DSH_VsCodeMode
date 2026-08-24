@@ -8,6 +8,8 @@ import React from 'react'
 import { rpc } from '../rpc.js'
 import type { MpcProject, MpcServer } from '../../shared/mcp.js'
 import '../styles/mcp.css'
+import { availableOpeners, AUTO_OPEN_TOOL } from '../fileOpeners.js'
+import { SettingsContext } from '../settingsContext.js'
 
 const EMPTY = { serverName: '', transport: 'stdio', command: '', args: '', cwd: '', url: '', headers: '' }
 
@@ -117,14 +119,49 @@ function ProjectGroup({ project, busy, onAdd, onRefresh, onToggle, onRemove }) {
   return React.createElement('section', { className: 'vsm-project' }, head, body)
 }
 
+/** 通用设置：选择当前对话文件链接的打开器。 */
+function GeneralSettings({ registry }) {
+  const [tool, setTool] = React.useState(AUTO_OPEN_TOOL)
+  const [busy, setBusy] = React.useState(false)
+  const [error, setError] = React.useState('')
+  const settings = React.useContext(SettingsContext)
+  const snapshot = settings?.getSnapshot?.()
+  const loading = !snapshot || snapshot.status === 'loading'
+  const unavailable = snapshot?.status === 'unavailable' || !settings
+  const notReady = snapshot?.status !== 'ready'
+  React.useEffect(() => {
+    const onChange = () => {
+      const next = settings?.getSnapshot?.().value?.fileOpenTool
+      if (typeof next === 'string') setTool(next)
+    }
+    onChange()
+    return settings?.subscribe?.(onChange)
+  }, [settings])
+  const save = (value) => {
+    setTool(value); setBusy(true); setError('')
+    if (!settings?.set) { setError('设置服务不可用'); setBusy(false); return }
+    settings.set('fileOpenTool', value).catch((e) => setError(String(e))).finally(() => setBusy(false))
+  }
+  const options = [{ id: AUTO_OPEN_TOOL, label: '自动选择', description: '按当前已注册工具自动选择' }, ...availableOpeners(registry).map((item) => ({ id: item.id, label: item.label, description: item.description }))]
+  const currentOption = options.some((item) => item.id === tool) ? tool : AUTO_OPEN_TOOL
+  return React.createElement('section', { className: 'vsm-general-page' },
+    React.createElement('h2', null, '通用'),
+    React.createElement('p', null, '配置 DSH 对话中文件链接的打开工具。工具由当前运行时自动扫描。'),
+    unavailable && React.createElement('div', { className: 'vsm-mcp-error vsm-mcp-banner' }, '设置服务暂不可用，当前使用自动选择。'),
+    error && React.createElement('div', { className: 'vsm-mcp-error vsm-mcp-banner' }, error),
+    React.createElement('label', { className: 'vsm-general-row' }, React.createElement('span', null, '文件链接使用工具'), React.createElement('select', { value: currentOption, disabled: loading || unavailable || notReady || busy || snapshot?.writable === false, onChange: (event) => save(event.target.value) }, options.map((item) => React.createElement('option', { key: item.id, value: item.id }, item.label))), loading && React.createElement('small', null, '读取中…')),
+  )
+}
+
 /** MCP 管理主面板。 */
-export function McpSettings() {
+export function McpSettings(props) {
+  const openerRegistry = props?.openerRegistry ?? { list: () => [] }
   const [servers, setServers] = React.useState<MpcServer[]>([])
   const [projects, setProjects] = React.useState<MpcProject[]>([])
   const [loading, setLoading] = React.useState(true)
   const [busy, setBusy] = React.useState('')
   const [error, setError] = React.useState('')
-  const [tab, setTab] = React.useState('mine')
+  const [tab, setTab] = React.useState('general')
   const [draft, setDraft] = React.useState(EMPTY)
   const [showForm, setShowForm] = React.useState(false)
   const [projectForm, setProjectForm] = React.useState(null)
@@ -212,13 +249,14 @@ export function McpSettings() {
   ) : React.createElement('div', { className: 'vsm-mcp-empty' }, '还没有项目')
   let body
   if (loading) body = React.createElement('div', { className: 'vsm-mcp-empty' }, '正在读取 MCP 服务…')
+  else if (tab === 'general') body = React.createElement(GeneralSettings, { registry: openerRegistry })
   else if (tab === 'mine') body = React.createElement('div', null, servers.length ? servers.map((s) => React.createElement(ServerCard, { key: s.id, server: s, onRefresh: refreshGlobal, onToggle: toggleGlobal, onRemove: removeGlobal })) : React.createElement('div', { className: 'vsm-mcp-empty' }, '还没有配置全局 MCP'))
   else if (tab === 'projects') body = projectBody
   else body = marketBody
   const form = showForm ? React.createElement(McpForm, { title: '添加全局 MCP', draft, busy, edit, save: saveGlobal, close: () => setShowForm(false) }) : projectForm ? React.createElement(McpForm, { title: '添加项目 MCP · ' + projectForm.title, draft, busy, edit, save: saveProject, close: () => setProjectForm(null) }) : null
   return React.createElement('section', { className: 'vsm-mcp-page' },
     React.createElement('header', { className: 'vsm-mcp-header' }, React.createElement('div', null, React.createElement('h2', null, 'VSCodeMode'), React.createElement('p', null, '管理当前 profile 与各项目的 Model Context Protocol 服务。')), React.createElement('button', { className: 'vsm-primary', onClick: () => { setDraft(EMPTY); setShowForm(true) } }, '+ 添加全局 MCP')),
-    React.createElement('nav', { className: 'vsm-mcp-tabs' }, React.createElement('button', { className: tab === 'mine' ? 'active' : '', onClick: () => setTab('mine') }, '我的 MCP'), React.createElement('button', { className: tab === 'projects' ? 'active' : '', onClick: () => setTab('projects') }, '项目 MCP'), React.createElement('button', { className: tab === 'market' ? 'active' : '', onClick: () => setTab('market') }, 'MCP 市场')),
+    React.createElement('nav', { className: 'vsm-mcp-tabs' }, React.createElement('button', { className: tab === 'general' ? 'active' : '', onClick: () => setTab('general') }, '通用'), React.createElement('button', { className: tab === 'mine' ? 'active' : '', onClick: () => setTab('mine') }, '我的 MCP'), React.createElement('button', { className: tab === 'projects' ? 'active' : '', onClick: () => setTab('projects') }, '项目 MCP'), React.createElement('button', { className: tab === 'market' ? 'active' : '', onClick: () => setTab('market') }, 'MCP 市场')),
     error && React.createElement('div', { className: 'vsm-mcp-error vsm-mcp-banner' }, error),
     body,
     form,

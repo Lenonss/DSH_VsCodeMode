@@ -17,6 +17,14 @@
 .vsm-mcp-tabs button.active{color:var(--dsw-alias-label-primary,#fff);font-weight:500}
 .vsm-mcp-tabs button.active::after{content:"";position:absolute;left:0;right:0;bottom:-1px;height:2px;background:var(--dsw-alias-brand-primary,#6d55ff);border-radius:2px}
 
+/* 通用设置 */
+.vsm-general-page{display:flex;flex-direction:column;gap:10px;max-width:720px}
+.vsm-general-page h2{margin:0;font-size:20px;color:var(--dsw-alias-label-primary,#e6e6e6)}
+.vsm-general-page p{margin:0 0 8px;color:var(--dsw-alias-label-tertiary,#9aa5b1);font-size:13px}
+.vsm-general-row{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:14px 0;border-bottom:1px solid var(--dsw-alias-border-l1,#333);color:var(--dsw-alias-label-primary,#eee);font-size:14px}
+.vsm-general-row select{min-width:220px;padding:8px 10px;border:1px solid var(--dsw-alias-border-l2,#555);border-radius:6px;background:var(--dsw-alias-bg-layer-1,#2b2b2b);color:var(--dsw-alias-label-primary,#eee);font:inherit}
+.vsm-general-row small{color:var(--dsw-alias-label-tertiary,#9aa5b1)}
+
 /* 服务卡片 */
 .vsm-mcp-card{border:1px solid var(--dsw-alias-border-l2,#3a3a3a);border-radius:10px;padding:14px 16px;margin-bottom:10px;background:var(--dsw-alias-bg-layer-2,transparent);transition:border-color .15s}
 .vsm-mcp-card:hover{border-color:var(--dsw-alias-border-l3,#555)}

@@ -6,8 +6,8 @@
 import type { DiffRecord, Hunk } from './shared/types.js'
 import { annotateHunks, fingerprint } from './shared/diff.js'
 import type { Ctx, Session } from './store.js'
-import { archiveRecords, loadBucket, saveBucket } from './store.js'
-import { fileMaxBatch, prune, recordResolved } from './model.js'
+import { loadBucket, saveBucket } from './store.js'
+import { fileMaxBatch, prune } from './model.js'
 import type { Registry } from './registry.js'
 import { cwdOf } from './registry.js'
 
@@ -93,14 +93,8 @@ export async function captureToolResult(ctx: Ctx, registry: Registry, exec: any,
     if (!bucket) { bucket = await loadBucket(ctx, cwd); registry.set(cwd, bucket) }
     record.batch = fileMaxBatch(bucket, path) + 1
     bucket.set(exec.callId, record)
-    // 融合：文件被再次修改（batch 递增）时，早于最新批次的未归档差异一律归档（内容已含其效果/被取代）
-    const prior: DiffRecord[] = []
-    for (const r of bucket.values()) {
-      if (r.path === path && r.callId !== exec.callId && !r.archived && (r.batch ?? 0) < record.batch) prior.push(r)
-    }
-    if (prior.length) {
-      await archiveRecords(ctx, session, cwd, bucket, prior, prior.every(recordResolved) ? '已处理且被后续修改取代' : '被后续修改融合（内容已含其效果）')
-    }
+    // 同一文件的多次 edit/write 都保留为独立记录，便于逐条审查。
+    // 旧实现按文件 batch 自动归档 prior，会导致界面看起来每个文件只剩一条差异。
     prune(bucket)
     await saveBucket(ctx, cwd, bucket, session)
   } catch (error) {

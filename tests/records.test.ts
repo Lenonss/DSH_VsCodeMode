@@ -65,6 +65,16 @@ describe('isRecPending / pendingCount', () => {
 })
 
 describe('summarize', () => {
+  it('同一文件保留多条活动记录', () => {
+    const result = summarize([
+      rec({ callId: 'one', at: '2026-08-20T00:00:00.000Z' }),
+      rec({ callId: 'two', at: '2026-08-20T00:01:00.000Z' }),
+    ])
+    expect(result.files).toHaveLength(1)
+    expect(result.files[0].recs).toHaveLength(2)
+    expect(result.files[0].pending).toBe(2)
+  })
+
   it('按文件分组并过滤已处理', () => {
     const s = summarize([
       rec({ path: '/a', decisions: { call: 'pending', perHunk: ['pending'] } }),

@@ -12,6 +12,7 @@ import { newSearcher } from './search/orchestrator.js'
 import { installIsolation } from './mcpIsolation.js'
 import { dropFileIndex } from './workspace.js'
 import { cwdOf } from './registry.js'
+import { setupOpenSettings } from './fileOpenSettings.js'
 import type { Registry } from './registry.js'
 import type { Ctx } from './store.js'
 
@@ -27,6 +28,7 @@ export const inject = ['sessions', 'fs', 'webServer', 'loader', 'tools', 'worksp
 export function apply(ctx: Ctx, config?: unknown): void {
   const registry: Registry = new Map()
   const searcher = newSearcher(ctx)
+  setupOpenSettings(ctx, config, () => {})
 
   ctx.on('tools/result', (exec: unknown, result: unknown) => {
     void captureToolResult(ctx, registry, exec, result)

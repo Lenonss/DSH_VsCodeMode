@@ -26,6 +26,7 @@ import { newSearcher } from './search/orchestrator.js'
 import { restoreFile, revertCall, revertHunk } from './revert.js'
 import { listMcp, refreshMcp, removeMcp, saveMcp, toggleMcp } from './mcp.js'
 import { listProjects, projectRefresh, projectRemove, projectSave, projectToggle } from './mcpProject.js'
+import { normalizeFileOpenTool, FILE_OPEN_DEFAULT, FILE_OPEN_SETTINGS_NS } from './fileOpenSettings.js'
 
 /** cwd → Promise 链：串行化 debug 日志追加（fs read+write 非原子，避免并发丢行）。 */
 const debugWriteQueues = new Map<string, Promise<void>>()
@@ -303,6 +304,23 @@ export function buildHandlers(ctx: Ctx, registry: Registry, searcher = newSearch
     'mcp.projectRefresh': async (args) => {
       try { return { ok: true, project: await projectRefresh(ctx, args.workspacePath, args.serverName) } }
       catch (error) { return { ok: false, error: String(error) } }
+    },
+    'vscode.fileOpenSettingsGet': async () => {
+      const settings = ctx.get('settings')
+      const descriptor = settings?.describe?.({ redactSecrets: true })?.find((item: { ns?: string }) => item.ns === FILE_OPEN_SETTINGS_NS)
+      const value = descriptor?.value as { fileOpenTool?: unknown } | undefined
+      return { ok: true, fileOpenTool: normalizeFileOpenTool(value?.fileOpenTool ?? FILE_OPEN_DEFAULT), revision: descriptor?.revision }
+    },
+    'vscode.fileOpenSettingsUpdate': async (args) => {
+      const settings = ctx.get('settings')
+      if (!settings?.update) return { ok: false, error: '设置服务不可用' }
+      try {
+        await settings.update(FILE_OPEN_SETTINGS_NS, { fileOpenTool: normalizeFileOpenTool(args.fileOpenTool) }, args.expectedRevision)
+        const descriptor = settings.describe?.({ redactSecrets: true })?.find((item: { ns?: string }) => item.ns === FILE_OPEN_SETTINGS_NS)
+        const value = descriptor?.value as { fileOpenTool?: unknown } | undefined
+        return { ok: true, fileOpenTool: normalizeFileOpenTool(value?.fileOpenTool), revision: descriptor?.revision }
+      } catch (error) { return { ok: false, error: String(error) }
+      }
     },
   }
 }
