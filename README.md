@@ -25,12 +25,15 @@
 
 ## 界面截图
 
-![dsh-vscode-mode 编辑差异审查界面](docs/screenshots/img1.png)
+![侧边栏编辑形态：AI 对话与文件编辑同屏](docs/screenshots/img1.png)
 
-> dsh-vscode-mode 的**编辑差异审查**界面：`cordis.patch.yml`（CodeGraph 配置）差异对比，
-> 底部 Keep / Undo（保留 / 撤销）按钮控制采纳。
-> Edit-review UI of dsh-vscode-mode: diff view of the `cordis.patch.yml` CodeGraph
-> configuration with Keep / Undo controls.
+> dsh-vscode-mode 侧边栏编辑形态：betterSidebar 右侧栏内的 Monaco 文件编辑器与中央 AI 对话同屏，
+> 差异条统一挂在对话输入框上方的原生 dock（编辑器未打开=「差异 N 个文件 · 查看下一个」，
+> 打开后=完整 Keep / Undo 操作条）。
+
+![文件编辑与差异审查界面](docs/screenshots/img2.png)
+
+![文件编辑与差异审查界面](docs/screenshots/img3.png)
 
 ## 安装（官方 `dsh plugin` 方式，三选一）
 
