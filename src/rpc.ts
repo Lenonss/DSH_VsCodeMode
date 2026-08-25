@@ -29,6 +29,7 @@ import { listProjects, projectRefresh, projectRemove, projectSave, projectToggle
 import { normalizeFileOpenTool, FILE_OPEN_DEFAULT, FILE_OPEN_SETTINGS_NS } from './fileOpenSettings.js'
 import { buildReport } from './compat.js'
 import { readDevForm, setDevForm } from './devForm.js'
+import { normalizeRel, toTreeEntries } from './tree.js'
 
 /** cwd → Promise 链：串行化 debug 日志追加（fs read+write 非原子，避免并发丢行）。 */
 const debugWriteQueues = new Map<string, Promise<void>>()
@@ -314,6 +315,26 @@ export function buildHandlers(ctx: Ctx, registry: Registry, searcher = newSearch
       for (const record of bucket.values()) if (record.path) activePaths.push(record.path)
       const result = await searcher.search({ session: sc.session, cwd: sc.cwd, query: args.query, activePaths })
       return { ok: true, ...result }
+    },
+    'edrv.listDir': async (args) => {
+      // 目录树（侧边栏文件管理用）：按会话 cwd 解析，与 edrv.read 同基准，树内相对路径点开即打开。
+      const sc = await requireSession(ctx, args.sessionId)
+      if ('err' in sc) return { ok: false, error: sc.err }
+      const fs = ctx.get('fs')
+      if (!fs) return { ok: false, error: '缺少 fs' }
+      try {
+        const rel = normalizeRel(args.path)
+        if (rel === null) return { ok: false, error: '路径不合法' }
+        const target = await resolveTarget(ctx, sc.session, rel || '.')
+        const info = await fs.stat(target)
+        if (!info) return { ok: false, error: '目录不存在' }
+        if (info.type !== 'directory') return { ok: false, error: '不是目录' }
+        const children = await fs.listDir(target)
+        const root = fs.processPath(await fs.resolve('.', { cwd: sc.cwd }))
+        return { ok: true, root, path: rel, entries: toTreeEntries(rel, children) }
+      } catch (error) {
+        return { ok: false, error: '读取目录失败：' + String(error) }
+      }
     },
     'mcp.list': async () => ({ ok: true, ...listMcp(ctx) }),
     'mcp.save': async (args) => {

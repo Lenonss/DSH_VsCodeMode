@@ -6,7 +6,32 @@
  */
 import React from 'react'
 import { callIdAttr } from '../state/records.js'
+import { diffDockText } from '../diffDock.js'
 import { badgeOf } from './shared.js'
+
+/**
+ * 折叠控制使用任务栏同尺寸的 chevron 轮廓，避免依赖未声明的运行时图标包。
+ * @author ddj 2026年08月25号
+ * @param open 是否已展开
+ * @returns 14×14 的装饰性 chevron SVG
+ */
+function chevronOf(open) {
+  const path = open ? 'M3.25 5.25 7 9l3.75-3.75' : 'M3.25 8.75 7 5l3.75 3.75'
+  return React.createElement('svg', {
+    width: 14,
+    height: 14,
+    viewBox: '0 0 14 14',
+    fill: 'none',
+    'aria-hidden': true,
+    focusable: false,
+  }, React.createElement('path', {
+    d: path,
+    stroke: 'currentColor',
+    strokeWidth: 1.2,
+    strokeLinecap: 'round',
+    strokeLinejoin: 'round',
+  }))
+}
 
 /**
  * 差异条：当前文件内 diff 导航（↑↓←→）、Keep/Undo、展开 hunk 列表、⋮ 二级菜单
@@ -14,15 +39,29 @@ import { badgeOf } from './shared.js'
  */
 export function DiffBox(props) {
   const {
-    pendingRegions, staleRegions, onAct, onAcceptFile, onUndoFile, onAcceptAllFiles, onUndoAllFiles,
-    allPendingCount, onRollback, onJump, otherFiles, onOpenOther, onOpenLauncher, onRefresh, activePath,
-    diffIdx, diffTotal, fileIdx, fileTotal, onPrevDiff, onNextDiff, onPrevFile, onNextFile,
+    pendingRegions = [], staleRegions = [], onAct, onAcceptFile, onUndoFile, onAcceptAllFiles, onUndoAllFiles,
+    allPendingCount = 0, onRollback, onJump, otherFiles = [], onOpenOther, onOpenLauncher, onRefresh, activePath,
+    diffIdx = 0, diffTotal = 0, fileIdx = 0, fileTotal = 0, onPrevDiff, onNextDiff, onPrevFile, onNextFile,
+    mode = 'editor', onOpenNextFile, dock = false,
   } = props
   const [expanded, setExpanded] = React.useState(false)
-  const [menuOpen, setMenuOpen] = React.useState(false)
+  const [detailsOpen, setDetailsOpen] = React.useState(false)
+  const detailsId = React.useId()
   const canAct = pendingRegions.length > 0
 
   const base = String(activePath || '').split(/[\\/]/).pop() || ''
+
+  if (mode === 'chat' || mode === 'editor-empty') {
+    return React.createElement('div', { className: 'edrv-diffbar edrv-diffbar-dock', 'data-edrv-diffbox': '1', 'data-edrv-diff-mode': mode },
+      React.createElement('div', { className: 'edrv-diffbar-row edrv-diffbar-dock-row' },
+        React.createElement('button', {
+          type: 'button',
+          className: 'edrv-diffbar-dock-button',
+          title: '切换到下一个差异文件',
+          'aria-label': diffDockText(fileTotal),
+          onClick: onOpenNextFile,
+        }, diffDockText(fileTotal))))
+  }
 
   let bodyEl = null
   if (expanded) {
@@ -49,32 +88,42 @@ export function DiffBox(props) {
     bodyEl = React.createElement('div', { className: 'edrv-diffbar-body' }, ...rows, ...stale, othersEl)
   }
 
-  const menu = menuOpen
-    ? React.createElement(React.Fragment, null,
-        React.createElement('div', { style: { position: 'fixed', inset: 0, zIndex: 44 }, onClick: () => setMenuOpen(false) }),
-        React.createElement('div', { className: 'edrv-diffbar-menu' },
-          React.createElement('button', { className: 'edrv-diffmenu-item', disabled: !allPendingCount, onClick: () => { onAcceptAllFiles(); setMenuOpen(false) } }, '✓ Keep All（全部文件采纳）'),
-          React.createElement('button', { className: 'edrv-diffmenu-item danger', disabled: !allPendingCount, onClick: () => { onUndoAllFiles(); setMenuOpen(false) } }, '↩ Undo All（全部文件不采纳）'),
-          React.createElement('div', { className: 'edrv-diffmenu-sep' }),
-          React.createElement('button', { className: 'edrv-diffmenu-item', onClick: () => { onOpenLauncher('pending'); setMenuOpen(false) } }, '🗂 差异总览'),
-          React.createElement('button', { className: 'edrv-diffmenu-item', onClick: () => { onOpenLauncher('archive'); setMenuOpen(false) } }, '📁 归档'),
-          React.createElement('div', { className: 'edrv-diffmenu-sep' }),
-          React.createElement('button', { className: 'edrv-diffmenu-item', disabled: !canAct, onClick: () => { onRollback(); setMenuOpen(false) } }, '⟲ 回滚文件'),
-          React.createElement('button', { className: 'edrv-diffmenu-item', onClick: () => { onRefresh(); setMenuOpen(false) } }, '⟳ 刷新')))
+  const details = detailsOpen
+    ? React.createElement('div', { className: 'edrv-diff-details', id: detailsId },
+        React.createElement('button', { className: 'edrv-diffmenu-item', disabled: !allPendingCount, onClick: onAcceptAllFiles }, '✓ Keep All（全部文件采纳）'),
+        React.createElement('button', { className: 'edrv-diffmenu-item danger', disabled: !allPendingCount, onClick: onUndoAllFiles }, '↩ Undo All（全部文件不采纳）'),
+        React.createElement('div', { className: 'edrv-diffmenu-sep' }),
+        React.createElement('button', { className: 'edrv-diffmenu-item', onClick: () => onOpenLauncher('pending') }, '🗂 差异总览'),
+        React.createElement('button', { className: 'edrv-diffmenu-item', onClick: () => onOpenLauncher('archive') }, '📁 归档'),
+        React.createElement('div', { className: 'edrv-diffmenu-sep' }),
+        React.createElement('button', { className: 'edrv-diffmenu-item', disabled: !canAct, onClick: onRollback }, '⟲ 回滚文件'),
+        React.createElement('button', { className: 'edrv-diffmenu-item', onClick: onRefresh }, '⟳ 刷新'))
     : null
 
-  return React.createElement('div', { className: 'edrv-diffbar', 'data-edrv-diffbox': '1' },
-    React.createElement('div', { className: 'edrv-diffbar-row' },
-      React.createElement('button', { className: 'edrv-pill edrv-pill-ghost', title: '上一个差异', disabled: !canAct, onClick: onPrevDiff }, '↑'),
-      React.createElement('span', { className: 'edrv-diffbar-count', title: '当前文件内差异位置（点击展开/收起差异列表）', onClick: () => setExpanded((v) => !v) }, diffTotal ? (diffIdx + 1) + '/' + diffTotal : '0/0'),
-      React.createElement('button', { className: 'edrv-pill edrv-pill-ghost', title: '下一个差异', disabled: !canAct, onClick: onNextDiff }, '↓'),
-      React.createElement('button', { className: 'edrv-pill edrv-pill-ghost', title: '上一个差异文件', disabled: !fileTotal, onClick: onPrevFile }, '←'),
-      React.createElement('span', { className: 'edrv-diffbar-count edrv-count-file', title: '差异文件位置' }, fileTotal ? (fileIdx + 1) + '/' + fileTotal + ' 文件' : '0/0 文件'),
-      React.createElement('button', { className: 'edrv-pill edrv-pill-ghost', title: '下一个差异文件', disabled: !fileTotal, onClick: onNextFile }, '→'),
-      React.createElement('span', { className: 'edrv-diffbar-file', title: activePath || '' }, base),
-      React.createElement('button', { className: 'edrv-pill edrv-pill-keep', title: '采纳当前文件的全部差异', disabled: !canAct, onClick: onAcceptFile }, '✓ Keep'),
-      React.createElement('button', { className: 'edrv-pill edrv-pill-undo', title: '不采纳当前文件的全部差异（回滚）', disabled: !canAct, onClick: onUndoFile }, '↩ Undo'),
-      React.createElement('button', { className: 'edrv-pill edrv-pill-ghost', title: '更多操作', onClick: () => setMenuOpen((v) => !v) }, '⋮')),
+  return React.createElement('div', { className: 'edrv-diffbar edrv-diffbar-dock', 'data-edrv-diffbox': '1', 'data-edrv-diff-mode': 'editor' },
+    React.createElement('div', { className: 'edrv-diffbar-row edrv-diffbar-editor-row' },
+      React.createElement('div', { className: 'edrv-diffbar-editor-content' },
+        React.createElement('div', { className: 'edrv-diffbar-nav' },
+          React.createElement('button', { className: 'edrv-pill edrv-pill-ghost', title: '上一个差异', disabled: !canAct, onClick: onPrevDiff }, '↑'),
+          React.createElement('span', { className: 'edrv-diffbar-count edrv-diffbar-progress', title: '当前文件内差异位置（点击展开/收起差异列表）', onClick: () => setExpanded((v) => !v) }, diffTotal ? (diffIdx + 1) + '/' + diffTotal : '0/0'),
+          React.createElement('button', { className: 'edrv-pill edrv-pill-ghost', title: '下一个差异', disabled: !canAct, onClick: onNextDiff }, '↓')),
+        React.createElement('div', { className: 'edrv-diffbar-files' },
+          React.createElement('button', { className: 'edrv-pill edrv-pill-ghost', title: '上一个差异文件', disabled: !fileTotal, onClick: onPrevFile }, '←'),
+          React.createElement('span', { className: 'edrv-diffbar-count edrv-count-file edrv-diffbar-progress', title: '差异文件位置' }, fileTotal ? (fileIdx + 1) + '/' + fileTotal + ' 文件' : '0/0 文件'),
+          React.createElement('button', { className: 'edrv-pill edrv-pill-ghost', title: '下一个差异文件', disabled: !fileTotal, onClick: onNextFile }, '→'),
+          React.createElement('span', { className: 'edrv-diffbar-file edrv-diffbar-summary', title: activePath || '' }, base)),
+
+        React.createElement('div', { className: 'edrv-diffbar-actions' },
+          React.createElement('button', { className: 'edrv-pill edrv-pill-keep', title: '采纳当前文件的全部差异', disabled: !canAct, onClick: onAcceptFile }, '✓ Keep'),
+          React.createElement('button', { className: 'edrv-pill edrv-pill-undo', title: '不采纳当前文件的全部差异（回滚）', disabled: !canAct, onClick: onUndoFile }, '↩ Undo'),
+          React.createElement('button', {
+            className: 'edrv-pill edrv-pill-ghost edrv-diff-details-toggle',
+            title: detailsOpen ? '收起差异操作' : '展开差异操作',
+            'aria-label': detailsOpen ? '收起差异操作' : '展开差异操作',
+            'aria-expanded': detailsOpen,
+            'aria-controls': detailsId,
+            onClick: () => setDetailsOpen((value) => !value),
+          }, chevronOf(detailsOpen))))),
     bodyEl,
-    menu)
+    details)
 }

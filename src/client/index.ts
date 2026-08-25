@@ -1,6 +1,6 @@
 /**
  * dsh-vscode-mode client — 浏览器半入口：slot 注册 + 装配。
- * 挂点：conversation.view「文件编辑」页签（中央 Monaco 编辑器）+ header 差异角标。
+ * 挂点：conversation.view「文件编辑」页签（中央 Monaco 编辑器）+ conversation.input.dock 差异条 + header 差异角标。
  * 与 Host 通信：同源 fetch('/edrv/rpc')（shared/rpc 契约）。
  *
  * ⚠️ 跨版本 slot 装配（2026-08-21）：新版 DSH 的 slots 系统要求 slot 必须由父 entry
@@ -8,13 +8,15 @@
  * 声明未就绪时抛 `slot ... is not declared (a parent entry's children table must declare it)`。
  * 正确写法 = `ctx.slots.inject(name, () => ctx.slots.register(...))`：声明存在时同步
  * 执行，否则等待声明（官方 ui-conversation 自身即此模式）；旧版（rc.8 及更早）同样支持，
- * 故跨版本兼容。slot 名未变：conversation.view / conversation.session.header.utilities。
+ * 故跨版本兼容。slot 名：conversation.view / conversation.session.header.utilities /
+ * conversation.input.dock。
  * 作者 ddj 2026-08-20
  */
 import React from 'react'
 import './styles/editor.css'
 import { EditorView } from './ui/EditorView.js'
 import { DiffBadge } from './ui/DiffBadge.js'
+import { ConversationDiffDock } from './ui/ConversationDiffDock.js'
 import { McpSettings } from './ui/McpSettings.js'
 import { rpc } from './rpc.js'
 import { loadMonaco } from './monaco/loader.js'
@@ -24,6 +26,8 @@ import { installOpenPathRouter, vscodeOpener, autoValue } from './openPathRouter
 import { SettingsContext } from './settingsContext.js'
 import { SIDEBAR_PLUGIN, pickSettingsBinder, registerSlotSafely } from './compat.js'
 import { createAddToConversation } from './addToConversation.js'
+import { createSidebarPanelRegistry } from './sidebar/registry.js'
+import { createFilePanel } from './sidebar/panels/index.js'
 import type { CompatAdapter } from '../shared/compat.js'
 
 export const inject = ['slots', 'timer', 'locale', 'connection', 'remote', 'workspaces', 'sessions', 'conversation', 'settingsScope', 'webUiSettings']
@@ -37,18 +41,29 @@ export const inject = ['slots', 'timer', 'locale', 'connection', 'remote', 'work
 export function apply(ctx: any): void {
   const schedule = (fn: () => void, ms: number) => ctx.timeout(fn, ms)
 
-  // Monaco 预热：DSH 启动后后台加载编辑器核心（模块级 promise 去重），用户点开「文件编辑」页签即用，
-  // 不再等页签挂载后才首次拉取 /edrv/vendor/*。requestIdleCallback 让出首屏带宽，缺省回退延时调度；
-  // 预热失败静默吞掉（loader 失败会重置 promise，页签打开时仍走原有加载/重试路径）。
-  if (typeof window !== 'undefined') {
-    const preloadMonaco = () => loadMonaco(() => {}).catch(() => {})
-    if (typeof window.requestIdleCallback === 'function') window.requestIdleCallback(preloadMonaco, { timeout: 2000 })
-    else schedule(preloadMonaco, 300)
-  }
-
   const registry: FileOpenerRegistry = createFileOpenerRegistry()
   const workspaces = ctx.get('workspaces')
   const sessions = ctx.get('sessions')
+
+  // Monaco 加载时机：不再 DSH 启动即预热，改为进入会话界面（sessions.list.current 出现）后再后台加载，
+  // 用户点开「文件编辑」页签即用；空闲时仍由 EditorView 挂载兜底加载。
+  // 模块级 promise 去重，重复触发只首次真正加载；requestIdleCallback 让出会话首屏带宽，缺省回退延时调度；
+  // 预热失败静默吞掉（loader 失败会重置 promise，页签打开时仍走原有加载/重试路径）。
+  const monacoList = sessions?.list
+  if (typeof window !== 'undefined' && monacoList && typeof monacoList.subscribe === 'function') {
+    const list = monacoList as { getSnapshot: () => { current?: unknown }; subscribe: (listener: () => void) => () => void }
+    const schedulePreload = () => {
+      const preload = () => loadMonaco(() => {}).catch(() => {})
+      if (typeof window.requestIdleCallback === 'function') window.requestIdleCallback(preload, { timeout: 2000 })
+      else schedule(preload, 300)
+    }
+    const onSessionEnter = () => {
+      if (!list.getSnapshot()?.current) return
+      schedulePreload()
+    }
+    ctx.effect(() => list.subscribe(onSessionEnter), 'vscode-mode: monaco session trigger')
+    onSessionEnter()
+  }
   const originalOpenPath = workspaces?.openPath
   const binder = pickSettingsBinder(ctx)
   const settings = binder.scope
@@ -65,6 +80,11 @@ export function apply(ctx: any): void {
 
   ctx.provide('fileOpeners', registry)
   ctx.effect(() => registry.register(vscodeOpener()), 'vscode-mode: file opener')
+
+  // 侧边栏面板注册表（对外 provide，供本插件/第三方注册面板；文件管理为面板 #1）
+  const sidebarPanels = createSidebarPanelRegistry()
+  ctx.provide('edrvSidebarPanels', sidebarPanels)
+  ctx.effect(() => sidebarPanels.register(createFilePanel()), 'vscode-mode: sidebar panel')
   ctx.effect(() => registry.register({
     id: 'system', label: '系统默认应用', priority: 0,
     open: (path: string) => originalOpenPath.call(workspaces, path),
@@ -99,14 +119,23 @@ export function apply(ctx: any): void {
     }), 'vscode-mode: file link routing')
   }
 
-  // 中央「文件编辑」页签：类 VSCode 编辑器（顶部=文件页签+搜索框，差异 UI=文件底部圆角悬浮框）
+  // 中央「文件编辑」页签：类 VSCode 编辑器（顶部=文件页签+搜索框，左侧=侧边栏，差异 UI=文件底部圆角悬浮框）
   registerSlotSafely(ctx, {
     name: 'conversation.view',
     id: 'edrv-editor',
     order: 5,
     label: '文件编辑',
     inject: (sessionId: string) => ({ sessionId }),
-  }, (props: unknown) => React.createElement(EditorView, Object.assign({}, props, { schedule, addToConversation })))
+  }, (props: unknown) => React.createElement(EditorView, Object.assign({}, props, { schedule, addToConversation, sidebarPanels })))
+
+  // 对话输入框上方差异 dock：普通对话显示单文案按钮，文件编辑页由 EditorView 隐藏
+  registerSlotSafely(ctx, {
+    name: 'conversation.input.dock',
+    id: 'edrv-diff-dock',
+    order: 30,
+    label: '差异',
+    inject: (sessionId: string) => ({ sessionId }),
+  }, (props: unknown) => React.createElement(ConversationDiffDock, Object.assign({}, props)))
 
   // header 差异角标：仅当前工作区存在差异时渲染
   registerSlotSafely(ctx, { name: 'conversation.session.header.utilities', id: 'edrv-diff-badge', order: 90, label: '差异' },

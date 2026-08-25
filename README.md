@@ -6,11 +6,16 @@
 
 - **中央「文件编辑」页签**（`conversation.view`，VSCode 式）：文件页签（脏点/关闭/「+」打开）+ `Ctrl+P`
   快速打开（QuickOpen）+ **Monaco Editor**（语法高亮/行号/minimap/`Ctrl+F`/`Ctrl+G`/`Ctrl+S`/700ms 防抖自动保存）+
-  状态栏（路径/语言/Ln,Col/保存状态）。
-- **差异审查**：Host 捕获 agent 的 `edit`/`write`（`tools/result`），客户端以**圆角悬浮框**（DiffBox）
-  逐文件列出差异（采纳 Keep / 不采纳 Undo / 跳转 / 回滚 / 归档对比），header 差异角标 + 状态栏 chip
-  （DiffLauncher 全局总览 + 归档/批次回滚）。状态持久化到工作区旁车（`.dsh-edit-review.json`，重启不丢）。
+  顶部工具栏（路径/语言/Ln,Col/保存状态/差异/侧边栏/刷新）。**编辑器不占用底部**：底部整条留给 DSH 对话输入栏
+  （`conversation.composer.bar` 由 DSH 自身渲染在 `conversation.view` 之下）。
+- **差异审查**：Host 捕获 agent 的 `edit`/`write`（`tools/result`），客户端统一使用**唯一一个挂在 DSH `conversation.input.dock` 的 DiffBox 实例**：
+  普通对话页显示单文案「差异 N 个文件 · 查看下一个」并循环跳转；文件编辑页只切换为同一实例的完整模式
+  （Keep / Undo / 跳转 / 回滚 / 归档对比），不会再出现两个浮窗。header 差异角标 + DiffLauncher 全局总览 + 归档/批次回滚；
+  状态持久化到工作区旁车（`.dsh-edit-review.json`，重启不丢）。
 - **Monaco 离线分发**：`assets/vendor/monaco` AMD 构建随包发布，经 `/edrv/vendor/*` 前缀路由提供，全离线可用。
+- **文件管理侧边栏**（类 VSCode 活动栏 + 面板）：左侧活动栏图标 + 可拖拽调宽的面板区；首期「资源管理器」= 懒加载目录树
+  （展开目录实时读取、点文件在编辑器打开、差异角标、活动文件高亮、`edrv:refresh`/手动 ⟳ 刷新、`Ctrl+B` 显隐并持久化）。
+  面板通过注册表装配（`ctx.provide('edrvSidebarPanels')`），新增面板只加一条注册，不改编辑器布局。
 - **MCP 可视化管理**（设置 → VSCodeMode）：子 Tab「我的 MCP」（profile 全局）+「项目 MCP」（各项目根 `.mcp.json`）。
   项目级 MCP 对齐 Claude Code/Cursor：配置存于项目根目录 `.mcp.json`（`mcpServers`），随仓库共享；
   可查看各项目连接状态/工具、添加（stdio / streamable-http）、刷新、启用/禁用、删除。工具全局生效。
@@ -94,6 +99,7 @@ src/
 ├── workspace.ts        Host 工作区文件扫描（TTL 缓存）+ 快速打开搜索
 ├── revert.ts           Host 回滚/删除（fs + subprocess，fs.contains 边界校验）
 ├── registry.ts         Host 每工作区记录桶注册表
+├── tree.ts             Host 目录树纯函数（normalizeRel/toTreeEntries，edrv.listDir 用，可单测）
 ├── rpc.ts              Host RPC 分发表（类型化 handler 表替代巨型 switch，含 compat）
 ├── routes.ts           Host webServer 路由（/edrv/rpc、/edrv/assets/*、/edrv/vendor/*，带冲突护栏）
 └── client/
@@ -103,9 +109,12 @@ src/
     ├── events.ts       窗口事件助手（edrv:refresh/open-editor/show-launcher）
     ├── state/          records.ts（摘要/计数/空差异）+ regions.ts（差异区域/行裁剪）纯函数
     ├── monaco/         loader.ts（AMD 加载/语言映射）+ diffRender.ts（差异自绘渲染器）
+    ├── diffDock.ts     差异 dock 轮转/文案纯函数（对话 dock 与 DiffBox 共用）
+    ├── sidebar/        ★ 侧边栏面板系统：registry.ts（注册表，镜像 fileOpeners）+ SidebarView.ts（活动栏/面板区/拖拽调宽）
+    │                   + types.ts（SidebarPanelDef/SidebarCtx）+ panels/FileExplorer.ts（文件树面板 #1）
     ├── styles/editor.css  编辑区样式（tsdown CSS-inline 注入）
-    └── ui/             EditorView（编排）/ QuickOpen / DiffBox / DiffBarEmpty / DiffLauncher / DiffBadge
-                        / McpSettings（含「兼容性」子 Tab）
+    └── ui/             EditorView（编排）/ QuickOpen / DiffBox（chat/editor 双模式）/ ConversationDiffDock
+                        / DiffBarEmpty / DiffLauncher / DiffBadge / McpSettings（含「兼容性」子 Tab）
 ```
 
 **兼容层（`src/compat.ts` + `src/client/compat.ts`）**：集中处理与其他插件 / DSH 版本的适配——
@@ -131,7 +140,8 @@ curl -s -X POST http://127.0.0.1:3080/edrv/rpc -H 'content-type: application/jso
 ```
 
 **扩展缝（VSCode 化后续迭代）**：新能力 = `shared/rpc.ts` 加方法 + `src/rpc.ts` 加 handler +
-`client/ui/` 加组件，其余模块零改动；`monaco/*` 是可复用的编辑器服务（资源树/对比/诊断面板共用）。
+`client/` 加组件，其余模块零改动；`monaco/*` 是可复用的编辑器服务（资源树/对比/诊断面板共用）；
+侧边栏面板系统（`edrvSidebarPanels` 注册表）可承载后续面板（搜索/差异/时间线），`edrv.listDir` 为通用目录树 API。
 
 ## 架构要点
 

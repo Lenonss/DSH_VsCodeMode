@@ -21,6 +21,14 @@ export const RPC_PATH = '/edrv/rpc'
 /** 决策作用域：call=整条记录，hunk=单个差异块。 */
 export type RpcScope = 'call' | 'hunk'
 
+/** 目录树单项（edrv.listDir 返回；path 相对工作区根，'/' 分隔）。 */
+export interface TreeEntry {
+  name: string
+  path: string
+  type: 'file' | 'directory' | 'other'
+  size?: number
+}
+
 /** 一条批量决策项（decideBatch 的 items 元素，与 accept/reject 单条参数同构）。 */
 export interface DecideItem {
   callId: string
@@ -51,6 +59,7 @@ export interface RpcRequestMap {
   'edrv.rollback': { sessionId?: string; path: string; batch?: number }
   'edrv.debug': { sessionId?: string; text: string }
   'edrv.searchFiles': { sessionId?: string; query: string }
+  'edrv.listDir': { sessionId?: string; path: string }
   'mcp.list': {}
   'mcp.save': { config: MpcConfig }
   'mcp.remove': { id: string }
@@ -84,6 +93,7 @@ export interface RpcOkMap {
   'edrv.rollback': { path: string; batch: number | null }
   'edrv.debug': object
   'edrv.searchFiles': { files: string[]; truncated: boolean }
+  'edrv.listDir': { root: string; path: string; entries: TreeEntry[] }
   'mcp.list': { servers: MpcServer[] }
   'mcp.save': { server: MpcServer }
   'mcp.remove': object

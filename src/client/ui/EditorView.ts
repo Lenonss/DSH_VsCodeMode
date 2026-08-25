@@ -13,9 +13,11 @@ import { createDiffRenderer } from '../monaco/diffRender.js'
 import { ST, callIdAttr, noopHunk, summarize } from '../state/records.js'
 import { diffRegions } from '../state/regions.js'
 import { QuickOpen } from './QuickOpen.js'
-import { DiffBox } from './DiffBox.js'
-import { DiffBarEmpty } from './DiffBarEmpty.js'
 import { DiffLauncher } from './DiffLauncher.js'
+import { SidebarView } from '../sidebar/SidebarView.js'
+import { clearDiffDock, publishDiffDock } from '../diffDockStore.js'
+import { displayDiffTotal, editorDockMode } from '../diffDock.js'
+import { editorHeight } from '../editorLayout.js'
 
 /**
  * 中央编辑区：文件页签（脏点/关闭/打开路径）+ Ctrl+P 搜索 + Monaco 编辑器 +
@@ -34,6 +36,7 @@ export function EditorView(props) {
   const [active, setActive] = React.useState(null)
   const [dirtyMap, setDirtyMap] = React.useState({})
   const [content, setContent] = React.useState(null)
+  const [contentPath, setContentPath] = React.useState(null)
   const [status, setStatus] = React.useState('')
   const [error, setError] = React.useState(null)
   const [loadError, setLoadError] = React.useState(null)
@@ -47,7 +50,12 @@ export function EditorView(props) {
   const [diffIdx, setDiffIdx] = React.useState(0) // 当前文件内差异位置（x/x 显示）
   const [fileIdx, setFileIdx] = React.useState(0) // 全局差异文件位置（x/x 文件 显示）
   const [tabMenu, setTabMenu] = React.useState(null) // Tab 右键菜单 { x,y,path }（编辑区右键走 Monaco 原生菜单，无此浮层）
+  const [sidebarOn, setSidebarOn] = React.useState(true) // 侧边栏显隐
+  const [sidebarW, setSidebarW] = React.useState(240) // 侧边栏宽度
+  const [activePanel, setActivePanel] = React.useState('explorer') // 激活面板 id
+  const [focusRequest, setFocusRequest] = React.useState(0) // 外部差异聚焦请求版本
   const editorRef = React.useRef(null)
+  const viewRootRef = React.useRef(null)
   const monacoRef = React.useRef(null)
   const modelsRef = React.useRef(new Map())
   const saveTimerRef = React.useRef(null)
@@ -74,7 +82,8 @@ export function EditorView(props) {
     return list
   }, [records, active])
 
-  const regions = React.useMemo(() => diffRegions(currentRecords, content).filter((r) => !r.superseded), [currentRecords, content])
+  const contentReady = content !== null && contentPath === active
+  const regions = React.useMemo(() => diffRegions(currentRecords, contentReady ? content : null).filter((r) => !r.superseded), [currentRecords, content, contentPath, active])
   // useMemo 稳定引用：否则 hover 等重渲染会让 view zone effect 反复重建（- 号闪烁）
   const pendingRegions = React.useMemo(() => regions.filter((r) => r.status === ST.PENDING && !r.stale), [regions])
   const staleRegions = React.useMemo(() => regions.filter((r) => r.status === ST.PENDING && r.stale), [regions])
@@ -132,6 +141,7 @@ export function EditorView(props) {
       if (seq !== loadSeqRef.current || path !== active) return
       if (res && res.ok) {
         setContent(res.content)
+        setContentPath(path)
         setLoadStage((prev) => ({ progress: Math.max(84, prev.progress), message: '文件已读取，准备创建编辑器…' }))
         setStatus('已加载')
       } else {
@@ -162,14 +172,81 @@ export function EditorView(props) {
   React.useEffect(() => {
     const onOpen = (e) => {
       const p = e?.detail?.path
-      if (p) addTab(p, true)
+      if (!p) return
+      if (e?.detail?.focusDiff === true) {
+        pendingFocusRef.current = { path: p, region: null }
+        setFocusRequest((value) => value + 1)
+      }
+      addTab(p, true)
     }
-    const onShowLauncher = () => setLauncherOpen(true)
+    const onShowLauncher = (event) => {
+      const tab = event?.detail?.tab
+      if (tab === 'pending' || tab === 'archive') setLauncherTab(tab)
+      setLauncherOpen(true)
+    }
     window.addEventListener('edrv:open-editor', onOpen)
     window.addEventListener('edrv:show-launcher', onShowLauncher)
     return () => {
       window.removeEventListener('edrv:open-editor', onOpen)
       window.removeEventListener('edrv:show-launcher', onShowLauncher)
+    }
+  }, [sessionId])
+
+  // 对话输入区的唯一差异 dock 读取此会话快照；编辑器卸载时只清理自己的发布者令牌。
+  const dockSourceRef = React.useRef({})
+  React.useEffect(() => () => clearDiffDock(sessionId, dockSourceRef.current), [sessionId])
+
+  // DSH composer 保持原生布局；编辑区只读取几何边界并同步自己的高度。
+  React.useLayoutEffect(() => {
+    const root = viewRootRef.current
+    const scroll = root?.closest?.('[data-conversation-scroll]')
+    if (!root || !scroll) return
+    let seat = null
+    let frame = null
+    let resizeObserver = null
+    const update = () => {
+      frame = null
+      const rootRect = root.getBoundingClientRect()
+      const scrollRect = scroll.getBoundingClientRect()
+      const seatRect = seat?.getBoundingClientRect?.()
+      const height = editorHeight(rootRect.top, scrollRect.bottom, seatRect?.top)
+      root.style.setProperty('--edrv-editor-height', height + 'px')
+    }
+    const scheduleUpdate = () => {
+      if (frame !== null) return
+      frame = requestAnimationFrame(update)
+    }
+    const attachSeat = () => {
+      const next = scroll.querySelector?.('[data-composer-seat]')
+      if (next === seat) {
+        scheduleUpdate()
+        return
+      }
+      resizeObserver?.disconnect()
+      seat = next
+      resizeObserver = null
+      if (seat && typeof ResizeObserver === 'function') {
+        resizeObserver = new ResizeObserver(scheduleUpdate)
+        resizeObserver.observe(seat)
+      }
+      scheduleUpdate()
+    }
+    attachSeat()
+    const mutationObserver = typeof MutationObserver === 'function'
+      ? new MutationObserver(attachSeat)
+      : null
+    mutationObserver?.observe(scroll, { childList: true })
+    const scrollObserver = typeof ResizeObserver === 'function' ? new ResizeObserver(scheduleUpdate) : null
+    scrollObserver?.observe(scroll)
+    window.addEventListener('resize', scheduleUpdate)
+    scheduleUpdate()
+    return () => {
+      if (frame !== null) cancelAnimationFrame(frame)
+      resizeObserver?.disconnect()
+      scrollObserver?.disconnect()
+      mutationObserver?.disconnect()
+      window.removeEventListener('resize', scheduleUpdate)
+      root.style.removeProperty('--edrv-editor-height')
     }
   }, [sessionId])
 
@@ -195,9 +272,50 @@ export function EditorView(props) {
     catch (e) { /* 忽略 */ }
   }, [tabs, active, sessionId])
 
+  // 侧边栏状态：恢复（显隐/宽度/激活面板）
+  React.useEffect(() => {
+    if (!sessionId) return
+    try {
+      const raw = localStorage.getItem('edrv.sidebar.' + String(sessionId))
+      if (raw) {
+        const saved = JSON.parse(raw)
+        if (typeof saved.on === 'boolean') setSidebarOn(saved.on)
+        if (typeof saved.width === 'number') setSidebarW(Math.max(180, Math.min(560, saved.width)))
+        if (typeof saved.panel === 'string') setActivePanel(saved.panel)
+      }
+    } catch (e) { /* 损坏忽略 */ }
+  }, [sessionId])
+
+  // 侧边栏状态持久化
+  React.useEffect(() => {
+    if (!sessionId) return
+    try { localStorage.setItem('edrv.sidebar.' + String(sessionId), JSON.stringify({ on: sidebarOn, width: sidebarW, panel: activePanel })) }
+    catch (e) { /* 忽略 */ }
+  }, [sidebarOn, sidebarW, activePanel, sessionId])
+
+  // Ctrl+B 切换侧边栏（capture 抢占，避免与 DSH 全局冲突）
+  React.useEffect(() => {
+    const onKey = (e) => {
+      if ((e.ctrlKey || e.metaKey) && String(e.key).toLowerCase() === 'b') {
+        e.preventDefault(); e.stopPropagation()
+        setSidebarOn((v) => !v)
+      }
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [])
+
+  // 文件 → 待处理差异数 映射（侧边栏角标）
+  const pendingByPath = React.useMemo(() => {
+    const out = {}
+    for (const f of sum.files) if (f.pending > 0) out[f.path] = f.pending
+    return out
+  }, [sum])
+
   React.useEffect(() => {
     if (!active) return
     setContent(null)
+    setContentPath(null)
     setLoadError(null)
     setLoadStage({ progress: 10, message: '准备读取文件…' })
     setStatus('加载中…')
@@ -258,6 +376,7 @@ export function EditorView(props) {
       if (res && res.ok) {
         setStatus('已保存 ' + new Date().toTimeString().slice(0, 8))
         setContent(text)
+        setContentPath(active)
         setDirtyMap((d) => Object.assign({}, d, { [active]: false }))
         refreshRecords()
         emitRefresh()
@@ -418,7 +537,7 @@ export function EditorView(props) {
     ed.revealLineInCenter(Math.max(1, target.start ?? 1))
     ed.setPosition({ lineNumber: Math.max(1, target.start ?? 1), column: 1 })
     ed.focus()
-  }, [active, content, pendingRegions])
+  }, [active, content, pendingRegions, focusRequest])
 
   const jumpTo = (region) => {
     if (editorRef.current) {
@@ -453,6 +572,12 @@ export function EditorView(props) {
     const next = (fileIdx + delta + sum.pendingFiles.length) % sum.pendingFiles.length
     setFileIdx(next)
     openFile(sum.pendingFiles[next].path, true)
+  }
+
+  const openNextFile = () => {
+    if (!sum.pendingFiles.length) return
+    if (sum.pendingFiles.some((file) => file.path === active)) gotoFile(1)
+    else openFile(sum.pendingFiles[0].path, true)
   }
 
   const reloadFile = (skipStale) => {
@@ -668,22 +793,19 @@ export function EditorView(props) {
 
   const pathBar = React.createElement('div', { className: 'edrv-pathbar', title: active || '' },
     React.createElement('span', { className: 'edrv-pb-name' }, active ? String(active).split(/[\\/]/).pop() : '未打开文件'),
-    React.createElement('span', { className: 'edrv-pb-full' }, active || '使用右上搜索框 (Ctrl+P) 打开文件'))
+    React.createElement('span', { className: 'edrv-pb-full' }, active || '使用右上搜索框 (Ctrl+P) 打开文件'),
+    (active && langOf(active) ? React.createElement('span', { className: 'edrv-pb-meta' }, langOf(active)) : null),
+    (cursor ? React.createElement('span', { className: 'edrv-pb-meta' }, cursor) : null),
+    (status ? React.createElement('span', { className: 'edrv-pb-meta edrv-pb-status' }, status) : null))
 
   const tabRow = React.createElement('div', { style: { display: 'flex', alignItems: 'center', background: 'var(--dsw-alias-bg-layer-1,transparent)', flexShrink: 0 } },
     tabsEl,
-    React.createElement(QuickOpen, { sessionId, onOpen: (p) => openFile(p, false) }))
-
-  const statusBar = React.createElement('div', { className: 'edrv-statusbar' },
-    React.createElement('span', null, '编辑'),
-    React.createElement('span', null, active ? langOf(active) : ''),
-    React.createElement('span', null, cursor),
-    (status ? React.createElement('span', null, status) : null),
-    React.createElement('span', { style: { flex: 1 } }),
     (sum.totalFiles > 0
       ? React.createElement('button', { className: 'edrv-diffchip', title: '打开差异总览/归档', onClick: () => setLauncherOpen((o) => !o) }, '⚠ 差异 ' + sum.totalFiles + ' 文件')
       : null),
-    React.createElement('button', { className: 'edrv-chip-btn', title: '刷新', onClick: reloadFile }, '⟳'))
+    React.createElement('button', { className: 'edrv-chip-btn' + (sidebarOn ? ' edrv-chip-on' : ''), title: '切换侧边栏 (Ctrl+B)', onClick: () => setSidebarOn((v) => !v) }, '☰'),
+    React.createElement('button', { className: 'edrv-chip-btn', title: '刷新', onClick: reloadFile }, '⟳'),
+    React.createElement(QuickOpen, { sessionId, onOpen: (p) => openFile(p, false) }))
 
   const otherFiles = sum.pendingFiles.filter((f) => f.path !== active)
 
@@ -724,6 +846,7 @@ export function EditorView(props) {
     body = loadingBody('文件加载失败：' + loadError, 0, () => {
       setLoadError(null)
       setContent(null)
+      setContentPath(null)
       setLoadStage({ progress: 10, message: '重新读取文件…' })
       loadContent(active, sessionId)
     })
@@ -756,39 +879,43 @@ export function EditorView(props) {
         React.createElement('button', { className: 'edrv-pill edrv-pill-undo', onClick: () => { dismissHover(); actHunk(hoverAct.region, true) } }, '↩ Undo'))
     : null
 
+  React.useEffect(() => {
+    if (!sessionId) return
+    const mode = editorDockMode(active)
+    publishDiffDock(sessionId, {
+      mode,
+      pendingRegions,
+      staleRegions,
+      onAct: actHunk,
+      onAcceptFile: acceptFile,
+      onUndoFile: undoFile,
+      onAcceptAllFiles: acceptAllFiles,
+      onUndoAllFiles: undoAllFiles,
+      allPendingCount: allPending.length,
+      onRollback: rollbackFile,
+      onJump: jumpTo,
+      otherFiles,
+      onOpenOther: (path) => openFile(path, true),
+      onOpenLauncher: (tab) => { setLauncherTab(tab || 'pending'); setLauncherOpen(true) },
+      onRefresh: reloadFile,
+      activePath: active,
+      diffIdx: contentReady ? diffIdx : 0,
+      diffTotal: displayDiffTotal(contentReady, pendingRegions.length, sum.files.find((file) => file.path === active)?.pending ?? 0),
+      fileIdx,
+      fileTotal: sum.pendingFiles.length,
+      onPrevDiff: () => gotoDiff(-1),
+      onNextDiff: () => gotoDiff(1),
+      onPrevFile: () => gotoFile(-1),
+      onNextFile: () => gotoFile(1),
+      onOpenNextFile: openNextFile,
+    }, dockSourceRef.current)
+  })
+
   const overlay = launcherOpen
     ? React.createElement(React.Fragment, null,
         React.createElement('div', { style: { position: 'fixed', inset: 0, zIndex: 30 }, onClick: () => setLauncherOpen(false) }),
         React.createElement(DiffLauncher, { sessionId, sum, tab: launcherTab, onClose: () => setLauncherOpen(false), onOpenFile: (p) => { openFile(p, true); setLauncherOpen(false) } }))
-    : (pendingRegions.length > 0
-        ? React.createElement(DiffBox, {
-            pendingRegions, staleRegions,
-            onAct: actHunk,
-            onAcceptFile: acceptFile,
-            onUndoFile: undoFile,
-            onAcceptAllFiles: acceptAllFiles,
-            onUndoAllFiles: undoAllFiles,
-            allPendingCount: allPending.length,
-            onRollback: rollbackFile,
-            onJump: jumpTo,
-            otherFiles,
-            onOpenOther: (p) => openFile(p, true),
-            onOpenLauncher: (tab) => { setLauncherTab(tab || 'pending'); setLauncherOpen(true) },
-            onRefresh: reloadFile,
-            activePath: active,
-            diffIdx, diffTotal: pendingRegions.length,
-            fileIdx, fileTotal: sum.pendingFiles.length,
-            onPrevDiff: () => gotoDiff(-1), onNextDiff: () => gotoDiff(1),
-            onPrevFile: () => gotoFile(-1), onNextFile: () => gotoFile(1),
-          })
-        : (sum.pendingFiles.length > 0
-            ? React.createElement(DiffBarEmpty, {
-                sum, active, staleCount: staleRegions.length,
-                onNextFile: () => { if (sum.pendingFiles.length) openFile(sum.pendingFiles[0].path, true) },
-                onOpenLauncher: (tab) => { setLauncherTab(tab || 'pending'); setLauncherOpen(true) },
-                onRefresh: reloadFile,
-              })
-            : null))
+    : null
 
   // Tab 右键菜单浮层：全屏遮罩（点击/右键关闭）+ 菜单（固定定位，clamp 防越界）。
   // 编辑区右键走 Monaco 原生 context menu（editor.addAction），不在此渲染浮层。
@@ -814,14 +941,42 @@ export function EditorView(props) {
         React.createElement('button', { className: 'edrv-ctxmenu-item edrv-ctxmenu-danger', onClick: () => { closeTab(tabMenu.path); dismissMenus() } }, '关闭标签页'))
     : null
 
-  return React.createElement('div', { 'data-edrv-view': '1', style: { height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column', background: 'var(--dsw-alias-bg-base,transparent)', overflow: 'hidden' } },
+  const sidebarPanels = props.sidebarPanels
+  const sidebarCtx = {
+    sessionId,
+    openFile: (p) => openFile(p, false),
+    activePath: active,
+    pendingByPath,
+    sum: { totalFiles: sum.totalFiles, files: sum.files },
+    refreshRecords: () => refreshRecords(),
+  }
+
+  // 主编辑列（侧边栏右侧）：pathBar + tabRow + 编辑/差异区（底部整条留给 DSH 对话输入栏）
+  const editorArea = React.createElement('div', { className: 'edrv-editor-area' },
+    body,
+    hoverEl,
+    overlay)
+  const mainCol = React.createElement('div', { className: 'edrv-main-col', style: { flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' } },
     pathBar,
     tabRow,
-    React.createElement('div', { style: { position: 'relative', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' } },
-      body,
-      hoverEl,
-      overlay),
+    editorArea)
+  // 编辑器根节点按 composer 顶部边界动态限高，底部对话区域继续由 DSH 原生渲染。
+  const editorRow = React.createElement('div', { className: 'edrv-editor-row' },
+    (sidebarOn && sidebarPanels
+      ? React.createElement(SidebarView, {
+          registry: sidebarPanels,
+          ctx: sidebarCtx,
+          activePanel,
+          onActive: setActivePanel,
+          width: sidebarW,
+          onWidth: setSidebarW,
+          onHide: () => setSidebarOn(false),
+        })
+      : null),
+    mainCol)
+
+  return React.createElement('div', { ref: viewRootRef, 'data-edrv-view': '1', style: { height: 'var(--edrv-editor-height, 100%)', maxHeight: 'var(--edrv-editor-height, 100%)', minHeight: 0, display: 'flex', flexDirection: 'column', background: 'var(--dsw-alias-bg-base,transparent)', overflow: 'hidden' } },
+    editorRow,
     menuBackdrop,
-    tabMenuEl,
-    statusBar)
+    tabMenuEl)
 }
