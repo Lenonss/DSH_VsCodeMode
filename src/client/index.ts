@@ -28,6 +28,8 @@ import { SIDEBAR_PLUGIN, pickSettingsBinder, registerSlotSafely } from './compat
 import { createAddToConversation } from './addToConversation.js'
 import { createSidebarPanelRegistry } from './sidebar/registry.js'
 import { createFilePanel } from './sidebar/panels/index.js'
+import { createOutlinePanel } from './outline/index.js'
+import { createOutlineSourceRegistry, registerBuiltinOutlineSources } from './outline/sources.js'
 import type { CompatAdapter } from '../shared/compat.js'
 
 export const inject = ['slots', 'timer', 'locale', 'connection', 'remote', 'workspaces', 'sessions', 'conversation', 'settingsScope', 'webUiSettings']
@@ -85,6 +87,11 @@ export function apply(ctx: any): void {
   const sidebarPanels = createSidebarPanelRegistry()
   ctx.provide('edrvSidebarPanels', sidebarPanels)
   ctx.effect(() => sidebarPanels.register(createFilePanel()), 'vscode-mode: sidebar panel')
+  // 大纲源注册表（公开预留口）：第三方语言插件（LSP/VSIX 等）注册更高优先级源即可覆盖兜底
+  const outlineSources = createOutlineSourceRegistry()
+  ctx.provide('edrvOutlineSources', outlineSources)
+  ctx.effect(() => registerBuiltinOutlineSources(outlineSources), 'vscode-mode: outline sources')
+  ctx.effect(() => sidebarPanels.register(createOutlinePanel()), 'vscode-mode: sidebar panel outline')
   ctx.effect(() => registry.register({
     id: 'system', label: '系统默认应用', priority: 0,
     open: (path: string) => originalOpenPath.call(workspaces, path),
@@ -126,7 +133,7 @@ export function apply(ctx: any): void {
     order: 5,
     label: '文件编辑',
     inject: (sessionId: string) => ({ sessionId }),
-  }, (props: unknown) => React.createElement(EditorView, Object.assign({}, props, { schedule, addToConversation, sidebarPanels })))
+  }, (props: unknown) => React.createElement(EditorView, Object.assign({}, props, { schedule, addToConversation, sidebarPanels, outlineSources })))
 
   // 对话输入框上方差异 dock：普通对话显示单文案按钮，文件编辑页由 EditorView 隐藏
   registerSlotSafely(ctx, {

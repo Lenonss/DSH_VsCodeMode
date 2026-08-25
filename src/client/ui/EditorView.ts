@@ -949,6 +949,8 @@ export function EditorView(props) {
     pendingByPath,
     sum: { totalFiles: sum.totalFiles, files: sum.files },
     refreshRecords: () => refreshRecords(),
+    editor: () => editorRef.current,
+    outlineSources: props.outlineSources,
   }
 
   // 主编辑列（侧边栏右侧）：pathBar + tabRow + 编辑/差异区（底部整条留给 DSH 对话输入栏）

@@ -217,6 +217,15 @@
 [data-edrv-view] .edrv-tree-badge { min-width: 14px; height: 14px; padding: 0 4px; border-radius: 999px; background: var(--dsw-alias-state-warn-primary, #d97706); color: #fff; font-size: 9px; font-weight: 600; line-height: 14px; text-align: center; box-sizing: border-box; flex-shrink: 0; }
 [data-edrv-view] .edrv-tree-loading { height: 22px; line-height: 22px; color: var(--dsw-alias-label-tertiary, #9aa5b1); font-size: 11px; }
 [data-edrv-view] .edrv-tree-error { display: flex; align-items: center; gap: 8px; margin: 4px 2px 6px; padding: 6px 8px; border: 1px solid rgba(217,83,79,.4); border-radius: 6px; background: #fdeaea; color: var(--dsw-alias-state-error-primary, #d9534f); font-size: 11px; }
+/* 大纲面板：kind 字形 / detail / 行号 */
+[data-edrv-view] .edrv-outline-kind { display: inline-flex; align-items: center; justify-content: center; width: 14px; flex-shrink: 0; font-size: 12px; font-weight: 600; text-align: center; }
+[data-edrv-view] .edrv-outline-kind.edrv-ol-func { color: var(--dsw-alias-brand-primary, #0f9d58); }
+[data-edrv-view] .edrv-outline-kind.edrv-ol-type { color: var(--dsw-alias-label-primary, #1f2933); }
+[data-edrv-view] .edrv-outline-kind.edrv-ol-data { color: var(--dsw-alias-state-warn-primary, #d97706); }
+[data-edrv-view] .edrv-outline-kind.edrv-ol-ns { color: var(--dsw-alias-label-secondary, #52606d); }
+[data-edrv-view] .edrv-outline-kind.edrv-ol-key { color: var(--dsw-alias-label-tertiary, #9aa5b1); }
+[data-edrv-view] .edrv-outline-detail { flex-shrink: 0; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dsw-alias-label-tertiary, #9aa5b1); font-size: 11px; }
+[data-edrv-view] .edrv-outline-ln { flex-shrink: 0; padding-right: 2px; color: var(--dsw-alias-label-tertiary, #9aa5b1); font-size: 10px; font-variant-numeric: tabular-nums; }
 [data-edrv-view] .edrv-side-resize { width: 5px; flex-shrink: 0; cursor: col-resize; background: transparent; }
 [data-edrv-view] .edrv-side-resize:hover { background: var(--dsw-alias-brand-primary, #0f9d58); opacity: .35; }
 [data-edrv-view] .edrv-chip-btn.edrv-chip-on { background: var(--dsw-alias-interactive-bg-hover, rgba(15,157,88,.12)); color: var(--dsw-alias-label-primary, #1f2933); }

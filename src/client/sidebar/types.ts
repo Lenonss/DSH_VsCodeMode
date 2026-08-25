@@ -3,6 +3,7 @@
  * 面板 = 活动栏一项 + 面板区一处渲染；新增面板只需注册一条 SidebarPanelDef。
  * 作者 ddj 2026-08-26
  */
+import type { OutlineSourceRegistry } from '../outline/types.js'
 
 /** 面板可用的共享上下文（由 SidebarView 从 EditorView 注入，面板不直碰其内部）。 */
 export interface SidebarCtx {
@@ -15,6 +16,10 @@ export interface SidebarCtx {
   sum: { totalFiles: number; files: Array<{ path: string; pending: number }> }
   /** 触发差异记录刷新（保存/决策后由 EditorView 统一 emitRefresh）。 */
   refreshRecords: () => void
+  /** 取当前 Monaco 编辑器实例（可能为 null；大纲面板读 model/跳转用）。 */
+  editor?: () => unknown | null
+  /** 大纲源注册表（公开 provide 为 edrvOutlineSources；大纲面板解析符号用）。 */
+  outlineSources?: OutlineSourceRegistry
 }
 
 /** 单个侧边栏面板定义。 */
