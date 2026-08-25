@@ -3,17 +3,21 @@
  * dsh-vscode-mode client — 侧边栏「文件管理」面板（懒加载目录树）。
  * 点目录展开/收起（首次经 edrv.listDir 拉取并缓存），点文件经 ctx.openFile 打开；
  * 差异角标取 pendingByPath，活动文件高亮；edrv:refresh 事件与手动刷新重载树。
- * 作者 ddj 2026-08-26
+ * 右键行/空白弹出菜单：项来自 ctx.fileMenuItems 注册表（可拓展），
+ * 内置「在文件浏览器中打开」经 edrv.revealInExplorer 定位/打开。
+ * 作者 ddj 2026-08-26 / 2026-08-27
  */
 import React from 'react'
 import { rpc } from '../../rpc.js'
+import { ContextMenu } from '../../ui/ContextMenu.js'
+import { buildTreeMenu } from '../contextMenu.js'
 import type { SidebarCtx } from '../types.js'
 
 const DIR_CAP = 4000
 
 /**
  * 目录树面板主体。
- * @param props.ctx 面板共享上下文（sessionId/openFile/activePath/pendingByPath）
+ * @param props.ctx 面板共享上下文（sessionId/openFile/activePath/pendingByPath/fileMenuItems/notify）
  */
 export function FileExplorer(props) {
   const ctx = props?.ctx
@@ -26,6 +30,7 @@ export function FileExplorer(props) {
   const [expanded, setExpanded] = React.useState({})
   const [loading, setLoading] = React.useState({})
   const [error, setError] = React.useState(null)
+  const [menu, setMenu] = React.useState(null) // 右键菜单 { x, y, target }
   const tokensRef = React.useRef({})
   // expanded 的 ref 镜像：edrv:refresh 监听用首次渲染闭包，但需读到最新展开态
   const expandedRef = React.useRef({})
@@ -113,6 +118,11 @@ export function FileExplorer(props) {
       title: e.path,
       style: { paddingLeft: 6 + depth * 14 },
       onClick: () => { if (isDir) toggle(e.path); else openFile(e.path) },
+      onContextMenu: (ev) => {
+        ev.preventDefault()
+        ev.stopPropagation()
+        setMenu({ x: ev.clientX, y: ev.clientY, target: { path: e.path, type: e.type } })
+      },
     },
       React.createElement('span', { className: 'edrv-tree-chev' },
         isDir ? (isOpen ? '▾' : '▸') : ''),
@@ -145,7 +155,24 @@ export function FileExplorer(props) {
     return rows
   }
 
-  return React.createElement('div', { className: 'edrv-side-panel' },
+  // 面板区右键（空白处）→ 工作区根目录菜单；行内右键已在 rowEl 阻止冒泡。
+  const onPanelContext = (ev) => {
+    ev.preventDefault()
+    setMenu({ x: ev.clientX, y: ev.clientY, target: { path: '', type: 'directory' } })
+  }
+  // 当前右键目标的可视菜单项（构建时过滤/排序，registry 变化下次打开生效）。
+  const menuEntries = menu
+    ? buildTreeMenu(ctx?.fileMenuItems, menu.target, ctx).map((item) => ({
+        id: item.id,
+        label: item.label,
+        danger: item.danger,
+        disabled: item.disabled,
+        separator: item.separator,
+        onClick: () => item.run(menu.target, ctx),
+      }))
+    : []
+
+  return React.createElement('div', { className: 'edrv-side-panel', onContextMenu: onPanelContext },
     React.createElement('div', { className: 'edrv-side-head' },
       React.createElement('span', { className: 'edrv-side-title' }, '资源管理器'),
       React.createElement('span', { className: 'edrv-side-root', title: root || '' }, rootName),
@@ -157,5 +184,8 @@ export function FileExplorer(props) {
             React.createElement('span', null, String(error)),
             React.createElement('button', { className: 'edrv-side-btn', onClick: () => refresh() }, '重试'))
         : null),
-      rowsOf('', 0)))
+      rowsOf('', 0)),
+    (menu && menuEntries.length
+      ? React.createElement(ContextMenu, { x: menu.x, y: menu.y, entries: menuEntries, onClose: () => setMenu(null) })
+      : null))
 }

@@ -69,6 +69,8 @@
 [data-edrv-view] .edrv-ctxmenu-item { display: flex; align-items: center; gap: 8px; font-size: 12px; line-height: 18px; padding: 7px 10px; border: none; border-radius: 6px; background: transparent; color: var(--dsw-alias-label-primary, #1f2933); cursor: pointer; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 [data-edrv-view] .edrv-ctxmenu-item:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(15,157,88,.08)); }
 [data-edrv-view] .edrv-ctxmenu-item.edrv-ctxmenu-danger { color: var(--dsw-alias-state-error-primary, #d9534f); }
+[data-edrv-view] .edrv-ctxmenu-item:disabled,
+[data-edrv-view] .edrv-ctxmenu-item.edrv-ctxmenu-disabled { color: var(--dsw-alias-label-disabled, #b0b7c0); cursor: default; background: transparent; }
 [data-edrv-view] .edrv-ctxmenu-sep { height: 1px; margin: 3px 4px; background: var(--dsw-alias-border-l1, #e0e6e8); }
 [data-edrv-view] .edrv-diffbar-body { max-height: 130px; max-width: min(560px, calc(100vw - 40px)); overflow: auto; padding: 4px 8px 8px; display: flex; flex-direction: column; gap: 4px; border-top: 1px solid var(--dsw-alias-border-l1, #e0e6e8); }
 [data-edrv-view] .edrv-diffrow { display: flex; align-items: center; gap: 8px; padding: 3px 6px; border: 1px solid var(--dsw-alias-border-l1, #e0e6e8); border-radius: 6px; background: var(--dsw-alias-bg-layer-2, #f0f4f4); cursor: pointer; flex-wrap: wrap; }
@@ -201,7 +203,7 @@
 [data-edrv-view] .edrv-rail-icon { font-size: 15px; line-height: 1; }
 [data-edrv-view] .edrv-rail-badge { position: absolute; top: 2px; right: 2px; min-width: 14px; height: 14px; padding: 0 3px; border-radius: 999px; background: var(--dsw-alias-brand-primary, #0f9d58); color: #fff; font-size: 9px; font-weight: 600; line-height: 14px; text-align: center; box-sizing: border-box; }
 [data-edrv-view] .edrv-side-body { flex: 1; min-width: 0; min-height: 0; display: flex; overflow: hidden; }
-[data-edrv-view] .edrv-side-panel { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+[data-edrv-view] .edrv-side-panel { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; position: relative; }
 [data-edrv-view] .edrv-side-head { display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 10px 0 12px; border-bottom: 1px solid var(--dsw-alias-border-l1, #e0e6e8); flex-shrink: 0; }
 [data-edrv-view] .edrv-side-title { font-size: 12px; font-weight: 600; color: var(--dsw-alias-label-primary, #1f2933); white-space: nowrap; }
 [data-edrv-view] .edrv-side-root { font-size: 11px; color: var(--dsw-alias-label-tertiary, #9aa5b1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

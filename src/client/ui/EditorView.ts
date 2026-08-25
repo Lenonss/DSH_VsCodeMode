@@ -18,6 +18,7 @@ import { SidebarView } from '../sidebar/SidebarView.js'
 import { clearDiffDock, publishDiffDock } from '../diffDockStore.js'
 import { displayDiffTotal, editorDockMode } from '../diffDock.js'
 import { editorHeight } from '../editorLayout.js'
+import { revealInExplorer as revealPathInExplorer } from '../fileReveal.js'
 
 /**
  * 中央编辑区：文件页签（脏点/关闭/打开路径）+ Ctrl+P 搜索 + Monaco 编辑器 +
@@ -491,6 +492,12 @@ export function EditorView(props) {
         if (s && p) menuHandlers()?.addRefToChat(p, { startLine: s.startLine, endLine: s.endLine })
       },
     })
+    // 在 OS 文件浏览器中打开/定位当前活动文件（与文件管理栏右键菜单同源能力）。
+    ed.addAction({
+      id: 'edrv.revealInExplorer', label: '在文件浏览器中打开', contextMenuGroupId: '1_edrv',
+      precondition: 'editorTextFocus',
+      run: (edx) => menuHandlers()?.openInExplorer(pathOf(edx)),
+    })
     // hover 差异块 → 浮出 Keep/Undo（req：鼠标移到编辑区差异块时显示）
     // 防闪烁：① 区域不变不 setState（浮窗锚定差异块起始行，不跟随鼠标）；② 延迟隐藏；
     // ③ 浮窗自身 onMouseEnter 取消隐藏计时（鼠标在浮窗与编辑器间移动不闪）。
@@ -751,8 +758,23 @@ export function EditorView(props) {
     addToConversation.appendReference(sessionId, path, range).then((o) => setStatus(statusOfAdd(o, '已添加文件引用')))
   }
 
+  /**
+   * 在 OS 文件浏览器中打开/定位路径（Monaco 右键菜单用，状态栏反馈）。
+   * @author ddj 2026年08月27号
+   * @param path 工作区相对路径（可能为 null）
+   */
+  const openInExplorer = (path) => {
+    if (!path) { setStatus('无活动文件'); return }
+    if (!sessionId) { setStatus('无活动会话'); return }
+    setStatus('正在打开文件浏览器…')
+    revealPathInExplorer(sessionId, path).then((outcome) => {
+      setStatus(outcome.ok ? '已在文件浏览器中打开' : '打开失败')
+      if (!outcome.ok && outcome.error) setError(outcome.error)
+    })
+  }
+
   // 供 Monaco 原生右键菜单 addAction 读取的最新动作闭包（空依赖回调不随渲染重建）
-  menuHandlersRef.current = { addRefToChat }
+  menuHandlersRef.current = { addRefToChat, openInExplorer }
 
   const openFile = (path, focusDiff) => {
     if (!path) return
@@ -951,6 +973,8 @@ export function EditorView(props) {
     refreshRecords: () => refreshRecords(),
     editor: () => editorRef.current,
     outlineSources: props.outlineSources,
+    fileMenuItems: props.fileMenuItems,
+    notify: (message) => setStatus(message),
   }
 
   // 主编辑列（侧边栏右侧）：pathBar + tabRow + 编辑/差异区（底部整条留给 DSH 对话输入栏）

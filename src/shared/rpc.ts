@@ -60,6 +60,7 @@ export interface RpcRequestMap {
   'edrv.debug': { sessionId?: string; text: string }
   'edrv.searchFiles': { sessionId?: string; query: string }
   'edrv.listDir': { sessionId?: string; path: string }
+  'edrv.revealInExplorer': { sessionId?: string; path: string }
   'mcp.list': {}
   'mcp.save': { config: MpcConfig }
   'mcp.remove': { id: string }
@@ -94,6 +95,7 @@ export interface RpcOkMap {
   'edrv.debug': object
   'edrv.searchFiles': { files: string[]; truncated: boolean }
   'edrv.listDir': { root: string; path: string; entries: TreeEntry[] }
+  'edrv.revealInExplorer': { revealed: string }
   'mcp.list': { servers: MpcServer[] }
   'mcp.save': { server: MpcServer }
   'mcp.remove': object

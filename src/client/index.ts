@@ -28,6 +28,8 @@ import { SIDEBAR_PLUGIN, pickSettingsBinder, registerSlotSafely } from './compat
 import { createAddToConversation } from './addToConversation.js'
 import { createSidebarPanelRegistry } from './sidebar/registry.js'
 import { createFilePanel } from './sidebar/panels/index.js'
+import { createTreeMenuRegistry } from './sidebar/contextMenu.js'
+import { createDefaultFileMenuItems } from './sidebar/menuItems.js'
 import { createOutlinePanel } from './outline/index.js'
 import { createOutlineSourceRegistry, registerBuiltinOutlineSources } from './outline/sources.js'
 import type { CompatAdapter } from '../shared/compat.js'
@@ -87,6 +89,12 @@ export function apply(ctx: any): void {
   const sidebarPanels = createSidebarPanelRegistry()
   ctx.provide('edrvSidebarPanels', sidebarPanels)
   ctx.effect(() => sidebarPanels.register(createFilePanel()), 'vscode-mode: sidebar panel')
+  // 文件右键菜单项注册表（对外 provide，供本插件/第三方注册；内置「在文件浏览器中打开」）
+  const fileMenuItems = createTreeMenuRegistry()
+  ctx.provide('edrvFileContextMenuItems', fileMenuItems)
+  for (const item of createDefaultFileMenuItems()) {
+    ctx.effect(() => fileMenuItems.register(item), 'vscode-mode: file context menu item ' + item.id)
+  }
   // 大纲源注册表（公开预留口）：第三方语言插件（LSP/VSIX 等）注册更高优先级源即可覆盖兜底
   const outlineSources = createOutlineSourceRegistry()
   ctx.provide('edrvOutlineSources', outlineSources)
@@ -133,7 +141,7 @@ export function apply(ctx: any): void {
     order: 5,
     label: '文件编辑',
     inject: (sessionId: string) => ({ sessionId }),
-  }, (props: unknown) => React.createElement(EditorView, Object.assign({}, props, { schedule, addToConversation, sidebarPanels, outlineSources })))
+  }, (props: unknown) => React.createElement(EditorView, Object.assign({}, props, { schedule, addToConversation, sidebarPanels, outlineSources, fileMenuItems })))
 
   // 对话输入框上方差异 dock：普通对话显示单文案按钮，文件编辑页由 EditorView 隐藏
   registerSlotSafely(ctx, {

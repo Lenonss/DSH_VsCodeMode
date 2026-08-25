@@ -4,6 +4,7 @@
  * 作者 ddj 2026-08-26
  */
 import type { OutlineSourceRegistry } from '../outline/types.js'
+import type { TreeMenuRegistry } from './contextMenu.js'
 
 /** 面板可用的共享上下文（由 SidebarView 从 EditorView 注入，面板不直碰其内部）。 */
 export interface SidebarCtx {
@@ -20,6 +21,10 @@ export interface SidebarCtx {
   editor?: () => unknown | null
   /** 大纲源注册表（公开 provide 为 edrvOutlineSources；大纲面板解析符号用）。 */
   outlineSources?: OutlineSourceRegistry
+  /** 文件右键菜单项注册表（公开 provide 为 edrvFileContextMenuItems；文件管理面板构建菜单用）。 */
+  fileMenuItems?: TreeMenuRegistry
+  /** 面板动作反馈（如右键菜单操作结果 → 编辑区路径栏状态）。 */
+  notify?: (message: string) => void
 }
 
 /** 单个侧边栏面板定义。 */

@@ -30,6 +30,7 @@ import { normalizeFileOpenTool, FILE_OPEN_DEFAULT, FILE_OPEN_SETTINGS_NS } from 
 import { buildReport } from './compat.js'
 import { readDevForm, setDevForm } from './devForm.js'
 import { normalizeRel, toTreeEntries } from './tree.js'
+import { revealInExplorer } from './reveal.js'
 
 /** cwd → Promise 链：串行化 debug 日志追加（fs read+write 非原子，避免并发丢行）。 */
 const debugWriteQueues = new Map<string, Promise<void>>()
@@ -334,6 +335,26 @@ export function buildHandlers(ctx: Ctx, registry: Registry, searcher = newSearch
         return { ok: true, root, path: rel, entries: toTreeEntries(rel, children) }
       } catch (error) {
         return { ok: false, error: '读取目录失败：' + String(error) }
+      }
+    },
+    'edrv.revealInExplorer': async (args) => {
+      // 在 OS 文件浏览器中打开/定位路径（树行/编辑器右键菜单用），相对工作区解析。
+      const sc = await requireSession(ctx, args.sessionId)
+      if ('err' in sc) return { ok: false, error: sc.err }
+      const fs = ctx.get('fs')
+      if (!fs) return { ok: false, error: '缺少 fs' }
+      try {
+        const rel = normalizeRel(args.path)
+        if (rel === null) return { ok: false, error: '路径不合法' }
+        const target = await fs.resolve(rel || '.', { cwd: sc.cwd })
+        const info = await fs.stat(target)
+        if (!info) return { ok: false, error: '路径不存在' }
+        const abs = fs.processPath(target)
+        const outcome = await revealInExplorer(ctx, abs, info.type === 'directory')
+        if (!outcome.ok) return { ok: false, error: outcome.error }
+        return { ok: true, revealed: abs }
+      } catch (error) {
+        return { ok: false, error: '打开失败：' + String(error) }
       }
     },
     'mcp.list': async () => ({ ok: true, ...listMcp(ctx) }),

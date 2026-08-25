@@ -52,10 +52,12 @@ export function detectExternal(ctx: Ctx, depsAvailable: boolean): CompatAdapter[
   const mcpCount = entriesOf(ctx).length
   const settings = ctx.get('settings') as { describe?: unknown; update?: unknown } | undefined
   const hasSettings = Boolean(settings?.describe || settings?.update)
+  const sub = ctx.get('subprocess') as { spawn?: unknown } | undefined
   return [
     { name: MCP_PACKAGE, active: mcpCount > 0, note: mcpCount > 0 ? mcpCount + ' 个 MCP 服务条目' : '未检测到 MCP 条目（MCP 管理页显示为空）' },
     { name: '设置持久化（@deepseek-ai/dsh-settings）', active: depsAvailable, note: depsAvailable ? '设置 section 已安装' : '未安装：fileOpenTool 持久化降级为配置值' },
     { name: 'settings 服务', active: hasSettings, note: hasSettings ? '可读写设置' : '不可用（设置读写走配置回退）' },
+    { name: '文件浏览器打开（subprocess 服务）', active: typeof sub?.spawn === 'function', note: typeof sub?.spawn === 'function' ? '可定位/打开 OS 文件浏览器' : '不可用（右键「在文件浏览器中打开」将提示失败）' },
   ]
 }
 
