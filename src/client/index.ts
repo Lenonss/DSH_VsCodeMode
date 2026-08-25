@@ -1,6 +1,7 @@
 /**
  * dsh-vscode-mode client — 浏览器半入口：slot 注册 + 装配。
- * 挂点：conversation.view「文件编辑」页签（中央 Monaco 编辑器）+ conversation.input.dock 差异条 + header 差异角标。
+ * 挂点：betterSidebar「文件编辑」Tab（侧边栏形态，对话+编辑同屏；未装 dsh-better-sidebar 时
+ * 回退 conversation.view 中央页签）+ conversation.input.dock 差异条 + header 差异角标。
  * 与 Host 通信：同源 fetch('/edrv/rpc')（shared/rpc 契约）。
  *
  * ⚠️ 跨版本 slot 装配（2026-08-21）：新版 DSH 的 slots 系统要求 slot 必须由父 entry
@@ -25,6 +26,8 @@ import type { FileOpenerRegistry } from './fileOpeners.js'
 import { installOpenPathRouter, vscodeOpener, autoValue } from './openPathRouter.js'
 import { SettingsContext } from './settingsContext.js'
 import { SIDEBAR_PLUGIN, pickSettingsBinder, registerSlotSafely } from './compat.js'
+import { detectSidebarService, installSideEditor, setEnsureSideEditor, SIDEBAR_INSTALL_CMD } from './sidebarBridge.js'
+import { SideEditorTab } from './ui/SideEditorTab.js'
 import { createAddToConversation } from './addToConversation.js'
 import { createSidebarPanelRegistry } from './sidebar/registry.js'
 import { createFilePanel } from './sidebar/panels/index.js'
@@ -72,6 +75,8 @@ export function apply(ctx: any): void {
   const binder = pickSettingsBinder(ctx)
   const settings = binder.scope
   let selected = autoValue('auto')
+  /** 可选探测 betterSidebar 服务（不进 inject：缺失会让插件停靠等待，杀死回退路径）。 */
+  const sideService = detectSidebarService(ctx)
   /** 「添加到对话」动作集：编辑区/Tab 右键菜单注入文件引用与代码块（conversation 服务缺失时各动作安全降级）。 */
   const addToConversation = createAddToConversation(ctx)
 
@@ -80,6 +85,7 @@ export function apply(ctx: any): void {
     { name: '设置桥', active: settings !== undefined, note: settings !== undefined ? '使用 ' + binder.service + ' 桥' : '未绑定设置服务（fileOpenTool 持久化不可用）' },
     { name: '文件打开路由（workspaces.openPath）', active: Boolean(workspaces?.openPath), note: 'vscode 打开器优先，失败回退系统打开' },
     { name: '侧边栏打开器（' + SIDEBAR_PLUGIN + '）', active: registry.get(SIDEBAR_PLUGIN) !== undefined, note: registry.get(SIDEBAR_PLUGIN) !== undefined ? '已注册（优先级 80）' : '未检测到侧边栏打开能力' },
+    { name: '侧边栏编辑区（' + SIDEBAR_PLUGIN + '）', active: sideService !== undefined, note: sideService !== undefined ? '编辑区=侧边栏 Tab（对话+编辑同屏）' : '未检测到；安装 dsh-better-sidebar 后刷新启用侧边栏形态（' + SIDEBAR_INSTALL_CMD + '）' },
   ]
 
   ctx.provide('fileOpeners', registry)
@@ -134,14 +140,35 @@ export function apply(ctx: any): void {
     }), 'vscode-mode: file link routing')
   }
 
-  // 中央「文件编辑」页签：类 VSCode 编辑器（顶部=文件页签+搜索框，左侧=侧边栏，差异 UI=文件底部圆角悬浮框）
-  registerSlotSafely(ctx, {
-    name: 'conversation.view',
-    id: 'edrv-editor',
-    order: 5,
-    label: '文件编辑',
-    inject: (sessionId: string) => ({ sessionId }),
-  }, (props: unknown) => React.createElement(EditorView, Object.assign({}, props, { schedule, addToConversation, sidebarPanels, outlineSources, fileMenuItems })))
+  // 中央「文件编辑」页签（旧形态回退）：类 VSCode 编辑器；侧边栏形态可用时编辑器住 betterSidebar Tab，
+  // 本页签不注册（避免双实例：Monaco×2 + diff dock 每会话单源抢占）。
+  const registerLegacyTab = (): void => {
+    registerSlotSafely(ctx, {
+      name: 'conversation.view',
+      id: 'edrv-editor',
+      order: 5,
+      label: '文件编辑',
+      inject: (sessionId: string) => ({ sessionId }),
+    }, (props: unknown) => React.createElement(EditorView, Object.assign({}, props, { layout: 'tab', sideHint: SIDEBAR_INSTALL_CMD, schedule, addToConversation, sidebarPanels, outlineSources, fileMenuItems })))
+  }
+
+  if (sideService) {
+    // 侧边栏形态：注册「文件编辑」Tab（单实例、可按会话持久化、内容打开自动展开面板）
+    ctx.effect(() => installSideEditor({
+      service: sideService,
+      renderTab: (props: Record<string, unknown>) => React.createElement(SideEditorTab, Object.assign({}, props, { schedule, addToConversation, sidebarPanels, outlineSources, fileMenuItems })),
+      activeSession: () => {
+        const snapshot = sessions?.list?.getSnapshot?.() as { current?: string; byId?: Record<string, { cwd?: string }> } | undefined
+        const sessionId = snapshot?.current
+        if (!sessionId) return undefined
+        return { sessionId, cwd: snapshot?.byId?.[sessionId]?.cwd }
+      },
+      registerLegacyFallback: registerLegacyTab,
+    }), 'vscode-mode: sidebar editor tab')
+  } else {
+    setEnsureSideEditor(null)
+    registerLegacyTab()
+  }
 
   // 对话输入框上方差异 dock：普通对话显示单文案按钮，文件编辑页由 EditorView 隐藏
   registerSlotSafely(ctx, {

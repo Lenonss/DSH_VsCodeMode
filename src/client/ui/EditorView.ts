@@ -19,17 +19,22 @@ import { clearDiffDock, publishDiffDock } from '../diffDockStore.js'
 import { displayDiffTotal, editorDockMode } from '../diffDock.js'
 import { editorHeight } from '../editorLayout.js'
 import { revealInExplorer as revealPathInExplorer } from '../fileReveal.js'
+import { setSidePending, SIDEBAR_INSTALL_CMD } from '../sidebarBridge.js'
 
 /**
  * 中央编辑区：文件页签（脏点/关闭/打开路径）+ Ctrl+P 搜索 + Monaco 编辑器 +
  * 底部差异条（DiffBox/空态）+ 全局差异下拉（DiffLauncher）+ 状态栏。
  * @param props.sessionId 会话 id
  * @param props.schedule 延时调度（ctx.timeout）
+ * @param props.layout 布局形态：'tab'（中央页签，默认）| 'side'（侧边栏面板）
+ * @param props.sideHint 旧页签形态下显示侧边栏引导（安装命令）
  */
 export function EditorView(props) {
   const sessionId = props?.sessionId
   const schedule = props.schedule
   const addToConversation = props.addToConversation
+  const layout = props?.layout === 'side' ? 'side' : 'tab'
+  const sideHint = props?.sideHint
   const [monaco, setMonaco] = React.useState(null)
   const [monacoErr, setMonacoErr] = React.useState(null)
   const [records, setRecords] = React.useState({})
@@ -51,10 +56,13 @@ export function EditorView(props) {
   const [diffIdx, setDiffIdx] = React.useState(0) // 当前文件内差异位置（x/x 显示）
   const [fileIdx, setFileIdx] = React.useState(0) // 全局差异文件位置（x/x 文件 显示）
   const [tabMenu, setTabMenu] = React.useState(null) // Tab 右键菜单 { x,y,path }（编辑区右键走 Monaco 原生菜单，无此浮层）
-  const [sidebarOn, setSidebarOn] = React.useState(true) // 侧边栏显隐
+  const [sidebarOn, setSidebarOn] = React.useState(layout !== 'side') // 侧边栏显隐（侧栏形态默认收起）
   const [sidebarW, setSidebarW] = React.useState(240) // 侧边栏宽度
   const [activePanel, setActivePanel] = React.useState('explorer') // 激活面板 id
   const [focusRequest, setFocusRequest] = React.useState(0) // 外部差异聚焦请求版本
+  const [hintDismissed, setHintDismissed] = React.useState(() => {
+    try { return localStorage.getItem('edrv.side-hint-dismissed') === '1' } catch { return false }
+  }) // 侧边栏引导条是否已关闭
   const editorRef = React.useRef(null)
   const viewRootRef = React.useRef(null)
   const monacoRef = React.useRef(null)
@@ -75,6 +83,8 @@ export function EditorView(props) {
   const batchBusyRef = React.useRef(false) // 批量 Keep All/Undo All 防重入
   const menuHandlersRef = React.useRef(null) // 右键菜单动作的最新闭包（Monaco addAction 空依赖回调读取）
   const diffRendererRef = React.useRef(null)
+  const layoutRef = React.useRef(layout) // ensureEditor 空依赖闭包读取的稳定布局
+  layoutRef.current = layout
   if (!diffRendererRef.current) diffRendererRef.current = createDiffRenderer((sid, t) => dbg(sid, t))
 
   const currentRecords = React.useMemo(() => {
@@ -195,10 +205,15 @@ export function EditorView(props) {
 
   // 对话输入区的唯一差异 dock 读取此会话快照；编辑器卸载时只清理自己的发布者令牌。
   const dockSourceRef = React.useRef({})
-  React.useEffect(() => () => clearDiffDock(sessionId, dockSourceRef.current), [sessionId])
+  React.useEffect(() => () => {
+    clearDiffDock(sessionId, dockSourceRef.current)
+    if (layout === 'side') setSidePending(sessionId, 0)
+  }, [sessionId])
 
   // DSH composer 保持原生布局；编辑区只读取几何边界并同步自己的高度。
+  // 侧栏形态：面板容器自带高度，跳过 composer 几何同步（面板内无会话滚动区）。
   React.useLayoutEffect(() => {
+    if (layout === 'side') return
     const root = viewRootRef.current
     const scroll = root?.closest?.('[data-conversation-scroll]')
     if (!root || !scroll) return
@@ -249,7 +264,7 @@ export function EditorView(props) {
       window.removeEventListener('resize', scheduleUpdate)
       root.style.removeProperty('--edrv-editor-height')
     }
-  }, [sessionId])
+  }, [sessionId, layout])
 
   // localStorage v2 恢复页签
   React.useEffect(() => {
@@ -273,11 +288,12 @@ export function EditorView(props) {
     catch (e) { /* 忽略 */ }
   }, [tabs, active, sessionId])
 
-  // 侧边栏状态：恢复（显隐/宽度/激活面板）
+  // 侧边栏状态：恢复（显隐/宽度/激活面板）；侧栏形态独立键（默认收起，不共享页签形态偏好）
+  const sidebarKey = 'edrv.sidebar.' + (layout === 'side' ? 'side.' : '') + String(sessionId)
   React.useEffect(() => {
     if (!sessionId) return
     try {
-      const raw = localStorage.getItem('edrv.sidebar.' + String(sessionId))
+      const raw = localStorage.getItem(sidebarKey)
       if (raw) {
         const saved = JSON.parse(raw)
         if (typeof saved.on === 'boolean') setSidebarOn(saved.on)
@@ -285,14 +301,14 @@ export function EditorView(props) {
         if (typeof saved.panel === 'string') setActivePanel(saved.panel)
       }
     } catch (e) { /* 损坏忽略 */ }
-  }, [sessionId])
+  }, [sessionId, sidebarKey])
 
   // 侧边栏状态持久化
   React.useEffect(() => {
     if (!sessionId) return
-    try { localStorage.setItem('edrv.sidebar.' + String(sessionId), JSON.stringify({ on: sidebarOn, width: sidebarW, panel: activePanel })) }
+    try { localStorage.setItem(sidebarKey, JSON.stringify({ on: sidebarOn, width: sidebarW, panel: activePanel })) }
     catch (e) { /* 忽略 */ }
-  }, [sidebarOn, sidebarW, activePanel, sessionId])
+  }, [sidebarOn, sidebarW, activePanel, sessionId, sidebarKey])
 
   // Ctrl+B 切换侧边栏（capture 抢占，避免与 DSH 全局冲突）
   React.useEffect(() => {
@@ -431,6 +447,7 @@ export function EditorView(props) {
     }
     if (editorRef.current || !monacoRef.current) return
     const m = monacoRef.current
+    const side = layoutRef.current === 'side'
     const ed = m.editor.create(node, {
       value: '',
       language: 'plaintext',
@@ -438,7 +455,7 @@ export function EditorView(props) {
       fontFamily: 'var(--ds-font-family-code, ui-monospace, monospace)',
       fontSize: 13,
       lineHeight: 20,
-      minimap: { enabled: true, scale: 1 },
+      minimap: { enabled: !side, scale: 1 },
       glyphMargin: true,
       lineDecorationsWidth: 16,
       automaticLayout: true,
@@ -448,7 +465,7 @@ export function EditorView(props) {
       renderWhitespace: 'selection',
       smoothScrolling: true,
       cursorBlinking: 'smooth',
-      padding: { top: 8 },
+      padding: { top: side ? 6 : 8 },
     })
     ed.addCommand(m.KeyMod.CtrlCmd | m.KeyCode.KeyS, () => { flushSave(); doSave(false) })
     ed.onDidChangeModelContent(() => {
@@ -901,36 +918,41 @@ export function EditorView(props) {
         React.createElement('button', { className: 'edrv-pill edrv-pill-undo', onClick: () => { dismissHover(); actHunk(hoverAct.region, true) } }, '↩ Undo'))
     : null
 
+  /** 组装差异 dock 快照（发布给 conversation.input.dock 的唯一 DiffBox 实例）。 */
+  const buildDockSnapshot = () => ({
+    mode: editorDockMode(active),
+    pendingRegions,
+    staleRegions,
+    onAct: actHunk,
+    onAcceptFile: acceptFile,
+    onUndoFile: undoFile,
+    onAcceptAllFiles: acceptAllFiles,
+    onUndoAllFiles: undoAllFiles,
+    allPendingCount: allPending.length,
+    onRollback: rollbackFile,
+    onJump: jumpTo,
+    otherFiles,
+    onOpenOther: (path) => openFile(path, true),
+    onOpenLauncher: (tab) => { setLauncherTab(tab || 'pending'); setLauncherOpen(true) },
+    onRefresh: reloadFile,
+    activePath: active,
+    diffIdx: contentReady ? diffIdx : 0,
+    diffTotal: displayDiffTotal(contentReady, pendingRegions.length, sum.files.find((file) => file.path === active)?.pending ?? 0),
+    fileIdx,
+    fileTotal: sum.pendingFiles.length,
+    onPrevDiff: () => gotoDiff(-1),
+    onNextDiff: () => gotoDiff(1),
+    onPrevFile: () => gotoFile(-1),
+    onNextFile: () => gotoFile(1),
+    onOpenNextFile: openNextFile,
+  })
+
   React.useEffect(() => {
     if (!sessionId) return
-    const mode = editorDockMode(active)
-    publishDiffDock(sessionId, {
-      mode,
-      pendingRegions,
-      staleRegions,
-      onAct: actHunk,
-      onAcceptFile: acceptFile,
-      onUndoFile: undoFile,
-      onAcceptAllFiles: acceptAllFiles,
-      onUndoAllFiles: undoAllFiles,
-      allPendingCount: allPending.length,
-      onRollback: rollbackFile,
-      onJump: jumpTo,
-      otherFiles,
-      onOpenOther: (path) => openFile(path, true),
-      onOpenLauncher: (tab) => { setLauncherTab(tab || 'pending'); setLauncherOpen(true) },
-      onRefresh: reloadFile,
-      activePath: active,
-      diffIdx: contentReady ? diffIdx : 0,
-      diffTotal: displayDiffTotal(contentReady, pendingRegions.length, sum.files.find((file) => file.path === active)?.pending ?? 0),
-      fileIdx,
-      fileTotal: sum.pendingFiles.length,
-      onPrevDiff: () => gotoDiff(-1),
-      onNextDiff: () => gotoDiff(1),
-      onPrevFile: () => gotoFile(-1),
-      onNextFile: () => gotoFile(1),
-      onOpenNextFile: openNextFile,
-    }, dockSourceRef.current)
+    publishDiffDock(sessionId, buildDockSnapshot(), dockSourceRef.current)
+    // 侧栏形态同步 Tab 角标计数（仅本形态写入；页签形态清零避免残留）
+    if (layout === 'side') setSidePending(sessionId, sum.totalFiles)
+    else setSidePending(sessionId, 0)
   })
 
   const overlay = launcherOpen
@@ -982,11 +1004,28 @@ export function EditorView(props) {
     body,
     hoverEl,
     overlay)
+  // 侧边栏引导条（仅旧页签形态且未装 betterSidebar 时显示；可复制安装命令、可关闭）
+  const dismissHint = () => {
+    setHintDismissed(true)
+    try { localStorage.setItem('edrv.side-hint-dismissed', '1') } catch (e) { /* 忽略 */ }
+  }
+  const copyInstallCmd = () => {
+    if (navigator.clipboard?.writeText) navigator.clipboard.writeText(SIDEBAR_INSTALL_CMD).catch(() => {})
+  }
+  const sideHintEl = (layout === 'tab' && sideHint && !hintDismissed)
+    ? React.createElement('div', { className: 'edrv-side-hint' },
+        React.createElement('span', { className: 'edrv-side-hint-text' }, '安装 dsh-better-sidebar 后可启用侧边栏编辑（对话+编辑同屏）：'),
+        React.createElement('code', { className: 'edrv-side-hint-cmd' }, SIDEBAR_INSTALL_CMD),
+        React.createElement('button', { className: 'edrv-pill edrv-pill-ghost', title: '复制安装命令', onClick: copyInstallCmd }, '复制命令'),
+        React.createElement('button', { className: 'edrv-side-hint-close', title: '关闭提示', 'aria-label': '关闭提示', onClick: dismissHint }, '×'))
+    : null
   const mainCol = React.createElement('div', { className: 'edrv-main-col', style: { flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' } },
     pathBar,
     tabRow,
+    sideHintEl,
     editorArea)
   // 编辑器根节点按 composer 顶部边界动态限高，底部对话区域继续由 DSH 原生渲染。
+  // 侧栏形态由面板容器给高（100%），不做 composer 几何同步。
   const editorRow = React.createElement('div', { className: 'edrv-editor-row' },
     (sidebarOn && sidebarPanels
       ? React.createElement(SidebarView, {
@@ -1001,8 +1040,15 @@ export function EditorView(props) {
       : null),
     mainCol)
 
-  return React.createElement('div', { ref: viewRootRef, 'data-edrv-view': '1', style: { height: 'var(--edrv-editor-height, 100%)', maxHeight: 'var(--edrv-editor-height, 100%)', minHeight: 0, display: 'flex', flexDirection: 'column', background: 'var(--dsw-alias-bg-base,transparent)', overflow: 'hidden' } },
-    editorRow,
-    menuBackdrop,
-    tabMenuEl)
+  const baseStyle = { minHeight: 0, display: 'flex', flexDirection: 'column', background: 'var(--dsw-alias-bg-base,transparent)', overflow: 'hidden' }
+  const rootEl = layout === 'side'
+    ? React.createElement('div', { ref: viewRootRef, 'data-edrv-view': '1', 'data-edrv-layout': 'side', className: 'edrv-view-side', style: Object.assign({}, baseStyle, { height: '100%' }) },
+        editorRow,
+        menuBackdrop,
+        tabMenuEl)
+    : React.createElement('div', { ref: viewRootRef, 'data-edrv-view': '1', style: Object.assign({}, baseStyle, { height: 'var(--edrv-editor-height, 100%)', maxHeight: 'var(--edrv-editor-height, 100%)' }) },
+        editorRow,
+        menuBackdrop,
+        tabMenuEl)
+  return rootEl
 }

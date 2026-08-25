@@ -14,7 +14,7 @@ import { summarize } from '../state/records.js'
  */
 export function DiffBadge(props) {
   const sessionId = props?.sessionId
-  const [n, setN] = React.useState(0)
+  const [summary, setSummary] = React.useState(null)
   const seq = React.useRef(0)
 
   const load = React.useCallback(() => {
@@ -22,7 +22,7 @@ export function DiffBadge(props) {
     const s = ++seq.current
     rpc('edrv.list', { sessionId }).then((res) => {
       if (s !== seq.current || !res || !res.ok || !Array.isArray(res.records)) return
-      setN(summarize(res.records).totalFiles)
+      setSummary(summarize(res.records))
     }).catch(() => {})
   }, [sessionId])
 
@@ -34,10 +34,12 @@ export function DiffBadge(props) {
     return () => { clearInterval(t); window.removeEventListener('edrv:refresh', onRefresh) }
   }, [load])
 
+  const n = summary?.totalFiles ?? 0
   if (!n) return null
 
   const click = () => {
-    openEditorView(null)
+    // 侧栏形态：带首个待处理文件路径（内容打开自动展开面板）；旧形态行为不变
+    openEditorView(summary?.pendingFiles?.[0]?.path ?? null)
     setTimeout(() => { emitShowLauncher() }, 120)
   }
 

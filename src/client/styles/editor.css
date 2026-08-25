@@ -232,3 +232,13 @@
 [data-edrv-view] .edrv-side-resize:hover { background: var(--dsw-alias-brand-primary, #0f9d58); opacity: .35; }
 [data-edrv-view] .edrv-chip-btn.edrv-chip-on { background: var(--dsw-alias-interactive-bg-hover, rgba(15,157,88,.12)); color: var(--dsw-alias-label-primary, #1f2933); }
 
+/* ===== 侧栏形态（betterSidebar 面板内编辑区） ===== */
+[data-edrv-view][data-edrv-layout='side'] { box-sizing: border-box; height: 100%; }
+
+/* ===== 侧边栏引导条（旧页签形态、未装 betterSidebar 时） ===== */
+[data-edrv-view] .edrv-side-hint { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; flex-wrap: wrap; padding: 6px 12px; font-size: 12px; color: var(--dsw-alias-label-secondary, #52606d); background: var(--dsw-specific-tip, var(--dsw-alias-bg-layer-2, #f0f4f4)); border-bottom: 1px solid var(--dsw-alias-border-l1, #e0e6e8); }
+[data-edrv-view] .edrv-side-hint-text { white-space: nowrap; }
+[data-edrv-view] .edrv-side-hint-cmd { font-size: 11px; padding: 2px 6px; border-radius: 6px; background: var(--dsw-alias-bg-layer-1, #ffffff); border: 1px solid var(--dsw-alias-border-l1, #e0e6e8); color: var(--dsw-alias-label-primary, #1f2933); white-space: nowrap; }
+[data-edrv-view] .edrv-side-hint-close { margin-left: auto; border: none; background: transparent; color: var(--dsw-alias-label-tertiary, #9aa5b1); cursor: pointer; font-size: 14px; line-height: 1; padding: 2px 6px; border-radius: 6px; flex-shrink: 0; }
+[data-edrv-view] .edrv-side-hint-close:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(15,157,88,.08)); color: var(--dsw-alias-label-primary, #1f2933); }
+
