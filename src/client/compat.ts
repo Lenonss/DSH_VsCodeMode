@@ -54,17 +54,20 @@ export interface SlotSpec {
  * @param ctx 客户端上下文（slots 服务）
  * @param spec slot 描述
  * @param render 渲染函数
+ * @returns 注销函数（未注册返回 null；形态切换时用于卸载旧 slot）
  */
-export function registerSlotSafely(ctx: { slots?: { inject?: (name: string, register: () => unknown) => unknown; register?: (...args: unknown[]) => unknown } }, spec: SlotSpec, render: (props: unknown) => unknown): void {
+export function registerSlotSafely(ctx: { slots?: { inject?: (name: string, register: () => unknown) => unknown; register?: (...args: unknown[]) => unknown } }, spec: SlotSpec, render: (props: unknown) => unknown): (() => void) | null {
   const slots = ctx?.slots as { inject: (name: string, register: () => unknown) => unknown; register: (...args: unknown[]) => unknown } | undefined
   if (!slots || typeof slots.inject !== 'function' || typeof slots.register !== 'function') {
     console.warn('[' + PLUGIN_NAME + '] slots 服务不可用，跳过 slot ' + spec.name)
-    return
+    return null
   }
   try {
-    slots.inject(spec.name, () => slots.register(spec, render))
+    const disposer = slots.inject(spec.name, () => slots.register(spec, render))
+    return typeof disposer === 'function' ? disposer as () => void : null
   } catch (error) {
     console.warn('[' + PLUGIN_NAME + '] slot ' + spec.name + ' 注册失败（' + String(error) + '），已跳过')
+    return null
   }
 }
 

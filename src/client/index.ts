@@ -79,7 +79,7 @@ export function apply(ctx: any): void {
   const settings = binder.scope
   let selected = autoValue('auto')
   /** 可选探测 betterSidebar 服务（不进 inject：缺失会让插件停靠等待，杀死回退路径）。 */
-  const sideService = detectSidebarService(ctx)
+  let sideService = detectSidebarService(ctx)
   /** 「添加到对话」动作集：编辑区/Tab 右键菜单注入文件引用与代码块（conversation 服务缺失时各动作安全降级）。 */
   const addToConversation = createAddToConversation(ctx)
 
@@ -145,8 +145,8 @@ export function apply(ctx: any): void {
 
   // 中央「文件编辑」页签（旧形态回退）：类 VSCode 编辑器；侧边栏形态可用时编辑器住 betterSidebar Tab，
   // 本页签不注册（避免双实例：Monaco×2 + diff dock 每会话单源抢占）。
-  const registerLegacyTab = (): void => {
-    registerSlotSafely(ctx, {
+  const registerLegacyTab = (): (() => void) | null => {
+    return registerSlotSafely(ctx, {
       name: 'conversation.view',
       id: 'edrv-editor',
       order: 5,
@@ -155,23 +155,52 @@ export function apply(ctx: any): void {
     }, (props: unknown) => React.createElement(EditorView, Object.assign({}, props, { layout: 'tab', sideHint: SIDEBAR_INSTALL_CMD, schedule, addToConversation, sidebarPanels, outlineSources, fileMenuItems })))
   }
 
-  if (sideService) {
-    // 侧边栏形态：注册「文件编辑」Tab（单实例、可按会话持久化、内容打开自动展开面板）
-    ctx.effect(() => installSideEditor({
-      service: sideService,
-      renderTab: (props: Record<string, unknown>) => React.createElement(SideEditorTab, Object.assign({}, props, { schedule, addToConversation, sidebarPanels, outlineSources, fileMenuItems })),
-      activeSession: () => {
-        const snapshot = sessions?.list?.getSnapshot?.() as { current?: string; byId?: Record<string, { cwd?: string }> } | undefined
-        const sessionId = snapshot?.current
-        if (!sessionId) return undefined
-        return { sessionId, cwd: snapshot?.byId?.[sessionId]?.cwd }
-      },
-      registerLegacyFallback: registerLegacyTab,
-    }), 'vscode-mode: sidebar editor tab')
-  } else {
-    setEnsureSideEditor(null)
-    registerLegacyTab()
+  // 侧边栏/中央页签两形态互斥切换：sideDisposer（侧边栏 Tab）与 legacyDisposer（中央页签）只保留其一。
+  // ⚠️ betterSidebar 服务由 dsh-better-sidebar 的 client bundle（1MB+）在页面加载时提供，本插件
+  // bundle 较小往往先执行完启动检测——一次性探测会误报「未检测到」并永久停在中央页签形态（实测
+  // 竞态：better-sidebar 已装，但「文件编辑」Tab 未注册）。故启动后按 2s 间隔重试（窗口 ~30s），
+  // 命中即自动切换侧边栏形态；始终未命中则保持中央页签回退。
+  let sideDisposer: (() => void) | null = null
+  let legacyDisposer: (() => void) | null = null
+  const applySideForm = (): void => {
+    if (sideService) {
+      if (sideDisposer !== null) return
+      if (legacyDisposer !== null) { legacyDisposer(); legacyDisposer = null }
+      sideDisposer = ctx.effect(() => installSideEditor({
+        service: sideService as NonNullable<typeof sideService>,
+        renderTab: (props: Record<string, unknown>) => React.createElement(SideEditorTab, Object.assign({}, props, { schedule, addToConversation, sidebarPanels, outlineSources, fileMenuItems })),
+        activeSession: () => {
+          const snapshot = sessions?.list?.getSnapshot?.() as { current?: string; byId?: Record<string, { cwd?: string }> } | undefined
+          const sessionId = snapshot?.current
+          if (!sessionId) return undefined
+          return { sessionId, cwd: snapshot?.byId?.[sessionId]?.cwd }
+        },
+        registerLegacyFallback: registerLegacyTab,
+      }), 'vscode-mode: sidebar editor tab')
+    } else {
+      if (legacyDisposer !== null) return
+      if (sideDisposer !== null) { sideDisposer(); sideDisposer = null }
+      setEnsureSideEditor(null)
+      legacyDisposer = registerLegacyTab()
+    }
   }
+  applySideForm()
+  let sideRetries = 0
+  const retrySideService = (): void => {
+    if (sideService !== undefined || sideRetries >= 15) return
+    sideRetries += 1
+    schedule(() => {
+      if (sideService !== undefined) return
+      sideService = detectSidebarService(ctx)
+      if (sideService !== undefined) {
+        console.info('[dsh-vscode-mode] 检测到 ' + SIDEBAR_PLUGIN + '，切换侧边栏编辑形态')
+        applySideForm()
+      } else {
+        retrySideService()
+      }
+    }, 2000)
+  }
+  retrySideService()
 
   // 对话输入框上方差异 dock：普通对话显示单文案按钮，文件编辑页由 EditorView 隐藏
   registerSlotSafely(ctx, {
