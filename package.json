@@ -1,6 +1,6 @@
 {
   "name": "dsh-vscode-mode",
-  "version": "0.1.23",
+  "version": "0.1.24",
   "description": "DSH 上的类 VSCode 编码体验：Monaco 编辑器（文件页签/QuickOpen/状态栏，可驻 dsh-better-sidebar 侧边栏与对话同屏）+ Agent 编辑差异审查（整文件差异/采纳/拒绝/归档/回滚），状态持久化到工作区旁车",
   "keywords": [
     "dsh",
@@ -51,13 +51,16 @@
     "@deepseek-ai/dsh-tools": ">=0.0.1-rc.1 <0.1.0 || >=0.1.0-rc.1 <0.2.0-0",
     "cordis": ">=4.0.0-rc <5",
     "react": "^18.2.0",
+    "react-dom": "^18.2.0",
     "schemastery": "^3.18.0"
   },
   "devDependencies": {
     "@deepseek-ai/dsh-settings": "0.1.0-rc.8",
     "@types/node": "^24.13.3",
     "@types/react": "^18.3.1",
+    "@types/react-dom": "^18.3.5",
     "react": "^18.3.1",
+    "react-dom": "^18.3.1",
     "schemastery": "3.18.0",
     "tsdown": "^0.22.14",
     "typescript": "^5.9.0",

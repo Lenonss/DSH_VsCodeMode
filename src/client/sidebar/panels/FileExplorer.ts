@@ -10,6 +10,7 @@
 import React from 'react'
 import { rpc } from '../../rpc.js'
 import { ContextMenu } from '../../ui/ContextMenu.js'
+import { rowMenuPosition } from '../../ui/menuPosition.js'
 import { buildTreeMenu } from '../contextMenu.js'
 import type { SidebarCtx } from '../types.js'
 
@@ -74,6 +75,7 @@ export function FileExplorer(props) {
   const refresh = () => {
     const keep = Object.keys(expandedRef.current).filter((k) => expandedRef.current[k] === true)
     tokensRef.current = {}
+    setMenu(null)
     setDirs({})
     setLoading({})
     setError(null)
@@ -94,6 +96,7 @@ export function FileExplorer(props) {
     setExpanded({})
     setLoading({})
     setError(null)
+    setMenu(null)
     setRoot(null)
     void loadDir('')
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -111,17 +114,22 @@ export function FileExplorer(props) {
   const rowEl = (e, depth, isDir, isOpen) => {
     const pending = isDir ? 0 : (pendingByPath[e.path] ?? 0)
     const active = !isDir && e.path === activePath
+    const contextTarget = Boolean(menu && menuEntries.length && menu.target.path === e.path)
     const dim = e.type === 'other'
     return React.createElement('div', {
       key: e.path,
-      className: 'edrv-tree-row' + (active ? ' edrv-tree-active' : ''),
+      className: 'edrv-tree-row'
+        + (active ? ' edrv-tree-active' : '')
+        + (contextTarget ? ' edrv-tree-context' : ''),
       title: e.path,
       style: { paddingLeft: 6 + depth * 14 },
       onClick: () => { if (isDir) toggle(e.path); else openFile(e.path) },
       onContextMenu: (ev) => {
         ev.preventDefault()
         ev.stopPropagation()
-        setMenu({ x: ev.clientX, y: ev.clientY, target: { path: e.path, type: e.type } })
+        const rect = ev.currentTarget?.getBoundingClientRect?.()
+        const position = rowMenuPosition(rect, ev.clientX, ev.clientY)
+        setMenu({ x: position.left, y: position.top, target: { path: e.path, type: e.type } })
       },
     },
       React.createElement('span', { className: 'edrv-tree-chev' },
@@ -158,6 +166,8 @@ export function FileExplorer(props) {
   // 面板区右键（空白处）→ 工作区根目录菜单；行内右键已在 rowEl 阻止冒泡。
   const onPanelContext = (ev) => {
     ev.preventDefault()
+    ev.stopPropagation()
+    if (!ev.currentTarget.contains(ev.target)) return
     setMenu({ x: ev.clientX, y: ev.clientY, target: { path: '', type: 'directory' } })
   }
   // 当前右键目标的可视菜单项（构建时过滤/排序，registry 变化下次打开生效）。

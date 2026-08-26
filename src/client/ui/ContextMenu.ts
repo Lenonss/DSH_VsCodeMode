@@ -1,10 +1,13 @@
 /**
  * dsh-vscode-mode client — 通用浮动右键菜单（createElement 风格、类型化）。
- * 全屏 backdrop（点击/右键/Esc 关闭）+ 固定定位（viewport clamp 防越界），
+ * 非阻塞式关闭：window capture 监听（点击菜单外/右键菜单外/Esc 关闭），
+ * 不拦截菜单外事件，允许同一事件内由发起方切换/重开菜单。
  * 条目支持 danger/disabled/separator，复用既有 edrv-ctxmenu* 样式类。
  * 作者 ddj 2026-08-27
  */
 import React from 'react'
+import { createPortal } from 'react-dom'
+import { clampMenuPosition } from './menuPosition.js'
 
 /** 单条菜单项（展示层形状；业务侧由 buildTreeMenu 映射而来）。 */
 export interface ContextMenuEntry {
@@ -37,17 +40,43 @@ const MENU_H = 176
  */
 export function ContextMenu(props: ContextMenuProps): React.ReactElement {
   const { x, y, entries, onClose } = props
+  const menuRef = React.useRef<HTMLDivElement | null>(null)
 
   React.useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
       if (e.key === 'Escape') onClose()
     }
+    const onPointerDown = (e: PointerEvent): void => {
+      if (e.button !== 0) return
+      if (menuRef.current && menuRef.current.contains(e.target as Node)) return
+      onClose()
+    }
+    const onContextMenu = (e: MouseEvent): void => {
+      if (menuRef.current && menuRef.current.contains(e.target as Node)) {
+        e.preventDefault()
+      }
+      onClose()
+    }
     window.addEventListener('keydown', onKey, true)
-    return () => window.removeEventListener('keydown', onKey, true)
+    window.addEventListener('pointerdown', onPointerDown, true)
+    window.addEventListener('contextmenu', onContextMenu, true)
+    return () => {
+      window.removeEventListener('keydown', onKey, true)
+      window.removeEventListener('pointerdown', onPointerDown, true)
+      window.removeEventListener('contextmenu', onContextMenu, true)
+    }
   }, [onClose])
 
-  const left = Math.max(4, Math.min(x, (window.innerWidth || 800) - MENU_W))
-  const top = Math.max(4, Math.min(y, (window.innerHeight || 600) - MENU_H))
+  const safeX = Number.isFinite(x) ? x : 4
+  const safeY = Number.isFinite(y) ? y : 4
+  const position = clampMenuPosition(
+    safeX,
+    safeY,
+    window.innerWidth || 800,
+    window.innerHeight || 600,
+    MENU_W,
+    MENU_H,
+  )
 
   const children: React.ReactNode[] = []
   for (const entry of entries) {
@@ -71,12 +100,8 @@ export function ContextMenu(props: ContextMenuProps): React.ReactElement {
     }, entry.label))
   }
 
-  return React.createElement(React.Fragment, null,
-    React.createElement('div', {
-      className: 'edrv-ctxmenu-backdrop',
-      style: { position: 'fixed', inset: 0, zIndex: 70 },
-      onClick: onClose,
-      onContextMenu: (e: React.MouseEvent) => { e.preventDefault(); onClose() },
-    }),
-    React.createElement('div', { className: 'edrv-ctxmenu', style: { left, top } }, ...children))
+  const overlay = React.createElement('div', { 'data-edrv-view': '1' },
+    React.createElement('div', { className: 'edrv-ctxmenu', ref: menuRef, style: position }, ...children))
+
+  return typeof document === 'undefined' ? overlay : createPortal(overlay, document.body)
 }
