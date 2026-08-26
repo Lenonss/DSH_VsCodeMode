@@ -37,7 +37,10 @@ import { createOutlinePanel } from './outline/index.js'
 import { createOutlineSourceRegistry, registerBuiltinOutlineSources } from './outline/sources.js'
 import type { CompatAdapter } from '../shared/compat.js'
 
-export const inject = ['slots', 'timer', 'locale', 'connection', 'remote', 'workspaces', 'sessions', 'conversation', 'settingsScope', 'webUiSettings']
+// ⚠️ inject 只列必需服务：webUiSettings 是 @linxin666/dsh-client-ui-web-ui-settings 提供的
+// 可选兼容桥（非官方服务），列入 inject 会让未装该桥的部署启动时 entry 永久 pending，
+// web boot 直接失败（'1 entry did not activate'）。兼容层用 ctx.get 运行时探测 + 降级，不靠 inject。
+export const inject = ['slots', 'timer', 'locale', 'connection', 'remote', 'workspaces', 'sessions', 'conversation', 'settingsScope']
 
 /**
  * 装配客户端：注册中央编辑区视图与 header 差异角标。
