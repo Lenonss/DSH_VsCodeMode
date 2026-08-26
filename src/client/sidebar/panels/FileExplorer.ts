@@ -12,9 +12,11 @@ import { rpc } from '../../rpc.js'
 import { ContextMenu } from '../../ui/ContextMenu.js'
 import { rowMenuPosition } from '../../ui/menuPosition.js'
 import { buildTreeMenu } from '../contextMenu.js'
+import { explorerLoad, explorerSave } from '../../state/explorerCache.js'
 import type { SidebarCtx } from '../types.js'
 
 const DIR_CAP = 4000
+const SAVE_DEBOUNCE_MS = 300
 
 /**
  * 目录树面板主体。
@@ -36,6 +38,8 @@ export function FileExplorer(props) {
   // expanded 的 ref 镜像：edrv:refresh 监听用首次渲染闭包，但需读到最新展开态
   const expandedRef = React.useRef({})
   expandedRef.current = expanded
+  // 展开状态防抖写回计时器
+  const saveTimerRef = React.useRef(null)
 
   const loadDir = (rel) => {
     const token = (tokensRef.current[rel] || 0) + 1
@@ -98,9 +102,35 @@ export function FileExplorer(props) {
     setError(null)
     setMenu(null)
     setRoot(null)
+    // 恢复上次展开状态（对齐 VSCode：持久化展开路径，目录条目实时拉取）
+    const cached = sessionId ? explorerLoad(sessionId) : null
+    const restored = cached?.expanded ?? []
+    if (cached?.root) setRoot(cached.root)
+    if (restored.length) {
+      const next = {}
+      for (const rel of restored) next[rel] = true
+      setExpanded(next)
+    }
     void loadDir('')
+    for (const rel of restored) {
+      if (rel) void loadDir(rel)
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId])
+
+  // 展开状态防抖写回 localStorage（重启后恢复展开结构）
+  React.useEffect(() => {
+    if (saveTimerRef.current) { clearTimeout(saveTimerRef.current); saveTimerRef.current = null }
+    if (!sessionId) return
+    saveTimerRef.current = setTimeout(() => {
+      saveTimerRef.current = null
+      const expandedList = Object.keys(expanded).filter((k) => expanded[k] === true)
+      explorerSave(sessionId, { root, expanded: expandedList })
+    }, SAVE_DEBOUNCE_MS)
+    return () => {
+      if (saveTimerRef.current) { clearTimeout(saveTimerRef.current); saveTimerRef.current = null }
+    }
+  }, [expanded, root, sessionId])
 
   React.useEffect(() => {
     const onRefresh = () => refresh()

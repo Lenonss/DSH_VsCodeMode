@@ -3,7 +3,7 @@
  * 迁移自原 src/index.ts 的路由部分，路径/行为一字不改。
  * 作者 ddj 2026-08-20
  */
-import { readFile } from 'node:fs/promises'
+import { readFile, stat } from 'node:fs/promises'
 import { dirname, extname, join, normalize, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { ROUTE_PREFIX, noteOwnRoute, resetOwnRoutes, routeConflict } from './compat.js'
@@ -124,10 +124,11 @@ export function registerRoutes(
   }
 
   // Monaco Editor AMD 构建：/edrv/vendor/* → assets/vendor/*（路径穿越防护 + 按扩展名 MIME）
+  // ETag 协商缓存：弱 etag（mtime+size），配合 max-age 让浏览器 304 复用，插件升级内容变化自动失效。
   ctx.effect(() => guarded({
     kind: 'prefix',
     path: VENDOR_PREFIX,
-    handler: async (req: { method?: string; url?: string }, res: { statusCode?: number; setHeader: (k: string, v: string) => void; end: (b?: string | Uint8Array) => void }) => {
+    handler: async (req: { method?: string; url?: string; headers?: Record<string, string | string[] | undefined> }, res: { statusCode?: number; setHeader: (k: string, v: string) => void; end: (b?: string | Uint8Array) => void }) => {
       try {
         if (req.method !== 'GET' && req.method !== 'HEAD') {
           res.statusCode = 405
@@ -143,10 +144,25 @@ export function registerRoutes(
           res.end()
           return
         }
+        const info = await stat(target).catch(() => null)
+        if (!info || !info.isFile()) { res.statusCode = 404; res.end(); return }
+        const etag = 'W/"' + info.mtimeMs.toString(16) + '-' + info.size.toString(16) + '"'
+        const reqEtag = (() => {
+          const raw = req.headers?.['if-none-match']
+          if (Array.isArray(raw)) return raw[0]
+          return raw
+        })()
+        if (reqEtag === etag) {
+          res.statusCode = 304
+          res.setHeader('etag', etag)
+          res.end()
+          return
+        }
         const body = await readFile(target)
         res.statusCode = 200
         res.setHeader('content-type', VENDOR_MIME[extname(target)] ?? 'application/octet-stream')
         res.setHeader('cache-control', 'public, max-age=3600')
+        res.setHeader('etag', etag)
         res.end(body)
       } catch (error) {
         res.statusCode = 404

@@ -67,3 +67,44 @@ jobs:
           fi
           npm config set //registry.npmjs.org/:_authToken="${NPM_TOKEN}"
           npm publish --access public
+
+      # 发布后回读注册表 tarball，校验 main/exports 入口文件存在——
+      # 镜像/CDN 刚发布时同步不完整会让用户端更新报"缺少入口文件"并回滚。
+      # 发布后同步有秒级~分钟级延迟，用重试窗口覆盖，超时仍未就绪则判失败。
+      - name: Verify published tarball (entry files present)
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "${NPM_TOKEN}" ]; then
+            echo "npm publish skipped — nothing to verify."
+            exit 0
+          fi
+          version="$(node -p "require('./package.json').version")"
+          npm config set //registry.npmjs.org/:_authToken="${NPM_TOKEN}"
+          ok=0
+          for attempt in $(seq 1 15); do
+            tarball="$(npm view "dsh-vscode-mode@${version}" dist.tarball 2>/dev/null || true)"
+            if [ -n "${tarball}" ] && curl -fsSL "${tarball}" -o /tmp/verify.tgz; then
+              ok=1
+              break
+            fi
+            echo "attempt ${attempt}/15: registry tarball for v${version} not ready yet, retrying in 30s..."
+            sleep 30
+          done
+          if [ "${ok}" != "1" ]; then
+            echo "::error::published tarball for v${version} not retrievable after retries"
+            exit 1
+          fi
+          echo "tarball: $(tar -tzf /tmp/verify.tgz | head -1)"
+          missing=0
+          for entry in package/lib/index.js package/lib/client.js; do
+            if ! tar -tzf /tmp/verify.tgz | grep -qx "${entry}"; then
+              echo "::error::published tarball missing ${entry}"
+              missing=1
+            fi
+          done
+          if [ "${missing}" != "0" ]; then
+            echo "::error::npm registry served an incomplete tarball for v${version}; unpublish or republish."
+            exit 1
+          fi
+          echo "Verified v${version}: lib/index.js + lib/client.js present on registry."

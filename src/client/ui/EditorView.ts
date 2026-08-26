@@ -20,6 +20,7 @@ import { displayDiffTotal, editorDockMode } from '../diffDock.js'
 import { editorHeight } from '../editorLayout.js'
 import { revealInExplorer as revealPathInExplorer } from '../fileReveal.js'
 import { setSidePending, SIDEBAR_INSTALL_CMD } from '../sidebarBridge.js'
+import { upsertViewState, viewStatesLoad, viewStatesSave } from '../state/viewStateCache.js'
 
 /**
  * 中央编辑区：文件页签（脏点/关闭/打开路径）+ Ctrl+P 搜索 + Monaco 编辑器 +
@@ -67,6 +68,8 @@ export function EditorView(props) {
   const viewRootRef = React.useRef(null)
   const monacoRef = React.useRef(null)
   const modelsRef = React.useRef(new Map())
+  // 视图状态缓存（path → Monaco viewState；重启后恢复光标/滚动/折叠位置）
+  const viewStatesRef = React.useRef({})
   const saveTimerRef = React.useRef(null)
   const loadSeqRef = React.useRef(0)
   const programmaticRef = React.useRef(false)
@@ -120,8 +123,42 @@ export function EditorView(props) {
     if (select) setActive(path)
   }
 
+  /**
+   * 保存当前活动文件的视图状态（光标/滚动/折叠）到会话缓存。
+   * @author ddj 2026年08月28号
+   * @param path 要保存的文件路径（缺省 = 当前 active）
+   */
+  const saveViewState = (path) => {
+    const ed = editorRef.current
+    const target = path ?? active
+    if (!ed || !target) return
+    try {
+      const state = ed.saveViewState()
+      if (!state) return
+      viewStatesRef.current = upsertViewState(viewStatesRef.current, target, state)
+      viewStatesSave(sessionId, viewStatesRef.current)
+    } catch (e) { /* 视图状态保存失败忽略 */ }
+  }
+
+  /**
+   * 恢复指定文件的视图状态（内容就绪、setModel 后调用；恢复后即消费删除）。
+   * @author ddj 2026年08月28号
+   * @param path 文件路径
+   */
+  const restoreViewState = (path) => {
+    const ed = editorRef.current
+    if (!ed || !path) return
+    const saved = viewStatesRef.current[path]
+    if (!saved) return
+    const next = Object.assign({}, viewStatesRef.current)
+    delete next[path]
+    viewStatesRef.current = next
+    try { ed.restoreViewState(saved) } catch (e) { /* 恢复失败忽略（行号越界自动兜底） */ }
+  }
+
   const closeTab = (path) => {
     flushSave()
+    if (path === active) saveViewState(path)
     setTabs((prev) => {
       const idx = prev.findIndex((t) => t.path === path)
       if (idx < 0) return prev
@@ -163,8 +200,33 @@ export function EditorView(props) {
     }).catch((e) => setError('list异常:' + String(e)))
   }
 
-  const loadContent = (path, sid) => {
+  /**
+   * 加载文件内容（对齐 VSCode model 复用：会话内已打开的 model 直接秒显，
+   * 后台静默 RPC 校验防陈旧；首次打开走原读取流程）。
+   * @author ddj 2026年08月28号
+   * @param path 文件路径
+   * @param sid 会话 id
+   * @param force 强制走 RPC（reloadFile 用，跳过 model 复用）
+   */
+  const loadContent = (path, sid, force) => {
     const seq = ++loadSeqRef.current
+    const cachedModel = force ? null : modelsRef.current.get(path)
+    if (cachedModel) {
+      // model 命中：直接显示其内容（切 tab 零等待），后台静默校验
+      setContent(cachedModel.getValue())
+      setContentPath(path)
+      setLoadStage((prev) => ({ progress: Math.max(84, prev.progress), message: '文件已读取，准备创建编辑器…' }))
+      setStatus('已加载')
+      rpc('edrv.read', { sessionId: sid, path }).then((res) => {
+        if (seq !== loadSeqRef.current || path !== active) return
+        if (res && res.ok && res.content !== cachedModel.getValue()) {
+          saveViewState(path) // 内容更新前保留当前视图位置
+          setContent(res.content)
+          setStatus('已加载')
+        }
+      }).catch(() => { /* 校验失败保留缓存内容 */ })
+      return
+    }
     setLoadError(null)
     setLoadStage({ progress: monaco ? 72 : 12, message: '读取文件内容…' })
     rpc('edrv.read', { sessionId: sid, path }).then((res) => {
@@ -289,6 +351,7 @@ export function EditorView(props) {
   React.useEffect(() => {
     if (bootRef.current || !sessionId) return
     bootRef.current = true
+    viewStatesRef.current = viewStatesLoad(sessionId)
     try {
       const raw = localStorage.getItem('edrv.editor.v2.' + String(sessionId))
       if (raw) {
@@ -435,6 +498,7 @@ export function EditorView(props) {
     const ed = editorRef.current
     const model = getModel(active, content)
     if (ed.getModel() !== model) ed.setModel(model)
+    restoreViewState(active)
     setLoadStage((prev) => ({ progress: Math.max(96, prev.progress), message: '创建编辑器视图…' }))
   }, [monaco, active, content])
 
@@ -447,6 +511,7 @@ export function EditorView(props) {
 
   React.useEffect(() => () => {
     flushSave()
+    saveViewState(active)
     diffRendererRef.current?.dispose?.()
     if (editorRef.current) { editorRef.current.dispose(); editorRef.current = null }
     for (const m of modelsRef.current.values()) m.dispose()
@@ -625,7 +690,7 @@ export function EditorView(props) {
 
   const reloadFile = (skipStale) => {
     if (!active) return
-    loadContent(active, sessionId)
+    loadContent(active, sessionId, true)
     refreshRecords(skipStale === true)
   }
 
@@ -835,7 +900,7 @@ export function EditorView(props) {
       key: t.path,
       className: 'edrv-tab' + (t.path === active ? ' edrv-tab-active' : ''),
       title: t.path,
-      onClick: () => { if (t.path !== active) { flushSave(); setActive(t.path) } },
+      onClick: () => { if (t.path !== active) { flushSave(); saveViewState(active); setActive(t.path) } },
       onContextMenu: (e) => {
         e.preventDefault()
         e.stopPropagation()
