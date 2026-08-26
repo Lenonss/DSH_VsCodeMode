@@ -17,7 +17,7 @@ interface SearchFs {
 }
 
 const RESULT_CAP = 500
-const EXCLUDED = new Set(['node_modules', '.git', '.tmp', '.cache', 'dist', 'build', 'vendor', 'coverage', '__pycache__'])
+const EXCLUDED = new Set(['node_modules', '.git', '.tmp', '.cache', 'dist', 'build', 'vendor', 'coverage', '__pycache__', '.pnpm-store', '.npm-cache', '.codegraph', '.workbuddy', '.dsh-edit-review.json', '.dsh-edit-review-archive.json', '.dsh-edit-review-debug.log'])
 
 /**
  * 在一个目录树中递归查找匹配文件。

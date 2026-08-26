@@ -1,11 +1,13 @@
 // @ts-nocheck
 /**
  * dsh-vscode-mode client — QuickOpen：顶部搜索框（Ctrl+P 打开文件）。
+ * 快捷键随配置（edrv.quickOpen），占位文案同步当前键位。
  * 迁移自原 src/client/index.ts 的 QuickOpen，语义不改。
- * 作者 ddj 2026-08-20
+ * 作者 ddj 2026-08-20 / 2026-08-26
  */
 import React from 'react'
 import { rpc } from '../rpc.js'
+import { bindingOf, chordOf, matchEvent, useKeybindingsVersion } from '../keybindings.js'
 
 /**
  * 快速打开搜索框：Ctrl+P 聚焦，输入 ≥2 字符经 edrv.searchFiles 搜索，
@@ -22,6 +24,7 @@ export function QuickOpen(props) {
   const inputRef = React.useRef(null)
   const seq = React.useRef(0)
   const timer = React.useRef(null)
+  useKeybindingsVersion() // 键位变化时刷新占位文案
 
   const search = (query) => {
     const s = ++seq.current
@@ -47,7 +50,7 @@ export function QuickOpen(props) {
 
   React.useEffect(() => {
     const onKey = (e) => {
-      if ((e.ctrlKey || e.metaKey) && String(e.key).toLowerCase() === 'p') {
+      if (matchEvent(e, bindingOf('edrv.quickOpen'))) {
         e.preventDefault(); e.stopPropagation()
         inputRef.current?.focus?.()
         setOpen(true)
@@ -78,7 +81,7 @@ export function QuickOpen(props) {
 
   return React.createElement('div', { className: 'edrv-search-wrap' },
     React.createElement('input', {
-      ref: inputRef, className: 'edrv-search', placeholder: '搜索文件 (Ctrl+P)',
+      ref: inputRef, className: 'edrv-search', placeholder: '搜索文件 (' + (chordOf('edrv.quickOpen') ?? 'Ctrl+P') + ')',
       value: q,
       onChange: (e) => onChange(e.target.value),
       onFocus: () => { if (q.trim().length >= 2 && !results) setOpen(true) },

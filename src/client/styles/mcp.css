@@ -110,3 +110,21 @@
 .vsm-general-row button:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover,#ffffff14)}
 .vsm-general-row button:disabled{opacity:.55;cursor:default}
 .vsm-general-row button.vsm-devform-close{color:var(--dsw-alias-state-error-primary,#f07878);border-color:var(--dsw-alias-state-error-secondary,#d9534f55)}
+
+/* keyboard shortcuts page */
+.vsm-kb-list{display:flex;flex-direction:column;gap:6px;margin-top:8px}
+.vsm-kb-row{display:flex;align-items:center;gap:10px;padding:8px 10px;border:1px solid var(--dsw-alias-border-l2,#555);border-radius:8px;background:var(--dsw-alias-bg-layer-1,#161616)}
+.vsm-kb-row.rec{border-color:var(--dsw-alias-brand-primary,#4f8cff)}
+.vsm-kb-label{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;color:var(--dsw-alias-label-primary,#eee);font-size:13px}
+.vsm-kb-warn{color:var(--dsw-alias-state-warn-primary,#e5b93f);font-size:11px}
+.vsm-kb-key{min-width:96px;text-align:center;padding:3px 10px;border:1px solid var(--dsw-alias-border-l2,#555);border-radius:6px;background:var(--dsw-alias-bg-base,#111);color:var(--dsw-alias-label-primary,#eee);font-size:12px;font-family:var(--ds-font-family-code,ui-monospace,monospace)}
+.vsm-kb-key.warn{border-color:var(--dsw-alias-state-warn-primary,#e5b93f);color:var(--dsw-alias-state-warn-primary,#e5b93f)}
+.vsm-kb-key.invalid{border-color:var(--dsw-alias-state-error-primary,#d9534f);color:var(--dsw-alias-state-error-primary,#d9534f)}
+.vsm-kb-rec{font-size:12px;color:var(--dsw-alias-label-secondary,#9aa5b1)}
+.vsm-kb-actions{display:flex;gap:6px}
+.vsm-kb-actions button{border:1px solid var(--dsw-alias-border-l2,#555);border-radius:6px;padding:4px 10px;background:none;color:var(--dsw-alias-label-primary,#eee);cursor:pointer;font-size:12px;white-space:nowrap}
+.vsm-kb-actions button:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover,#ffffff14)}
+.vsm-kb-actions button:disabled{opacity:.55;cursor:default}
+.vsm-kb-actionsbar{display:flex;align-items:center;gap:10px;margin-top:12px}
+.vsm-kb-dirty{flex:1;font-size:12px;color:var(--dsw-alias-state-warn-primary,#e5b93f)}
+.vsm-kb-message{font-size:12px;color:var(--dsw-alias-brand-primary,#4f8cff);margin-top:8px}

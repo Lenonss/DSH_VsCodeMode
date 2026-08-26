@@ -10,6 +10,7 @@ import { registerRoutes } from './routes.js'
 import { captureToolResult } from './capture.js'
 import { handleRpc } from './rpc.js'
 import { newSearcher } from './search/orchestrator.js'
+import { newContentSearcher } from './search/content.js'
 import { installIsolation } from './mcpIsolation.js'
 import { dropFileIndex } from './workspace.js'
 import { cwdOf } from './registry.js'
@@ -30,6 +31,7 @@ export const inject = ['sessions', 'fs', 'webServer', 'loader', 'tools', 'worksp
 export function apply(ctx: Ctx, config?: unknown): void {
   const registry: Registry = new Map()
   const searcher = newSearcher(ctx)
+  const contentSearcher = newContentSearcher(ctx)
   /** 兼容性警告收集（route 护栏等写入，启动日志一并输出）。 */
   const warnings: string[] = []
   setupOpenSettings(ctx, config, () => {})
@@ -44,10 +46,11 @@ export function apply(ctx: Ctx, config?: unknown): void {
       registry.delete(cwd)
       dropFileIndex(cwd)
       searcher.dispose(cwd)
+      contentSearcher.dispose(cwd)
     }
   })
 
-  registerRoutes(ctx, config, (method, args) => handleRpc(ctx, registry, method, args, searcher), (warning) => warnings.push(warning))
+  registerRoutes(ctx, config, (method, args) => handleRpc(ctx, registry, method, args, searcher, contentSearcher), (warning) => warnings.push(warning))
   installIsolation(ctx)
   void logCompatSummary(ctx, warnings)
 

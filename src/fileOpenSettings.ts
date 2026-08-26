@@ -1,10 +1,11 @@
 /**
- * dsh-vscode-mode host — 文件链接打开工具的持久化设置。
+ * dsh-vscode-mode host — 文件链接打开工具 + 快捷键的持久化设置。
  * 依赖守卫：@deepseek-ai/dsh-settings / schemastery 以动态加载引入，
  * 缺失时插件仍可加载（fileOpenTool 降级为配置值，compat 报告可见）。
- * 作者 ddj 2026年08月24号
+ * 作者 ddj 2026年08月24号 / 2026年08月26号
  */
 import type { Ctx } from './store.js'
+import { KEYBINDING_DEFAULTS } from './shared/keybindings.js'
 
 export const FILE_OPEN_SETTINGS_NS = 'dsh-vscode-mode'
 export const FILE_OPEN_DEFAULT = 'auto'
@@ -21,7 +22,7 @@ type SettingsProvider = {
 export interface SettingsDeps {
   installSettingsSection: (ctx: Ctx, ns: string, schema: unknown, entry: object, hooks: object) => void
   z: {
-    object: (shape: Record<string, unknown>) => unknown
+    object: (shape: Record<string, unknown>) => { default: (value: Record<string, unknown>) => unknown }
     string: () => { default: (value: string) => unknown }
   }
 }
@@ -29,6 +30,18 @@ export interface SettingsDeps {
 export type SettingsDepsLoader = () => Promise<SettingsDeps | null>
 
 let depsPromise: Promise<SettingsDeps | null> | undefined
+
+/**
+ * 按命令目录构建 keybindings 显式键形状（每键独立默认值）。
+ * @author ddj 2026年08月26号
+ * @param z schemastery 命名空间
+ * @returns keybindings 字段形状
+ */
+function keybindingsShape(z: SettingsDeps['z']): Record<string, unknown> {
+  const shape: Record<string, unknown> = {}
+  for (const [id, chord] of Object.entries(KEYBINDING_DEFAULTS)) shape[id] = z.string().default(chord)
+  return shape
+}
 
 /**
  * 动态加载设置依赖（模块级缓存；任一缺失返回 null 而非抛错）。
@@ -75,7 +88,10 @@ export async function installOpenSettingsSection(
 ): Promise<boolean> {
   const deps = await loader()
   if (!deps) return false
-  const schema = deps.z.object({ fileOpenTool: deps.z.string().default(FILE_OPEN_DEFAULT) })
+  const schema = deps.z.object({
+    fileOpenTool: deps.z.string().default(FILE_OPEN_DEFAULT),
+    keybindings: deps.z.object(keybindingsShape(deps.z)).default({ ...KEYBINDING_DEFAULTS }),
+  })
   deps.installSettingsSection(ctx, ns, schema, entry, hooks)
   return true
 }

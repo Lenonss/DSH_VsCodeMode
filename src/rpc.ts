@@ -23,6 +23,8 @@ import type { Registry } from './registry.js'
 import { bucketOf, cwdOf, sessionOf } from './registry.js'
 import type { SearchOrchestrator } from './search/orchestrator.js'
 import { newSearcher } from './search/orchestrator.js'
+import type { ContentSearcher } from './search/content.js'
+import { newContentSearcher } from './search/content.js'
 import { restoreFile, revertCall, revertHunk } from './revert.js'
 import { listMcp, refreshMcp, removeMcp, saveMcp, toggleMcp } from './mcp.js'
 import { listProjects, projectRefresh, projectRemove, projectSave, projectToggle } from './mcpProject.js'
@@ -117,7 +119,7 @@ async function applyDecisions(
 }
 
 /** 各方法 handler 表（类型由 shared/rpc 的 RpcHandlerMap 约束）。 */
-export function buildHandlers(ctx: Ctx, registry: Registry, searcher = newSearcher(ctx)): RpcHandlerMap {
+export function buildHandlers(ctx: Ctx, registry: Registry, searcher = newSearcher(ctx), contentSearcher = newContentSearcher(ctx)): RpcHandlerMap {
   return {
     'edrv.list': async (args) => {
       const sc = await requireSession(ctx, args.sessionId)
@@ -323,6 +325,27 @@ export function buildHandlers(ctx: Ctx, registry: Registry, searcher = newSearch
       const result = await searcher.search({ session: sc.session, cwd: sc.cwd, query: args.query, activePaths })
       return { ok: true, ...result }
     },
+    'edrv.searchContent': async (args) => {
+      // 工作区内容搜索：rg --json 主路径；provider 失败转错误响应（无 fallback）。
+      const sc = await requireSession(ctx, args.sessionId)
+      if ('err' in sc) return { ok: false, error: sc.err }
+      try {
+        const result = await contentSearcher.search({
+          session: sc.session,
+          cwd: sc.cwd,
+          query: args.query,
+          matchCase: args.matchCase,
+          wholeWord: args.wholeWord,
+          regex: args.regex,
+          maxResults: args.maxResults,
+          include: args.include,
+          exclude: args.exclude,
+        })
+        return { ok: true, ...result }
+      } catch (error) {
+        return { ok: false, error: '搜索失败：' + String(error) }
+      }
+    },
     'edrv.listDir': async (args) => {
       // 目录树（侧边栏文件管理用）：按会话 cwd 解析，与 edrv.read 同基准，树内相对路径点开即打开。
       const sc = await requireSession(ctx, args.sessionId)
@@ -433,7 +456,7 @@ export function buildHandlers(ctx: Ctx, registry: Registry, searcher = newSearch
 
 /**
  * 统一入口：按方法分发到 handler 表。
- * @author ddj 2026年08月20号
+ * @author ddj 2026年08月20号 / 2026年08月26号
  */
 export async function handleRpc<M extends RpcMethod>(
   ctx: Ctx,
@@ -441,8 +464,9 @@ export async function handleRpc<M extends RpcMethod>(
   method: M,
   args: RpcRequestMap[M],
   searcher = newSearcher(ctx),
+  contentSearcher = newContentSearcher(ctx),
 ): Promise<RpcResult<M>> {
-  const handlers = buildHandlers(ctx, registry, searcher)
+  const handlers = buildHandlers(ctx, registry, searcher, contentSearcher)
   const handler = handlers[method]
   if (!handler) return { ok: false, error: '未知方法: ' + String(method) } as RpcResult<M>
   return handler(args)

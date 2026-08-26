@@ -29,6 +29,15 @@ export interface TreeEntry {
   size?: number
 }
 
+/** 内容搜索单条命中（edrv.searchContent 返回；path 相对工作区根，列为 1-based UTF-16）。 */
+export interface SearchContentMatch {
+  path: string
+  line: number
+  startColumn: number
+  endColumn: number
+  text: string
+}
+
 /** 一条批量决策项（decideBatch 的 items 元素，与 accept/reject 单条参数同构）。 */
 export interface DecideItem {
   callId: string
@@ -59,6 +68,7 @@ export interface RpcRequestMap {
   'edrv.rollback': { sessionId?: string; path: string; batch?: number }
   'edrv.debug': { sessionId?: string; text: string }
   'edrv.searchFiles': { sessionId?: string; query: string }
+  'edrv.searchContent': { sessionId?: string; query: string; matchCase?: boolean; wholeWord?: boolean; regex?: boolean; maxResults?: number; include?: string[]; exclude?: string[] }
   'edrv.listDir': { sessionId?: string; path: string }
   'edrv.revealInExplorer': { sessionId?: string; path: string }
   'mcp.list': {}
@@ -94,6 +104,7 @@ export interface RpcOkMap {
   'edrv.rollback': { path: string; batch: number | null }
   'edrv.debug': object
   'edrv.searchFiles': { files: string[]; truncated: boolean }
+  'edrv.searchContent': { matches: SearchContentMatch[]; truncated: boolean }
   'edrv.listDir': { root: string; path: string; entries: TreeEntry[] }
   'edrv.revealInExplorer': { revealed: string }
   'mcp.list': { servers: MpcServer[] }

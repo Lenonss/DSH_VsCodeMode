@@ -21,6 +21,7 @@ import { editorHeight } from '../editorLayout.js'
 import { revealInExplorer as revealPathInExplorer } from '../fileReveal.js'
 import { setSidePending, SIDEBAR_INSTALL_CMD } from '../sidebarBridge.js'
 import { upsertViewState, viewStatesLoad, viewStatesSave } from '../state/viewStateCache.js'
+import { bindingOf, chordOf, matchEvent, useKeybindingsVersion } from '../keybindings.js'
 
 /**
  * 中央编辑区：文件页签（脏点/关闭/打开路径）+ Ctrl+P 搜索 + Monaco 编辑器 +
@@ -61,6 +62,7 @@ export function EditorView(props) {
   const [sidebarW, setSidebarW] = React.useState(240) // 侧边栏宽度
   const [activePanel, setActivePanel] = React.useState('explorer') // 激活面板 id
   const [focusRequest, setFocusRequest] = React.useState(0) // 外部差异聚焦请求版本
+  const kbVersion = useKeybindingsVersion() // 快捷键配置版本（tooltip 文案随键位刷新）
   const [hintDismissed, setHintDismissed] = React.useState(() => {
     try { return localStorage.getItem('edrv.side-hint-dismissed') === '1' } catch { return false }
   }) // 侧边栏引导条是否已关闭
@@ -85,6 +87,7 @@ export function EditorView(props) {
   const hoverPanelRef = React.useRef(false) // 鼠标是否已进入 Keep/Undo 浮层
   const batchBusyRef = React.useRef(false) // 批量 Keep All/Undo All 防重入
   const menuHandlersRef = React.useRef(null) // 右键菜单动作的最新闭包（Monaco addAction 空依赖回调读取）
+  const doSaveRef = React.useRef(null) // 保存动作的最新闭包（窗口级保存监听读取）
   const diffRendererRef = React.useRef(null)
   const layoutRef = React.useRef(layout) // ensureEditor 空依赖闭包读取的稳定布局
   layoutRef.current = layout
@@ -392,13 +395,38 @@ export function EditorView(props) {
     catch (e) { /* 忽略 */ }
   }, [sidebarOn, sidebarW, activePanel, sessionId, sidebarKey])
 
-  // Ctrl+B 切换侧边栏（capture 抢占，避免与 DSH 全局冲突）
+  // 切换侧边栏（capture 抢占，避免与 DSH 全局冲突；键位随快捷键配置）
   React.useEffect(() => {
     const onKey = (e) => {
-      if ((e.ctrlKey || e.metaKey) && String(e.key).toLowerCase() === 'b') {
-        e.preventDefault(); e.stopPropagation()
-        setSidebarOn((v) => !v)
-      }
+      if (!matchEvent(e, bindingOf('edrv.toggleSidebar'))) return
+      e.preventDefault(); e.stopPropagation()
+      setSidebarOn((v) => !v)
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [])
+
+  // 保存文件（窗口级）：编辑器有活动模型才拦截执行，无文件时放行（浏览器默认行为）
+  React.useEffect(() => {
+    const onKey = (e) => {
+      if (!matchEvent(e, bindingOf('edrv.save'))) return
+      if (!editorRef.current?.getModel?.()) return
+      e.preventDefault(); e.stopPropagation()
+      flushSave()
+      doSaveRef.current(false)
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [])
+
+  // Ctrl+Shift+F 全局搜索：展开侧边栏 + 激活搜索页签，随后聚焦搜索输入框
+  React.useEffect(() => {
+    const onKey = (e) => {
+      if (!matchEvent(e, bindingOf('edrv.searchInFiles'))) return
+      e.preventDefault(); e.stopPropagation()
+      setSidebarOn(true)
+      setActivePanel('search')
+      setTimeout(() => window.dispatchEvent(new CustomEvent('edrv:search-focus')), 0)
     }
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
@@ -482,6 +510,7 @@ export function EditorView(props) {
       } else { setStatus('保存失败'); setError(res?.error ? String(res.error) : '保存失败') }
     }).catch((e) => { setStatus('保存失败'); setError('保存异常:' + String(e)) })
   }
+  doSaveRef.current = doSave
 
   const onEdit = () => {
     const ed = editorRef.current
@@ -551,7 +580,7 @@ export function EditorView(props) {
       cursorBlinking: 'smooth',
       padding: { top: side ? 6 : 8 },
     })
-    ed.addCommand(m.KeyMod.CtrlCmd | m.KeyCode.KeyS, () => { flushSave(); doSave(false) })
+    // 保存改由窗口级快捷键监听执行（键位可配置；见上方 edrv.save 监听）
     ed.onDidChangeModelContent(() => {
       if (!ed.getModel() || programmaticRef.current) return
       onEdit()
@@ -634,13 +663,22 @@ export function EditorView(props) {
     editorRef.current = ed
   }, [])
 
-  // 打开文件后的差异聚焦跳转（内容/差异就绪后执行一次）
+  // 打开文件后的跳转（差异聚焦/搜索行列跳转，内容就绪后执行一次）
   React.useEffect(() => {
     const pf = pendingFocusRef.current
     if (!pf || pf.path !== active || content === null) return
-    const target = pf.region || pendingRegions[0]
     const ed = editorRef.current
-    if (!target || !ed) return
+    if (!ed) return
+    if (pf.line != null) {
+      // 搜索命中跳转：直接定位到行/列（不依赖差异区域）
+      pendingFocusRef.current = null
+      ed.revealLineInCenter(Math.max(1, pf.line))
+      ed.setPosition({ lineNumber: Math.max(1, pf.line), column: Math.max(1, pf.column ?? 1) })
+      ed.focus()
+      return
+    }
+    const target = pf.region || pendingRegions[0]
+    if (!target) return
     pendingFocusRef.current = null
     ed.revealLineInCenter(Math.max(1, target.start ?? 1))
     ed.setPosition({ lineNumber: Math.max(1, target.start ?? 1), column: 1 })
@@ -883,6 +921,20 @@ export function EditorView(props) {
     if (focusDiff) pendingFocusRef.current = { path, region: null }
   }
 
+  /**
+   * 打开文件并跳转到指定行列（搜索面板命中跳转）。
+   * @author ddj 2026年08月26号
+   * @param path 文件路径
+   * @param line 目标行（缺省仅打开不跳转）
+   * @param column 目标列（缺省 1）
+   */
+  const openFileAt = (path, line, column) => {
+    if (!path) return
+    addTab(path, true)
+    pendingFocusRef.current = { path, region: null, line: line ?? null, column: column ?? 1 }
+    setFocusRequest((value) => value + 1)
+  }
+
   const openPath = () => {
     const p = (pathDraft || '').trim()
     if (!p) return
@@ -916,7 +968,7 @@ export function EditorView(props) {
 
   const pathBar = React.createElement('div', { className: 'edrv-pathbar', title: active || '' },
     React.createElement('span', { className: 'edrv-pb-name' }, active ? String(active).split(/[\\/]/).pop() : '未打开文件'),
-    React.createElement('span', { className: 'edrv-pb-full' }, active || '使用右上搜索框 (Ctrl+P) 打开文件'),
+    React.createElement('span', { className: 'edrv-pb-full' }, active || '使用右上搜索框 (' + (chordOf('edrv.quickOpen') ?? 'Ctrl+P') + ') 打开文件'),
     (active && langOf(active) ? React.createElement('span', { className: 'edrv-pb-meta' }, langOf(active)) : null),
     (cursor ? React.createElement('span', { className: 'edrv-pb-meta' }, cursor) : null),
     (status ? React.createElement('span', { className: 'edrv-pb-meta edrv-pb-status' }, status) : null))
@@ -926,7 +978,7 @@ export function EditorView(props) {
     (sum.totalFiles > 0
       ? React.createElement('button', { className: 'edrv-diffchip', title: '打开差异总览/归档', onClick: () => setLauncherOpen((o) => !o) }, '⚠ 差异 ' + sum.totalFiles + ' 文件')
       : null),
-    React.createElement('button', { className: 'edrv-chip-btn' + (sidebarOn ? ' edrv-chip-on' : ''), title: '切换侧边栏 (Ctrl+B)', onClick: () => setSidebarOn((v) => !v) }, '☰'),
+    React.createElement('button', { className: 'edrv-chip-btn' + (sidebarOn ? ' edrv-chip-on' : ''), title: '切换侧边栏 (' + (chordOf('edrv.toggleSidebar') ?? 'Ctrl+B') + ')', onClick: () => setSidebarOn((v) => !v) }, '☰'),
     React.createElement('button', { className: 'edrv-chip-btn', title: '刷新', onClick: reloadFile }, '⟳'),
     React.createElement(QuickOpen, { sessionId, onOpen: (p) => openFile(p, false) }))
 
@@ -964,7 +1016,7 @@ export function EditorView(props) {
   } else if (!active) {
     body = React.createElement('div', { className: 'edrv-empty' },
       React.createElement('div', null, '暂无打开的文件'),
-      React.createElement('div', { style: { fontSize: 12 } }, '使用右上搜索框 (Ctrl+P) 打开工作区文件；agent 修改文件后顶部会出现差异角标'))
+      React.createElement('div', { style: { fontSize: 12 } }, '使用右上搜索框 (' + (chordOf('edrv.quickOpen') ?? 'Ctrl+P') + ') 打开工作区文件；agent 修改文件后顶部会出现差异角标'))
   } else if (content === null && loadError) {
     body = loadingBody('文件加载失败：' + loadError, 0, () => {
       setLoadError(null)
@@ -1073,6 +1125,7 @@ export function EditorView(props) {
   const sidebarCtx = {
     sessionId,
     openFile: (p) => openFile(p, false),
+    openFileAt,
     activePath: active,
     pendingByPath,
     sum: { totalFiles: sum.totalFiles, files: sum.files },

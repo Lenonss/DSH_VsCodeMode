@@ -18,17 +18,24 @@ const RESULT_LIMIT = 50
 const PROVIDER_VERSION = 'ripgrep-v1'
 const POLICY_VERSION = 'search-policy-v1'
 
-type CacheEntry = { at: number; result: WorkspaceSearchResult }
+type CacheEntry<T> = { at: number; result: T }
 type SearchRequest = { session: Session; cwd: string; query: string; activePaths: string[] }
 type SearchResponse = { files: string[]; truncated: boolean }
 
 /**
- * 短期有界搜索缓存。
+ * 短期有界搜索缓存（泛型：文件/内容搜索共用；clone 由调用方保证写隔离）。
  * @author ddj 2026年08月24号
- * @returns 缓存对象
+ * @param clone 结果写隔离克隆（缺省恒等）
  */
-export class SearchCache {
-  private readonly entries = new Map<string, CacheEntry>()
+export class SearchCache<T> {
+  private readonly entries = new Map<string, CacheEntry<T>>()
+
+  /**
+   * 创建缓存。
+   * @author ddj 2026年08月24号
+   * @param clone 结果克隆函数（缺省直接引用）
+   */
+  constructor(private readonly clone: (value: T) => T = (value) => value) {}
 
   /**
    * 读取未过期条目。
@@ -37,13 +44,13 @@ export class SearchCache {
    * @param now 当前时间
    * @returns 缓存结果或 undefined
    */
-  get(key: string, now = Date.now()): WorkspaceSearchResult | undefined {
+  get(key: string, now = Date.now()): T | undefined {
     const entry = this.entries.get(key)
     if (!entry) return undefined
     if (now - entry.at >= CACHE_TTL) { this.entries.delete(key); return undefined }
     this.entries.delete(key)
     this.entries.set(key, entry)
-    return { ...entry.result, files: [...entry.result.files] }
+    return this.clone(entry.result)
   }
 
   /**
@@ -53,9 +60,9 @@ export class SearchCache {
    * @param result provider 结果
    * @param now 当前时间
    */
-  set(key: string, result: WorkspaceSearchResult, now = Date.now()): void {
+  set(key: string, result: T, now = Date.now()): void {
     this.entries.delete(key)
-    this.entries.set(key, { at: now, result: { ...result, files: [...result.files] } })
+    this.entries.set(key, { at: now, result: this.clone(result) })
     while (this.entries.size > CACHE_LIMIT) this.entries.delete(this.entries.keys().next().value as string)
   }
 
@@ -145,7 +152,7 @@ function mergeCandidates(result: WorkspaceSearchResult, activePaths: string[], r
  * @author ddj 2026年08月24号
  */
 export class SearchOrchestrator {
-  private readonly cache = new SearchCache()
+  private readonly cache = new SearchCache<WorkspaceSearchResult>((r) => ({ ...r, files: [...r.files] }))
   private readonly inflight = new Map<string, AbortController>()
   private readonly rootsByCwd = new Map<string, Set<string>>()
   private readonly provider: WorkspaceSearchProvider

@@ -10,6 +10,8 @@ import type { TreeMenuRegistry } from './contextMenu.js'
 export interface SidebarCtx {
   sessionId?: string
   openFile: (path: string) => void
+  /** 打开文件并跳转到指定行/列（搜索面板命中跳转；缺省仅打开）。 */
+  openFileAt?: (path: string, line?: number, column?: number) => void
   activePath: string | null
   /** 文件路径 → 待处理差异数（>0 才收录）。 */
   pendingByPath: Record<string, number>

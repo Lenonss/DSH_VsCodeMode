@@ -14,9 +14,23 @@ import type { WorkspaceSearchInput, WorkspaceSearchProvider, WorkspaceSearchResu
 const STDOUT_CAP = 4 << 20
 const STDERR_CAP = 64 << 10
 const GRACE_MS = 20_000
-const EXCLUDES = [
+
+/** 默认排除目录（文件/内容搜索共用，导出供 provider 复用）。 */
+export const EXCLUDES = [
   'node_modules', '.git', '.tmp', '.cache', 'dist', 'build', 'vendor',
-  'coverage', '__pycache__',
+  'coverage', '__pycache__', '.pnpm-store', '.npm-cache', '.codegraph', '.workbuddy',
+]
+
+/**
+ * 默认排除文件（glob 模式，文件/内容搜索共用）。
+ * 插件自身 sidecar（内容搜索会命中其历史编辑文本，且单行巨型 JSON 会撑爆输出上限）；
+ * *.map 源映射（纯构建产物，内容搜索无意义且常为单行巨文件）。
+ */
+export const FILE_EXCLUDES = [
+  '**/.dsh-edit-review.json',
+  '**/.dsh-edit-review-archive.json',
+  '**/.dsh-edit-review-debug.log',
+  '**/*.map',
 ]
 
 interface SearchHandle {
@@ -113,6 +127,7 @@ export async function searchRipgrep(input: WorkspaceSearchInput): Promise<Worksp
   const query = prepareQuery(input.query)
   const argv = [binary, '--no-config', '--files', '--hidden', '--no-ignore', '--glob-case-insensitive', '--glob', queryGlob(query.text)]
   for (const excluded of EXCLUDES) argv.push('--glob', '!**/' + excluded + '/**')
+  for (const excluded of FILE_EXCLUDES) argv.push('--glob', '!' + excluded)
   argv.push('--', root)
   const handle = sub.spawn({
     argv,

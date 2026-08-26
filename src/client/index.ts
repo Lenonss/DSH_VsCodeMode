@@ -31,10 +31,12 @@ import { SideEditorTab } from './ui/SideEditorTab.js'
 import { createAddToConversation } from './addToConversation.js'
 import { createSidebarPanelRegistry } from './sidebar/registry.js'
 import { createFilePanel } from './sidebar/panels/index.js'
+import { createSearchPanel } from './sidebar/panels/index.js'
 import { createTreeMenuRegistry } from './sidebar/contextMenu.js'
 import { createDefaultFileMenuItems } from './sidebar/menuItems.js'
 import { createOutlinePanel } from './outline/index.js'
 import { createOutlineSourceRegistry, registerBuiltinOutlineSources } from './outline/sources.js'
+import { keybindingsApply } from './keybindings.js'
 import type { CompatAdapter } from '../shared/compat.js'
 
 // ⚠️ inject 只列必需服务：webUiSettings 是 @linxin666/dsh-client-ui-web-ui-settings 提供的
@@ -98,6 +100,8 @@ export function apply(ctx: any): void {
   const sidebarPanels = createSidebarPanelRegistry()
   ctx.provide('edrvSidebarPanels', sidebarPanels)
   ctx.effect(() => sidebarPanels.register(createFilePanel()), 'vscode-mode: sidebar panel')
+  // 搜索面板：活动栏「搜索」页签（Ctrl+Shift+F 唤起，VSCode 搜索视图形态）
+  ctx.effect(() => sidebarPanels.register(createSearchPanel()), 'vscode-mode: sidebar panel search')
   // 文件右键菜单项注册表（对外 provide，供本插件/第三方注册；内置「在文件浏览器中打开」）
   const fileMenuItems = createTreeMenuRegistry()
   ctx.provide('edrvFileContextMenuItems', fileMenuItems)
@@ -128,6 +132,17 @@ export function apply(ctx: any): void {
     sync()
     return settings.subscribe(sync)
   }, 'vscode-mode: file opener setting sync')
+  // 快捷键配置同步：设置提交后立即刷新键位匹配（编辑器/QuickOpen 按事件时读取）
+  ctx.effect(() => {
+    if (!settings) return undefined
+    const sync = (): void => {
+      const snapshot = settings.getSnapshot()
+      if (snapshot.status === 'loading') return
+      keybindingsApply(snapshot.value?.keybindings)
+    }
+    sync()
+    return settings.subscribe(sync)
+  }, 'vscode-mode: keybindings setting sync')
   if (workspaces?.openPath) {
     ctx.effect(() => installOpenPathRouter({
       workspaces,

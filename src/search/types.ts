@@ -45,3 +45,43 @@ export interface SearchCandidate {
 export interface CandidateRanker {
   rank(candidates: SearchCandidate[], query: PreparedQuery): SearchCandidate[]
 }
+
+/** 内容搜索单条命中（列 = 1-based UTF-16，直接供 Monaco 跳转/高亮）。 */
+export interface ContentMatch {
+  path: string
+  line: number
+  startColumn: number
+  endColumn: number
+  text: string
+}
+
+/** 内容搜索输入（options 缺省 = 大小写不敏感、字面匹配、非全词；include/exclude 为 rg glob）。 */
+export interface ContentSearchInput {
+  ctx: Ctx
+  session: Session
+  cwd: string
+  query: string
+  matchCase?: boolean
+  wholeWord?: boolean
+  regex?: boolean
+  maxResults?: number
+  /** 正选 glob（仅在这些文件内搜索；逗号已在客户端拆分）。 */
+  include?: string[]
+  /** 排除 glob（这些文件不参与搜索）。 */
+  exclude?: string[]
+  signal?: AbortSignal
+  root?: string
+}
+
+/** 内容搜索输出：扁平命中列表 + 截断标志。 */
+export interface ContentSearchResult {
+  matches: ContentMatch[]
+  truncated: boolean
+  complete: boolean
+  source: SearchSource
+}
+
+/** 内容搜索 provider（rg JSON 主路径；无 fallback，失败抛错由调用方处理）。 */
+export interface ContentSearchProvider {
+  search(input: ContentSearchInput): Promise<ContentSearchResult>
+}
