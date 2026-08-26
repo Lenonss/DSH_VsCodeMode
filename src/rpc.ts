@@ -34,10 +34,75 @@ import { readDevForm, setDevForm } from './devForm.js'
 import { normalizeRel, toTreeEntries } from './tree.js'
 import { revealInExplorer } from './reveal.js'
 
-/** cwd → Promise 链：串行化 debug 日志追加（fs read+write 非原子，避免并发丢行）。 */
+/** cwd → 内存缓冲：行数组 + 累计字节数 + 待触发 flush 定时器（攒批落盘，避免每条日志全文件读改写）。 */
+const debugBuffers = new Map<string, { lines: string[]; len: number; timer: ReturnType<typeof setTimeout> | null }>()
+/** cwd → Promise 链：串行化 debug 日志落盘（fs read+write 非原子，避免并发丢行）。 */
 const debugWriteQueues = new Map<string, Promise<void>>()
 /** debug 日志单文件上限：超限截断保留尾部，防文件无限增长拖慢每次追加。 */
 const DEBUG_LOG_CAP = 512 * 1024
+/** debug 日志批量缓冲上限：攒满即落盘（一次读改写），上限内不逐条写文件。 */
+const DEBUG_BUF_CAP = 32 * 1024
+/** debug 日志空闲 flush 延迟：缓冲未满时，静默一段时间后落盘一次。 */
+const DEBUG_FLUSH_IDLE_MS = 1000
+/** cwd → 上次 stale 自动清理时间：全量轮询（EditorView/DiffBadge/Dock 各自 5s）节流，避免每轮都读文件算指纹。 */
+const staleCheckedAt = new Map<string, number>()
+/** stale 自动清理最小间隔。 */
+const STALE_CHECK_MIN_MS = 10_000
+
+/**
+ * 调试日志入队：先攒内存缓冲（行 + 字节数），满 DEBUG_BUF_CAP 立即落盘，
+ * 否则空闲 DEBUG_FLUSH_IDLE_MS 后落盘；落盘 = 读旧文件 + 追加整批 + 超限截断 + 一次写入。
+ * @author ddj 2026年08月26号
+ * @param ctx DSH 上下文
+ * @param cwd 工作区（日志文件按工作区旁车存放）
+ * @param policy 会话沙箱策略（入队时刻捕获）
+ * @param line 单条日志文本（不含换行）
+ */
+function enqueueDebug(ctx: Ctx, cwd: string, policy: unknown, line: string): void {
+  const st = debugBuffers.get(cwd) ?? { lines: [], len: 0, timer: null }
+  st.lines.push(line)
+  st.len += line.length
+  const flush = () => {
+    st.timer = null
+    const batch = st.lines
+    st.lines = []
+    st.len = 0
+    void flushDebug(ctx, cwd, policy, batch)
+  }
+  if (st.len >= DEBUG_BUF_CAP) {
+    if (st.timer) clearTimeout(st.timer)
+    flush()
+  } else if (!st.timer) {
+    st.timer = setTimeout(flush, DEBUG_FLUSH_IDLE_MS)
+  }
+  debugBuffers.set(cwd, st)
+}
+
+/**
+ * 批量落盘一条 debug 日志缓冲：读旧文件 → 追加 → 超上限截断保留尾部 → 一次写回。
+ * 串行链保证同一 cwd 的读改写不交错丢行；写失败静默忽略（调试日志不阻塞业务）。
+ * @author ddj 2026年08月26号
+ * @param ctx DSH 上下文
+ * @param cwd 工作区
+ * @param policy 会话沙箱策略（enqueue 时刻捕获）
+ * @param batch 本批日志行
+ */
+function flushDebug(ctx: Ctx, cwd: string, policy: unknown, batch: string[]): Promise<void> {
+  const prev = debugWriteQueues.get(cwd) ?? Promise.resolve()
+  const task = prev.then(async () => {
+    try {
+      const fs = ctx.get('fs')
+      if (!fs) return
+      const target = await fs.resolve('.dsh-edit-review-debug.log', { cwd })
+      const old = await fs.readText(target).catch(() => '')
+      const appended = old + batch.map((l) => new Date().toISOString() + ' ' + l + '\n').join('')
+      const next = appended.length > DEBUG_LOG_CAP ? appended.slice(-Math.floor(DEBUG_LOG_CAP / 2)) : appended
+      await fs.writeText(target, next, void 0, void 0, policy)
+    } catch (e) { /* 写日志失败忽略 */ }
+  })
+  debugWriteQueues.set(cwd, task)
+  return task
+}
 
 /** 记录 → 客户端视图（不含 before 全文，仅长度）。 */
 function recView(record: DiffRecord): RecordView {
@@ -126,7 +191,16 @@ export function buildHandlers(ctx: Ctx, registry: Registry, searcher = newSearch
       if ('err' in sc) return { ok: false, error: sc.err }
       const bucket = await bucketOf(registry, ctx, sc.cwd)
       const want = Array.isArray(args.callIds) ? new Set(args.callIds) : null
-      if (!want && args.skipStale !== true) await autoArchiveStale(ctx, sc.session, sc.cwd, bucket) // 全量轮询时自动清理 stale 幽灵差异（批量决策后的即时刷新可 skipStale 跳过）
+      // 全量轮询时自动清理 stale 幽灵差异（批量决策后的即时刷新可 skipStale 跳过）；
+      // 三个组件各自 5s 全量 list，stale 检查节流到 STALE_CHECK_MIN_MS 一次，
+      // 避免每轮都对全部记录读文件 + 算指纹（keepall 期间多组件同时刷新的主要 host 开销）。
+      if (!want && args.skipStale !== true) {
+        const now = Date.now()
+        if (now - (staleCheckedAt.get(sc.cwd) ?? 0) > STALE_CHECK_MIN_MS) {
+          staleCheckedAt.set(sc.cwd, now)
+          await autoArchiveStale(ctx, sc.session, sc.cwd, bucket)
+        }
+      }
       const out: RecordView[] = []
       for (const rec of bucket.values()) {
         // 面板全量查询过滤已归档；聊天条按 callId 查询保留（状态徽章仍需正确显示）
@@ -293,26 +367,12 @@ export function buildHandlers(ctx: Ctx, registry: Registry, searcher = newSearch
       return { ok: true, path: args.path, batch: batch ?? null }
     },
     'edrv.debug': async (args) => {
-      // 诊断日志：client 上报 → 写入工作区旁车 .dsh-edit-review-debug.log（console 不一定落盘，文件可靠）
+      // 诊断日志：client 上报 → 内存缓冲批量落盘 .dsh-edit-review-debug.log（console 不一定落盘，文件可靠）。
+      // 只出现在调试开关开启时（client dbg 默认关），终端仍逐条打印便于实时观察。
       const sc = await requireSession(ctx, args.sessionId)
       if ('err' in sc) return { ok: false, error: sc.err }
-      const fs = ctx.get('fs')
       const text = String(args.text ?? '')
-      const prev = debugWriteQueues.get(sc.cwd) || Promise.resolve()
-      const task = prev.then(async () => {
-        try {
-          const target = await fs.resolve('.dsh-edit-review-debug.log', { cwd: sc.cwd })
-          const old = await fs.readText(target).catch(() => '')
-          const line = new Date().toISOString() + ' ' + text + '\n'
-          // 超上限时截断保留尾部：单文件体积有界，每次追加的读改写成本不随会话时长增长
-          const next = old.length + line.length > DEBUG_LOG_CAP
-            ? old.slice(-Math.floor(DEBUG_LOG_CAP / 2)) + line
-            : old + line
-          await fs.writeText(target, next, void 0, void 0, policyOf(ctx, sc.session))
-        } catch (e) { /* 写日志失败忽略 */ }
-      })
-      debugWriteQueues.set(sc.cwd, task)
-      await task
+      enqueueDebug(ctx, sc.cwd, policyOf(ctx, sc.session), text)
       console.error('[edrv-debug] ' + text)
       return { ok: true }
     },

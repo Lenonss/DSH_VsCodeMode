@@ -12,6 +12,8 @@
 export function createDiffRenderer(log) {
   let viewZoneIds = []
   let decorations = []
+  /** 上次已渲染的差异指纹（callId:idx@start-end:oldLen/newLen 串）：内容未变时跳过重建。 */
+  let lastKey = null
 
   /**
    * 渲染当前 pending 差异：绿底 decoration + 删除块 view zones + '-' 号 overlay（滚动同步）。
@@ -26,6 +28,11 @@ export function createDiffRenderer(log) {
     if (!pendingRegions.length && viewZoneIds.length === 0 && decorations.length === 0) return
     const renderT0 = Date.now()
     const callIdAttr = (callId, idx) => String(callId) + ':' + String(idx)
+    // 指纹相同 = 内容未变（轮询/引用空转/重复点击触发的重渲染）：残留 DOM 已在位，
+    // 直接跳过整轮重建（view zones 拆建 / overlay DOM / 50ms 校正），消除同区域重复渲染成本。
+    const key = pendingRegions.map((r) => callIdAttr(r.callId, r.idx) + '@' + (r.start ?? '?') + '-' + (r.end ?? '?') + ':' + (r.oldLines ? r.oldLines.length : 0) + '/' + (r.newLines ? r.newLines.length : 0)).join('|')
+    if (key === lastKey) return
+    lastKey = key
     log(sessionId, '[diff-render] begin regs=' + pendingRegions.length + ' ' + pendingRegions.map((r) => callIdAttr(r.callId, r.idx) + '@' + (r.start ?? '?') + '-' + (r.end ?? '?') + '(-' + (r.oldLines ? r.oldLines.length : 0) + '/+' + (r.newLines ? r.newLines.length : 0) + ')').join('|'))
 
     const decos = []

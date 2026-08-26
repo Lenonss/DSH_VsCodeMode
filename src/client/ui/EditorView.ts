@@ -795,7 +795,9 @@ export function EditorView(props) {
           fail++
         }
       }
-      setRecords((prev) => Object.assign({}, prev, next))
+      // 合并结果无变化（批量全部失败/重复点击）时不 setRecords：避免 records 换引用
+      // → pendingRegions 换引用 → diff 全量重渲染（内容相同，纯空转）
+      if (Object.keys(next).length) setRecords((prev) => Object.assign({}, prev, next))
       return { ok, fail }
     }).catch((e) => {
       setError('批量处理异常:' + String(e))
@@ -813,20 +815,26 @@ export function EditorView(props) {
   const itemOf = (r, reject) => ({ callId: r.callId, scope: r.create ? 'call' : 'hunk', hunkIndex: r.idx, decision: reject ? 'rejected' : 'accepted' })
 
   const acceptFile = () => {
+    if (batchBusyRef.current || !pendingRegions.length) return
+    batchBusyRef.current = true
     actMany(pendingRegions.map((r) => itemOf(r, false))).then(({ ok, fail }) => {
+      batchBusyRef.current = false
       reloadFile(true)
       emitRefresh()
       setStatus('已采纳 ' + ok + ' 处差异' + (fail ? '，' + fail + ' 处失败' : ''))
       if (fail) setError(fail + ' 处差异处理失败（可能已被后续修改影响），可刷新后重试')
-    })
+    }).catch(() => { batchBusyRef.current = false })
   }
   const undoFile = () => {
+    if (batchBusyRef.current || !pendingRegions.length) return
+    batchBusyRef.current = true
     actMany([...pendingRegions].reverse().map((r) => itemOf(r, true))).then(({ ok, fail }) => {
+      batchBusyRef.current = false
       reloadFile(true)
       emitRefresh()
       setStatus('已不采纳 ' + ok + ' 处差异' + (fail ? '，' + fail + ' 处失败' : ''))
       if (fail) setError(fail + ' 处差异处理失败（可能已被后续修改影响），可刷新后重试')
-    })
+    }).catch(() => { batchBusyRef.current = false })
   }
 
   // 所有差异文件的待处理 hunk 列表（二级菜单 Keep All / Undo All 用）
