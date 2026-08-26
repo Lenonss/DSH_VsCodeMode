@@ -21,6 +21,9 @@ export function createDiffRenderer(log) {
    * @param sessionId 会话 id
    */
   const render = (monaco, editor, pendingRegions, sessionId) => {
+    // 空渲染且无残留（5s 轮询 setRecords 常触发）：无需清理时直接跳过，
+    // 不打 begin 日志、不做无谓 DOM 操作；有 zone/decoration 残留时仍需走清理。
+    if (!pendingRegions.length && viewZoneIds.length === 0 && decorations.length === 0) return
     const renderT0 = Date.now()
     const callIdAttr = (callId, idx) => String(callId) + ':' + String(idx)
     log(sessionId, '[diff-render] begin regs=' + pendingRegions.length + ' ' + pendingRegions.map((r) => callIdAttr(r.callId, r.idx) + '@' + (r.start ?? '?') + '-' + (r.end ?? '?') + '(-' + (r.oldLines ? r.oldLines.length : 0) + '/+' + (r.newLines ? r.newLines.length : 0) + ')').join('|'))

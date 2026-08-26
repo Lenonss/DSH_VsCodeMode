@@ -34,6 +34,8 @@ import { revealInExplorer } from './reveal.js'
 
 /** cwd → Promise 链：串行化 debug 日志追加（fs read+write 非原子，避免并发丢行）。 */
 const debugWriteQueues = new Map<string, Promise<void>>()
+/** debug 日志单文件上限：超限截断保留尾部，防文件无限增长拖慢每次追加。 */
+const DEBUG_LOG_CAP = 512 * 1024
 
 /** 记录 → 客户端视图（不含 before 全文，仅长度）。 */
 function recView(record: DiffRecord): RecordView {
@@ -300,7 +302,11 @@ export function buildHandlers(ctx: Ctx, registry: Registry, searcher = newSearch
           const target = await fs.resolve('.dsh-edit-review-debug.log', { cwd: sc.cwd })
           const old = await fs.readText(target).catch(() => '')
           const line = new Date().toISOString() + ' ' + text + '\n'
-          await fs.writeText(target, (old || '') + line, void 0, void 0, policyOf(ctx, sc.session))
+          // 超上限时截断保留尾部：单文件体积有界，每次追加的读改写成本不随会话时长增长
+          const next = old.length + line.length > DEBUG_LOG_CAP
+            ? old.slice(-Math.floor(DEBUG_LOG_CAP / 2)) + line
+            : old + line
+          await fs.writeText(target, next, void 0, void 0, policyOf(ctx, sc.session))
         } catch (e) { /* 写日志失败忽略 */ }
       })
       debugWriteQueues.set(sc.cwd, task)

@@ -131,6 +131,25 @@ export function EditorView(props) {
     })
   }
 
+  /**
+   * 轮询去重：前后记录内容一致时返回原引用，React 跳过重渲染，
+   * 阻断 5s 轮询 → memo 链 → diff 重渲染/日志 的空转。
+   * @author ddj 2026年08月26号
+   * @param prev 当前 records
+   * @param next 轮询新结果
+   * @returns 内容一致返回 true
+   */
+  const sameRecords = (prev, next) => {
+    const pk = Object.keys(prev)
+    const nk = Object.keys(next)
+    if (pk.length !== nk.length) return false
+    for (const k of pk) {
+      if (!(k in next)) return false
+      if (JSON.stringify(prev[k]) !== JSON.stringify(next[k])) return false
+    }
+    return true
+  }
+
   const refreshRecords = (skipStale) => {
     if (!sessionId) return
     rpc('edrv.list', { sessionId, ...(skipStale ? { skipStale: true } : {}) }).then((res) => {
@@ -140,7 +159,7 @@ export function EditorView(props) {
         if (r.archived === true) continue
         map[r.callId] = r
       }
-      setRecords(map)
+      setRecords((prev) => (sameRecords(prev, map) ? prev : map))
     }).catch((e) => setError('list异常:' + String(e)))
   }
 
