@@ -117,9 +117,20 @@ describe('ripgrep provider argv', () => {
     expect(calls[0].cwd).toBe('root')
   })
 
-  it('does not turn process failure into an empty success', async () => {
+  it('keeps partial results with a warning on traversal errors (exit 2)', async () => {
     const fs = fakeFs()
-    const subprocess = { spawn: vi.fn(() => ({ done: Promise.resolve({ exitCode: 2, signal: null }) })) }
+    const subprocess = { spawn: vi.fn(() => ({ done: Promise.resolve({ exitCode: 2, signal: null }), collected: { stderr: { readFrom: () => ({ text: 'rg: C:\\ws\\broken: 系统找不到指定的文件。 (os error 2)' }) } } })) }
+    const ctx: any = { get: (name: string) => name === 'fs' ? fs : name === 'subprocess' ? subprocess : undefined }
+    const { searchRipgrep } = await import('../src/search/ripgrep.js')
+    const output = await searchRipgrep({ ctx, session: { header: { cwd: 'ws' } }, cwd: 'ws', query: 'bad', maxResults: 10, root: 'root' })
+    expect(output.complete).toBe(false)
+    expect(output.warning).toContain('部分路径无法访问')
+    expect(output.warning).toContain('os error 2')
+  })
+
+  it('does not turn hard process failure into an empty success', async () => {
+    const fs = fakeFs()
+    const subprocess = { spawn: vi.fn(() => ({ done: Promise.resolve({ exitCode: 3, signal: null }) })) }
     const ctx: any = { get: (name: string) => name === 'fs' ? fs : name === 'subprocess' ? subprocess : undefined }
     const { searchRipgrep } = await import('../src/search/ripgrep.js')
     await expect(searchRipgrep({ ctx, session: { header: { cwd: 'ws' } }, cwd: 'ws', query: 'bad', maxResults: 10, root: 'root' })).rejects.toThrow('退出码')

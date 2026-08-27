@@ -7,9 +7,9 @@ import type { ArchiveBatch, ArchiveData, DiffRecord, SidecarData } from './share
 import type { ReadState } from './shared/diff.js'
 import { fingerprint, isNoopHunk, locateHunks, preciseHunk } from './shared/diff.js'
 import { archiveEntryFor, groupByBatch, normalizeRecord } from './model.js'
+import { SIDECAR, SIDECAR_ARCHIVE } from './paths.js'
 
-export const SIDECAR = '.dsh-edit-review.json'
-export const SIDECAR_ARCHIVE = '.dsh-edit-review-archive.json'
+export { SIDECAR, SIDECAR_ARCHIVE }
 export const READ_CAP = 8 * 1024 * 1024
 
 /** DSH 上下文与会话类型较宽松：本地无 dsh 类型声明，显式 any + 文档约束。 */

@@ -4,12 +4,12 @@
  * 作者 ddj 2026-08-20
  */
 import { readFile, stat } from 'node:fs/promises'
-import { dirname, extname, join, normalize, resolve, sep } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { extname, join, normalize, resolve, sep } from 'node:path'
 import { ROUTE_PREFIX, noteOwnRoute, resetOwnRoutes, routeConflict } from './compat.js'
 import { RPC_PATH } from './shared/rpc.js'
 import type { RpcMethod, RpcRequestMap } from './shared/rpc.js'
 import type { Ctx } from './store.js'
+import { VENDOR_PREFIX, imageDirOf, vendorDirOf } from './paths.js'
 
 const IMG_ROUTES = [
   { url: '/edrv/assets/compare-idle.png', file: 'compare_idle.png' },
@@ -17,7 +17,6 @@ const IMG_ROUTES = [
 ]
 
 /** Monaco AMD 构建静态资源（随包发布，离线可用；前缀路由 /edrv/vendor/*）。 */
-const VENDOR_PREFIX = '/edrv/vendor'
 const VENDOR_MIME: Record<string, string> = {
   '.js': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
@@ -35,15 +34,11 @@ const VENDOR_MIME: Record<string, string> = {
   '.md': 'text/markdown',
 }
 
-/** 图标目录：默认插件包内 assets/（随包发布）；config.imageDir 可覆盖（用于自定义换图）。 */
-function imageDirOf(config: unknown): string {
-  const cfg = config as { imageDir?: unknown } | undefined
-  if (cfg && typeof cfg.imageDir === 'string' && cfg.imageDir) return cfg.imageDir.replace(/\\/g, '/')
-  return join(dirname(fileURLToPath(import.meta.url)), '..', 'assets')
-}
+/** 图标目录（paths.ts 统一解析：config.imageDir 覆盖优先，否则插件包 assets/）。 */
+const imgDirOf = (config: unknown): string => imageDirOf(config, import.meta.url)
 
-/** Monaco AMD 静态目录（随包发布）。 */
-const vendorDir = join(dirname(fileURLToPath(import.meta.url)), '..', 'assets', 'vendor')
+/** Monaco AMD 静态目录（随包发布，paths.ts 统一解析）。 */
+const vendorDir = vendorDirOf(import.meta.url)
 
 /**
  * 注册全部 webServer 路由（带兼容护栏：前缀冲突预警 + 注册失败降级跳过）。
@@ -59,7 +54,7 @@ export function registerRoutes(
   handleRpc: <M extends RpcMethod>(method: M, args: RpcRequestMap[M]) => Promise<unknown>,
   onWarning?: (warning: string) => void,
 ): void {
-  const imgDir = imageDirOf(config)
+  const imgDir = imgDirOf(config)
   const web = ctx.get('webServer')
   if (!web) return
 

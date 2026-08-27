@@ -22,6 +22,7 @@ import { revealInExplorer as revealPathInExplorer } from '../fileReveal.js'
 import { setSidePending, SIDEBAR_INSTALL_CMD } from '../sidebarBridge.js'
 import { upsertViewState, viewStatesLoad, viewStatesSave } from '../state/viewStateCache.js'
 import { bindingOf, chordOf, matchEvent, useKeybindingsVersion } from '../keybindings.js'
+import { CACHE_KEY } from '../paths.js'
 
 /**
  * 中央编辑区：文件页签（脏点/关闭/打开路径）+ Ctrl+P 搜索 + Monaco 编辑器 +
@@ -64,7 +65,7 @@ export function EditorView(props) {
   const [focusRequest, setFocusRequest] = React.useState(0) // 外部差异聚焦请求版本
   const kbVersion = useKeybindingsVersion() // 快捷键配置版本（tooltip 文案随键位刷新）
   const [hintDismissed, setHintDismissed] = React.useState(() => {
-    try { return localStorage.getItem('edrv.side-hint-dismissed') === '1' } catch { return false }
+    try { return localStorage.getItem(CACHE_KEY.sideHint) === '1' } catch { return false }
   }) // 侧边栏引导条是否已关闭
   const editorRef = React.useRef(null)
   const viewRootRef = React.useRef(null)
@@ -356,7 +357,7 @@ export function EditorView(props) {
     bootRef.current = true
     viewStatesRef.current = viewStatesLoad(sessionId)
     try {
-      const raw = localStorage.getItem('edrv.editor.v2.' + String(sessionId))
+      const raw = localStorage.getItem(CACHE_KEY.editor + String(sessionId))
       if (raw) {
         const saved = JSON.parse(raw)
         if (Array.isArray(saved.tabs) && saved.tabs.length) {
@@ -369,12 +370,12 @@ export function EditorView(props) {
 
   React.useEffect(() => {
     if (!sessionId) return
-    try { localStorage.setItem('edrv.editor.v2.' + String(sessionId), JSON.stringify({ tabs: tabs.map((t) => t.path), active })) }
+    try { localStorage.setItem(CACHE_KEY.editor + String(sessionId), JSON.stringify({ tabs: tabs.map((t) => t.path), active })) }
     catch (e) { /* 忽略 */ }
   }, [tabs, active, sessionId])
 
   // 侧边栏状态：恢复（显隐/宽度/激活面板）；侧栏形态独立键（默认收起，不共享页签形态偏好）
-  const sidebarKey = 'edrv.sidebar.' + (layout === 'side' ? 'side.' : '') + String(sessionId)
+  const sidebarKey = CACHE_KEY.sidebar + (layout === 'side' ? 'side.' : '') + String(sessionId)
   React.useEffect(() => {
     if (!sessionId) return
     try {
@@ -1152,7 +1153,7 @@ export function EditorView(props) {
   // 侧边栏引导条（仅旧页签形态且未装 betterSidebar 时显示；可复制安装命令、可关闭）
   const dismissHint = () => {
     setHintDismissed(true)
-    try { localStorage.setItem('edrv.side-hint-dismissed', '1') } catch (e) { /* 忽略 */ }
+    try { localStorage.setItem(CACHE_KEY.sideHint, '1') } catch (e) { /* 忽略 */ }
   }
   const copyInstallCmd = () => {
     if (navigator.clipboard?.writeText) navigator.clipboard.writeText(SIDEBAR_INSTALL_CMD).catch(() => {})

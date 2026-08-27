@@ -69,7 +69,7 @@ export interface RpcRequestMap {
   'edrv.debug': { sessionId?: string; text: string }
   'edrv.searchFiles': { sessionId?: string; query: string }
   'edrv.searchContent': { sessionId?: string; query: string; matchCase?: boolean; wholeWord?: boolean; regex?: boolean; maxResults?: number; include?: string[]; exclude?: string[] }
-  'edrv.listDir': { sessionId?: string; path: string }
+  'edrv.listDir': { sessionId?: string; path: string; force?: boolean }
   'edrv.revealInExplorer': { sessionId?: string; path: string }
   'mcp.list': {}
   'mcp.save': { config: MpcConfig }
@@ -104,7 +104,7 @@ export interface RpcOkMap {
   'edrv.rollback': { path: string; batch: number | null }
   'edrv.debug': object
   'edrv.searchFiles': { files: string[]; truncated: boolean }
-  'edrv.searchContent': { matches: SearchContentMatch[]; truncated: boolean }
+  'edrv.searchContent': { matches: SearchContentMatch[]; truncated: boolean; warning?: string }
   'edrv.listDir': { root: string; path: string; entries: TreeEntry[] }
   'edrv.revealInExplorer': { revealed: string }
   'mcp.list': { servers: MpcServer[] }

@@ -22,6 +22,8 @@ export interface WorkspaceSearchResult {
   truncated: boolean
   complete: boolean
   source: SearchSource
+  /** rg 遍历错误（退出码 2）时的部分结果提示；无则缺省。 */
+  warning?: string
 }
 
 export interface WorkspaceSearchProvider {
@@ -73,12 +75,13 @@ export interface ContentSearchInput {
   root?: string
 }
 
-/** 内容搜索输出：扁平命中列表 + 截断标志。 */
+/** 内容搜索输出：扁平命中列表 + 截断标志（warning = rg 遍历错误时的部分结果提示）。 */
 export interface ContentSearchResult {
   matches: ContentMatch[]
   truncated: boolean
   complete: boolean
   source: SearchSource
+  warning?: string
 }
 
 /** 内容搜索 provider（rg JSON 主路径；无 fallback，失败抛错由调用方处理）。 */

@@ -113,6 +113,53 @@ export function parseOutput(handle: SearchHandle, maxResults: number): { files: 
 }
 
 /**
+ * 读取已收集的 stderr（无收集器 → 空文本）。
+ * @author ddj 2026年08月27号
+ * @param handle subprocess handle
+ * @returns stderr 文本
+ */
+export function readStderr(handle: SearchHandle): { text: string } {
+  const reader = handle.collected?.stderr
+  return reader ? reader.readFrom(0) : { text: '' }
+}
+
+/**
+ * 取 stderr 首条非空行（去 \r，截断 300 字符防撑爆 UI）。
+ * @author ddj 2026年08月27号
+ * @param text stderr 全文
+ * @returns 首条诊断行（无则空串）
+ */
+export function firstStderrLine(text: string): string {
+  for (const raw of String(text ?? '').split(/\r?\n/)) {
+    const line = raw.trim()
+    if (!line) continue
+    return line.length > 300 ? line.slice(0, 300) + '…' : line
+  }
+  return ''
+}
+
+/**
+ * 分类 rg 非 0/1 退出：pattern=模式错误（正则/glob 无效，无结果），
+ * partial=遍历错误（rg 已输出的命中仍有效，结果不完整），hard=硬失败（其他退出码/超时被杀）。
+ * @author ddj 2026年08月27号
+ * @param code 退出码（null/undefined = 被终止，通常为 20s 超时）
+ * @param stderrText stderr 全文
+ * @returns 分类与中文提示文案（partial 的 message 即 warning 内容）
+ */
+export function rgExitFailure(code: number | null | undefined, stderrText: string): { kind: 'pattern' | 'partial' | 'hard'; message: string } {
+  const detail = firstStderrLine(stderrText)
+  if (/regex parse error/i.test(detail)) return { kind: 'pattern', message: '正则表达式无效：' + detail }
+  if (/error parsing glob/i.test(detail)) return { kind: 'pattern', message: '文件过滤模式无效：' + detail }
+  if (code === 2) {
+    const count = String(stderrText ?? '').split(/\r?\n/).filter((line) => line.trim()).length
+    const suffix = count > 1 ? '（共 ' + count + ' 处）' : ''
+    return { kind: 'partial', message: (detail ? '部分路径无法访问，结果可能不完整：' + detail + suffix : '部分路径无法访问，结果可能不完整') }
+  }
+  if (code === null || code === undefined) return { kind: 'hard', message: '搜索超时（20 秒内未完成，已终止）' }
+  return { kind: 'hard', message: 'ripgrep 退出码：' + String(code) + (detail ? '（' + detail + '）' : '') }
+}
+
+/**
  * 使用打包 ripgrep 搜索工作区文件。
  * @author ddj 2026年08月24号
  * @param input provider 输入
@@ -143,7 +190,13 @@ export async function searchRipgrep(input: WorkspaceSearchInput): Promise<Worksp
     throw new Error('ripgrep 启动失败：' + String(error))
   }
   const code = outcome.exitCode ?? outcome.code
-  if (code !== 0 && code !== 1) throw new Error('ripgrep 退出码：' + String(code))
+  if (code !== 0 && code !== 1) {
+    const failure = rgExitFailure(code, readStderr(handle).text)
+    if (failure.kind !== 'partial') throw new Error(failure.message)
+    // 遍历错误：已收集的文件列表仍有效，保留并标记不完整（warning 供上层展示，编排层丢弃不抛错）
+    const parsed = parseOutput(handle, input.maxResults)
+    return { ...parsed, warning: failure.message, complete: false, source: 'ripgrep' }
+  }
   const parsed = parseOutput(handle, input.maxResults)
   if (!handle.collected?.stdout) throw new Error('ripgrep stdout 不可用')
   return { ...parsed, source: 'ripgrep' }

@@ -10,6 +10,7 @@
 import React from 'react'
 import { rpc } from '../../rpc.js'
 import type { SidebarCtx } from '../types.js'
+import { CACHE_KEY } from '../../paths.js'
 
 const DEBOUNCE_MS = 250
 const INCLUDE_PLACEHOLDER = '例如 *.ts, src/**/include'
@@ -56,6 +57,7 @@ export function SearchPanel(props) {
   const [sectionOpen, setSectionOpen] = React.useState(false)
   const [status, setStatus] = React.useState('idle') // idle | searching | done | error
   const [error, setError] = React.useState('')
+  const [warning, setWarning] = React.useState('') // rg 遍历错误时的部分结果提示（结果照常展示）
   const [matches, setMatches] = React.useState(null)
   const [truncated, setTruncated] = React.useState(false)
   const [collapsed, setCollapsed] = React.useState({})
@@ -78,7 +80,7 @@ export function SearchPanel(props) {
   React.useEffect(() => {
     if (!sessionId) return
     try {
-      const saved = JSON.parse(localStorage.getItem('edrv.search.v1.' + String(sessionId)) || 'null')
+      const saved = JSON.parse(localStorage.getItem(CACHE_KEY.search + String(sessionId)) || 'null')
       if (saved && typeof saved === 'object') {
         if (typeof saved.query === 'string') setQuery(saved.query)
         if (typeof saved.matchCase === 'boolean') setMatchCase(saved.matchCase)
@@ -97,7 +99,7 @@ export function SearchPanel(props) {
   React.useEffect(() => {
     if (!sessionId) return
     try {
-      localStorage.setItem('edrv.search.v1.' + String(sessionId), JSON.stringify({
+      localStorage.setItem(CACHE_KEY.search + String(sessionId), JSON.stringify({
         query, matchCase, wholeWord, regex, includeText, excludeText, onlyActive, excludeOn, sectionOpen,
       }))
     } catch (e) { /* 忽略 */ }
@@ -114,6 +116,7 @@ export function SearchPanel(props) {
     const req = requestRef.current
     setStatus('searching')
     setError('')
+    setWarning('')
     rpc('edrv.searchContent', {
       sessionId, query: clean,
       matchCase: req.matchCase, wholeWord: req.wholeWord, regex: req.regex,
@@ -123,6 +126,7 @@ export function SearchPanel(props) {
       if (res && res.ok) {
         setMatches(Array.isArray(res.matches) ? res.matches : [])
         setTruncated(res.truncated === true)
+        setWarning(res?.warning ? String(res.warning) : '')
         setStatus('done')
       } else {
         setError(res?.error ? String(res.error) : '搜索失败')
@@ -249,6 +253,10 @@ export function SearchPanel(props) {
           : '无匹配结果')
     : null
 
+  const warnBanner = warning
+    ? React.createElement('div', { className: 'edrv-search-warn', title: warning }, warning)
+    : null
+
   const body = (() => {
     if (status === 'searching') return React.createElement('div', { className: 'edrv-search-empty' }, '搜索中…')
     if (status === 'error') return React.createElement('div', { className: 'edrv-search-error' }, error)
@@ -290,5 +298,6 @@ export function SearchPanel(props) {
     optsBar,
     filterRows,
     summary,
+    warnBanner,
     body)
 }

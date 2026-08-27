@@ -6,7 +6,7 @@
  */
 import type { Ctx, Session } from '../store.js'
 import { pathText } from './query.js'
-import { EXCLUDES, FILE_EXCLUDES, ripgrepPath, searchRoot } from './ripgrep.js'
+import { EXCLUDES, FILE_EXCLUDES, readStderr, rgExitFailure, ripgrepPath, searchRoot } from './ripgrep.js'
 import { SearchCache } from './orchestrator.js'
 import type { ContentMatch, ContentSearchInput, ContentSearchProvider, ContentSearchResult } from './types.js'
 
@@ -47,7 +47,7 @@ export interface ContentSearchRequest {
   exclude?: string[]
 }
 
-type ContentSearchResponse = { matches: ContentMatch[]; truncated: boolean }
+type ContentSearchResponse = { matches: ContentMatch[]; truncated: boolean; warning?: string }
 
 /**
  * 把行内字节偏移转成 UTF-16 列（1-based；越界钳到行尾）。
@@ -181,7 +181,7 @@ export function contentArgv(binary: string, root: string, input: ContentSearchIn
  * @returns 有界内容搜索结果
  */
 export async function searchRipgrepContent(input: ContentSearchInput): Promise<ContentSearchResult> {
-  const sub = input.ctx.get('subprocess') as { spawn(spec: unknown): { done: Promise<{ exitCode: number | null; code?: number | null }>; collected?: { stdout?: { readFrom(offset: number): { text: string; lossy?: boolean } } } } } | undefined
+  const sub = input.ctx.get('subprocess') as { spawn(spec: unknown): { done: Promise<{ exitCode: number | null; code?: number | null }>; collected?: { stdout?: { readFrom(offset: number): { text: string; lossy?: boolean } }; stderr?: { readFrom(offset: number): { text: string } } } } } | undefined
   if (!sub) throw new Error('缺少 subprocess')
   const binary = ripgrepPath()
   if (!binary) throw new Error('ripgrep 不可用')
@@ -200,7 +200,8 @@ export async function searchRipgrepContent(input: ContentSearchInput): Promise<C
     throw new Error('ripgrep 启动失败：' + String(error))
   }
   const code = outcome.exitCode ?? outcome.code
-  if (code !== 0 && code !== 1) throw new Error('ripgrep 退出码：' + String(code))
+  const failure = code !== 0 && code !== 1 ? rgExitFailure(code, readStderr(handle).text) : null
+  if (failure && failure.kind !== 'partial') throw new Error(failure.message)
   const reader = handle.collected?.stdout
   if (!reader) throw new Error('ripgrep stdout 不可用')
   const output = reader.readFrom(0)
@@ -208,7 +209,13 @@ export async function searchRipgrepContent(input: ContentSearchInput): Promise<C
   const maxMatches = Math.max(1, Math.min(input.maxResults ?? DEFAULT_MAX_MATCHES, DEFAULT_MAX_MATCHES))
   const capped = applyCaps(all, maxMatches, DEFAULT_MAX_FILES)
   const truncated = Boolean(output.lossy) || capped.truncated
-  return { ...capped, complete: !truncated, source: 'ripgrep' }
+  const result: ContentSearchResult = { ...capped, complete: !truncated, source: 'ripgrep' }
+  // 遍历错误（退出码 2）：rg 已输出的命中仍有效，保留结果、标记不完整并附部分结果提示
+  if (failure) {
+    result.complete = false
+    result.warning = failure.message
+  }
+  return result
 }
 
 /**
@@ -251,7 +258,7 @@ export class ContentSearcher {
     const excludeKey = (request.exclude ?? []).join(',')
     const key = [rootKey, query, request.matchCase ? 'mc' : '', request.wholeWord ? 'ww' : '', request.regex ? 'rx' : '', includeKey, excludeKey, PROVIDER_VERSION].join('|')
     const cached = this.cache.get(key)
-    if (cached) return { matches: cached.matches, truncated: cached.truncated }
+    if (cached) return { matches: cached.matches, truncated: cached.truncated, warning: cached.warning }
     this.inflight.get(root)?.abort()
     const controller = new AbortController()
     this.inflight.set(root, controller)
@@ -272,7 +279,7 @@ export class ContentSearcher {
       })
       if (controller.signal.aborted) return { matches: [], truncated: false }
       this.cache.set(key, result)
-      return { matches: result.matches, truncated: result.truncated }
+      return { matches: result.matches, truncated: result.truncated, warning: result.warning }
     } catch (error) {
       if (controller.signal.aborted) return { matches: [], truncated: false }
       throw error

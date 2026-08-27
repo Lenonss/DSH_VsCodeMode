@@ -15,6 +15,8 @@ import { installIsolation } from './mcpIsolation.js'
 import { dropFileIndex } from './workspace.js'
 import { cwdOf } from './registry.js'
 import { setupOpenSettings } from './fileOpenSettings.js'
+import { disposeIndex } from './treeIndex.js'
+import { sweepTreeCache } from './paths.js'
 import { PLUGIN_NAME, buildReport } from './compat.js'
 import type { Registry } from './registry.js'
 import type { Ctx } from './store.js'
@@ -47,11 +49,14 @@ export function apply(ctx: Ctx, config?: unknown): void {
       dropFileIndex(cwd)
       searcher.dispose(cwd)
       contentSearcher.dispose(cwd)
+      disposeIndex(cwd)
     }
   })
 
   registerRoutes(ctx, config, (method, args) => handleRpc(ctx, registry, method, args, searcher, contentSearcher), (warning) => warnings.push(warning))
   installIsolation(ctx)
+  // 启动清理缓存目录：非当前 schema / 超保留期 / 未知残留（best-effort，不阻塞装配）
+  void sweepTreeCache()
   void logCompatSummary(ctx, warnings)
 
   ctx.logger?.info?.('[' + name + '] 编辑差异审查已装配（/edrv/rpc 路由就绪，项目 MCP 隔离已启用）')

@@ -4,6 +4,7 @@
  */
 import { describe, expect, it, vi } from 'vitest'
 import { applyCaps, byteToUtf16Col, contentArgv, ContentSearcher, displayPathOf, parseRgJsonLines } from '../src/search/content.js'
+import { firstStderrLine, rgExitFailure } from '../src/search/ripgrep.js'
 import { buildHandlers } from '../src/rpc.js'
 import { splitGlobs } from '../src/client/sidebar/panels/SearchPanel.js'
 import type { ContentSearchResult } from '../src/search/types.js'
@@ -133,6 +134,38 @@ describe('caps and argv', () => {
   })
 })
 
+describe('rg exit code classification', () => {
+  it('extracts the first non-blank stderr line (capped)', () => {
+    expect(firstStderrLine('  \r\nrg: a\r\nrg: b\n')).toBe('rg: a')
+    expect(firstStderrLine('')).toBe('')
+    expect(firstStderrLine('x'.repeat(400)).length).toBeLessThanOrEqual(301)
+  })
+
+  it('classifies invalid regex and glob as pattern errors with friendly text', () => {
+    const regex = rgExitFailure(2, 'rg: regex parse error:\n    (?:()\n    ^\nerror: unclosed group')
+    expect(regex.kind).toBe('pattern')
+    expect(regex.message).toContain('正则表达式无效')
+    const glob = rgExitFailure(2, "rg: error parsing glob 'src/**/[bad': unclosed character class; missing ']'")
+    expect(glob.kind).toBe('pattern')
+    expect(glob.message).toContain('文件过滤模式无效')
+  })
+
+  it('classifies traversal errors (exit 2 + os error) as partial with warning text', () => {
+    const partial = rgExitFailure(2, 'rg: C:\\ws\\broken: 系统找不到指定的文件。 (os error 2)')
+    expect(partial.kind).toBe('partial')
+    expect(partial.message).toContain('部分路径无法访问')
+    const multi = rgExitFailure(2, 'rg: a (os error 2)\nrg: b (os error 2)')
+    expect(multi.message).toContain('共 2 处')
+  })
+
+  it('classifies other exits and null (timeout kill) as hard', () => {
+    expect(rgExitFailure(3, '')).toEqual({ kind: 'hard', message: 'ripgrep 退出码：3' })
+    expect(rgExitFailure(3, 'rg: boom')).toEqual({ kind: 'hard', message: 'ripgrep 退出码：3（rg: boom）' })
+    expect(rgExitFailure(null, '')).toEqual({ kind: 'hard', message: expect.stringContaining('超时') })
+    expect(rgExitFailure(undefined, '')).toEqual({ kind: 'hard', message: expect.stringContaining('超时') })
+  })
+})
+
 describe('ContentSearcher', () => {
   const fs = fakeFs()
   const ctx = context(fs)
@@ -181,6 +214,18 @@ describe('ContentSearcher', () => {
     expect(provider).toHaveBeenCalledTimes(2)
     expect(provider.mock.calls[1][0].include).toEqual(['*.ts'])
   })
+
+  it('passes through the partial-result warning, fresh and cached', async () => {
+    const provider = vi.fn(async () => ({ matches: [{ path: 'a.lua', line: 1, startColumn: 1, endColumn: 4, text: 'x' }], truncated: false, complete: false, source: 'ripgrep', warning: '部分路径无法访问，结果可能不完整：rg: broken (os error 2)' }))
+    const searcher = new ContentSearcher(ctx, { search: provider })
+    const request = { session: { header: { cwd: 'ws' } }, cwd: 'ws', query: 'foo' }
+    const first = await searcher.search(request)
+    expect(first.matches).toHaveLength(1)
+    expect(first.warning).toContain('部分路径无法访问')
+    const second = await searcher.search(request) // 命中缓存
+    expect(second.warning).toBe(first.warning)
+    expect(provider).toHaveBeenCalledTimes(1)
+  })
 })
 
 describe('edrv.searchContent RPC handler', () => {
@@ -203,5 +248,12 @@ describe('edrv.searchContent RPC handler', () => {
     const out = await handlers['edrv.searchContent']({ sessionId: 's1', query: 'foo' })
     expect(out.ok).toBe(false)
     expect((out as { error: string }).error).toContain('ripgrep 不可用')
+  })
+
+  it('passes the partial-result warning through the ok payload', async () => {
+    const search = vi.fn(async () => ({ matches: [{ path: 'a.lua', line: 1, startColumn: 1, endColumn: 4, text: 'x' }], truncated: false, warning: '部分路径无法访问，结果可能不完整：rg: broken (os error 2)' }))
+    const handlers = buildHandlers(rpcCtx(), new Map(), undefined, { search })
+    const out = await handlers['edrv.searchContent']({ sessionId: 's1', query: 'foo' })
+    expect(out).toEqual({ ok: true, matches: [{ path: 'a.lua', line: 1, startColumn: 1, endColumn: 4, text: 'x' }], truncated: false, warning: expect.stringContaining('部分路径无法访问') })
   })
 })

@@ -10,6 +10,7 @@ import { loadBucket, saveBucket } from './store.js'
 import { fileMaxBatch, prune } from './model.js'
 import type { Registry } from './registry.js'
 import { cwdOf } from './registry.js'
+import { invalidateIndex } from './treeIndex.js'
 
 /** 校验并提取工具 result meta 中的文件 hunk。 */
 function validHunks(raw: unknown): Hunk[] {
@@ -97,6 +98,8 @@ export async function captureToolResult(ctx: Ctx, registry: Registry, exec: any,
     // 旧实现按文件 batch 自动归档 prior，会导致界面看起来每个文件只剩一条差异。
     prune(bucket)
     await saveBucket(ctx, cwd, bucket, session)
+    // agent 写盘后目录树可能变化（新建/删除文件/目录）：父目录+祖先进失效，后台自愈。
+    invalidateIndex(ctx, cwd, path)
   } catch (error) {
     console.error('edrv capture failed', error)
   }

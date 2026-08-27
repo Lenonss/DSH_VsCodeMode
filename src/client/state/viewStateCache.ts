@@ -2,11 +2,13 @@
  * dsh-vscode-mode client — 编辑器视图状态持久化（纯函数，可单测）。
  * 对齐 VSCode workbench.editor.restoreViewState：恢复每个文件的光标/滚动/折叠位置。
  * 视图状态 = Monaco editor.saveViewState() 返回值（JSON 可序列化），按 path 存储。
+ * 键前缀统一走 paths.ts PathConst（CACHE_KEY.viewstate）。
  * 作者 ddj 2026-08-28
  */
+import { CACHE_KEY } from '../paths.js'
 
 /** localStorage 键前缀（按会话隔离）。 */
-const KEY_PREFIX = 'edrv.cache.viewstate.v1.'
+const KEY_PREFIX = CACHE_KEY.viewstate
 
 /** 视图状态条目容量上限。 */
 export const VIEWSTATE_CAP = 50

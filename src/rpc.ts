@@ -18,6 +18,8 @@ import {
   resolveTarget,
   saveBucket,
 } from './store.js'
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import { archiveEntryFor, markDecision, recordResolved, reconstructOriginal } from './model.js'
 import type { Registry } from './registry.js'
 import { bucketOf, cwdOf, sessionOf } from './registry.js'
@@ -31,8 +33,10 @@ import { listProjects, projectRefresh, projectRemove, projectSave, projectToggle
 import { normalizeFileOpenTool, FILE_OPEN_DEFAULT, FILE_OPEN_SETTINGS_NS } from './fileOpenSettings.js'
 import { buildReport } from './compat.js'
 import { readDevForm, setDevForm } from './devForm.js'
-import { normalizeRel, toTreeEntries } from './tree.js'
+import { normalizeRel } from './tree.js'
+import { invalidateIndex, listDirCached } from './treeIndex.js'
 import { revealInExplorer } from './reveal.js'
+import { DEBUG_LOG, debugLogFile, pluginLogRoot } from './paths.js'
 
 /** cwd → 内存缓冲：行数组 + 累计字节数 + 待触发 flush 定时器（攒批落盘，避免每条日志全文件读改写）。 */
 const debugBuffers = new Map<string, { lines: string[]; len: number; timer: ReturnType<typeof setTimeout> | null }>()
@@ -52,13 +56,12 @@ const STALE_CHECK_MIN_MS = 10_000
 /**
  * 调试日志入队：先攒内存缓冲（行 + 字节数），满 DEBUG_BUF_CAP 立即落盘，
  * 否则空闲 DEBUG_FLUSH_IDLE_MS 后落盘；落盘 = 读旧文件 + 追加整批 + 超限截断 + 一次写入。
- * @author ddj 2026年08月26号
+ * @author ddj 2026年08月26号 / 2026年09月01号
  * @param ctx DSH 上下文
- * @param cwd 工作区（日志文件按工作区旁车存放）
- * @param policy 会话沙箱策略（入队时刻捕获）
+ * @param cwd 工作区（日志按 cwd hash 存 ~/.dsh/dsh-vscode-mode/logs/）
  * @param line 单条日志文本（不含换行）
  */
-function enqueueDebug(ctx: Ctx, cwd: string, policy: unknown, line: string): void {
+function enqueueDebug(ctx: Ctx, cwd: string, line: string): void {
   const st = debugBuffers.get(cwd) ?? { lines: [], len: 0, timer: null }
   st.lines.push(line)
   st.len += line.length
@@ -67,7 +70,7 @@ function enqueueDebug(ctx: Ctx, cwd: string, policy: unknown, line: string): voi
     const batch = st.lines
     st.lines = []
     st.len = 0
-    void flushDebug(ctx, cwd, policy, batch)
+    void flushDebug(cwd, batch)
   }
   if (st.len >= DEBUG_BUF_CAP) {
     if (st.timer) clearTimeout(st.timer)
@@ -78,26 +81,31 @@ function enqueueDebug(ctx: Ctx, cwd: string, policy: unknown, line: string): voi
   debugBuffers.set(cwd, st)
 }
 
+/** cwd → 已清理旧工作区 debug 日志标记（一次性）。 */
+const debugLegacyCleaned = new Set<string>()
+
 /**
  * 批量落盘一条 debug 日志缓冲：读旧文件 → 追加 → 超上限截断保留尾部 → 一次写回。
  * 串行链保证同一 cwd 的读改写不交错丢行；写失败静默忽略（调试日志不阻塞业务）。
- * @author ddj 2026年08月26号
- * @param ctx DSH 上下文
- * @param cwd 工作区
- * @param policy 会话沙箱策略（enqueue 时刻捕获）
+ * @author ddj 2026年08月26号 / 2026年09月01号
+ * @param cwd 工作区（日志落 ~/.dsh/dsh-vscode-mode/logs/debug.<cwdHash>.log）
  * @param batch 本批日志行
  */
-function flushDebug(ctx: Ctx, cwd: string, policy: unknown, batch: string[]): Promise<void> {
+function flushDebug(cwd: string, batch: string[]): Promise<void> {
   const prev = debugWriteQueues.get(cwd) ?? Promise.resolve()
   const task = prev.then(async () => {
     try {
-      const fs = ctx.get('fs')
-      if (!fs) return
-      const target = await fs.resolve('.dsh-edit-review-debug.log', { cwd })
-      const old = await fs.readText(target).catch(() => '')
+      await mkdir(pluginLogRoot(), { recursive: true })
+      const target = debugLogFile(cwd)
+      const old = await readFile(target, 'utf8').catch(() => '')
       const appended = old + batch.map((l) => new Date().toISOString() + ' ' + l + '\n').join('')
       const next = appended.length > DEBUG_LOG_CAP ? appended.slice(-Math.floor(DEBUG_LOG_CAP / 2)) : appended
-      await fs.writeText(target, next, void 0, void 0, policy)
+      await writeFile(target, next, 'utf8')
+      // 迁移后一次性清理旧工作区 debug 日志（best-effort）
+      if (!debugLegacyCleaned.has(cwd)) {
+        debugLegacyCleaned.add(cwd)
+        await rm(join(cwd, DEBUG_LOG), { force: true }).catch(() => {})
+      }
     } catch (e) { /* 写日志失败忽略 */ }
   })
   debugWriteQueues.set(cwd, task)
@@ -285,6 +293,8 @@ export function buildHandlers(ctx: Ctx, registry: Registry, searcher = newSearch
       try {
         const target = await resolveTarget(ctx, sc.session, args.path)
         await fs.writeText(target, args.content, void 0, void 0, policyOf(ctx, sc.session))
+        // 手动保存后目录树可能变化（新建/删除文件）：父目录+祖先进失效，后台自愈。
+        invalidateIndex(ctx, sc.cwd, args.path)
         const bucket = await bucketOf(registry, ctx, sc.cwd)
         let changed = false
         for (const rec of bucket.values()) {
@@ -372,7 +382,7 @@ export function buildHandlers(ctx: Ctx, registry: Registry, searcher = newSearch
       const sc = await requireSession(ctx, args.sessionId)
       if ('err' in sc) return { ok: false, error: sc.err }
       const text = String(args.text ?? '')
-      enqueueDebug(ctx, sc.cwd, policyOf(ctx, sc.session), text)
+      enqueueDebug(ctx, sc.cwd, text)
       console.error('[edrv-debug] ' + text)
       return { ok: true }
     },
@@ -407,24 +417,15 @@ export function buildHandlers(ctx: Ctx, registry: Registry, searcher = newSearch
       }
     },
     'edrv.listDir': async (args) => {
-      // 目录树（侧边栏文件管理用）：按会话 cwd 解析，与 edrv.read 同基准，树内相对路径点开即打开。
+      // 目录树（侧边栏文件管理用）：树索引命中直出（内存，0 IO）；失效/force 时
+      // 走快路径（resolve + listDirCheap + putIndex）；同路径在途请求去重复用。
       const sc = await requireSession(ctx, args.sessionId)
       if ('err' in sc) return { ok: false, error: sc.err }
-      const fs = ctx.get('fs')
-      if (!fs) return { ok: false, error: '缺少 fs' }
-      try {
-        const rel = normalizeRel(args.path)
-        if (rel === null) return { ok: false, error: '路径不合法' }
-        const target = await resolveTarget(ctx, sc.session, rel || '.')
-        const info = await fs.stat(target)
-        if (!info) return { ok: false, error: '目录不存在' }
-        if (info.type !== 'directory') return { ok: false, error: '不是目录' }
-        const children = await fs.listDir(target)
-        const root = fs.processPath(await fs.resolve('.', { cwd: sc.cwd }))
-        return { ok: true, root, path: rel, entries: toTreeEntries(rel, children) }
-      } catch (error) {
-        return { ok: false, error: '读取目录失败：' + String(error) }
-      }
+      const rel = normalizeRel(args.path)
+      if (rel === null) return { ok: false, error: '路径不合法' }
+      const res = await listDirCached(ctx, sc.cwd, rel, args.force === true)
+      if ('error' in res) return { ok: false, error: res.error }
+      return { ok: true, root: res.root, path: rel, entries: res.entries }
     },
     'edrv.revealInExplorer': async (args) => {
       // 在 OS 文件浏览器中打开/定位路径（树行/编辑器右键菜单用），相对工作区解析。

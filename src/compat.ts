@@ -14,6 +14,9 @@ import { loadSettingsDeps } from './fileOpenSettings.js'
 import { readDevForm } from './devForm.js'
 import type { CompatAdapter, CompatReport } from './shared/compat.js'
 import type { Ctx } from './store.js'
+import { ROUTE_PREFIX } from './paths.js'
+
+export { ROUTE_PREFIX }
 
 export const PLUGIN_NAME = 'dsh-vscode-mode'
 export const MCP_PACKAGE = '@deepseek-ai/dsh-mcp-client'
@@ -21,8 +24,6 @@ export const MCP_PACKAGE = '@deepseek-ai/dsh-mcp-client'
 export const PROJECT_ENTRY_PREFIX = 'vsm-mcp.'
 /** 旧版项目 MCP 条目前缀（升级残留识别，不显示为全局 MCP）。 */
 export const LEGACY_PROJECT_PREFIX = 'vsm-mcp:'
-/** webServer 路由前缀（RPC 精确路由 + 静态资源前缀共用）。 */
-export const ROUTE_PREFIX = '/edrv'
 
 /** 判断新旧格式项目 MCP 条目 id（旧残留不被视为全局 MCP）。 */
 export function isProjectEntryId(id: string): boolean {

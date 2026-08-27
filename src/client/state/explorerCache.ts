@@ -1,11 +1,13 @@
 /**
  * dsh-vscode-mode client — 资源管理栏展开状态持久化（纯函数，可单测）。
  * 对齐 VSCode：只持久化展开路径集合，不缓存目录条目数据（条目实时 listDir）。
+ * 键前缀统一走 paths.ts PathConst（CACHE_KEY.expanded）。
  * 作者 ddj 2026-08-28
  */
+import { CACHE_KEY } from '../paths.js'
 
 /** localStorage 键前缀（按会话隔离）。 */
-const KEY_PREFIX = 'edrv.cache.explorer.v1.'
+const KEY_PREFIX = CACHE_KEY.expanded
 
 /** 展开路径容量上限：超出丢弃最旧（按写入顺序近似 LRU）。 */
 export const EXPANDED_CAP = 500
