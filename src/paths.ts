@@ -52,6 +52,68 @@ export function hashOf(text: string): string {
   return createHash('sha1').update(String(text)).digest('hex').slice(0, 16)
 }
 
+// --region DSH 会话定位编码
+/**
+ * 可读安全路径段编码：非安全码位 → ~XXXX 大写十六进制（`~` 本身也转义）。
+ * 与 DSH 引擎 dsh-session-persistence-jsonl 的 encodeSegment 逐字节一致，
+ * 用于从 cwd/id 反推 `~/.dsh/sessions` 下的会话目录，纯函数可单测。
+ * @author ddj 2026年09月02号
+ * @param raw 原始路径段（非空）
+ * @returns 路径安全段（`.`/`..` 特判为 ~002E / ~002E~002E）
+ */
+export function encodeSegment(raw: string): string {
+  if (raw.length === 0) throw new Error('cannot encode an empty path segment')
+  if (raw === '.') return '~002E'
+  if (raw === '..') return '~002E~002E'
+  let out = ''
+  for (let i = 0; i < raw.length; i++) {
+    const code = raw.charCodeAt(i)
+    const ch = String.fromCharCode(code)
+    if (ch !== '~' && /^[A-Za-z0-9._-]$/.test(ch)) out += ch
+    else out += '~' + code.toString(16).toUpperCase().padStart(4, '0')
+  }
+  return out
+}
+
+/**
+ * DSH 工作区目录键：cwd → `--<可读键>--`。分隔符（/ \ :）折叠为单个 `-`，
+ * 其余非安全码位转 ~XXXX，`--` 包裹、251 截断。与引擎 projectKey 一致。
+ * @author ddj 2026年09月02号
+ * @param cwd 会话工作区绝对路径（非空）
+ * @returns `~/.dsh/sessions` 下的工作区目录名
+ */
+export function sessionWorkspaceKey(cwd: string): string {
+  if (cwd.length === 0) throw new Error('cannot encode an empty project path')
+  let readable = ''
+  let separatorRun = false
+  for (let i = 0; i < cwd.length; i++) {
+    const code = cwd.charCodeAt(i)
+    const ch = String.fromCharCode(code)
+    if (ch === '/' || ch === '\\' || ch === ':') {
+      if (!separatorRun) readable += '-'
+      separatorRun = true
+    } else if (ch !== '~' && /^[A-Za-z0-9._-]$/.test(ch)) {
+      readable += ch
+      separatorRun = false
+    } else {
+      readable += '~' + code.toString(16).toUpperCase().padStart(4, '0')
+      separatorRun = false
+    }
+  }
+  return `--${(readable.replace(/^-+/, '') || 'root').slice(0, 251)}--`
+}
+
+/** DSH 会话目录段：id → 路径安全段（与引擎 encodeSegment 一致）。 */
+export function sessionIdSegment(id: string): string {
+  return encodeSegment(id)
+}
+
+/** DSH 会话根目录（~/.dsh/sessions；引擎 dsh-base 默认 root）。 */
+export function sessionsRoot(home = dshHome()): string {
+  return join(home, 'sessions')
+}
+// --endregion
+
 /**
  * 解析 DSH home：DSH_HOME（去空白）→ ~/.dsh。
  * @author ddj 2026年09月01号

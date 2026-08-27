@@ -17,6 +17,7 @@ import React from 'react'
 import './styles/editor.css'
 import { EditorView } from './ui/EditorView.js'
 import { DiffBadge } from './ui/DiffBadge.js'
+import { PerfSizeBadge } from './ui/PerfSizeBadge.js'
 import { ConversationDiffDock } from './ui/ConversationDiffDock.js'
 import { McpSettings } from './ui/McpSettings.js'
 import { rpc } from './rpc.js'
@@ -229,6 +230,10 @@ export function apply(ctx: any): void {
   // header 差异角标：仅当前工作区存在差异时渲染
   registerSlotSafely(ctx, { name: 'conversation.session.header.utilities', id: 'edrv-diff-badge', order: 90, label: '差异' },
     (props: unknown) => React.createElement(DiffBadge, Object.assign({}, props)))
+
+  // header 会话体积指示器：当前会话持久化体积，超阈值提示新开会话（性能优化）
+  registerSlotSafely(ctx, { name: 'conversation.session.header.utilities', id: 'edrv-perf-size', order: 89, label: '会话体积' },
+    (props: unknown) => React.createElement(PerfSizeBadge, Object.assign({}, props, { sessions })))
 
   // 设置页中的 VSCodeMode 专属页签，MCP 管理作为该页签的内部子 Tab。
   registerSlotSafely(ctx, {

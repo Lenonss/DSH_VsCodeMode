@@ -22,6 +22,13 @@
 - **MCP 可视化管理**（设置 → VSCodeMode）：子 Tab「我的 MCP」（profile 全局）+「项目 MCP」（各项目根 `.mcp.json`）。
   项目级 MCP 对齐 Claude Code/Cursor：配置存于项目根目录 `.mcp.json`（`mcpServers`），随仓库共享；
   可查看各项目连接状态/工具、添加（stdio / streamable-http）、刷新、启用/禁用、删除。工具全局生效。
+- **会话性能管理**（设置 → VSCodeMode →「性能优化」）：DSH 启动会回放 `~/.dsh/sessions` 全部会话
+  （V8 展开约 10×，会话越多越吃内存，可能 OOM）。该子页提供
+  ① 全工作区会话盘点（体积/活跃度/新旧）；② 巨型/旧会话**移出到归档**（`~/.dsh/sessions-archive`，可逆、
+  免重启即从下次启动的回放中剔除）与恢复/清除；③ **DSH 内置压缩调优**：一键把更低的
+  `compaction-basic`/`tool-result-pruner` 阈值写入 profile `cordis.patch.yml`（带备份与撤销，重启生效）；
+  ④ 侧车摘要接口指引。对话 header 另有**会话体积指示器**（`edrv-perf-size`，≥1MB 显示、超 2MB 琥珀、超 8MB 红），
+  引导"一次任务一个短会话"。
 
 ## 界面截图
 
@@ -163,6 +170,29 @@ curl -s -X POST http://127.0.0.1:3080/edrv/rpc -H 'content-type: application/jso
   id `edrv-editor`）+ `conversation.session.header.utilities`（id `edrv-diff-badge`）+ `conversation.input.dock`
   （id `edrv-diff-dock`，唯一差异栏：编辑器未打开=紧凑按钮，打开后=完整操作条）。内部路由/slot/事件/CSS 前缀沿用 `edrv-*`（防回归），包身份为 `dsh-vscode-mode`。
 - **⚠️ Host 改动需重启 DSH 应用**（Node ESM 模块缓存）；Client 经 `dsh-client-hmr` 热重载。
+
+## 会话性能（性能优化）
+
+DSH 每次启动都会回放 `~/.dsh/sessions` 下全部会话（`session-persistence-jsonl` 逐行 parse 并驻留为 JS 对象，
+V8 展开约 10×）。会话越多越大，启动内存越高，可能冲爆堆（OOM → bundle 加载失败）。本插件的「性能优化」子页
+（设置 → VSCodeMode）治理这个问题：
+
+- **盘点**：`edrv.perf.inventory` —— stat 全部工作区会话（不解压），按体积/工作区聚合，标记活跃会话。
+- **移出到归档（可逆）**：`edrv.perf.movePlan`（先规划）+ `edrv.perf.moveOut`（确认后执行，逐项失败回放）把会话目录
+  从 `~/.dsh/sessions` 搬到 `~/.dsh/sessions-archive`（同卷 rename，写 `.manifest.json`）；`edrv.perf.restore` 恢复；
+  `edrv.perf.purgeArchive` 清除归档区早于 N 天的会话。活跃会话一律拒绝移出。移出即从下次启动回放中剔除——这是
+  对存量 95MB 级会话**立刻见效**的手段。
+- **压缩调优**：`edrv.perf.configApply` 把 `compaction-basic`（thresholdRatio 0.6 / retainRatio 0.12）与
+  `tool-result-pruner`（thresholdChars 4096）写入 profile `cordis.patch.yml`（标记块 + 备份 `.bak-<ts>`，可撤销），
+  长循环会话更早压缩、降低模型上下文压力。⚠️ 压缩只追加 `compaction/*` 事件、**不重写**已持久化日志（append-only），
+  因此它不缩小会话文件——存量瘦身靠「移出到归档」。
+- **会话体积指示器**：对话 header 的 `edrv-perf-size` 每 5s stat 当前会话持久化体积（近零成本），≥1MB 显示、
+  ≥2MB 琥珀、≥8MB 红，提示 `/compact` 或新开会话，从使用习惯上引导"一次任务一个短会话"。
+- **侧车摘要**：`edrv.perf.sidecarSummary` 返回 `.dsh-edit-review.json` 的关键字段（活跃记录数/每文件 pending/归档体积），
+  agent/脚本取摘要即可，**不要**整份 read/write 该大 JSON 进对话。差异列表本身请走 `edrv.list`。
+
+> 治理原则：存量靠「移出到归档」；增量靠「压缩调优 + 短会话习惯 + 体积指示器」；packChunks（chunk 打包存储）为
+> DSH 默认开启，无需再配置。
 
 ## 开发 / 卸载（超级模组注入器，开发期可选）
 

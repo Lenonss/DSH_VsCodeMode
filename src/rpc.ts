@@ -18,8 +18,8 @@ import {
   resolveTarget,
   saveBucket,
 } from './store.js'
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { mkdir, readFile, rm, writeFile, readdir } from 'node:fs/promises'
+import { basename, join } from 'node:path'
 import { archiveEntryFor, markDecision, recordResolved, reconstructOriginal } from './model.js'
 import type { Registry } from './registry.js'
 import { bucketOf, cwdOf, sessionOf } from './registry.js'
@@ -32,11 +32,13 @@ import { listMcp, refreshMcp, removeMcp, saveMcp, toggleMcp } from './mcp.js'
 import { listProjects, projectRefresh, projectRemove, projectSave, projectToggle } from './mcpProject.js'
 import { normalizeFileOpenTool, FILE_OPEN_DEFAULT, FILE_OPEN_SETTINGS_NS } from './fileOpenSettings.js'
 import { buildReport } from './compat.js'
-import { readDevForm, setDevForm } from './devForm.js'
+import { findProfileDir, readDevForm, setDevForm } from './devForm.js'
 import { normalizeRel } from './tree.js'
 import { invalidateIndex, listDirCached } from './treeIndex.js'
 import { revealInExplorer } from './reveal.js'
-import { DEBUG_LOG, debugLogFile, pluginLogRoot } from './paths.js'
+import { DEBUG_LOG, debugLogFile, dshHome, pluginLogRoot } from './paths.js'
+import { markActiveSessions, moveOutSessions, planMoveOut, purgeArchive, restoreSession, scanSessionInventory, sessionsArchiveRoot, sessionSizeOf, sidecarSummaryOf } from './perf.js'
+import { patchHasPerfConfig, patchInsertPerfConfig, patchRemovePerfConfig, perfConfigBlock } from './perfPatch.js'
 
 /** cwd → 内存缓冲：行数组 + 累计字节数 + 待触发 flush 定时器（攒批落盘，避免每条日志全文件读改写）。 */
 const debugBuffers = new Map<string, { lines: string[]; len: number; timer: ReturnType<typeof setTimeout> | null }>()
@@ -189,6 +191,28 @@ async function applyDecisions(
   }
   if (changed) await saveBucket(ctx, cwd, bucket, session)
   return results
+}
+
+/** 当前活跃会话 id 集合（live sessions，用于移出/恢复护栏）。 */
+function activeSessionIds(ctx: Ctx): Set<string> {
+  const sessions = ctx.get('sessions')
+  if (!sessions || typeof sessions.list !== 'function') return new Set()
+  return new Set((sessions.list() as Session[]).map((s) => s.id).filter(Boolean))
+}
+
+/** profile patch 文件定位（依赖本插件的 profile，同 devForm）。 */
+async function patchFileInfo(): Promise<{ profileDir?: string; patchPath?: string }> {
+  const profileDir = findProfileDir()
+  if (!profileDir) return {}
+  return { profileDir, patchPath: join(profileDir, 'cordis.patch.yml') }
+}
+
+/** 最新一次压缩配置备份文件名（cordis.patch.yml.bak-<ts>，按名倒序取新）。 */
+async function latestPatchBackup(patchPath: string): Promise<string | undefined> {
+  const dir = join(patchPath, '..')
+  const base = basename(patchPath)
+  const names = await readdir(dir).catch(() => [])
+  return names.filter((n) => n.startsWith(base + '.bak-')).sort().reverse()[0]
 }
 
 /** 各方法 handler 表（类型由 shared/rpc 的 RpcHandlerMap 约束）。 */
@@ -510,6 +534,120 @@ export function buildHandlers(ctx: Ctx, registry: Registry, searcher = newSearch
         return { ok: true, devForm: readDevForm(), restart: result.restart }
       } catch (error) {
         return { ok: false, error: String(error) }
+      }
+    },
+    'edrv.perf.inventory': async () => {
+      try {
+        const home = dshHome()
+        const inventory = await scanSessionInventory(home, sessionsArchiveRoot(home))
+        const active = activeSessionIds(ctx)
+        markActiveSessions(inventory.sessions, active)
+        return { ok: true, ...inventory, activeIds: [...active] }
+      } catch (error) {
+        return { ok: false, error: '盘点失败：' + String(error) }
+      }
+    },
+    'edrv.perf.sessionSize': async (args) => {
+      try {
+        const size = await sessionSizeOf(dshHome(), args.cwd, args.sessionId ?? '')
+        return { ok: true, ...size }
+      } catch (error) {
+        return { ok: false, error: '读取会话体积失败：' + String(error) }
+      }
+    },
+    'edrv.perf.movePlan': async (args) => {
+      try {
+        const home = dshHome()
+        const inventory = await scanSessionInventory(home, sessionsArchiveRoot(home))
+        markActiveSessions(inventory.sessions, activeSessionIds(ctx))
+        const plan = planMoveOut(inventory, { workspaceKey: args.workspaceKey, sessionIds: args.sessionIds, minBytes: args.minBytes, olderThanDays: args.olderThanDays })
+        return { ok: true, ...plan }
+      } catch (error) {
+        return { ok: false, error: '移出规划失败：' + String(error) }
+      }
+    },
+    'edrv.perf.moveOut': async (args) => {
+      try {
+        const home = dshHome()
+        const items = (args.sessionIds ?? []).map((sessionId) => ({ workspaceKey: args.workspaceKey, sessionId, bytes: 0 }))
+        const result = await moveOutSessions(home, sessionsArchiveRoot(home), items, activeSessionIds(ctx), args.dryRun === true)
+        return { ok: true, ...result }
+      } catch (error) {
+        return { ok: false, error: '移出失败：' + String(error) }
+      }
+    },
+    'edrv.perf.restore': async (args) => {
+      try {
+        const result = await restoreSession(dshHome(), sessionsArchiveRoot(dshHome()), args.workspaceKey, args.sessionId)
+        return result.ok ? { ok: true, restored: true } : { ok: false, error: result.error ?? '恢复失败' }
+      } catch (error) {
+        return { ok: false, error: '恢复失败：' + String(error) }
+      }
+    },
+    'edrv.perf.purgeArchive': async (args) => {
+      try {
+        const result = await purgeArchive(sessionsArchiveRoot(dshHome()), args.olderThanDays)
+        return { ok: true, ...result }
+      } catch (error) {
+        return { ok: false, error: '清除失败：' + String(error) }
+      }
+    },
+    'edrv.perf.sidecarSummary': async (args) => {
+      const sc = await requireSession(ctx, args.sessionId)
+      const cwd = 'err' in sc ? null : sc.cwd
+      try {
+        const summary = await sidecarSummaryOf(ctx, cwd)
+        return { ok: true, ...summary }
+      } catch (error) {
+        return { ok: false, error: '读取侧车摘要失败：' + String(error) }
+      }
+    },
+    'edrv.perf.configGet': async () => {
+      try {
+        const { profileDir, patchPath } = await patchFileInfo()
+        const block = perfConfigBlock()
+        if (!patchPath) return { ok: true, applied: false, block }
+        const text = await readFile(patchPath, 'utf8').catch(() => '')
+        const backup = await latestPatchBackup(patchPath)
+        return { ok: true, profileDir, patchPath, applied: patchHasPerfConfig(text), block, backup }
+      } catch (error) {
+        return { ok: false, error: '读取压缩配置失败：' + String(error) }
+      }
+    },
+    'edrv.perf.configApply': async () => {
+      try {
+        const { patchPath } = await patchFileInfo()
+        if (!patchPath) return { ok: false, error: '未找到依赖本插件的 profile（检查 DSH_HOME/profiles）' }
+        const text = await readFile(patchPath, 'utf8').catch(() => '')
+        const backup = patchPath + '.bak-' + Date.now()
+        if (text) await writeFile(backup, text, 'utf8')
+        await mkdir(join(patchPath, '..'), { recursive: true })
+        await writeFile(patchPath, patchInsertPerfConfig(text), 'utf8')
+        return { ok: true, applied: true, backup, restart: true }
+      } catch (error) {
+        return { ok: false, error: '写入压缩配置失败：' + String(error) }
+      }
+    },
+    'edrv.perf.configUndo': async () => {
+      try {
+        const { patchPath } = await patchFileInfo()
+        if (!patchPath) return { ok: false, error: '未找到依赖本插件的 profile（检查 DSH_HOME/profiles）' }
+        const backup = await latestPatchBackup(patchPath)
+        if (backup) {
+          const backupPath = join(join(patchPath, '..'), backup)
+          const saved = await readFile(backupPath, 'utf8').catch(() => null)
+          if (saved !== null) {
+            await writeFile(patchPath, saved, 'utf8')
+            await rm(backupPath, { force: true }).catch(() => {})
+            return { ok: true, restored: true, backup }
+          }
+        }
+        const text = await readFile(patchPath, 'utf8').catch(() => '')
+        if (!patchHasPerfConfig(text)) return { ok: false, error: '没有可撤销的压缩配置' }
+        await writeFile(patchPath, patchRemovePerfConfig(text), 'utf8')
+        return { ok: true, restored: true }
+      } catch (error) {
+        return { ok: false, error: '撤销压缩配置失败：' + String(error) }
       }
     },
   }

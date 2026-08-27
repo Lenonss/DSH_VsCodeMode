@@ -38,6 +38,54 @@ export interface SearchContentMatch {
   text: string
 }
 
+// --region 会话性能管理（edrv.perf.*）
+/** 一个已持久化会话的体积/活跃信息（edrv.perf.inventory 每行）。 */
+export interface PerfSession {
+  sessionId: string
+  workspaceKey: string
+  bytes: number
+  mtime: number
+  active: boolean
+}
+
+/** 一个工作区的会话聚合（edrv.perf.inventory）。 */
+export interface PerfWorkspace {
+  workspaceKey: string
+  sessionCount: number
+  totalBytes: number
+  minMtime: number
+  maxMtime: number
+}
+
+/** 会话盘点汇总。 */
+export interface PerfTotals {
+  workspaces: number
+  sessions: number
+  totalBytes: number
+}
+
+/** 一次移出/恢复操作中的单个会话条目。 */
+export interface PerfMoveItem {
+  workspaceKey: string
+  sessionId: string
+  bytes: number
+}
+
+/** 一次移出操作的失败项。 */
+export interface PerfMoveFailure {
+  workspaceKey: string
+  sessionId: string
+  error: string
+}
+
+/** 侧车摘要（edrv.perf.sidecarSummary）：紧凑关键字段，不整份读 sidecar 进对话。 */
+export interface SidecarPerfSummary {
+  active: number
+  pendingByFile: { path: string; pending: number }[]
+  archiveBytes: number
+}
+// --endregion
+
 /** 一条批量决策项（decideBatch 的 items 元素，与 accept/reject 单条参数同构）。 */
 export interface DecideItem {
   callId: string
@@ -86,6 +134,16 @@ export interface RpcRequestMap {
   'vscode.devFormGet': {}
   'vscode.devFormSet': { enabled: boolean; path?: string }
   'compat': {}
+  'edrv.perf.inventory': { sessionId?: string }
+  'edrv.perf.sessionSize': { sessionId?: string; cwd: string }
+  'edrv.perf.movePlan': { workspaceKey?: string; sessionIds?: string[]; minBytes?: number; olderThanDays?: number }
+  'edrv.perf.moveOut': { workspaceKey: string; sessionIds: string[]; dryRun?: boolean }
+  'edrv.perf.restore': { workspaceKey: string; sessionId: string }
+  'edrv.perf.purgeArchive': { olderThanDays: number }
+  'edrv.perf.sidecarSummary': { sessionId?: string }
+  'edrv.perf.configGet': {}
+  'edrv.perf.configApply': {}
+  'edrv.perf.configUndo': {}
 }
 
 export type RpcMethod = keyof RpcRequestMap
@@ -122,6 +180,16 @@ export interface RpcOkMap {
   'vscode.devFormGet': { devForm: DevFormInfo }
   'vscode.devFormSet': { devForm: DevFormInfo; restart: boolean }
   'compat': { report: CompatReport }
+  'edrv.perf.inventory': { workspaces: PerfWorkspace[]; sessions: PerfSession[]; totals: PerfTotals; activeIds: string[] }
+  'edrv.perf.sessionSize': { bytes: number; exists: boolean }
+  'edrv.perf.movePlan': { items: PerfMoveItem[]; reclaimedBytes: number }
+  'edrv.perf.moveOut': { moved: PerfMoveItem[]; failures: PerfMoveFailure[]; reclaimedBytes: number }
+  'edrv.perf.restore': { restored: boolean; error?: string }
+  'edrv.perf.purgeArchive': { removed: number; reclaimedBytes: number }
+  'edrv.perf.sidecarSummary': SidecarPerfSummary
+  'edrv.perf.configGet': { profileDir?: string; patchPath?: string; applied: boolean; block: string; backup?: string }
+  'edrv.perf.configApply': { applied: boolean; backup: string; restart: boolean }
+  'edrv.perf.configUndo': { restored: boolean; error?: string; backup?: string }
 }
 
 /** 统一响应：{ok:true, ...payload} 或 {ok:false, error}。 */
