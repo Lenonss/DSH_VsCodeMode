@@ -14,6 +14,11 @@ import { isAbsolute, resolve as resolvePath } from 'node:path'
  */
 export function pathToFileUri(absPath: string): string {
   const normalized = absPath.replace(/\\/g, '/')
+  const drive = /^([A-Za-z]:)(?:\/(.*))?$/.exec(normalized)
+  if (drive) {
+    const tail = drive[2] ? '/' + drive[2].split('/').map(encodeURIComponent).join('/') : ''
+    return 'file:///' + drive[1] + tail
+  }
   return pathToFileURL(normalized).toString()
 }
 
