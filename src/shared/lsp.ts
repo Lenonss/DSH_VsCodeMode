@@ -17,10 +17,11 @@ export interface LspRange {
   end: LspPosition
 }
 
-/** LSP Location：uri 为 file:// 绝对路径（与 Monaco Uri 对齐）。 */
+/** LSP Location：uri 为 file:// 绝对路径；root 用于还原为工作区相对路径。 */
 export interface LspLocation {
   uri: string
   range: LspRange
+  root?: string
 }
 
 /** 跳转结果（definition 常返回 LocationLink，归一化为 targetUri + targetRange + 可选 originSelectionRange）。 */
@@ -73,6 +74,8 @@ export interface LspServerStatus {
   phase: LspServerPhase
   version?: string
   reason?: string   // unavailable/不可用原因（缺 dotnet、找不到服务器等）
+  progress?: number // LSP 工作区解析进度（0–100，未知时省略）
+  progressMessage?: string
   root?: string     // 绑定工作区根（相对显示）
 }
 

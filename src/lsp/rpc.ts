@@ -9,6 +9,7 @@ import { sessionOf, cwdOf } from '../registry.js'
 import { resolveProviderSpec, langOfPath, configFromPlugin, configFromSettings, LSP_SETTINGS_NS, type LspConfig } from './config.js'
 import type { LspManager } from './manager.js'
 import type { RpcHandlerMap } from '../shared/rpc.js'
+import type { LspLocation } from '../shared/lsp.js'
 import { installFromMarket, installVsixFile, listInstalled, marketGet, marketSearch, uninstall, updateExtension, type ExtInfo } from './extmgr.js'
 
 export interface LspRpcDeps {
@@ -22,56 +23,67 @@ export interface LspRpcDeps {
  * 保证 manager 的 acquire/release 一一配对（多会话共享同一 root|lang 也平衡）。
  */
 function createDocTracker() {
-  const openDocs = new Map<string, string>()
+  const openDocs = new Map<string, Set<string>>()
   const rootLangRefs = new Map<string, number>()
-  const sessionAcquired = new Map<string, Set<string>>()
+  const sessionDocs = new Map<string, Set<string>>()
+  const keyOf = (root: string, lang: string, path: string): string => root + '|' + lang + '|' + path
   const rootLangOf = (docKey: string): string => docKey.slice(0, docKey.lastIndexOf('|'))
-  return {
-    /** 记录文档打开；返回 true 表示"首个该 root|lang 的文档"（应 acquire）。 */
-    open(root: string, lang: string, path: string, sessionId: string): boolean {
-      const docKey = root + '|' + lang + '|' + path
-      if (openDocs.has(docKey)) return false
-      openDocs.set(docKey, sessionId)
-      const rl = root + '|' + lang
-      rootLangRefs.set(rl, (rootLangRefs.get(rl) ?? 0) + 1)
-      if (!sessionAcquired.has(sessionId)) sessionAcquired.set(sessionId, new Set())
-      sessionAcquired.get(sessionId)!.add(rl)
+  const rememberDoc = (sessionId: string, docKey: string): void => {
+    const docs = sessionDocs.get(sessionId) ?? new Set<string>()
+    docs.add(docKey)
+    sessionDocs.set(sessionId, docs)
+  }
+  const forgetDoc = (sessionId: string, docKey: string): void => {
+    const docs = sessionDocs.get(sessionId)
+    docs?.delete(docKey)
+    if (docs?.size === 0) sessionDocs.delete(sessionId)
+  }
+  const releaseRef = (rl: string): boolean => {
+    const next = (rootLangRefs.get(rl) ?? 1) - 1
+    if (next <= 0) {
+      rootLangRefs.delete(rl)
       return true
+    }
+    rootLangRefs.set(rl, next)
+    return false
+  }
+  return {
+    /** 记录文档打开；同一文档可由多个会话打开，但每个会话只计一次。 */
+    open(root: string, lang: string, path: string, sessionId: string): boolean {
+      const docKey = keyOf(root, lang, path)
+      const owners = openDocs.get(docKey) ?? new Set<string>()
+      if (owners.has(sessionId)) return false
+      owners.add(sessionId)
+      openDocs.set(docKey, owners)
+      rememberDoc(sessionId, docKey)
+      const rl = root + '|' + lang
+      const count = rootLangRefs.get(rl) ?? 0
+      rootLangRefs.set(rl, count + 1)
+      return count === 0
     },
-    /** 记录文档关闭；返回 true 表示"该 root|lang 已无文档"（应 release）。 */
+    /** 记录文档关闭；返回 true 表示 root|lang 已无文档（应 release）。 */
     close(root: string, lang: string, path: string, sessionId: string): boolean {
-      const docKey = root + '|' + lang + '|' + path
-      if (!openDocs.has(docKey)) return false
-      openDocs.delete(docKey)
-      const rl = rootLangOf(docKey)
-      const next = (rootLangRefs.get(rl) ?? 1) - 1
-      if (next <= 0) {
-        rootLangRefs.delete(rl)
-        return true
-      }
-      rootLangRefs.set(rl, next)
-      sessionAcquired.get(sessionId)?.delete(rl)
-      return false
+      const docKey = keyOf(root, lang, path)
+      const owners = openDocs.get(docKey)
+      if (!owners?.has(sessionId)) return false
+      owners.delete(sessionId)
+      if (owners.size === 0) openDocs.delete(docKey)
+      forgetDoc(sessionId, docKey)
+      return releaseRef(root + '|' + lang)
     },
-    /** 关闭某会话全部文档；返回需要 release 的 root|lang 键列表。 */
+    /** 关闭某会话全部文档；返回全局引用归零、需要 release 的 root|lang。 */
     closeSession(sessionId: string): string[] {
-      const acquired = sessionAcquired.get(sessionId)
-      if (!acquired) return []
-      sessionAcquired.delete(sessionId)
-      const toRelease: string[] = []
-      for (const rl of acquired) {
-        // 从 openDocs 移除属于该会话的文档
-        for (const [docKey, sid] of [...openDocs]) {
-          if (sid !== sessionId) continue
-          if (rootLangOf(docKey) !== rl) continue
-          openDocs.delete(docKey)
-          const next = (rootLangRefs.get(rl) ?? 1) - 1
-          if (next <= 0) rootLangRefs.delete(rl)
-          else rootLangRefs.set(rl, next)
-        }
-        if (!(rootLangRefs.get(rl) ?? 0)) toRelease.push(rl)
+      const docs = sessionDocs.get(sessionId)
+      if (!docs) return []
+      const toRelease = new Set<string>()
+      for (const docKey of docs) {
+        const owners = openDocs.get(docKey)
+        owners?.delete(sessionId)
+        if (owners?.size === 0) openDocs.delete(docKey)
+        if (releaseRef(rootLangOf(docKey))) toRelease.add(rootLangOf(docKey))
       }
-      return toRelease
+      sessionDocs.delete(sessionId)
+      return [...toRelease]
     },
   }
 }
@@ -101,8 +113,14 @@ export function createLspRpc(deps: LspRpcDeps): { handlers: Partial<RpcHandlerMa
     }
   }
 
-  const serverOf = (root: string, lang: string) =>
+  const acquireServer = (root: string, lang: string) =>
     manager.acquire(root, lang, (languageId: string) => resolveProviderSpec(ctx, pluginConfig, languageId))
+
+  const serverOf = (root: string, lang: string) =>
+    manager.peek(root, lang)
+
+  const rootLocations = (locations: LspLocation[], root: string): LspLocation[] =>
+    locations.map((location) => ({ ...location, root }))
 
   const disposeSession = (sessionId: string): void => {
     for (const rl of tracker.closeSession(sessionId)) {
@@ -112,7 +130,12 @@ export function createLspRpc(deps: LspRpcDeps): { handlers: Partial<RpcHandlerMa
   }
 
   const handlers: Partial<RpcHandlerMap> = {
-    'edrv.lsp.status': async () => ({ ok: true, servers: manager.statusAll() }),
+    'edrv.lsp.status': async (args) => {
+      if (!args.sessionId) return { ok: true, servers: manager.statusAll() }
+      const sc = await rootOf(args.sessionId)
+      if ('err' in sc) return { ok: false, error: sc.err }
+      return { ok: true, servers: manager.statusAll().filter((status) => status.root === sc.root) }
+    },
 
     'edrv.lsp.configGet': async () => {
       const settings = configFromSettings(ctx)
@@ -151,10 +174,9 @@ export function createLspRpc(deps: LspRpcDeps): { handlers: Partial<RpcHandlerMa
       if (!lang) return { ok: true }
       const sc = await rootOf(args.sessionId)
       if ('err' in sc) return { ok: false, error: sc.err }
-      if (tracker.open(sc.root, lang, args.path, sc.sessionId)) {
-        serverOf(sc.root, lang)
-      }
-      const server = serverOf(sc.root, lang)
+      const first = tracker.open(sc.root, lang, args.path, sc.sessionId)
+      const server = first ? acquireServer(sc.root, lang) : serverOf(sc.root, lang)
+      if (!server) return { ok: false, error: '语言服务器未注册' }
       server.sync(args.path, args.text, args.version)
       return { ok: true }
     },
@@ -176,9 +198,12 @@ export function createLspRpc(deps: LspRpcDeps): { handlers: Partial<RpcHandlerMa
       const sc = await rootOf(args.sessionId)
       if ('err' in sc) return { ok: false, error: sc.err }
       try {
-        const locations = await serverOf(sc.root, lang).definition(args.path, args.position.line, args.position.character)
-        const truncated = locations.length > 500
-        return { ok: true, locations: truncated ? locations.slice(0, 500) : locations, truncated: truncated || undefined }
+        const server = serverOf(sc.root, lang)
+        if (!server) return { ok: true, locations: [] }
+        const locations = await server.definition(args.path, args.position.line, args.position.character)
+        const rooted = rootLocations(locations, sc.root)
+        const truncated = rooted.length > 500
+        return { ok: true, locations: truncated ? rooted.slice(0, 500) : rooted, truncated: truncated || undefined }
       } catch (error) {
         return { ok: false, error: 'LSP 定义查询失败：' + String(error) }
       }
@@ -190,9 +215,12 @@ export function createLspRpc(deps: LspRpcDeps): { handlers: Partial<RpcHandlerMa
       const sc = await rootOf(args.sessionId)
       if ('err' in sc) return { ok: false, error: sc.err }
       try {
-        const locations = await serverOf(sc.root, lang).references(args.path, args.position.line, args.position.character, args.includeDeclaration !== false)
-        const truncated = locations.length > 500
-        return { ok: true, locations: truncated ? locations.slice(0, 500) : locations, truncated: truncated || undefined }
+        const server = serverOf(sc.root, lang)
+        if (!server) return { ok: true, locations: [] }
+        const locations = await server.references(args.path, args.position.line, args.position.character, args.includeDeclaration !== false)
+        const rooted = rootLocations(locations, sc.root)
+        const truncated = rooted.length > 500
+        return { ok: true, locations: truncated ? rooted.slice(0, 500) : rooted, truncated: truncated || undefined }
       } catch (error) {
         return { ok: false, error: 'LSP 引用查询失败：' + String(error) }
       }
@@ -204,7 +232,9 @@ export function createLspRpc(deps: LspRpcDeps): { handlers: Partial<RpcHandlerMa
       const sc = await rootOf(args.sessionId)
       if ('err' in sc) return { ok: false, error: sc.err }
       try {
-        const symbols = await serverOf(sc.root, lang).documentSymbol(args.path)
+        const server = serverOf(sc.root, lang)
+        if (!server) return { ok: true, symbols: [] }
+        const symbols = await server.documentSymbol(args.path)
         return { ok: true, symbols }
       } catch (error) {
         return { ok: false, error: 'LSP 大纲查询失败：' + String(error) }
@@ -216,9 +246,10 @@ export function createLspRpc(deps: LspRpcDeps): { handlers: Partial<RpcHandlerMa
       if ('err' in sc) return { ok: false, error: sc.err }
       const out: { symbols: never[]; truncated?: boolean } = { symbols: [] }
       for (const lang of ['lua', 'csharp']) {
+        const existing = serverOf(sc.root, lang)
+        if (!existing) continue
         try {
-          const server = serverOf(sc.root, lang)
-          const symbols = await server.workspaceSymbol(args.query)
+          const symbols = await existing.workspaceSymbol(args.query)
           if (symbols.length) out.symbols.push(...(symbols as never[]))
         } catch (error) {
           /* 单语言失败忽略 */
@@ -234,7 +265,9 @@ export function createLspRpc(deps: LspRpcDeps): { handlers: Partial<RpcHandlerMa
       const sc = await rootOf(args.sessionId)
       if ('err' in sc) return { ok: false, error: sc.err }
       try {
-        const hover = await serverOf(sc.root, lang).hover(args.path, args.position.line, args.position.character)
+        const server = serverOf(sc.root, lang)
+        if (!server) return { ok: true, hover: undefined }
+        const hover = await server.hover(args.path, args.position.line, args.position.character)
         return { ok: true, hover: hover ?? undefined }
       } catch (error) {
         return { ok: false, error: 'LSP hover 查询失败：' + String(error) }

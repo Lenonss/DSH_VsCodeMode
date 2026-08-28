@@ -73,7 +73,9 @@ export function apply(ctx: any): void {
       else schedule(preload, 300)
     }
     const onSessionEnter = () => {
-      if (!list.getSnapshot()?.current) return
+      const current = list.getSnapshot()?.current
+      if (!current) return
+      setSession(current)
       schedulePreload()
     }
     ctx.effect(() => list.subscribe(onSessionEnter), 'vscode-mode: monaco session trigger')

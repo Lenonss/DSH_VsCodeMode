@@ -27,6 +27,7 @@ const SYNC_DEBOUNCE_MS = 250
 let sessionId
 const syncTimers = new Map()
 let statusCache = { servers: [], at: 0 }
+let progressListeners = new Set()
 let ready = false
 
 /** 设置当前会话（切换会话时清理旧文档跟踪由 host 端 session/disposed 兜底）。 */
@@ -38,6 +39,20 @@ export function setLspSession(id) {
 
 export function lspSessionId() {
   return sessionId
+}
+
+/** 订阅 LSP 状态变化（服务器进度/启动状态）。 */
+export function onLspProgress(listener) {
+  if (typeof listener !== 'function') return () => {}
+  progressListeners.add(listener)
+  return () => progressListeners.delete(listener)
+}
+
+/** 发布当前 server 状态给编辑器底部状态区。 */
+function publishProgress() {
+  for (const listener of progressListeners) {
+    try { listener(statusCache.servers) } catch (error) { /* UI listener failure ignored */ }
+  }
 }
 
 /** 立即同步某文档到 host（首次打开/查询前保证服务器已认识该文档）。 */
@@ -100,11 +115,12 @@ export async function fetchHover(path, text, position) {
 
 /** 拉取服务器状态（带 5s 缓存）。 */
 export async function refreshStatus(force = false) {
-  if (!force && Date.now() - statusCache.at < 5000) return statusCache.servers
-  const res = await rpc('edrv.lsp.status', {}).catch(() => null)
+  if (!force && Date.now() - statusCache.at < 1500) return statusCache.servers
+  const res = await rpc('edrv.lsp.status', { sessionId }).catch(() => null)
   const servers = res && res.ok && Array.isArray(res.servers) ? res.servers : []
   statusCache = { servers, at: Date.now() }
   ready = true
+  publishProgress()
   return servers
 }
 
@@ -125,7 +141,7 @@ function toClientLocation(loc) {
   const start = range.start || {}
   const end = range.end || {}
   return {
-    uri: window.monaco.Uri.parse(toEdrvUri(loc.uri)),
+    uri: window.monaco.Uri.parse(toEdrvUri(loc.uri, loc.root)),
     range: new window.monaco.Range(
       Math.max(1, (start.line ?? 0) + 1),
       Math.max(1, (start.character ?? 0) + 1),
@@ -136,24 +152,33 @@ function toClientLocation(loc) {
 }
 
 /** file:// URI（或裸路径）→ edrv:// 相对路径（去掉盘符/根，与编辑器模型路径一致）。 */
-export function toEdrvUri(uri) {
+export function toEdrvUri(uri, root) {
   if (!uri) return ''
   if (uri.startsWith('edrv://')) return uri
-  let path = uri
-  if (path.startsWith('file://')) {
-    path = decodeURIComponent(path.replace(/^file:\/\//, ''))
-  }
-  // 去掉 Windows 盘符（edrv:///C:/x → edrv:///x？）——保持与编辑器 model.uri.path 一致的相对形式
-  path = path.replace(/^\/[A-Za-z]:/, '')
-  return 'edrv:///' + encodeURI(path.replace(/\\/g, '/'))
+  const path = relativeLspPath(uri, root)
+  return 'edrv:///' + encodeURI(path)
 }
 
-/** 将 LSP 目标 path 解析为 edrv 打开路径（供跳转）：取 file:// 去盘符的相对形式。 */
+/** 将 LSP 目标解析为当前工作区相对路径（跨文件跳转与 model URI 对齐）。 */
 export function targetOpenPath(loc) {
-  let path = loc.uri || ''
-  if (path.startsWith('file://')) path = decodeURIComponent(path.replace(/^file:\/\//, ''))
-  path = path.replace(/^\/[A-Za-z]:/, '').replace(/\\/g, '/')
-  return path
+  return relativeLspPath(loc?.uri, loc?.root)
+}
+
+/** file URI/裸路径 → root 下的 / 分隔相对路径；root 不匹配时保留规范化绝对路径。 */
+function relativeLspPath(uri, root) {
+  if (!uri) return ''
+  let path = String(uri)
+  if (path.startsWith('file://')) {
+    try { path = decodeURIComponent(path.replace(/^file:\/\//, '')) } catch (error) { path = path.replace(/^file:\/\//, '') }
+  }
+  path = path.replace(/\\/g, '/').replace(/^\/([A-Za-z]:)/, '$1')
+  const normalizedRoot = root ? String(root).replace(/\\/g, '/').replace(/^\/([A-Za-z]:)/, '$1').replace(/\/+$/, '') : ''
+  const lowerPath = path.toLowerCase()
+  const lowerRoot = normalizedRoot.toLowerCase()
+  if (normalizedRoot && (lowerPath === lowerRoot || lowerPath.startsWith(lowerRoot + '/'))) {
+    return path.slice(normalizedRoot.length).replace(/^\/+/, '')
+  }
+  return path.replace(/^\/+/, '')
 }
 
 /** 目标行/列（0-based LSP → 1-based Monaco）。 */

@@ -109,27 +109,54 @@ function toMonacoSymbol(symbol) {
   return out
 }
 
-/** F12 / 右键「转到定义」：查询定义并跳转（首个目标）。 */
-export async function runGoToDefinition(ed) {
+/** 定义查询并跳转；nativeReveal 仅供 F12 保留 Monaco 原生 reveal。 */
+async function goToDefinition(ed, position, nativeReveal = false) {
   const model = ed.getModel()
   const path = pathOfModel(model)
-  const position = ed.getPosition()
   if (!path || !position) return
   const locations = await findDefinition(path, model.getValue(), position)
   if (!locations.length) {
     setStatus('未找到定义')
     return
   }
-  // 同一文件内交给 Monaco 原生 reveal（模型存在，光标/peek 体验更好）；跨文件自研跳转
   const first = locations[0]
-  const firstPath = targetOpenPath(first)
-  if (firstPath === path) {
+  if (nativeReveal && targetOpenPath(first) === path) {
     const action = ed.getAction('editor.action.revealDefinition')
-    if (action) await action.run()
-    else jumpToLocation(first)
-  } else {
-    jumpToLocation(first)
+    if (action) {
+      await action.run()
+      return
+    }
   }
+  jumpToLocation(first)
+}
+
+/** F12 / 右键「转到定义」：查询定义并跳转（首个目标）。 */
+export async function runGoToDefinition(ed) {
+  await goToDefinition(ed, ed.getPosition(), true)
+}
+
+/** Ctrl+鼠标点击定义：使用点击位置查询，避免依赖当前光标位置。 */
+export async function gotoDefinitionAt(ed, position) {
+  await goToDefinition(ed, position)
+}
+
+/** 给一个 Monaco 编辑器绑定 Ctrl/Cmd+鼠标定义跳转（幂等）。 */
+export function bindLspEditor(ed) {
+  if (!ed || ed.__edrvLspClick) return
+  ed.__edrvLspClick = true
+  const disposable = ed.onMouseDown((event) => {
+    const native = event?.event
+    const position = event?.target?.position
+    const button = native?.button ?? event?.button
+    const ctrl = native?.ctrlKey ?? event?.ctrlKey
+    const meta = native?.metaKey ?? event?.metaKey
+    const isLeftButton = button === 0 || native?.leftButton === true
+    if (!native || !position || !isLeftButton || (!ctrl && !meta)) return
+    native.preventDefault?.()
+    native.stopPropagation?.()
+    void gotoDefinitionAt(ed, position)
+  })
+  disposables.push(disposable)
 }
 
 /** Shift+F12 / 右键「查找所有引用」：查询引用并展示浮动面板。 */

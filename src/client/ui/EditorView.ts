@@ -23,7 +23,8 @@ import { setSidePending, SIDEBAR_INSTALL_CMD } from '../sidebarBridge.js'
 import { upsertViewState, viewStatesLoad, viewStatesSave } from '../state/viewStateCache.js'
 import { bindingOf, chordOf, matchEvent, useKeybindingsVersion } from '../keybindings.js'
 import { CACHE_KEY } from '../paths.js'
-import { runGoToDefinition, runFindReferences, hideReferencesOverlay } from '../monaco/lsp/providers.js'
+import { bindLspEditor, runGoToDefinition, runFindReferences, hideReferencesOverlay } from '../monaco/lsp/providers.js'
+import { onLspProgress, refreshStatus } from '../monaco/lsp/index.js'
 
 /**
  * 中央编辑区：文件页签（脏点/关闭/打开路径）+ Ctrl+P 搜索 + Monaco 编辑器 +
@@ -48,6 +49,7 @@ export function EditorView(props) {
   const [content, setContent] = React.useState(null)
   const [contentPath, setContentPath] = React.useState(null)
   const [status, setStatus] = React.useState('')
+  const [lspServers, setLspServers] = React.useState([])
   const [error, setError] = React.useState(null)
   const [loadError, setLoadError] = React.useState(null)
   const [loadStage, setLoadStage] = React.useState({ progress: 0, message: '准备加载编辑器…' })
@@ -264,6 +266,14 @@ export function EditorView(props) {
     const onRefresh = () => refreshRecords()
     window.addEventListener('edrv:refresh', onRefresh)
     return () => { clearInterval(t); window.removeEventListener('edrv:refresh', onRefresh) }
+  }, [sessionId])
+
+  React.useEffect(() => {
+    const publishLsp = (servers) => setLspServers(Array.isArray(servers) ? servers : [])
+    const unsubscribe = onLspProgress(publishLsp)
+    void refreshStatus(true).then(publishLsp)
+    const timer = setInterval(() => { void refreshStatus(true).then(publishLsp) }, 1500)
+    return () => { unsubscribe(); clearInterval(timer) }
   }, [sessionId])
 
   React.useEffect(() => {
@@ -655,6 +665,7 @@ export function EditorView(props) {
       run: (edx) => { void runFindReferences(edx) },
     })
     ed.addCommand(m.KeyCode.F12, () => { void runGoToDefinition(ed) })
+    bindLspEditor(ed)
     // hover 差异块 → 浮出 Keep/Undo（req：鼠标移到编辑区差异块时显示）
     // 防闪烁：① 区域不变不 setState（浮窗锚定差异块起始行，不跟随鼠标）；② 延迟隐藏；
     // ③ 浮窗自身 onMouseEnter 取消隐藏计时（鼠标在浮窗与编辑器间移动不闪）。
@@ -1008,6 +1019,22 @@ export function EditorView(props) {
     (cursor ? React.createElement('span', { className: 'edrv-pb-meta' }, cursor) : null),
     (status ? React.createElement('span', { className: 'edrv-pb-meta edrv-pb-status' }, status) : null))
 
+  const lspLanguage = active ? langOf(active) : ''
+  const lspServer = lspServers.find((item) => item.languageId === lspLanguage)
+  const lspPhaseText = { idle: '未启动', starting: '启动中', ready: '已就绪', indexing: '解析中', unavailable: '不可用', stopped: '已停止' }
+  const lspSourceText = { extension: '扩展', discover: '自动发现', manual: '手动配置', none: '未配置' }
+  const lspLabel = lspServer
+    ? 'LSP ' + lspLanguage + ' · ' + (lspPhaseText[lspServer.phase] ?? lspServer.phase) + ' · ' + (lspSourceText[lspServer.source] ?? lspServer.source)
+    : 'LSP ' + lspLanguage + ' · 未启动'
+  const lspProgress = typeof lspServer?.progress === 'number' ? Math.round(lspServer.progress) : null
+  const lspFooter = (lspLanguage === 'lua' || lspLanguage === 'csharp')
+    ? React.createElement('div', { className: 'edrv-statusbar', title: lspServer?.progressMessage || lspLabel },
+        React.createElement('span', { className: 'edrv-lsp-status-dot ' + (lspServer?.phase === 'ready' ? 'ready' : lspServer?.phase === 'indexing' || lspServer?.phase === 'starting' ? 'busy' : 'idle') }),
+        React.createElement('span', { className: 'edrv-sp-lsp' }, lspLabel),
+        lspServer?.progressMessage ? React.createElement('span', { className: 'edrv-sp-progress-message' }, lspServer.progressMessage) : null,
+        lspProgress !== null ? React.createElement('span', { className: 'edrv-sp-progress' }, lspProgress + '%') : null)
+    : null
+
   const tabRow = React.createElement('div', { style: { display: 'flex', alignItems: 'center', background: 'var(--dsw-alias-bg-layer-1,transparent)', flexShrink: 0 } },
     tabsEl,
     (sum.totalFiles > 0
@@ -1195,7 +1222,8 @@ export function EditorView(props) {
     pathBar,
     tabRow,
     sideHintEl,
-    editorArea)
+    editorArea,
+    lspFooter)
   // 编辑器根节点按 composer 顶部边界动态限高，底部对话区域继续由 DSH 原生渲染。
   // 侧栏形态由面板容器给高（100%），不做 composer 几何同步。
   const editorRow = React.createElement('div', { className: 'edrv-editor-row' },

@@ -6,7 +6,7 @@
  * 作者 ddj 2026-08-27
  */
 import { registerLspProviders, hideReferencesOverlay } from './providers.js'
-import { setLspSession, refreshStatus, lspStatusFor } from './lspClient.js'
+import { setLspSession, refreshStatus, lspStatusFor, onLspProgress } from './lspClient.js'
 
 let monacoRef = null
 
@@ -27,4 +27,4 @@ export function disposeLspOverlay() {
   hideReferencesOverlay()
 }
 
-export { lspStatusFor, refreshStatus }
+export { lspStatusFor, refreshStatus, onLspProgress }

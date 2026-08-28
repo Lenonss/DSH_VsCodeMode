@@ -27,6 +27,8 @@ export interface LspManager {
   releaseRoot(root: string): void
   /** 状态快照。 */
   statusAll(): LspServerStatus[]
+  /** 查询已注册的工作区+语言服务器，不增加引用计数。 */
+  peek(root: string, languageId: string): LspServer | undefined
   /** 停止并清空全部（卸载/退出）。 */
   disposeAll(): Promise<void>
   /** 监听状态变化（用于 UI）。 */
@@ -110,6 +112,10 @@ export function createLspManager(logger?: (line: string) => void): LspManager {
 
     statusAll(): LspServerStatus[] {
       return [...entries.values()].map((entry) => entry.server.status())
+    },
+
+    peek(root: string, languageId: string): LspServer | undefined {
+      return entries.get(keyOf(root, languageId))?.server
     },
 
     async disposeAll(): Promise<void> {

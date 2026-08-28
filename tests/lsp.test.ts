@@ -14,6 +14,7 @@ import { platformServerDir, exeSuffix, listMatchingDirs, resolveLuaProvider, res
 import { createLspManager } from '../src/lsp/manager.js'
 import { createLspClient, type LspClientTransport } from '../src/lsp/client.js'
 import { parseFrame } from '../src/lsp/jsonrpc.js'
+import { toEdrvUri, targetOpenPath } from '../src/client/monaco/lsp/lspClient.js'
 import { installLspSettingsSection } from '../src/lsp/settings.js'
 import { LSP_SETTINGS_NS } from '../src/lsp/config.js'
 import { parseOutline, SK } from '../src/client/outline/parse.js'
@@ -94,6 +95,12 @@ describe('lsp/uri 转换（Windows 风格）', () => {
   it('file:// URI → 路径', () => {
     expect(fileUriToPath('file:///D:/Work/a/b.lua')).toMatch(/[Dd]:/)
   })
+  it('LSP 目标按 root 还原为工作区相对路径', () => {
+    const root = 'D:/Work/PopIsland/IslandSplash_BugFix2'
+    const uri = 'file:///D:/Work/PopIsland/IslandSplash_BugFix2/Assets/Scripts/TeamModel.lua'
+    expect(toEdrvUri(uri, root)).toBe('edrv:///Assets/Scripts/TeamModel.lua')
+    expect(targetOpenPath({ uri, root })).toBe('Assets/Scripts/TeamModel.lua')
+  })
   it('isInside 边界', () => {
     expect(isInside('D:/root', 'D:/root/a/b.ts')).toBe(true)
     expect(isInside('D:/root', 'D:/root2/a.ts')).toBe(false)
@@ -169,6 +176,9 @@ describe('lsp/manager 引用计数', () => {
     const spec = { languageId: 'lua', kind: 'none', argv: [], ready: false } as const
     const server = manager.acquire('/root', 'lua', () => spec)
     expect(server.phase).toBe('idle')
+    expect(manager.peek('/root', 'lua')).toBe(server)
+    expect(manager.peek('/other', 'lua')).toBeUndefined()
+    expect(manager.peek('/root', 'csharp')).toBeUndefined()
     manager.acquire('/root', 'lua', () => spec)
     manager.release('/root', 'lua')
     // 仍有 1 引用 → 未停止

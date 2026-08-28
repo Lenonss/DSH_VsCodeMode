@@ -11,6 +11,7 @@ export interface LspClientEvents {
   onReady?: (capabilities: LspServerCapabilities) => void
   onExit?: (code: number | null, signal: string | null) => void
   onLog?: (line: string) => void
+  onProgress?: (params: unknown) => void
 }
 
 const DEFAULT_TIMEOUT_MS = 20_000
@@ -59,9 +60,10 @@ export function createLspClient(
   const parser = createFrameParser()
 
   transport.onMessage = (message: unknown): void => {
-    const msg = message as { id?: unknown; method?: unknown; result?: unknown; error?: unknown }
+    const msg = message as { id?: unknown; method?: unknown; params?: unknown; result?: unknown; error?: unknown }
     // 服务器端请求/通知带 method（请求还带 id）；响应带 id + result/error、无 method。先判 method 再判 id。
     if (typeof msg.method === 'string') {
+      if (msg.method === '$/progress') events.onProgress?.(msg.params)
       void handleServerRequest(msg as { method: string; params?: unknown; id?: unknown })
       return
     }
@@ -160,6 +162,7 @@ export function createLspClient(
           ? workspaceFolders.map((uri) => ({ uri, name: uri }))
           : null,
         capabilities: {
+          window: { workDoneProgress: true },
           workspace: { configuration: true },
           textDocument: {
             synchronization: { dynamicRegistration: false, willSave: false, didSave: true },

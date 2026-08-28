@@ -135,7 +135,7 @@ export interface RpcRequestMap {
   'vscode.devFormGet': {}
   'vscode.devFormSet': { enabled: boolean; path?: string }
   'compat': {}
-  'edrv.lsp.status': {}
+  'edrv.lsp.status': { sessionId?: string }
   'edrv.lsp.sync': { sessionId?: string; path: string; text: string; version: number }
   'edrv.lsp.close': { sessionId?: string; path: string }
   'edrv.lsp.definition': { sessionId?: string; path: string; position: LspPosition }

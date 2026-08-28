@@ -61,13 +61,42 @@ export function createLspServer(spec: LspProviderSpec, root: string, languageId:
   let client: LspClient | null = null
   let capabilities: LspServerCapabilities = { definition: false, references: false, documentSymbol: false, workspaceSymbol: false, hover: false }
   let disposed = false
+  let readyWait: Promise<boolean> = Promise.resolve(false)
+  let resolveReady: ((ready: boolean) => void) | null = null
+  let lastProgress: { value?: number; message?: string } = {}
   let lastStatus: LspServerStatus = { languageId, source: spec.kind, phase: 'idle', reason: spec.ready ? undefined : spec.reason, root }
 
   const log = (line: string): void => logger?.('[' + languageId + '@' + root + '] ' + line)
 
   const setPhase = (next: LspServerPhase, reason?: string): void => {
     phase = next
-    lastStatus = { languageId, source: spec.kind, phase: next, reason, root }
+    lastStatus = { languageId, source: spec.kind, phase: next, reason, root, ...progressFields() }
+    server.onStateChange?.(lastStatus)
+  }
+
+  /** 返回当前进度字段，避免空进度污染状态载荷。 */
+  const progressFields = (): Pick<LspServerStatus, 'progress' | 'progressMessage'> => ({
+    progress: lastProgress.value,
+    progressMessage: lastProgress.message,
+  })
+
+  /** 处理 LSP $/progress 通知并映射为编辑器状态。 */
+  const applyProgress = (params: unknown): void => {
+    const value = params as { value?: unknown }
+    const report = value?.value as { kind?: unknown; percentage?: unknown; message?: unknown } | undefined
+    if (report?.kind === 'begin') {
+      lastProgress = { value: 0, message: typeof report.message === 'string' ? report.message : '正在解析工作区' }
+      if (phase === 'ready') phase = 'indexing'
+    } else if (report?.kind === 'end') {
+      lastProgress = { value: 100, message: typeof report.message === 'string' ? report.message : '解析完成' }
+      if (phase === 'indexing') phase = 'ready'
+    } else if (typeof report?.percentage === 'number') {
+      lastProgress = { value: Math.max(0, Math.min(100, report.percentage)), message: typeof report.message === 'string' ? report.message : lastProgress.message }
+      if (phase === 'ready') phase = 'indexing'
+    } else if (typeof report?.message === 'string') {
+      lastProgress = { ...lastProgress, message: report.message }
+    }
+    lastStatus = { ...lastStatus, phase, ...progressFields() }
     server.onStateChange?.(lastStatus)
   }
 
@@ -92,7 +121,10 @@ export function createLspServer(spec: LspProviderSpec, root: string, languageId:
 
     async start(): Promise<boolean> {
       if (disposed) return false
-      if (phase === 'starting' || phase === 'ready' || phase === 'indexing') return true
+      if (phase === 'starting') return readyWait
+      if (phase === 'ready' || phase === 'indexing') return true
+      readyWait = new Promise((resolve) => { resolveReady = resolve })
+      lastProgress = {}
       setPhase('starting')
       try {
         transport = spawnServer(
@@ -110,10 +142,15 @@ export function createLspServer(spec: LspProviderSpec, root: string, languageId:
               })
             }
             setPhase('ready')
+            resolveReady?.(true)
+            resolveReady = null
             log('ready: definition=' + caps.definition + ' references=' + caps.references + ' symbols=' + caps.documentSymbol)
           },
+          onProgress: (params) => applyProgress(params),
           onExit: (code, signal) => {
             if (disposed) return
+            resolveReady?.(false)
+            resolveReady = null
             log('server exited (' + String(code) + '/' + String(signal) + ')')
             client = null
             transport = null
@@ -129,6 +166,8 @@ export function createLspServer(spec: LspProviderSpec, root: string, languageId:
       } catch (error) {
         log('start failed: ' + String(error))
         setPhase('unavailable', '启动失败：' + String(error))
+        resolveReady?.(false)
+        resolveReady = null
         try { await server.dispose() } catch { /* 忽略 */ }
         return false
       }
@@ -167,7 +206,7 @@ export function createLspServer(spec: LspProviderSpec, root: string, languageId:
 
     async definition(path: string, line: number, character: number): Promise<LspLocation[]> {
       const doc = docs.get(path)
-      if (!doc) return []
+      if (!doc || !(await readyWait)) return []
       const result = await ensureClient().request<unknown>(
         'textDocument/definition',
         { textDocument: { uri: doc.uri }, position: { line, character } },
@@ -177,7 +216,7 @@ export function createLspServer(spec: LspProviderSpec, root: string, languageId:
 
     async references(path: string, line: number, character: number, includeDeclaration: boolean): Promise<LspLocation[]> {
       const doc = docs.get(path)
-      if (!doc) return []
+      if (!doc || !(await readyWait)) return []
       const result = await ensureClient().request<unknown>(
         'textDocument/references',
         {
@@ -191,13 +230,14 @@ export function createLspServer(spec: LspProviderSpec, root: string, languageId:
 
     async documentSymbol(path: string): Promise<LspSymbol[]> {
       const doc = docs.get(path)
-      if (!doc) return []
+      if (!doc || !(await readyWait)) return []
       const result = await ensureClient().request<unknown>('textDocument/documentSymbol', { textDocument: { uri: doc.uri } })
       if (!Array.isArray(result)) return []
       return (result as unknown[]).map(normalizeSymbol).filter((s): s is LspSymbol => s !== null)
     },
 
     async workspaceSymbol(query: string): Promise<LspSymbol[]> {
+      if (!(await readyWait)) return []
       const result = await ensureClient().request<unknown>('workspace/symbol', { query })
       if (!Array.isArray(result)) return []
       return (result as unknown[]).map(normalizeSymbol).filter((s): s is LspSymbol => s !== null)
@@ -205,7 +245,7 @@ export function createLspServer(spec: LspProviderSpec, root: string, languageId:
 
     async hover(path: string, line: number, character: number): Promise<{ contents: string[] } | null> {
       const doc = docs.get(path)
-      if (!doc) return null
+      if (!doc || !(await readyWait)) return null
       const result = await ensureClient().request<{ contents?: unknown; range?: unknown } | null>(
         'textDocument/hover',
         { textDocument: { uri: doc.uri }, position: { line, character } },
@@ -216,6 +256,8 @@ export function createLspServer(spec: LspProviderSpec, root: string, languageId:
 
     async dispose(): Promise<void> {
       disposed = true
+      resolveReady?.(false)
+      resolveReady = null
       if (client) {
         await client.shutdown().catch(() => {})
         client = null

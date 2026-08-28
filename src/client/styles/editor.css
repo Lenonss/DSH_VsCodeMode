@@ -33,6 +33,13 @@
 [data-edrv-view] .edrv-btn-mini:disabled { opacity: .45; cursor: default; }
 [data-edrv-view] .edrv-statusbar { display: flex; align-items: center; gap: 10px; padding: 3px 10px; border-top: 1px solid var(--dsw-alias-border-l1, #333); background: var(--dsw-alias-bg-layer-1, transparent); font-size: 11px; color: var(--dsw-alias-label-tertiary, #888); flex-shrink: 0; white-space: nowrap; overflow: hidden; }
 [data-edrv-view] .edrv-statusbar .edrv-sp-path { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+[data-edrv-view] .edrv-statusbar .edrv-sp-lsp { flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; }
+[data-edrv-view] .edrv-statusbar .edrv-sp-progress-message { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--dsw-alias-label-secondary, #52606d); }
+[data-edrv-view] .edrv-statusbar .edrv-sp-progress { flex: 0 0 auto; min-width: 36px; text-align: right; font-variant-numeric: tabular-nums; color: var(--dsw-alias-label-secondary, #52606d); }
+[data-edrv-view] .edrv-lsp-status-dot { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto; background: var(--dsw-alias-label-tertiary, #9aa5b1); }
+[data-edrv-view] .edrv-lsp-status-dot.ready { background: var(--dsw-alias-state-success-primary, #0f9d58); }
+[data-edrv-view] .edrv-lsp-status-dot.busy { background: var(--dsw-alias-state-warn-primary, #d97706); animation: edrv-lsp-pulse 1.2s ease-in-out infinite; }
+@keyframes edrv-lsp-pulse { 50% { opacity: .45; } }
 [data-edrv-view] .edrv-diffchip { font-size: 11px; padding: 2px 10px; border: 1px solid var(--dsw-alias-border-l1, #333); border-radius: 999px; background: var(--dsw-alias-bg-layer-2, transparent); color: var(--dsw-alias-state-warn-primary, #b7791f); cursor: pointer; white-space: nowrap; flex-shrink: 0; }
 [data-edrv-view] .edrv-chip-btn { font-size: 12px; padding: 2px 6px; border: none; background: transparent; color: var(--dsw-alias-label-secondary, #aaa); cursor: pointer; border-radius: 4px; flex-shrink: 0; }
 [data-edrv-view] .edrv-chip-btn:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(255,255,255,.06)); }
