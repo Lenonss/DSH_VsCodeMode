@@ -10,18 +10,36 @@
 .vsm-primary:hover{background:var(--dsw-alias-button-primary-hover,#5a46e6)}
 .vsm-primary:disabled{opacity:.55;cursor:default}
 
-/* 子 Tab：我的 MCP / MCP 市场 */
+/* MCP 管理下的二级子页签：我的 MCP / 项目 MCP / MCP 市场 */
+.vsm-mcp-subhead{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-top:-4px}
+.vsm-mcp-subtabs{display:flex;gap:18px;border-bottom:1px solid var(--dsw-alias-border-l1,#2e2e2e);flex:1}
+.vsm-mcp-subtabs button{border:0;background:none;color:var(--dsw-alias-label-tertiary,#9aa5b1);padding:7px 2px 9px;cursor:pointer;font-size:13px;position:relative}
+.vsm-mcp-subtabs button:hover{color:var(--dsw-alias-label-secondary,#c8c8c8)}
+.vsm-mcp-subtabs button.active{color:var(--dsw-alias-label-primary,#fff);font-weight:500}
+.vsm-mcp-subtabs button.active::after{content:"";position:absolute;left:0;right:0;bottom:-1px;height:2px;background:var(--dsw-alias-brand-primary,#6d55ff);border-radius:2px}
+
+/* 顶层 Tab：通用 / 快捷键 / MCP 管理 / 语言服务器 / 性能优化 / 兼容性 */
 .vsm-mcp-tabs{display:flex;gap:24px;border-bottom:1px solid var(--dsw-alias-border-l2,#3a3a3a)}
 .vsm-mcp-tabs button{border:0;background:none;color:var(--dsw-alias-label-tertiary,#9aa5b1);padding:9px 2px 11px;cursor:pointer;font-size:14px;position:relative}
 .vsm-mcp-tabs button:hover{color:var(--dsw-alias-label-secondary,#c8c8c8)}
 .vsm-mcp-tabs button.active{color:var(--dsw-alias-label-primary,#fff);font-weight:500}
 .vsm-mcp-tabs button.active::after{content:"";position:absolute;left:0;right:0;bottom:-1px;height:2px;background:var(--dsw-alias-brand-primary,#6d55ff);border-radius:2px}
 
+/* 统一线框面板：圆角矩形边框圈住各设置分区，提升可读性。
+   用法：<section class="vsm-panel"> + 可选 <h3 class="vsm-panel-title">。 */
+.vsm-panel{border:1px solid var(--dsw-alias-border-l2,#3a3a3a);border-radius:12px;background:var(--dsw-alias-bg-layer-2,transparent);overflow:hidden}
+.vsm-panel-pad{padding:14px 16px}
+.vsm-panel-title{margin:0;padding:10px 16px;font-size:13px;font-weight:600;color:var(--dsw-alias-label-secondary,#c8c8c8);background:var(--dsw-alias-bg-mask-1,#ffffff0a);border-bottom:1px solid var(--dsw-alias-border-l1,#333)}
+.vsm-panel-body{padding:6px 16px}
+.vsm-panel-body>*:first-child{margin-top:8px}
+.vsm-panel-body>*:last-child{margin-bottom:10px}
+
 /* 通用设置 */
-.vsm-general-page{display:flex;flex-direction:column;gap:10px;max-width:720px}
+.vsm-general-page{display:flex;flex-direction:column;gap:14px;max-width:720px}
 .vsm-general-page h2{margin:0;font-size:20px;color:var(--dsw-alias-label-primary,#e6e6e6)}
-.vsm-general-page p{margin:0 0 8px;color:var(--dsw-alias-label-tertiary,#9aa5b1);font-size:13px}
+.vsm-general-page p{margin:0;color:var(--dsw-alias-label-tertiary,#9aa5b1);font-size:13px}
 .vsm-general-row{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:14px 0;border-bottom:1px solid var(--dsw-alias-border-l1,#333);color:var(--dsw-alias-label-primary,#eee);font-size:14px}
+.vsm-general-row:last-child{border-bottom:0}
 .vsm-general-row select{min-width:220px;padding:8px 10px;border:1px solid var(--dsw-alias-border-l2,#555);border-radius:6px;background:var(--dsw-alias-bg-layer-1,#2b2b2b);color:var(--dsw-alias-label-primary,#eee);font:inherit}
 .vsm-general-row small{color:var(--dsw-alias-label-tertiary,#9aa5b1)}
 
@@ -94,8 +112,7 @@
 .vsm-mcp-dialog-actions button{padding:8px 14px;border:1px solid var(--dsw-alias-border-l2,#555);border-radius:6px;background:none;color:var(--dsw-alias-label-primary,#eee);cursor:pointer;font-size:13px}
 .vsm-mcp-dialog-actions button:hover{background:var(--dsw-alias-interactive-bg-hover,#ffffff14)}
 
-/* 兼容性小节 */
-.vsm-compat-h3{margin:16px 0 2px;font-size:14px;font-weight:600;color:var(--dsw-alias-label-secondary,#c8c8c8)}
+/* 兼容性条目（面板标题改用 .vsm-panel-title） */
 .vsm-compat-item{display:flex;align-items:baseline;justify-content:space-between;gap:16px;padding:10px 0;border-bottom:1px solid var(--dsw-alias-border-l1,#333);font-size:13px;color:var(--dsw-alias-label-primary,#eee)}
 .vsm-compat-item.ok .vsm-compat-name::before{content:"● ";color:var(--dsw-alias-state-success-primary,#38bd75)}
 .vsm-compat-item.warn .vsm-compat-name::before{content:"● ";color:var(--dsw-alias-state-warn-primary,#e5b93f)}
@@ -139,6 +156,7 @@
 
 /* 会话性能（PerfSettings 子 Tab） */
 .vsm-perf-page{display:flex;flex-direction:column;gap:14px;max-width:920px}
+.vsm-perf-page>.vsm-panel-body>*:first-child{margin-top:0}
 .vsm-perf-page h2{margin:0;font-size:20px;color:var(--dsw-alias-label-primary,#e6e6e6)}
 .vsm-perf-page p{margin:0;color:var(--dsw-alias-label-tertiary,#9aa5b1);font-size:13px;line-height:1.5}
 .vsm-perf-cards{display:flex;gap:12px;flex-wrap:wrap}
@@ -148,8 +166,19 @@
 .vsm-perf-card b.big{color:var(--dsw-alias-state-error-primary,#e05252)}
 .vsm-perf-toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .vsm-perf-selcount{font-size:12px;color:var(--dsw-alias-label-tertiary,#9aa5b1);margin:0 4px}
+/* 工作区列表分页器 */
+.vsm-perf-pager{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-top:4px}
+.vsm-perf-pager-text{font-size:12px;color:var(--dsw-alias-label-tertiary,#9aa5b1)}
+.vsm-perf-pager-actions{display:flex;gap:8px}
+.vsm-perf-ws-list{display:flex;flex-direction:column;gap:8px}
 .vsm-perf-ws{border:1px solid var(--dsw-alias-border-l2,#3a3a3a);border-radius:10px;overflow:hidden}
-.vsm-perf-ws-head{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:10px 14px;background:var(--dsw-alias-bg-layer-1,#262626);border-bottom:1px solid var(--dsw-alias-border-l2,#3a3a3a)}
+.vsm-perf-ws-head{display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--dsw-alias-bg-layer-1,#262626);cursor:pointer;user-select:none}
+.vsm-perf-ws-head:hover{background:var(--dsw-alias-interactive-bg-hover,#ffffff14)}
+.vsm-perf-ws-head:focus-visible{outline:1px solid var(--dsw-alias-brand-primary,#6d55ff);outline-offset:-1px}
+.vsm-perf-ws.expanded .vsm-perf-ws-head{border-bottom:1px solid var(--dsw-alias-border-l2,#3a3a3a)}
+.vsm-perf-ws-caret{color:var(--dsw-alias-label-tertiary,#9aa5b1);font-size:12px;flex-shrink:0;transition:transform .15s;display:inline-block}
+.vsm-perf-ws-caret.open{transform:rotate(90deg)}
+.vsm-perf-ws .vsm-perf-ws-name{flex:1}
 .vsm-perf-ws-name{font-size:13px;font-weight:600;color:var(--dsw-alias-label-primary,#e6e6e6);font-family:var(--ds-font-family-code,ui-monospace,monospace);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .vsm-perf-ws-meta{font-size:12px;color:var(--dsw-alias-label-tertiary,#9aa5b1);flex-shrink:0}
 .vsm-perf-rows{display:flex;flex-direction:column}
@@ -163,15 +192,9 @@
 .vsm-perf-size.big{color:var(--dsw-alias-state-error-primary,#e05252);font-weight:600}
 .vsm-perf-mtime{width:44px;flex-shrink:0;color:var(--dsw-alias-label-tertiary,#9aa5b1)}
 .vsm-perf-active{width:44px;flex-shrink:0;font-size:11px;color:var(--dsw-alias-state-warn-primary,#e5b93f);text-align:right}
-.vsm-perf-moved{border:1px solid var(--dsw-alias-border-l2,#3a3a3a);border-radius:10px;padding:12px 14px;background:var(--dsw-alias-bg-layer-2,transparent)}
-.vsm-perf-moved h3{margin:0 0 8px;font-size:14px;color:var(--dsw-alias-label-primary,#e6e6e6)}
-.vsm-perf-config{border:1px solid var(--dsw-alias-border-l2,#3a3a3a);border-radius:10px;padding:12px 14px;background:var(--dsw-alias-bg-layer-2,transparent)}
-.vsm-perf-config h3{margin:0 0 8px;font-size:14px;color:var(--dsw-alias-label-primary,#e6e6e6)}
 .vsm-perf-config-state{display:flex;align-items:center;gap:12px;margin:10px 0}
 .vsm-perf-note{font-size:12px;color:var(--dsw-alias-state-warn-primary,#e5b93f)}
 .vsm-perf-block{margin:8px 0 0;padding:10px 12px;border:1px solid var(--dsw-alias-border-l2,#3a3a3a);border-radius:8px;background:var(--dsw-alias-bg-base,#111);color:var(--dsw-alias-label-secondary,#c8c8c8);font-size:11px;line-height:1.5;font-family:var(--ds-font-family-code,ui-monospace,monospace);white-space:pre-wrap;overflow-x:auto;max-width:100%}
-.vsm-perf-guide{border:1px solid var(--dsw-alias-border-l2,#3a3a3a);border-radius:10px;padding:12px 14px;background:var(--dsw-alias-bg-layer-2,transparent)}
-.vsm-perf-guide h3{margin:0 0 8px;font-size:14px;color:var(--dsw-alias-label-primary,#e6e6e6)}
 .vsm-perf-modal{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:var(--dsw-alias-bg-mask-1,#000000aa);z-index:1000;padding:20px}
 .vsm-perf-modal-card{width:min(560px,92vw);max-height:72vh;display:flex;flex-direction:column;gap:12px;padding:18px 20px;border:1px solid var(--dsw-alias-border-l2,#3a3a3a);border-radius:12px;background:var(--dsw-alias-bg-layer-2,#1f1f1f);color:var(--dsw-alias-label-primary,#e6e6e6)}
 .vsm-perf-modal-card h3{margin:0;font-size:16px}

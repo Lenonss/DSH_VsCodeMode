@@ -226,23 +226,29 @@ export function LspSettings() {
     React.createElement('button', { className: 'vsm-primary', onClick: refresh }, '↻ 刷新'))
   const banner = error ? React.createElement('div', { className: 'vsm-mcp-error vsm-mcp-banner' }, error) : null
 
+  /** 线框面板容器：标题 + 内容体。 */
+  const panel = (title, children) => React.createElement('section', { className: 'vsm-panel' },
+    React.createElement('h3', { className: 'vsm-panel-title' }, title),
+    React.createElement('div', { className: 'vsm-panel-body' }, children),
+  )
+
   let body = null
   if (tab === 'servers') {
-    body = React.createElement('div', null,
+    body = panel('语言服务器', React.createElement(React.Fragment, null,
       LANGUAGES.map((lang) => React.createElement(LangCard, {
         key: lang.id, lang,
         config: config[lang.id] ?? {},
         status: servers.find((s) => s.languageId === lang.id),
         busy, onToggle: toggleLang, onSave: saveLang,
       })),
-      React.createElement('div', { className: 'vsm-lsp-hint' }, '提示：打开 Lua/C# 文件即自动（惰性）启动对应语言服务器；未配置时编辑器功能不受影响，大纲回退内置解析。'))
+      React.createElement('div', { className: 'vsm-lsp-hint' }, '提示：打开 Lua/C# 文件即自动（惰性）启动对应语言服务器；未配置时编辑器功能不受影响，大纲回退内置解析。')))
   } else if (tab === 'installed') {
-    body = React.createElement('div', null,
+    body = panel('已安装扩展', React.createElement(React.Fragment, null,
       React.createElement('div', { className: 'vsm-lsp-hint' }, '已安装的语言服务器扩展（存于 ~/.dsh/dsh-vscode-mode/extensions/）。语言服务器被自动发现为「扩展」源。'),
       installed.length ? installed.map((ext) => React.createElement(InstalledCard, { key: ext.id, ext, busy, onUninstall: uninstallExt, onUpdate: updateExt }))
-        : React.createElement('div', { className: 'vsm-mcp-empty' }, '还没有安装扩展（去「市场」或指定本地 .vsix）'))
+        : React.createElement('div', { className: 'vsm-mcp-empty' }, '还没有安装扩展（去「市场」或指定本地 .vsix）')))
   } else if (tab === 'market') {
-    body = React.createElement('div', null,
+    body = panel('扩展市场', React.createElement(React.Fragment, null,
       React.createElement('div', { className: 'vsm-lsp-form' },
         React.createElement('label', null, React.createElement('span', null, '搜索 Open VSX 市场'), React.createElement('input', { value: query, placeholder: '如 sumneko.lua / lua language server', onChange: (e) => setQuery(e.target.value), onKeyDown: (e) => { if (e.key === 'Enter') searchMarket() } })),
         React.createElement('button', { className: 'vsm-primary', disabled: busy === '__market', onClick: searchMarket }, busy === '__market' ? '搜索中…' : '搜索')),
@@ -250,9 +256,9 @@ export function LspSettings() {
         React.createElement('label', null, React.createElement('span', null, '安装本地 .vsix 文件（服务器绝对路径）'), React.createElement('input', { value: vsixPath, placeholder: '如 C:/Downloads/sumneko.lua-3.19.1.vsix', onChange: (e) => setVsixPath(e.target.value) })),
         React.createElement('button', { className: 'vsm-primary', disabled: busy === '__vsix', onClick: installLocal }, busy === '__vsix' ? '安装中…' : '安装本地 .vsix')),
       React.createElement('div', { className: 'vsm-lsp-hint' }, '市场安装会下载并解包 VSIX 到扩展目录；含语言服务器（如 sumneko.lua）的扩展会被自动发现。'),
-      market.map((item) => React.createElement(MarketCard, { key: item.id, item, installed, busy, onInstall: installMarket })))
+      market.map((item) => React.createElement(MarketCard, { key: item.id, item, installed, busy, onInstall: installMarket }))))
   } else {
-    body = React.createElement('div', null,
+    body = panel('可用更新', React.createElement(React.Fragment, null,
       React.createElement('div', { className: 'vsm-lsp-hint' }, '已装扩展与 Open VSX 最新版的差异。'),
       updates.length ? updates.map((u) => React.createElement('article', { key: u.id, className: 'vsm-mcp-card' },
         React.createElement('div', { className: 'vsm-mcp-card-head' },
@@ -262,7 +268,7 @@ export function LspSettings() {
             React.createElement('span', { className: 'vsm-ext-ver' }, 'v' + u.current + ' → v' + u.latest)),
           React.createElement('div', { className: 'vsm-mcp-actions' },
             React.createElement('button', { className: 'vsm-primary vsm-small', disabled: busy === u.id, onClick: () => updateExt(u) }, busy === u.id ? '更新中…' : '更新')))))
-        : React.createElement('div', { className: 'vsm-mcp-empty' }, '全部已是最新'))
+        : React.createElement('div', { className: 'vsm-mcp-empty' }, '全部已是最新')))
   }
   return React.createElement('div', null, header, nav, banner, body)
 }

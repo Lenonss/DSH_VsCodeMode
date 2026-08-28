@@ -178,10 +178,13 @@ export function KeybindingsPanel() {
     unavailable && React.createElement('div', { className: 'vsm-mcp-error vsm-mcp-banner' }, '设置服务暂不可用，当前使用默认键位。'),
     error && React.createElement('div', { className: 'vsm-mcp-error vsm-mcp-banner' }, error),
     message && React.createElement('div', { className: 'vsm-kb-message' }, message),
-    React.createElement('div', { className: 'vsm-kb-list' }, rows),
-    React.createElement('div', { className: 'vsm-kb-actionsbar' },
-      React.createElement('span', { className: 'vsm-kb-dirty' }, dirty ? '有未保存的修改' : ''),
-      React.createElement('button', { className: 'vsm-primary vsm-small', disabled: unavailable || notReady || busy || snapshot?.writable === false || !dirty, onClick: save }, busy ? '保存中…' : '保存'),
-      React.createElement('button', { className: 'vsm-small', disabled: unavailable || notReady || busy || snapshot?.writable === false, onClick: resetAll }, '恢复默认')),
+    React.createElement('section', { className: 'vsm-panel' },
+      React.createElement('h3', { className: 'vsm-panel-title' }, '编辑器键位'),
+      React.createElement('div', { className: 'vsm-panel-body' }, React.createElement('div', { className: 'vsm-kb-list' }, rows)),
+      React.createElement('div', { className: 'vsm-panel-body vsm-kb-actionsbar' },
+        React.createElement('span', { className: 'vsm-kb-dirty' }, dirty ? '有未保存的修改' : ''),
+        React.createElement('button', { className: 'vsm-primary vsm-small', disabled: unavailable || notReady || busy || snapshot?.writable === false || !dirty, onClick: save }, busy ? '保存中…' : '保存'),
+        React.createElement('button', { className: 'vsm-small', disabled: unavailable || notReady || busy || snapshot?.writable === false, onClick: resetAll }, '恢复默认')),
+    ),
   )
 }

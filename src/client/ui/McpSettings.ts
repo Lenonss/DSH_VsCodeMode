@@ -1,9 +1,8 @@
 // @ts-nocheck
 /**
- * dsh-vscode-mode client — VSCodeMode 设置区：通用 / 快捷键 / MCP 管理。
- * 子 Tab：通用（文件打开工具/开发形态）/ 快捷键（编辑器键位配置，可重置）/
- * 我的 MCP（profile 全局）/ 项目 MCP（各项目 .mcp.json）/ MCP 市场（占位）/ 兼容性。
- * 作者 ddj 2026年08月22号 / 2026年08月26号
+ * dsh-vscode-mode client — VSCodeMode 设置区：通用 / 快捷键 / MCP 管理 / 语言服务器 / 性能优化 / 兼容性。
+ * MCP 管理 Tab 下含三个子页签：我的 MCP（profile 全局）/ 项目 MCP（各项目 .mcp.json）/ MCP 市场（占位）。
+ * 作者 ddj 2026年08月22号 / 2026年08月26号 / 2026年08月27号
  */
 import React from 'react'
 import { rpc } from '../rpc.js'
@@ -178,8 +177,13 @@ function GeneralSettings({ registry }) {
     React.createElement('p', null, '配置 DSH 对话中文件链接的打开工具。工具由当前运行时自动扫描。'),
     unavailable && React.createElement('div', { className: 'vsm-mcp-error vsm-mcp-banner' }, '设置服务暂不可用，当前使用自动选择。'),
     error && React.createElement('div', { className: 'vsm-mcp-error vsm-mcp-banner' }, error),
-    React.createElement('label', { className: 'vsm-general-row' }, React.createElement('span', null, '文件链接使用工具'), React.createElement('select', { value: currentOption, disabled: loading || unavailable || notReady || busy || snapshot?.writable === false, onChange: (event) => save(event.target.value) }, options.map((item) => React.createElement('option', { key: item.id, value: item.id }, item.label))), loading && React.createElement('small', null, '读取中…')),
-    devFormRow,
+    React.createElement('section', { className: 'vsm-panel' },
+      React.createElement('h3', { className: 'vsm-panel-title' }, '文件与安装'),
+      React.createElement('div', { className: 'vsm-panel-body' },
+        React.createElement('label', { className: 'vsm-general-row' }, React.createElement('span', null, '文件链接使用工具'), React.createElement('select', { value: currentOption, disabled: loading || unavailable || notReady || busy || snapshot?.writable === false, onChange: (event) => save(event.target.value) }, options.map((item) => React.createElement('option', { key: item.id, value: item.id }, item.label))), loading && React.createElement('small', null, '读取中…')),
+        devFormRow,
+      ),
+    ),
   )
 }
 
@@ -200,24 +204,89 @@ function CompatSection({ getSummary }) {
     React.createElement('span', { className: 'vsm-compat-name' }, item.name),
     React.createElement('span', { className: 'vsm-compat-note' }, item.note ?? (item.active ? '正常' : '未生效')),
   ))
+  /** 兼容性分组面板：标题 + 线框内容区。 */
+  const group = (title, children) => React.createElement('section', { className: 'vsm-panel' },
+    React.createElement('h3', { className: 'vsm-panel-title' }, title),
+    React.createElement('div', { className: 'vsm-panel-body' }, children),
+  )
   const warnings = report?.warnings ?? []
   const devForm = report?.devForm
   return React.createElement('section', { className: 'vsm-general-page' },
     React.createElement('h2', null, '兼容性'),
     React.createElement('p', null, '检测与其他插件 / DSH 版本的适配状态与已知问题。' + (report?.pluginVersion ? '（插件版本 ' + report.pluginVersion + '）' : '')),
     error && React.createElement('div', { className: 'vsm-mcp-error vsm-mcp-banner' }, error),
-    devForm?.enabled && React.createElement(React.Fragment, null,
-      React.createElement('h3', { className: 'vsm-compat-h3' }, '开发形态'),
-      React.createElement('div', { className: 'vsm-compat-item ok' }, React.createElement('span', { className: 'vsm-compat-name' }, '开发形态开启（工作区链接安装）'), React.createElement('span', { className: 'vsm-compat-note' }, devForm.path)),
+    devForm?.enabled && group('开发形态', React.createElement('div', { className: 'vsm-compat-item ok' }, React.createElement('span', { className: 'vsm-compat-name' }, '开发形态开启（工作区链接安装）'), React.createElement('span', { className: 'vsm-compat-note' }, devForm.path))),
+    group('外部插件与服务', renderItems(report?.external)),
+    group('客户端适配', renderItems(getSummary?.() ?? [])),
+    group('护栏', renderItems(report?.guards)),
+    group('警告', warnings.length ? warnings.map((w, index) => React.createElement('div', { key: index, className: 'vsm-mcp-error vsm-mcp-banner' }, w)) : React.createElement('div', { className: 'vsm-compat-item ok' }, React.createElement('span', { className: 'vsm-compat-name' }, '未检测到兼容性问题'), React.createElement('span', { className: 'vsm-compat-note' }, ''))),
+  )
+}
+
+/** MCP 管理子页签定义（我的 / 项目 / 市场）。 */
+const MCP_TABS = [
+  { id: 'mine', label: '我的 MCP' },
+  { id: 'projects', label: '项目 MCP' },
+  { id: 'market', label: 'MCP 市场' },
+]
+
+/**
+ * MCP 管理面板：顶层「MCP 管理」Tab 下的三个子页签容器。
+ * 作者 ddj 2026年08月27号
+ * @param {object[]} servers 全局 MCP 服务列表
+ * @param {object[]} projects 项目及其项目级 MCP 列表
+ * @param {string} busy 正在执行的操作标识
+ * @param {object} draft 新增表单草稿
+ * @param {Function} edit 草稿字段变更回调
+ * @param {Function} resetDraft 清空草稿回调
+ */
+function McpManagePanel({ servers, projects, busy, draft, edit, resetDraft, refreshGlobal, toggleGlobal, removeGlobal, refreshProject, toggleProject, removeProject, saveGlobal, saveProject }) {
+  const [mcpTab, setMcpTab] = React.useState('mine')
+  const [showForm, setShowForm] = React.useState(false)
+  const [projectForm, setProjectForm] = React.useState(null)
+  const [selectedPath, setSelectedPath] = React.useState('')
+
+  React.useEffect(() => {
+    if (!projects.length) {
+      setSelectedPath('')
+      return
+    }
+    if (!projects.some((project) => project.workspacePath === selectedPath)) setSelectedPath(projects[0].workspacePath)
+  }, [projects, selectedPath])
+
+  const closeGlobalForm = () => setShowForm(false)
+  const closeProjectForm = () => setProjectForm(null)
+  const addProject = (project) => {
+    resetDraft?.()
+    setProjectForm({ workspacePath: project.workspacePath, title: project.title })
+  }
+
+  const selectedProject = projects.find((project) => project.workspacePath === selectedPath)
+  const mineBody = servers.length
+    ? servers.map((s) => React.createElement(ServerCard, { key: s.id, server: s, onRefresh: refreshGlobal, onToggle: toggleGlobal, onRemove: removeGlobal }))
+    : React.createElement('div', { className: 'vsm-mcp-empty' }, '还没有配置全局 MCP')
+  const projectBody = projects.length ? React.createElement(React.Fragment, null,
+    React.createElement(ProjectPicker, { projects, value: selectedPath, onChange: setSelectedPath }),
+    selectedProject ? React.createElement(ProjectGroup, { project: selectedProject, busy, onAdd: addProject, onRefresh: refreshProject, onToggle: toggleProject, onRemove: removeProject }) : React.createElement('div', { className: 'vsm-mcp-empty' }, '请选择项目'),
+  ) : React.createElement('div', { className: 'vsm-mcp-empty' }, '还没有项目')
+
+  let body
+  if (mcpTab === 'projects') body = projectBody
+  else if (mcpTab === 'market') body = React.createElement('div', { className: 'vsm-mcp-empty' }, 'MCP 市场暂未接入')
+  else body = mineBody
+
+  const form = showForm
+    ? React.createElement(McpForm, { title: '添加全局 MCP', draft, busy, edit, save: () => saveGlobal(closeGlobalForm), close: closeGlobalForm })
+    : projectForm
+      ? React.createElement(McpForm, { title: '添加项目 MCP · ' + projectForm.title, draft, busy, edit, save: () => saveProject(projectForm.workspacePath, closeProjectForm), close: closeProjectForm })
+      : null
+  return React.createElement(React.Fragment, null,
+    React.createElement('div', { className: 'vsm-mcp-subhead' },
+      React.createElement('nav', { className: 'vsm-mcp-subtabs' }, MCP_TABS.map((item) => React.createElement('button', { key: item.id, className: mcpTab === item.id ? 'active' : '', onClick: () => setMcpTab(item.id) }, item.label))),
+      React.createElement('button', { className: 'vsm-primary vsm-small', onClick: () => { resetDraft?.(); setShowForm(true) } }, '+ 添加全局 MCP'),
     ),
-    React.createElement('h3', { className: 'vsm-compat-h3' }, '外部插件与服务'),
-    renderItems(report?.external),
-    React.createElement('h3', { className: 'vsm-compat-h3' }, '客户端适配'),
-    renderItems(getSummary?.() ?? []),
-    React.createElement('h3', { className: 'vsm-compat-h3' }, '护栏'),
-    renderItems(report?.guards),
-    React.createElement('h3', { className: 'vsm-compat-h3' }, '警告'),
-    warnings.length ? warnings.map((w, index) => React.createElement('div', { key: index, className: 'vsm-mcp-error vsm-mcp-banner' }, w)) : React.createElement('div', { className: 'vsm-compat-item ok' }, React.createElement('span', { className: 'vsm-compat-name' }, '未检测到兼容性问题'), React.createElement('span', { className: 'vsm-compat-note' }, '')),
+    body,
+    form,
   )
 }
 
@@ -232,17 +301,6 @@ export function McpSettings(props) {
   const [error, setError] = React.useState('')
   const [tab, setTab] = React.useState('general')
   const [draft, setDraft] = React.useState(EMPTY)
-  const [showForm, setShowForm] = React.useState(false)
-  const [projectForm, setProjectForm] = React.useState(null)
-  const [selectedPath, setSelectedPath] = React.useState('')
-
-  React.useEffect(() => {
-    if (!projects.length) {
-      setSelectedPath('')
-      return
-    }
-    if (!projects.some((project) => project.workspacePath === selectedPath)) setSelectedPath(projects[0].workspacePath)
-  }, [projects, selectedPath])
 
   const loadAll = React.useCallback(() => {
     setLoading(true)
@@ -287,52 +345,55 @@ export function McpSettings(props) {
   const toggleProject = (p, s) => projectAction(p.workspacePath, s.serverName, 'mcp.projectToggle', { workspacePath: p.workspacePath, serverName: s.serverName, enabled: !s.enabled }, replaceProject(p.workspacePath))
   const removeProject = (p, s) => window.confirm('确认删除此项目的 MCP「' + s.serverName + '」？') && projectAction(p.workspacePath, s.serverName, 'mcp.projectRemove', { workspacePath: p.workspacePath, serverName: s.serverName }, replaceProject(p.workspacePath))
 
-  const saveGlobal = () => {
+  /**
+   * 保存全局 MCP：成功后由回调关闭子面板。
+   * 作者 ddj 2026年08月27号
+   * @param {Function} close 关闭新增表单回调
+   */
+  const saveGlobal = (close) => {
     setBusy('save')
     setError('')
     rpc('mcp.save', { config: configOf(draft) }).then(finish).then((result) => {
       setServers((old) => old.some((s) => s.id === result.server.id) ? old.map((s) => s.id === result.server.id ? result.server : s) : old.concat(result.server))
       setDraft(EMPTY)
-      setShowForm(false)
+      close()
     }).catch((e) => setError(String(e))).finally(() => setBusy(''))
   }
 
-  const saveProject = () => {
-    if (!projectForm) return
+  /**
+   * 保存项目 MCP：成功后由回调关闭子面板。
+   * 作者 ddj 2026年08月27号
+   * @param {string} workspacePath 目标项目路径
+   * @param {Function} close 关闭新增表单回调
+   */
+  const saveProject = (workspacePath, close) => {
     setBusy('project-save')
     setError('')
     const config = configOf(draft)
-    rpc('mcp.projectSave', { workspacePath: projectForm.workspacePath, serverName: config.serverName, config }).then(finish).then((result) => {
-      setProjects((old) => old.map((p) => p.workspacePath === projectForm.workspacePath ? result.project : p))
+    rpc('mcp.projectSave', { workspacePath, serverName: config.serverName, config }).then(finish).then((result) => {
+      setProjects((old) => old.map((p) => p.workspacePath === workspacePath ? result.project : p))
       setDraft(EMPTY)
-      setProjectForm(null)
+      close()
     }).catch((e) => setError(String(e))).finally(() => setBusy(''))
   }
 
   const edit = (key, value) => setDraft((old) => ({ ...old, [key]: value }))
-  const marketBody = React.createElement('div', { className: 'vsm-mcp-empty' }, 'MCP 市场暂未接入')
-  const selectedProject = projects.find((project) => project.workspacePath === selectedPath)
-  const projectBody = projects.length ? React.createElement(React.Fragment, null,
-    React.createElement(ProjectPicker, { projects, value: selectedPath, onChange: setSelectedPath }),
-    selectedProject ? React.createElement(ProjectGroup, { project: selectedProject, busy, onAdd: (project) => { setDraft(EMPTY); setProjectForm({ workspacePath: project.workspacePath, title: project.title }) }, onRefresh: refreshProject, onToggle: toggleProject, onRemove: removeProject }) : React.createElement('div', { className: 'vsm-mcp-empty' }, '请选择项目'),
-  ) : React.createElement('div', { className: 'vsm-mcp-empty' }, '还没有项目')
+  const resetDraft = () => setDraft(EMPTY)
   let body
   if (loading) body = React.createElement('div', { className: 'vsm-mcp-empty' }, '正在读取 MCP 服务…')
   else if (tab === 'general') body = React.createElement(GeneralSettings, { registry: openerRegistry })
   else if (tab === 'keys') body = React.createElement(KeybindingsPanel, null)
-  else if (tab === 'mine') body = React.createElement('div', null, servers.length ? servers.map((s) => React.createElement(ServerCard, { key: s.id, server: s, onRefresh: refreshGlobal, onToggle: toggleGlobal, onRemove: removeGlobal })) : React.createElement('div', { className: 'vsm-mcp-empty' }, '还没有配置全局 MCP'))
-  else if (tab === 'projects') body = projectBody
+  else if (tab === 'mcp') body = React.createElement(McpManagePanel, { servers, projects, busy, draft, edit, resetDraft,
+    saveGlobal: (close) => saveGlobal(close), saveProject: (workspacePath, close) => saveProject(workspacePath, close),
+    refreshGlobal, toggleGlobal, removeGlobal, refreshProject, toggleProject, removeProject })
   else if (tab === 'compat') body = React.createElement(CompatSection, { getSummary: compatSummary })
   else if (tab === 'lsp') body = React.createElement(LspSettings, null)
-  else if (tab === 'perf') body = React.createElement(PerfSettings, null)
-  else body = marketBody
-  const form = showForm ? React.createElement(McpForm, { title: '添加全局 MCP', draft, busy, edit, save: saveGlobal, close: () => setShowForm(false) }) : projectForm ? React.createElement(McpForm, { title: '添加项目 MCP · ' + projectForm.title, draft, busy, edit, save: saveProject, close: () => setProjectForm(null) }) : null
+  else body = React.createElement(PerfSettings, null)
   return React.createElement('section', { className: 'vsm-mcp-page' },
-    React.createElement('header', { className: 'vsm-mcp-header' }, React.createElement('div', null, React.createElement('h2', null, 'VSCodeMode'), React.createElement('p', null, '管理当前 profile 与各项目的 Model Context Protocol 服务。')), React.createElement('button', { className: 'vsm-primary', onClick: () => { setDraft(EMPTY); setShowForm(true) } }, '+ 添加全局 MCP')),
-    React.createElement('nav', { className: 'vsm-mcp-tabs' }, React.createElement('button', { className: tab === 'general' ? 'active' : '', onClick: () => setTab('general') }, '通用'), React.createElement('button', { className: tab === 'keys' ? 'active' : '', onClick: () => setTab('keys') }, '快捷键'), React.createElement('button', { className: tab === 'mine' ? 'active' : '', onClick: () => setTab('mine') }, '我的 MCP'), React.createElement('button', { className: tab === 'projects' ? 'active' : '', onClick: () => setTab('projects') }, '项目 MCP'), React.createElement('button', { className: tab === 'lsp' ? 'active' : '', onClick: () => setTab('lsp') }, '语言服务器'), React.createElement('button', { className: tab === 'perf' ? 'active' : '', onClick: () => setTab('perf') }, '性能优化'), React.createElement('button', { className: tab === 'market' ? 'active' : '', onClick: () => setTab('market') }, 'MCP 市场'), React.createElement('button', { className: tab === 'compat' ? 'active' : '', onClick: () => setTab('compat') }, '兼容性')),
+    React.createElement('header', { className: 'vsm-mcp-header' }, React.createElement('div', null, React.createElement('h2', null, 'VSCodeMode'), React.createElement('p', null, '管理当前 profile 与各项目的 Model Context Protocol 服务。'))),
+    React.createElement('nav', { className: 'vsm-mcp-tabs' }, React.createElement('button', { className: tab === 'general' ? 'active' : '', onClick: () => setTab('general') }, '通用'), React.createElement('button', { className: tab === 'keys' ? 'active' : '', onClick: () => setTab('keys') }, '快捷键'), React.createElement('button', { className: tab === 'mcp' ? 'active' : '', onClick: () => setTab('mcp') }, 'MCP 管理'), React.createElement('button', { className: tab === 'lsp' ? 'active' : '', onClick: () => setTab('lsp') }, '语言服务器'), React.createElement('button', { className: tab === 'perf' ? 'active' : '', onClick: () => setTab('perf') }, '性能优化'), React.createElement('button', { className: tab === 'compat' ? 'active' : '', onClick: () => setTab('compat') }, '兼容性')),
     error && React.createElement('div', { className: 'vsm-mcp-error vsm-mcp-banner' }, error),
     body,
-    form,
   )
 }
 

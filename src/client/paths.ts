@@ -22,6 +22,8 @@ export const CACHE_KEY = {
   search: 'edrv.search.v1.',
   /** 侧边栏提示已关闭标记（全局，无会话）。 */
   sideHint: 'edrv.side-hint-dismissed',
+  /** 「性能优化」页工作区栏目展开状态（workspaceFoldCache v1，全局不按会话）。 */
+  workspaceFold: 'edrv.ws-fold.v1.',
 } as const
 
 /** 按前缀拼会话键（侧边栏/编辑器等需要布局段时自行拼接后传入）。 */
