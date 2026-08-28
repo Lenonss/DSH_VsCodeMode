@@ -18,6 +18,11 @@ import { setupOpenSettings } from './fileOpenSettings.js'
 import { disposeIndex } from './treeIndex.js'
 import { sweepTreeCache } from './paths.js'
 import { PLUGIN_NAME, buildReport } from './compat.js'
+import { createLspManager } from './lsp/manager.js'
+import { createLspRpc } from './lsp/rpc.js'
+import { installLspSettingsSection } from './lsp/settings.js'
+import { disposeAllServers } from './lsp/transport.js'
+import type { RpcHandlerMap } from './shared/rpc.js'
 import type { Registry } from './registry.js'
 import type { Ctx } from './store.js'
 
@@ -34,9 +39,15 @@ export function apply(ctx: Ctx, config?: unknown): void {
   const registry: Registry = new Map()
   const searcher = newSearcher(ctx)
   const contentSearcher = newContentSearcher(ctx)
+  /** LSP 服务器管理器（语言智能：跳转/引用/大纲）。 */
+  const lspManager = createLspManager((line) => ctx.logger?.debug?.('[' + name + '] ' + line))
   /** 兼容性警告收集（route 护栏等写入，启动日志一并输出）。 */
   const warnings: string[] = []
   setupOpenSettings(ctx, config, () => {})
+  void installLspSettingsSection(ctx, {})
+  /** LSP RPC 与会话清理（一次性创建，tracker 状态跨请求保留）。 */
+  const lspRpc = createLspRpc({ ctx, pluginConfig: config, manager: lspManager })
+  const lspHandlers: Partial<RpcHandlerMap> = lspRpc.handlers
 
   ctx.on('tools/result', (exec: unknown, result: unknown) => {
     void captureToolResult(ctx, registry, exec, result)
@@ -51,15 +62,22 @@ export function apply(ctx: Ctx, config?: unknown): void {
       contentSearcher.dispose(cwd)
       disposeIndex(cwd)
     }
+    const sid = (session as { id?: unknown })?.id
+    if (typeof sid === 'string') lspRpc.disposeSession(sid)
   })
 
-  registerRoutes(ctx, config, (method, args) => handleRpc(ctx, registry, method, args, searcher, contentSearcher), (warning) => warnings.push(warning))
+  registerRoutes(ctx, config, (method, args) => handleRpc(ctx, registry, method, args, searcher, contentSearcher, lspHandlers), (warning) => warnings.push(warning))
   installIsolation(ctx)
   // 启动清理缓存目录：非当前 schema / 超保留期 / 未知残留（best-effort，不阻塞装配）
   void sweepTreeCache()
   void logCompatSummary(ctx, warnings)
+  // 卸载/重启时强杀 LSP 子进程（防残留）
+  ctx.effect(() => () => {
+    void lspManager.disposeAll().catch(() => {})
+    disposeAllServers()
+  })
 
-  ctx.logger?.info?.('[' + name + '] 编辑差异审查已装配（/edrv/rpc 路由就绪，项目 MCP 隔离已启用）')
+  ctx.logger?.info?.('[' + name + '] 编辑差异审查已装配（/edrv/rpc 路由就绪，项目 MCP 隔离已启用，语言服务器 LSP 已接入）')
 }
 
 /**

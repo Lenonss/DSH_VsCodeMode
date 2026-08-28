@@ -24,6 +24,8 @@ export interface OutlineSymbol {
 /** 大纲数据源输入（面板解析时注入当前快照；字段均为弱类型，源自行 duck-typing）。 */
 export interface OutlineSourceInput {
   languageId: string
+  /** 活动文件路径（工作区相对，可空；LSP 等源用）。 */
+  path?: string
   /** Monaco 文本模型（源可用 model.getValue() 自行解析）。 */
   model?: unknown
   /** 当前 Monaco 编辑器实例（供 _commandService 等内部调用）。 */

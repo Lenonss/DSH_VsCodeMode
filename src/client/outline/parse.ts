@@ -129,12 +129,42 @@ function parsePwsh(text: string): OutlineSymbol[] {
   return out
 }
 
-/** Lua：`function Foo:bar` / `M.bar = class|function`。 */
+/** Lua：`function Foo:bar` / `M.bar = class|function` + EmmyLua 注解（---@class/@alias/@enum/@field）。 */
 function parseLua(text: string): OutlineSymbol[] {
   const out: OutlineSymbol[] = []
   const lines = text.split('\n')
+  /** 当前注解类（收拢紧随的 ---@field 为字段子节点）。 */
+  let pendingClass: OutlineSymbol | null = null
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]
+    // EmmyLua 注解（---@）：class/alias/enum 进大纲根，field 收给当前类
+    const am = /^[ \t]*---@(class|alias|enum|field|type)\s+([^\r\n]+)/.exec(line)
+    if (am) {
+      const tag = am[1]
+      const rest = am[2].trim()
+      const name = (rest.match(/^([A-Za-z_][\w]*)/) || [])[1] ?? ''
+      if (tag === 'class') {
+        if (name) {
+          const item = mk(i, name, SK.Class, line)
+          item.children = []
+          out.push(item)
+          pendingClass = item
+        } else pendingClass = null
+      } else if (tag === 'alias') {
+        if (name) out.push(mk(i, name, SK.TypeParameter, line))
+        pendingClass = null
+      } else if (tag === 'enum') {
+        if (name) out.push(mk(i, name, SK.Enum, line))
+        pendingClass = null
+      } else if (tag === 'field') {
+        if (name && pendingClass) {
+          pendingClass.children!.push(mk(i, name, SK.Field, line))
+        }
+      } else if (tag === 'type') {
+        pendingClass = null
+      }
+      continue
+    }
     if (/^\s*--/.test(line)) continue
     const fm = /^[ \t]*(?:local[ \t]+)?function[ \t]+([A-Za-z_][\w.:]*)/.exec(line)
     if (fm) { out.push(mk(i, fm[1], SK.Function, line)); continue }

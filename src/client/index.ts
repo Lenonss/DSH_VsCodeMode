@@ -37,7 +37,9 @@ import { createTreeMenuRegistry } from './sidebar/contextMenu.js'
 import { createDefaultFileMenuItems } from './sidebar/menuItems.js'
 import { createOutlinePanel } from './outline/index.js'
 import { createOutlineSourceRegistry, registerBuiltinOutlineSources } from './outline/sources.js'
+import { createLspOutlineSource } from './outline/lspSource.js'
 import { keybindingsApply } from './keybindings.js'
+import { setupLsp, setSession } from './monaco/lsp/index.js'
 import type { CompatAdapter } from '../shared/compat.js'
 
 // ⚠️ inject 只列必需服务：webUiSettings 是 @linxin666/dsh-client-ui-web-ui-settings 提供的
@@ -66,7 +68,7 @@ export function apply(ctx: any): void {
   if (typeof window !== 'undefined' && monacoList && typeof monacoList.subscribe === 'function') {
     const list = monacoList as { getSnapshot: () => { current?: unknown }; subscribe: (listener: () => void) => () => void }
     const schedulePreload = () => {
-      const preload = () => loadMonaco(() => {}).catch(() => {})
+      const preload = () => loadMonaco(() => {}).then((m: unknown) => setupLsp(m)).catch(() => {})
       if (typeof window.requestIdleCallback === 'function') window.requestIdleCallback(preload, { timeout: 2000 })
       else schedule(preload, 300)
     }
@@ -76,6 +78,13 @@ export function apply(ctx: any): void {
     }
     ctx.effect(() => list.subscribe(onSessionEnter), 'vscode-mode: monaco session trigger')
     onSessionEnter()
+  }
+  // 会话切换 → LSP 文档归属更新 + 状态刷新
+  if (monacoList && typeof monacoList.subscribe === 'function') {
+    const list = monacoList as { getSnapshot: () => { current?: string }; subscribe: (listener: () => void) => () => void }
+    ctx.effect(() => list.subscribe(() => {
+      setSession(list.getSnapshot()?.current)
+    }), 'vscode-mode: lsp session sync')
   }
   const originalOpenPath = workspaces?.openPath
   const binder = pickSettingsBinder(ctx)
@@ -113,6 +122,8 @@ export function apply(ctx: any): void {
   const outlineSources = createOutlineSourceRegistry()
   ctx.provide('edrvOutlineSources', outlineSources)
   ctx.effect(() => registerBuiltinOutlineSources(outlineSources), 'vscode-mode: outline sources')
+  // LSP 大纲源（priority 60）：lua/csharp 有 host 服务器时优先生效，否则自动落入 fallback
+  ctx.effect(() => outlineSources.register(createLspOutlineSource()), 'vscode-mode: outline lsp source')
   ctx.effect(() => sidebarPanels.register(createOutlinePanel()), 'vscode-mode: sidebar panel outline')
   ctx.effect(() => registry.register({
     id: 'system', label: '系统默认应用', priority: 0,

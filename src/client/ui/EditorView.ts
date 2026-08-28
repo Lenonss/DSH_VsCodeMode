@@ -23,6 +23,7 @@ import { setSidePending, SIDEBAR_INSTALL_CMD } from '../sidebarBridge.js'
 import { upsertViewState, viewStatesLoad, viewStatesSave } from '../state/viewStateCache.js'
 import { bindingOf, chordOf, matchEvent, useKeybindingsVersion } from '../keybindings.js'
 import { CACHE_KEY } from '../paths.js'
+import { runGoToDefinition, runFindReferences, hideReferencesOverlay } from '../monaco/lsp/providers.js'
 
 /**
  * 中央编辑区：文件页签（脏点/关闭/打开路径）+ Ctrl+P 搜索 + Monaco 编辑器 +
@@ -272,6 +273,13 @@ export function EditorView(props) {
       if (e?.detail?.focusDiff === true) {
         pendingFocusRef.current = { path: p, region: null }
         setFocusRequest((value) => value + 1)
+        addTab(p, true)
+        return
+      }
+      if (e?.detail?.line != null) {
+        // LSP/搜索跳转：打开并定位到行列
+        openFileAt(p, e?.detail?.line, e?.detail?.column)
+        return
       }
       addTab(p, true)
     }
@@ -282,9 +290,12 @@ export function EditorView(props) {
     }
     window.addEventListener('edrv:open-editor', onOpen)
     window.addEventListener('edrv:show-launcher', onShowLauncher)
+    const onStatus = (e) => { if (e?.detail?.text) setStatus(e.detail.text) }
+    window.addEventListener('edrv:status', onStatus)
     return () => {
       window.removeEventListener('edrv:open-editor', onOpen)
       window.removeEventListener('edrv:show-launcher', onShowLauncher)
+      window.removeEventListener('edrv:status', onStatus)
     }
   }, [sessionId])
 
@@ -543,6 +554,7 @@ export function EditorView(props) {
     flushSave()
     saveViewState(active)
     diffRendererRef.current?.dispose?.()
+    hideReferencesOverlay()
     if (editorRef.current) { editorRef.current.dispose(); editorRef.current = null }
     for (const m of modelsRef.current.values()) m.dispose()
     modelsRef.current.clear()
@@ -629,6 +641,20 @@ export function EditorView(props) {
       precondition: 'editorTextFocus',
       run: (edx) => menuHandlers()?.openInExplorer(pathOf(edx)),
     })
+    // 语言智能（LSP）：转到定义 / 查找所有引用（右键 + F12/Shift+F12 键位）。
+    ed.addAction({
+      id: 'edrv.goToDefinition', label: '转到定义', contextMenuGroupId: '1_edrv',
+      keybindings: m.KeyMod.CtrlCmd | m.KeyCode.F12,
+      precondition: 'editorTextFocus',
+      run: (edx) => { void runGoToDefinition(edx) },
+    })
+    ed.addAction({
+      id: 'edrv.findReferences', label: '查找所有引用', contextMenuGroupId: '1_edrv',
+      keybindings: m.KeyMod.Shift | m.KeyCode.F12,
+      precondition: 'editorTextFocus',
+      run: (edx) => { void runFindReferences(edx) },
+    })
+    ed.addCommand(m.KeyCode.F12, () => { void runGoToDefinition(ed) })
     // hover 差异块 → 浮出 Keep/Undo（req：鼠标移到编辑区差异块时显示）
     // 防闪烁：① 区域不变不 setState（浮窗锚定差异块起始行，不跟随鼠标）；② 延迟隐藏；
     // ③ 浮窗自身 onMouseEnter 取消隐藏计时（鼠标在浮窗与编辑器间移动不闪）。

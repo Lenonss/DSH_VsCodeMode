@@ -24,6 +24,7 @@ export interface SettingsDeps {
   z: {
     object: (shape: Record<string, unknown>) => { default: (value: Record<string, unknown>) => unknown }
     string: () => { default: (value: string) => unknown }
+    boolean: () => { default: (value: boolean) => unknown }
   }
 }
 

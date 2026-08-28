@@ -14,6 +14,7 @@ import type {
 } from './types.js'
 import type { MpcConfig, MpcProject, MpcProjectSaveInput, MpcServer } from './mcp.js'
 import type { CompatReport, DevFormInfo } from './compat.js'
+import type { LspExtInfo, LspExtUpdate, LspHover, LspLocation, LspMarketItem, LspPosition, LspServerStatus, LspSymbol } from './lsp.js'
 
 /** webServer 精确路由。 */
 export const RPC_PATH = '/edrv/rpc'
@@ -134,6 +135,22 @@ export interface RpcRequestMap {
   'vscode.devFormGet': {}
   'vscode.devFormSet': { enabled: boolean; path?: string }
   'compat': {}
+  'edrv.lsp.status': {}
+  'edrv.lsp.sync': { sessionId?: string; path: string; text: string; version: number }
+  'edrv.lsp.close': { sessionId?: string; path: string }
+  'edrv.lsp.definition': { sessionId?: string; path: string; position: LspPosition }
+  'edrv.lsp.references': { sessionId?: string; path: string; position: LspPosition; includeDeclaration?: boolean }
+  'edrv.lsp.documentSymbol': { sessionId?: string; path: string }
+  'edrv.lsp.workspaceSymbol': { sessionId?: string; query: string }
+  'edrv.lsp.hover': { sessionId?: string; path: string; position: LspPosition }
+  'edrv.lsp.configGet': {}
+  'edrv.lsp.configUpdate': { languageId: string; enabled?: boolean; command?: string; path?: string }
+  'edrv.lsp.ext.list': {}
+  'edrv.lsp.ext.install': { vsixPath?: string; namespace?: string; name?: string; version?: string }
+  'edrv.lsp.ext.uninstall': { id: string }
+  'edrv.lsp.ext.update': { id: string }
+  'edrv.lsp.ext.updates': {}
+  'edrv.lsp.ext.market': { query: string; size?: number }
   'edrv.perf.inventory': { sessionId?: string }
   'edrv.perf.sessionSize': { sessionId?: string; cwd: string }
   'edrv.perf.movePlan': { workspaceKey?: string; sessionIds?: string[]; minBytes?: number; olderThanDays?: number }
@@ -180,6 +197,22 @@ export interface RpcOkMap {
   'vscode.devFormGet': { devForm: DevFormInfo }
   'vscode.devFormSet': { devForm: DevFormInfo; restart: boolean }
   'compat': { report: CompatReport }
+  'edrv.lsp.status': { servers: LspServerStatus[] }
+  'edrv.lsp.sync': object
+  'edrv.lsp.close': object
+  'edrv.lsp.definition': { locations: LspLocation[]; truncated?: boolean }
+  'edrv.lsp.references': { locations: LspLocation[]; truncated?: boolean }
+  'edrv.lsp.documentSymbol': { symbols: LspSymbol[] }
+  'edrv.lsp.workspaceSymbol': { symbols: LspSymbol[]; truncated?: boolean }
+  'edrv.lsp.hover': { hover?: LspHover }
+  'edrv.lsp.configGet': { config: Record<string, unknown> }
+  'edrv.lsp.configUpdate': { config: Record<string, unknown> }
+  'edrv.lsp.ext.list': { extensions: LspExtInfo[] }
+  'edrv.lsp.ext.install': { extension: LspExtInfo; updated?: boolean }
+  'edrv.lsp.ext.uninstall': object
+  'edrv.lsp.ext.update': { extension: LspExtInfo; updated: boolean }
+  'edrv.lsp.ext.updates': { updates: LspExtUpdate[] }
+  'edrv.lsp.ext.market': { extensions: LspMarketItem[] }
   'edrv.perf.inventory': { workspaces: PerfWorkspace[]; sessions: PerfSession[]; totals: PerfTotals; activeIds: string[] }
   'edrv.perf.sessionSize': { bytes: number; exists: boolean }
   'edrv.perf.movePlan': { items: PerfMoveItem[]; reclaimedBytes: number }

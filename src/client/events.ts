@@ -60,6 +60,17 @@ export function emitOpenEditor(path: string): void {
 }
 
 /**
+ * 打开指定路径并定位到行列（LSP 跳转目标）。
+ * @author ddj 2026年08月27号
+ * @param path 目标路径
+ * @param line 目标行（1-based，可空）
+ * @param column 目标列（1-based，可空）
+ */
+export function emitOpenAt(path: string, line?: number, column?: number): void {
+  window.dispatchEvent(new CustomEvent('edrv:open-editor', { detail: { path, line, column } }))
+}
+
+/**
  * 拉起 DiffLauncher。
  * @author ddj 2026年08月26号
  * @param tab 可选的目标页签

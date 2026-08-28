@@ -216,8 +216,16 @@ async function latestPatchBackup(patchPath: string): Promise<string | undefined>
 }
 
 /** 各方法 handler 表（类型由 shared/rpc 的 RpcHandlerMap 约束）。 */
-export function buildHandlers(ctx: Ctx, registry: Registry, searcher = newSearcher(ctx), contentSearcher = newContentSearcher(ctx)): RpcHandlerMap {
+export function buildHandlers(
+  ctx: Ctx,
+  registry: Registry,
+  searcher = newSearcher(ctx),
+  contentSearcher = newContentSearcher(ctx),
+  lspHandlers?: Partial<RpcHandlerMap>,
+): RpcHandlerMap {
   return {
+    // edrv.lsp.* 由 createLspRpc 一次性提供（tracker 跨请求保留），这里并入。
+    ...((lspHandlers ?? {}) as RpcHandlerMap),
     'edrv.list': async (args) => {
       const sc = await requireSession(ctx, args.sessionId)
       if ('err' in sc) return { ok: false, error: sc.err }
@@ -664,8 +672,9 @@ export async function handleRpc<M extends RpcMethod>(
   args: RpcRequestMap[M],
   searcher = newSearcher(ctx),
   contentSearcher = newContentSearcher(ctx),
+  lspHandlers?: Partial<RpcHandlerMap>,
 ): Promise<RpcResult<M>> {
-  const handlers = buildHandlers(ctx, registry, searcher, contentSearcher)
+  const handlers = buildHandlers(ctx, registry, searcher, contentSearcher, lspHandlers)
   const handler = handlers[method]
   if (!handler) return { ok: false, error: '未知方法: ' + String(method) } as RpcResult<M>
   return handler(args)

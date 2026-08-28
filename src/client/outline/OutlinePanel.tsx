@@ -65,7 +65,7 @@ export function OutlinePanel(props) {
     const sources = sourcesRef.current
     if (!sources) { setSymbols([]); setError(null); return }
     setError(null)
-    resolveOutline(sources, { languageId: model.getLanguageId(), model, editor: ed, monaco: window.monaco })
+    resolveOutline(sources, { languageId: model.getLanguageId(), path: modelPath, model, editor: ed, monaco: window.monaco })
       .then((list) => { if (seq === seqRef.current) setSymbols(list || []) })
       .catch((e) => { if (seq === seqRef.current) { setError(String(e?.message ?? e)); setSymbols(null) } })
   }, [])
