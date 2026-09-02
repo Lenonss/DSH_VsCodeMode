@@ -4,19 +4,21 @@
  */
 import { describe, expect, it } from 'vitest'
 import {
-  bindingOf, chordFromEvent, chordOf, formatChord, keybindingsApply,
-  matchEvent, normalizeKey, parseChord,
+  bindingsOf, chordFromEvent, chordOf, formatChord, keybindingsApply,
+  matchEvent, normalizeKey, parseChord, parseChords,
 } from '../src/client/keybindings.js'
 import { draftOf, storeOf, conflictsOf } from '../src/client/ui/KeybindingsPanel.js'
 import { defaultKeybindings, KEYBINDING_DEFAULTS, normalizeKeybindings } from '../src/shared/keybindings.js'
 
 describe('keybindings shared defaults', () => {
-  it('declares the four editor commands with defaults', () => {
+  it('declares every editor command with defaults', () => {
     expect(KEYBINDING_DEFAULTS).toEqual({
       'edrv.save': 'Ctrl+S',
       'edrv.quickOpen': 'Ctrl+P',
       'edrv.toggleSidebar': 'Ctrl+B',
       'edrv.searchInFiles': 'Ctrl+Shift+F',
+      'edrv.navigateBack': 'Alt+ArrowLeft|Ctrl+Alt+-',
+      'edrv.navigateForward': 'Alt+ArrowRight|Ctrl+Shift+-',
     })
   })
 
@@ -36,6 +38,22 @@ describe('parseChord / formatChord', () => {
   it('parses modifier chords', () => {
     expect(parseChord('Ctrl+Shift+F')).toEqual({ ctrl: true, shift: true, alt: false, meta: false, key: 'F' })
     expect(parseChord('Ctrl+S')).toEqual({ ctrl: true, shift: false, alt: false, meta: false, key: 'S' })
+  })
+
+  it('parses multi-candidate chords (| separator)', () => {
+    expect(parseChords('Alt+ArrowLeft|Ctrl+Alt+-')).toEqual([
+      { ctrl: false, shift: false, alt: true, meta: false, key: 'ArrowLeft' },
+      { ctrl: true, shift: false, alt: true, meta: false, key: '-' },
+    ])
+  })
+
+  it('drops invalid segments and dedupes multi-candidates', () => {
+    expect(parseChords('Alt+X|bad|Alt+X||Ctrl')).toEqual([
+      { ctrl: false, shift: false, alt: true, meta: false, key: 'X' },
+    ])
+    expect(parseChords('')).toEqual([])
+    expect(parseChords(null as unknown as string)).toEqual([])
+    expect(parseChords('|||')).toEqual([])
   })
 
   it('accepts lowercase modifiers and letters', () => {
@@ -80,6 +98,14 @@ describe('normalizeKey / matchEvent', () => {
   it('never matches unbound or null bindings', () => {
     expect(matchEvent({ ctrlKey: true, key: 'S' }, null)).toBe(false)
     expect(matchEvent({ ctrlKey: true, key: 'S' }, parseChord(''))).toBe(false)
+    expect(matchEvent({ ctrlKey: true, key: 'S' }, [])).toBe(false)
+  })
+
+  it('matches any candidate of a multi-chord binding', () => {
+    const bindings = parseChords('Alt+ArrowLeft|Ctrl+Alt+-')
+    expect(matchEvent({ altKey: true, key: 'ArrowLeft' }, bindings)).toBe(true)
+    expect(matchEvent({ ctrlKey: true, altKey: true, key: '-' }, bindings)).toBe(true)
+    expect(matchEvent({ altKey: true, key: 'ArrowRight' }, bindings)).toBe(false)
   })
 })
 
@@ -97,7 +123,11 @@ describe('keybindingsApply module state', () => {
     keybindingsApply({ 'edrv.save': 'Ctrl+Alt+S', ghost: 'Ctrl+Z' })
     expect(chordOf('edrv.save')).toBe('Ctrl+Alt+S')
     expect(chordOf('edrv.quickOpen')).toBe('Ctrl+P')
-    expect(bindingOf('edrv.save')).toEqual({ ctrl: true, alt: true, shift: false, meta: false, key: 'S' })
+    expect(bindingsOf('edrv.save')).toEqual([{ ctrl: true, alt: true, shift: false, meta: false, key: 'S' }])
+    expect(bindingsOf('edrv.navigateBack')).toEqual([
+      { ctrl: false, shift: false, alt: true, meta: false, key: 'ArrowLeft' },
+      { ctrl: true, shift: false, alt: true, meta: false, key: '-' },
+    ])
     keybindingsApply(undefined)
     expect(chordOf('edrv.save')).toBe('Ctrl+S')
   })
@@ -105,7 +135,7 @@ describe('keybindingsApply module state', () => {
   it('treats empty chord as unbound', () => {
     keybindingsApply({ 'edrv.toggleSidebar': '' })
     expect(chordOf('edrv.toggleSidebar')).toBeNull()
-    expect(bindingOf('edrv.toggleSidebar')).toBeNull()
+    expect(bindingsOf('edrv.toggleSidebar')).toEqual([])
     keybindingsApply(undefined)
   })
 })

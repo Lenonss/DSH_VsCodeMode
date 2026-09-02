@@ -22,7 +22,8 @@ import { editorHeight } from '../editorLayout.js'
 import { revealInExplorer as revealPathInExplorer } from '../fileReveal.js'
 import { setSidePending, SIDEBAR_INSTALL_CMD } from '../sidebarBridge.js'
 import { upsertViewState, viewStatesLoad, viewStatesSave } from '../state/viewStateCache.js'
-import { bindingOf, chordOf, matchEvent, useKeybindingsVersion } from '../keybindings.js'
+import { bindingsOf, chordOf, matchEvent, useKeybindingsVersion } from '../keybindings.js'
+import { createNavHistory } from '../navHistory.js'
 import { CACHE_KEY } from '../paths.js'
 import { bindLspEditor, runGoToDefinition, runFindReferences, hideReferencesOverlay } from '../monaco/lsp/providers.js'
 import { onLspProgress, refreshStatus } from '../monaco/lsp/index.js'
@@ -82,6 +83,14 @@ export function EditorView(props) {
   const programmaticRef = React.useRef(false)
   const bootRef = React.useRef(false)
   const pendingFocusRef = React.useRef(null) // { path, region } 内容加载后跳转
+  // 导航历史（后退/前进）：跨文件焦点位置；按会话隔离，会话切换重置
+  const navRef = React.useRef(null)
+  if (!navRef.current) navRef.current = createNavHistory()
+  const navPendingRef = React.useRef(null) // { path,line,column,viewState } 待恢复条目（内容就绪后消费）
+  const navCursorTimerRef = React.useRef(null) // 光标位置防抖记录计时器
+  const navBackRef = React.useRef(null) // 后退动作最新闭包（窗口级键盘监听读取）
+  const navForwardRef = React.useRef(null) // 前进动作最新闭包（窗口级键盘监听读取）
+  const [navTick, setNavTick] = React.useState(0) // 历史可用性版本（按钮 disabled 重渲染）
   const hoverRegionsRef = React.useRef([]) // 当前 pending 区域镜像（稳定回调读取）
   const lineRegionMapRef = React.useRef(new Map()) // 行 → 区域 映射（hover 命中）
   const hoverKeyRef = React.useRef(null) // 当前 hover 区域 key（区域不变不重渲染）
@@ -164,9 +173,97 @@ export function EditorView(props) {
     try { ed.restoreViewState(saved) } catch (e) { /* 恢复失败忽略（行号越界自动兜底） */ }
   }
 
+  /**
+   * 采集当前焦点条目：路径从编辑器 model 实时读取（避免空依赖闭包读到过期 active），
+   * 位置/viewState 从编辑器读取；编辑器或模型未就绪 → null。
+   * @author ddj 2026年09月04号
+   * @returns 导航历史条目或 null
+   */
+  const captureNavEntry = () => {
+    const ed = editorRef.current
+    const model = ed?.getModel?.()
+    const uriPath = model?.uri?.path
+    if (!ed || !uriPath) return null
+    let line = null
+    let column = null
+    try {
+      const pos = ed.getPosition?.()
+      if (pos) { line = pos.lineNumber; column = pos.column }
+    } catch (e) { /* 位置读取失败降级为仅路径 */ }
+    let viewState = null
+    try { viewState = ed.saveViewState() } catch (e) { /* 快照失败忽略 */ }
+    return { path: decodeURIComponent(String(uriPath).replace(/^\//, '')), line, column, viewState }
+  }
+
+  /**
+   * 记录当前位置到导航历史（同位置去重由历史模块处理；可用性变化时刷新按钮）。
+   * @author ddj 2026年09月04号
+   */
+  const recordNav = () => {
+    const entry = captureNavEntry()
+    if (!entry) return
+    const wasBack = navRef.current.canBack()
+    const wasForward = navRef.current.canForward()
+    navRef.current.record(entry)
+    if (navRef.current.canBack() !== wasBack || navRef.current.canForward() !== wasForward) {
+      setNavTick((v) => v + 1)
+    }
+  }
+
+  /**
+   * 跳到历史条目：保存当前视图状态后打开目标文件，内容就绪后恢复焦点。
+   * @author ddj 2026年09月04号
+   * @param entry 目标历史条目
+   */
+  const navigateTo = (entry) => {
+    if (!entry || !entry.path) return
+    flushSave()
+    saveViewState(active)
+    navPendingRef.current = entry
+    addTab(entry.path, true)
+    setFocusRequest((value) => value + 1) // 目标已是活动文件时也触发恢复
+  }
+
+  /**
+   * 立即落盘待记录的光标位置（后退/前进前调用：<500ms 内刚移动的光标也算入历史）。
+   * @author ddj 2026年09月04号
+   */
+  const flushNavCursor = () => {
+    if (!navCursorTimerRef.current) return
+    clearTimeout(navCursorTimerRef.current)
+    navCursorTimerRef.current = null
+    recordNav()
+  }
+
+  /**
+   * 后退：恢复上一处焦点（跨文件）。
+   * @author ddj 2026年09月04号
+   */
+  const navBack = () => {
+    flushNavCursor()
+    const entry = navRef.current.back()
+    if (!entry) return
+    navigateTo(entry)
+    setNavTick((v) => v + 1)
+  }
+
+  /**
+   * 前进：恢复下一处焦点（跨文件）。
+   * @author ddj 2026年09月04号
+   */
+  const navForward = () => {
+    flushNavCursor()
+    const entry = navRef.current.forward()
+    if (!entry) return
+    navigateTo(entry)
+    setNavTick((v) => v + 1)
+  }
+  navBackRef.current = navBack
+  navForwardRef.current = navForward
+
   const closeTab = (path) => {
     flushSave()
-    if (path === active) saveViewState(path)
+    if (path === active) { saveViewState(path); recordNav() }
     setTabs((prev) => {
       const idx = prev.findIndex((t) => t.path === path)
       if (idx < 0) return prev
@@ -284,6 +381,7 @@ export function EditorView(props) {
       const p = e?.detail?.path
       if (!p) return
       if (e?.detail?.focusDiff === true) {
+        recordNav()
         pendingFocusRef.current = { path: p, region: null }
         setFocusRequest((value) => value + 1)
         addTab(p, true)
@@ -294,6 +392,7 @@ export function EditorView(props) {
         openFileAt(p, e?.detail?.line, e?.detail?.column)
         return
       }
+      recordNav()
       addTab(p, true)
     }
     const onShowLauncher = (event) => {
@@ -392,6 +491,14 @@ export function EditorView(props) {
     } catch (e) { /* 损坏忽略 */ }
   }, [sessionId])
 
+  // 导航历史会话隔离：切换会话时重置（历史仅会话内存，不跨会话串扰）
+  React.useEffect(() => {
+    navRef.current = createNavHistory()
+    navPendingRef.current = null
+    if (navCursorTimerRef.current) { clearTimeout(navCursorTimerRef.current); navCursorTimerRef.current = null }
+    setNavTick((v) => v + 1)
+  }, [sessionId])
+
   React.useEffect(() => {
     if (!sessionId) return
     try { localStorage.setItem(CACHE_KEY.editor + String(sessionId), JSON.stringify({ tabs: tabs.map((t) => t.path), active })) }
@@ -423,7 +530,7 @@ export function EditorView(props) {
   // 切换侧边栏（capture 抢占，避免与 DSH 全局冲突；键位随快捷键配置）
   React.useEffect(() => {
     const onKey = (e) => {
-      if (!matchEvent(e, bindingOf('edrv.toggleSidebar'))) return
+      if (!matchEvent(e, bindingsOf('edrv.toggleSidebar'))) return
       e.preventDefault(); e.stopPropagation()
       setSidebarOn((v) => !v)
     }
@@ -434,7 +541,7 @@ export function EditorView(props) {
   // 保存文件（窗口级）：编辑器有活动模型才拦截执行，无文件时放行（浏览器默认行为）
   React.useEffect(() => {
     const onKey = (e) => {
-      if (!matchEvent(e, bindingOf('edrv.save'))) return
+      if (!matchEvent(e, bindingsOf('edrv.save'))) return
       if (!editorRef.current?.getModel?.()) return
       e.preventDefault(); e.stopPropagation()
       flushSave()
@@ -447,7 +554,7 @@ export function EditorView(props) {
   // Ctrl+Shift+F 全局搜索：展开侧边栏 + 激活搜索页签，随后聚焦搜索输入框
   React.useEffect(() => {
     const onKey = (e) => {
-      if (!matchEvent(e, bindingOf('edrv.searchInFiles'))) return
+      if (!matchEvent(e, bindingsOf('edrv.searchInFiles'))) return
       e.preventDefault(); e.stopPropagation()
       setSidebarOn(true)
       setActivePanel('search')
@@ -455,6 +562,49 @@ export function EditorView(props) {
     }
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
+  }, [])
+
+  // 后退/前进：导航历史（跨文件焦点位置；经 ref 读最新闭包，避免空依赖过期）
+  React.useEffect(() => {
+    const onKey = (e) => {
+      if (!matchEvent(e, bindingsOf('edrv.navigateBack'))) return
+      e.preventDefault(); e.stopPropagation()
+      if (navBackRef.current) navBackRef.current()
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [])
+  React.useEffect(() => {
+    const onKey = (e) => {
+      if (!matchEvent(e, bindingsOf('edrv.navigateForward'))) return
+      e.preventDefault(); e.stopPropagation()
+      if (navForwardRef.current) navForwardRef.current()
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [])
+
+  // 鼠标侧键后退/前进：Logitech 官方默认「后退/前进」= XButton 鼠标事件（button 3/4），不产生键盘事件。
+  // pointerdown 触发导航（preventDefault 后兼容 mousedown 可能不再触发，避免双触发）；
+  // mousedown 兜底仅取消浏览器历史导航默认动作（MDN：preventDefault mousedown/pointerdown 可抑制）。
+  // @author ddj 2026年09月02号
+  React.useEffect(() => {
+    const onPointer = (e) => {
+      if (e?.button !== 3 && e?.button !== 4) return
+      e.preventDefault(); e.stopPropagation()
+      const ref = e.button === 3 ? navBackRef : navForwardRef
+      if (ref.current) ref.current()
+    }
+    const onMouse = (e) => {
+      if (e?.button !== 3 && e?.button !== 4) return
+      e.preventDefault(); e.stopPropagation()
+    }
+    window.addEventListener('pointerdown', onPointer, true)
+    window.addEventListener('mousedown', onMouse, true)
+    return () => {
+      window.removeEventListener('pointerdown', onPointer, true)
+      window.removeEventListener('mousedown', onMouse, true)
+    }
   }, [])
 
   // 文件 → 待处理差异数 映射（侧边栏角标）
@@ -629,6 +779,12 @@ export function EditorView(props) {
     })
     ed.onDidChangeCursorPosition((e) => {
       setCursor('Ln ' + e.position.lineNumber + ', Col ' + e.position.column)
+      // 导航历史：同文件内光标移动防抖记录（程序化恢复触发的位置与栈顶去重，无副作用）
+      if (navCursorTimerRef.current) clearTimeout(navCursorTimerRef.current)
+      navCursorTimerRef.current = setTimeout(() => {
+        navCursorTimerRef.current = null
+        recordNav()
+      }, 500)
     })
     // 编辑区右键 → 注入 Monaco 原生 context menu（与 Go to Definition 等同菜单，避免分离浮层）。
     // 有选区时额外显示「选中内容」项：context key edrvSelection 由光标选区变化驱动。
@@ -720,12 +876,26 @@ export function EditorView(props) {
     editorRef.current = ed
   }, [])
 
-  // 打开文件后的跳转（差异聚焦/搜索行列跳转，内容就绪后执行一次）
+  // 打开文件后的跳转（导航历史恢复/差异聚焦/搜索行列跳转，内容就绪后执行一次）
   React.useEffect(() => {
-    const pf = pendingFocusRef.current
-    if (!pf || pf.path !== active || content === null) return
     const ed = editorRef.current
-    if (!ed) return
+    if (!ed || content === null) return
+    // 导航历史恢复优先：viewState 快照恢复滚动/折叠，行列补定位
+    const nav = navPendingRef.current
+    if (nav && nav.path === active) {
+      navPendingRef.current = null
+      if (nav.viewState) {
+        try { ed.restoreViewState(nav.viewState) } catch (e) { /* 非法快照忽略（行号越界自动兜底） */ }
+      }
+      if (nav.line != null) {
+        ed.revealLineInCenter(Math.max(1, nav.line))
+        ed.setPosition({ lineNumber: Math.max(1, nav.line), column: Math.max(1, nav.column ?? 1) })
+      }
+      ed.focus()
+      return
+    }
+    const pf = pendingFocusRef.current
+    if (!pf || pf.path !== active) return
     if (pf.line != null) {
       // 搜索命中跳转：直接定位到行/列（不依赖差异区域）
       pendingFocusRef.current = null
@@ -982,6 +1152,7 @@ export function EditorView(props) {
 
   const openFile = (path, focusDiff) => {
     if (!path) return
+    recordNav()
     addTab(path, true)
     if (focusDiff) pendingFocusRef.current = { path, region: null }
   }
@@ -995,6 +1166,7 @@ export function EditorView(props) {
    */
   const openFileAt = (path, line, column) => {
     if (!path) return
+    recordNav()
     addTab(path, true)
     pendingFocusRef.current = { path, region: null, line: line ?? null, column: column ?? 1 }
     setFocusRequest((value) => value + 1)
@@ -1017,7 +1189,7 @@ export function EditorView(props) {
       key: t.path,
       className: 'edrv-tab' + (t.path === active ? ' edrv-tab-active' : ''),
       title: t.path,
-      onClick: () => { if (t.path !== active) { flushSave(); saveViewState(active); setActive(t.path) } },
+      onClick: () => { if (t.path !== active) { flushSave(); saveViewState(active); recordNav(); setActive(t.path) } },
       onContextMenu: (e) => {
         e.preventDefault()
         e.stopPropagation()
@@ -1054,11 +1226,29 @@ export function EditorView(props) {
         lspProgress !== null ? React.createElement('span', { className: 'edrv-sp-progress' }, lspProgress + '%') : null)
     : null
 
+  // 导航历史按钮：目标条目名（tooltip 提示下一步会回到哪个文件）
+  const navBackTarget = navRef.current.peekBack()
+  const navForwardTarget = navRef.current.peekForward()
+  const navNameOf = (entry) => (entry && entry.path ? String(entry.path).split(/[\\/]/).pop() : '')
   const tabRow = React.createElement('div', { style: { display: 'flex', alignItems: 'center', background: 'var(--dsw-alias-bg-layer-1,transparent)', flexShrink: 0 } },
     tabsEl,
     (sum.totalFiles > 0
       ? React.createElement('button', { className: 'edrv-diffchip', title: '打开差异总览/归档', onClick: () => setLauncherOpen((o) => !o) }, '⚠ 差异 ' + sum.totalFiles + ' 文件')
       : null),
+    React.createElement('button', {
+      className: 'edrv-chip-btn',
+      title: '后退（' + (chordOf('edrv.navigateBack') ?? '未绑定') + '）' + (navBackTarget ? ' · ' + navNameOf(navBackTarget) : ''),
+      disabled: !navRef.current.canBack(),
+      'aria-label': '后退',
+      onClick: navBack,
+    }, '←'),
+    React.createElement('button', {
+      className: 'edrv-chip-btn',
+      title: '前进（' + (chordOf('edrv.navigateForward') ?? '未绑定') + '）' + (navForwardTarget ? ' · ' + navNameOf(navForwardTarget) : ''),
+      disabled: !navRef.current.canForward(),
+      'aria-label': '前进',
+      onClick: navForward,
+    }, '→'),
     React.createElement('button', { className: 'edrv-chip-btn' + (sidebarOn ? ' edrv-chip-on' : ''), title: '切换侧边栏 (' + (chordOf('edrv.toggleSidebar') ?? 'Ctrl+B') + ')', onClick: () => setSidebarOn((v) => !v) }, '☰'),
     React.createElement('button', { className: 'edrv-chip-btn', title: '刷新', onClick: reloadFile }, '⟳'),
     React.createElement(QuickOpen, { sessionId, onOpen: (p) => openFile(p, false) }))

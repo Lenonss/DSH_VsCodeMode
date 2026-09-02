@@ -9,7 +9,7 @@
  */
 import React from 'react'
 import { SettingsContext } from '../settingsContext.js'
-import { COMMANDS, chordFromEvent, parseChord } from '../keybindings.js'
+import { COMMANDS, chordFromEvent, parseChords } from '../keybindings.js'
 import { defaultKeybindings, KEYBINDING_DEFAULTS, normalizeKeybindings } from '../../shared/keybindings.js'
 
 /**
@@ -148,7 +148,7 @@ export function KeybindingsPanel() {
   const rows = COMMANDS.map((command) => {
     const chord = draft[command.id] ?? null
     const conflict = chord !== null && conflicts.has(command.id)
-    const invalid = chord !== null && parseChord(chord) === null
+    const invalid = chord !== null && parseChords(chord).length === 0
     const recordingRow = recording === command.id
     let display
     if (recordingRow) {
@@ -174,7 +174,7 @@ export function KeybindingsPanel() {
 
   return React.createElement('section', { className: 'vsm-general-page' },
     React.createElement('h2', null, '快捷键'),
-    React.createElement('p', null, '配置编辑器视图的快捷键（保存 / 快速打开 / 侧边栏 / 搜索）。修改即时写入配置，重新聚焦编辑器后生效。'),
+    React.createElement('p', null, '配置编辑器视图的快捷键（保存 / 快速打开 / 侧边栏 / 搜索 / 后退 / 前进）。修改即时写入配置，重新聚焦编辑器后生效。'),
     unavailable && React.createElement('div', { className: 'vsm-mcp-error vsm-mcp-banner' }, '设置服务暂不可用，当前使用默认键位。'),
     error && React.createElement('div', { className: 'vsm-mcp-error vsm-mcp-banner' }, error),
     message && React.createElement('div', { className: 'vsm-kb-message' }, message),

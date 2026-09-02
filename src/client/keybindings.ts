@@ -1,6 +1,6 @@
 /**
  * dsh-vscode-mode client — 快捷键配置模块（解析/匹配/状态同步）。
- * 纯逻辑（parseChord/formatChord/matchEvent/chordFromEvent/normalizeKey）不依赖 DOM，可单测；
+ * 纯逻辑（parseChord/parseChords/formatChord/matchEvent/chordFromEvent/normalizeKey）不依赖 DOM，可单测；
  * 模块状态由 settings 订阅驱动（client/index.ts 调 keybindingsApply）。
  * 键位语义：Ctrl 与 Cmd 互认（延续现有 Ctrl+P/Ctrl+B 捕获行为）。
  * 作者 ddj 2026年08月26号
@@ -23,6 +23,8 @@ export const COMMANDS: Array<{ id: string; label: string }> = [
   { id: 'edrv.quickOpen', label: '快速打开文件' },
   { id: 'edrv.toggleSidebar', label: '切换侧边栏' },
   { id: 'edrv.searchInFiles', label: '在工作区中搜索' },
+  { id: 'edrv.navigateBack', label: '后退（导航历史）' },
+  { id: 'edrv.navigateForward', label: '前进（导航历史）' },
 ]
 
 const MODIFIERS: Record<string, 'ctrl' | 'shift' | 'alt' | 'meta'> = {
@@ -30,18 +32,19 @@ const MODIFIERS: Record<string, 'ctrl' | 'shift' | 'alt' | 'meta'> = {
 }
 
 let current: Record<string, string> = { ...KEYBINDING_DEFAULTS }
-let parsed: Record<string, Binding | null> = {}
+let parsed: Record<string, Binding[]> = {}
 const listeners = new Set<() => void>()
 
 /**
  * 应用设置快照（与默认值合并；未知 id 丢弃；空对象 = 全部默认）。
+ * 每个命令可含多候选键位（`|` 分隔），任一命中即触发。
  * @author ddj 2026年08月26号
  * @param raw 设置 scope 的 keybindings 字段
  */
 export function keybindingsApply(raw: unknown): void {
   current = { ...KEYBINDING_DEFAULTS, ...normalizeKeybindings(raw) }
   parsed = {}
-  for (const id of Object.keys(current)) parsed[id] = parseChord(current[id])
+  for (const id of Object.keys(current)) parsed[id] = parseChords(current[id])
   for (const listener of listeners) {
     try { listener() } catch { /* 监听器异常不影响其他订阅 */ }
   }
@@ -70,13 +73,13 @@ export function chordOf(id: string): string | null {
 }
 
 /**
- * 当前命令的解析键位（未绑定/非法 → null）。
+ * 当前命令的解析键位集合（未绑定/非法 → 空数组；含多候选）。
  * @author ddj 2026年08月26号
  * @param id 命令 id
- * @returns 解析键位或 null
+ * @returns 解析键位数组（可能为空）
  */
-export function bindingOf(id: string): Binding | null {
-  return parsed[id] ?? null
+export function bindingsOf(id: string): Binding[] {
+  return parsed[id] ?? []
 }
 
 /**
@@ -115,6 +118,26 @@ export function parseChord(chord: string): Binding | null {
 }
 
 /**
+ * 解析多候选键位弦（`|` 分隔）：逐段解析，丢弃非法段，去重。
+ * @author ddj 2026年08月26号
+ * @param chord 键位弦（如 `Alt+ArrowLeft|Ctrl+Alt+-`）
+ * @returns 解析键位数组（纯 `|`/空/非法 → 空数组）
+ */
+export function parseChords(chord: string): Binding[] {
+  const out: Binding[] = []
+  const seen = new Set<string>()
+  for (const part of String(chord ?? '').split('|')) {
+    const binding = parseChord(part)
+    if (!binding) continue
+    const key = formatChord(binding)
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(binding)
+  }
+  return out
+}
+
+/**
  * 格式化键位（Ctrl/Cmd/Shift/Alt + 主键；meta 显示 Cmd）。
  * @author ddj 2026年08月26号
  * @param binding 解析键位
@@ -131,18 +154,21 @@ export function formatChord(binding: Binding): string {
 }
 
 /**
- * 事件是否命中键位（Ctrl 与 Cmd 互认）。
+ * 事件是否命中键位（Ctrl 与 Cmd 互认；多候选任一命中即 true）。
  * @author ddj 2026年08月26号
  * @param e 键盘事件（鸭子类型，便于单测）
- * @param binding 解析键位（null = 未绑定，永不命中）
+ * @param bindings 解析键位或键位数组（null/空 = 未绑定，永不命中）
  * @returns 是否命中
  */
-export function matchEvent(e: { ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean; altKey?: boolean; key?: string }, binding: Binding | null): boolean {
-  if (!binding) return false
-  if ((e.ctrlKey || e.metaKey) !== (binding.ctrl || binding.meta)) return false
-  if (Boolean(e.shiftKey) !== binding.shift) return false
-  if (Boolean(e.altKey) !== binding.alt) return false
-  return normalizeKey(e.key ?? '') === binding.key
+export function matchEvent(e: { ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean; altKey?: boolean; key?: string }, bindings: Binding | Binding[] | null): boolean {
+  const list = Array.isArray(bindings) ? bindings : bindings ? [bindings] : []
+  for (const binding of list) {
+    if ((e.ctrlKey || e.metaKey) !== (binding.ctrl || binding.meta)) continue
+    if (Boolean(e.shiftKey) !== binding.shift) continue
+    if (Boolean(e.altKey) !== binding.alt) continue
+    if (normalizeKey(e.key ?? '') === binding.key) return true
+  }
+  return false
 }
 
 /**

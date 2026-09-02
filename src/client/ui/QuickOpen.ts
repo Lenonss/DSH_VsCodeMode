@@ -7,7 +7,7 @@
  */
 import React from 'react'
 import { rpc } from '../rpc.js'
-import { bindingOf, chordOf, matchEvent, useKeybindingsVersion } from '../keybindings.js'
+import { bindingsOf, chordOf, matchEvent, useKeybindingsVersion } from '../keybindings.js'
 
 /**
  * 快速打开搜索框：Ctrl+P 聚焦，输入 ≥2 字符经 edrv.searchFiles 搜索，
@@ -50,7 +50,7 @@ export function QuickOpen(props) {
 
   React.useEffect(() => {
     const onKey = (e) => {
-      if (matchEvent(e, bindingOf('edrv.quickOpen'))) {
+      if (matchEvent(e, bindingsOf('edrv.quickOpen'))) {
         e.preventDefault(); e.stopPropagation()
         inputRef.current?.focus?.()
         setOpen(true)

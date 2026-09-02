@@ -43,6 +43,8 @@
 [data-edrv-view] .edrv-diffchip { font-size: 11px; padding: 2px 10px; border: 1px solid var(--dsw-alias-border-l1, #333); border-radius: 999px; background: var(--dsw-alias-bg-layer-2, transparent); color: var(--dsw-alias-state-warn-primary, #b7791f); cursor: pointer; white-space: nowrap; flex-shrink: 0; }
 [data-edrv-view] .edrv-chip-btn { font-size: 12px; padding: 2px 6px; border: none; background: transparent; color: var(--dsw-alias-label-secondary, #aaa); cursor: pointer; border-radius: 4px; flex-shrink: 0; }
 [data-edrv-view] .edrv-chip-btn:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(255,255,255,.06)); }
+[data-edrv-view] .edrv-chip-btn:disabled { opacity: .35; cursor: default; }
+[data-edrv-view] .edrv-chip-btn:disabled:hover { background: transparent; }
 [data-edrv-view] .edrv-mn-add-line { background: rgba(15,157,88,.10); }
 [data-edrv-view] .edrv-mn-gutter-add { color: #0f9d58 !important; font-weight: 700; display: flex !important; align-items: center; justify-content: center; }
 [data-edrv-view] .edrv-mn-gutter-add::before { content: "+"; }
