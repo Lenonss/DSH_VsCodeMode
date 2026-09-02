@@ -197,7 +197,16 @@ export async function gotoRefsAt(ed, position) {
   if (!path || !position) return
   const all = await findReferences(path, model.getValue(), position, false)
   const others = filterOtherRefs(all, path, position)
-  if (!others.length) return
+  if (!others.length) {
+    // 0 条「其它」引用：降级查定义（参数/局部变量只被声明时引用为空，定义可经 host 降级链推导）
+    const defs = await findDefinition(path, model.getValue(), position)
+    const first = defs[0]
+    if (!first) return
+    const lspPos = monoToLsp(position.lineNumber, position.column)
+    if (sameFile(targetOpenPath(first), path) && posInRange(lspPos, first.lspRange)) return // 定义即自身：无其它可跳，保持静默
+    jumpToLocation(first)
+    return
+  }
   if (others.length === 1) {
     jumpToLocation(others[0])
     return

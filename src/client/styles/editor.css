@@ -40,6 +40,8 @@
 [data-edrv-view] .edrv-lsp-status-dot.ready { background: var(--dsw-alias-state-success-primary, #0f9d58); }
 [data-edrv-view] .edrv-lsp-status-dot.busy { background: var(--dsw-alias-state-warn-primary, #d97706); animation: edrv-lsp-pulse 1.2s ease-in-out infinite; }
 @keyframes edrv-lsp-pulse { 50% { opacity: .45; } }
+/* Ctrl+hover 可导航标识符下划线提示（绑定 Monaco inlineClassName 装饰） */
+[data-edrv-view] .edrv-nav-underline { text-decoration: underline; text-decoration-color: var(--dsw-alias-interactive-primary, #4fc1ff); text-underline-offset: 1px; cursor: pointer; }
 [data-edrv-view] .edrv-diffchip { font-size: 11px; padding: 2px 10px; border: 1px solid var(--dsw-alias-border-l1, #333); border-radius: 999px; background: var(--dsw-alias-bg-layer-2, transparent); color: var(--dsw-alias-state-warn-primary, #b7791f); cursor: pointer; white-space: nowrap; flex-shrink: 0; }
 [data-edrv-view] .edrv-chip-btn { font-size: 12px; padding: 2px 6px; border: none; background: transparent; color: var(--dsw-alias-label-secondary, #aaa); cursor: pointer; border-radius: 4px; flex-shrink: 0; }
 [data-edrv-view] .edrv-chip-btn:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(255,255,255,.06)); }

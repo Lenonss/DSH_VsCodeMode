@@ -26,6 +26,7 @@ import { bindingsOf, chordOf, matchEvent, useKeybindingsVersion } from '../keybi
 import { createNavHistory } from '../navHistory.js'
 import { CACHE_KEY } from '../paths.js'
 import { bindLspEditor, runGoToDefinition, runFindReferences, hideReferencesOverlay } from '../monaco/lsp/providers.js'
+import { bindLspUnderline } from '../monaco/lsp/underline.js'
 import { onLspProgress, refreshStatus } from '../monaco/lsp/index.js'
 
 /**
@@ -841,6 +842,7 @@ export function EditorView(props) {
     })
     ed.addCommand(m.KeyCode.F12, () => { void runGoToDefinition(ed) })
     bindLspEditor(ed)
+    bindLspUnderline(ed, m)
     // hover 差异块 → 浮出 Keep/Undo（req：鼠标移到编辑区差异块时显示）
     // 防闪烁：① 区域不变不 setState（浮窗锚定差异块起始行，不跟随鼠标）；② 延迟隐藏；
     // ③ 浮窗自身 onMouseEnter 取消隐藏计时（鼠标在浮窗与编辑器间移动不闪）。

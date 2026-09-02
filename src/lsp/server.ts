@@ -7,6 +7,7 @@
 import { spawnServer, type Transport } from './transport.js'
 import { createLspClient, type LspClient } from './client.js'
 import { pathToFileUri } from './uri.js'
+import { deriveDefinitionFromLocations } from './derive.js'
 import type { LspProviderSpec } from './providers.js'
 import { LSP_SEMANTIC_TOKEN_MODIFIERS, LSP_SEMANTIC_TOKEN_TYPES } from '../shared/lsp.js'
 import type {
@@ -64,6 +65,7 @@ export function createLspServer(spec: LspProviderSpec, root: string, languageId:
   let client: LspClient | null = null
   let capabilities: LspServerCapabilities = {
     definition: false,
+    declaration: false,
     references: false,
     documentSymbol: false,
     workspaceSymbol: false,
@@ -231,11 +233,55 @@ export function createLspServer(spec: LspProviderSpec, root: string, languageId:
     async definition(path: string, line: number, character: number): Promise<LspLocation[]> {
       const doc = docs.get(path)
       if (!doc || !(await readyWait)) return []
-      const result = await ensureClient().request<unknown>(
-        'textDocument/definition',
-        { textDocument: { uri: doc.uri }, position: { line, character } },
+      const client = ensureClient()
+      const position = { line, character }
+      // ① 标准定义（方法/跨文件命名空间等）
+      const direct = normalizeLocations(
+        await client.request<unknown>(
+          'textDocument/definition',
+          { textDocument: { uri: doc.uri }, position },
+        ),
       )
-      return normalizeLocations(result)
+      if (direct.length) return direct
+      // ② 声明（服务器能力支持时）：EmmyLua 对局部变量/参数/表字段 definition 常返回空，declaration 更准
+      if (capabilities.declaration) {
+        try {
+          const decl = normalizeLocations(
+            await client.request<unknown>(
+              'textDocument/declaration',
+              { textDocument: { uri: doc.uri }, position },
+            ),
+          )
+          if (decl.length) {
+            log('definition fallback → declaration (' + path + ':' + line + ':' + character + ')')
+            return decl
+          }
+        } catch (error) {
+          log('declaration request failed: ' + String(error))
+        }
+      }
+      // ③ 引用推导：definition/declaration 均空时，从 references(includeDeclaration) 推导声明
+      // （EmmyLua 局部/参数把声明排在引用首位；词文本不一致则拒绝，宁可空不误跳）
+      try {
+        const refs = normalizeLocations(
+          await client.request<unknown>(
+            'textDocument/references',
+            {
+              textDocument: { uri: doc.uri },
+              position,
+              context: { includeDeclaration: true },
+            },
+          ),
+        )
+        const derived = deriveDefinitionFromLocations(position, refs, doc.text, doc.uri)
+        if (derived) {
+          log('definition fallback → references-derived (' + path + ':' + line + ':' + character + ')')
+          return [derived]
+        }
+      } catch (error) {
+        log('references fallback failed: ' + String(error))
+      }
+      return []
     },
 
     async references(path: string, line: number, character: number, includeDeclaration: boolean): Promise<LspLocation[]> {

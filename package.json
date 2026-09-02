@@ -1,6 +1,6 @@
 {
   "name": "dsh-vscode-mode",
-  "version": "0.1.45",
+  "version": "0.1.46",
   "description": "DSH 上的类 VSCode 编码体验：Monaco 编辑器（文件页签/QuickOpen/状态栏，可驻 dsh-better-sidebar 侧边栏与对话同屏）+ Agent 编辑差异审查（整文件差异/采纳/拒绝/归档/回滚）+ 语言服务器（LSP）智能（跳转定义/引用/hover/大纲 + VSIX 扩展市场安装），状态持久化到工作区旁车",
   "keywords": [
     "dsh",

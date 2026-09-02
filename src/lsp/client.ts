@@ -56,6 +56,7 @@ export function createLspClient(
   const pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>()
   let serverCapabilities: LspServerCapabilities = {
     definition: false,
+    declaration: false,
     references: false,
     documentSymbol: false,
     workspaceSymbol: false,
@@ -158,6 +159,7 @@ export function createLspClient(
       const init = await client.request<{
         capabilities?: {
           definitionProvider?: unknown
+          declarationProvider?: unknown
           referencesProvider?: unknown
           documentSymbolProvider?: unknown
           workspaceSymbolProvider?: unknown
@@ -179,6 +181,7 @@ export function createLspClient(
           textDocument: {
             synchronization: { dynamicRegistration: false, willSave: false, didSave: true },
             definition: { dynamicRegistration: false },
+            declaration: { dynamicRegistration: false },
             references: { dynamicRegistration: false },
             documentSymbol: { dynamicRegistration: false },
             hover: { dynamicRegistration: false },
@@ -196,6 +199,7 @@ export function createLspClient(
       const legend = caps.semanticTokensProvider?.legend
       serverCapabilities = {
         definition: Boolean(caps.definitionProvider),
+        declaration: Boolean(caps.declarationProvider),
         references: Boolean(caps.referencesProvider),
         documentSymbol: Boolean(caps.documentSymbolProvider),
         workspaceSymbol: Boolean(caps.workspaceSymbolProvider),

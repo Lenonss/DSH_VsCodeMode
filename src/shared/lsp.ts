@@ -69,9 +69,66 @@ export interface LspSemanticTokens {
   resultId?: string
 }
 
+/** 语义 token 解码后的绝对范围（LSP 0-based；type 为插件固定 legend 与 type 名）。 */
+export interface LspSemanticTokenRange {
+  start: LspPosition
+  end: LspPosition
+  type: string
+  modifiers: number
+}
+
+/** 语义 token 中可作为"可导航标识符"的类型（ctrl+hover 下划线判定用）。 */
+export const LSP_NAVIGABLE_TOKEN_TYPES: ReadonlySet<string> = new Set([
+  'variable', 'parameter', 'property', 'function', 'method', 'class', 'enum',
+  'struct', 'interface', 'namespace', 'typeParameter', 'enumMember', 'event', 'type',
+])
+
+/**
+ * 语义 token 是否属于可导航标识符。
+ * @author ddj 2026年09月02号
+ * @param type 语义 token 类型名（插件固定 legend）
+ * @returns 是否可导航
+ */
+export function isNavigableTokenType(type: string): boolean {
+  return LSP_NAVIGABLE_TOKEN_TYPES.has(type)
+}
+
+/**
+ * 解码 LSP delta 编码的语义 token 流为绝对范围数组。
+ * @author ddj 2026年09月02号
+ * @param data 5 元组 delta 流（host normalizeSemanticData 产物，类型索引对应固定 legend）
+ * @param types 固定 legend 类型表（缺省 LSP_SEMANTIC_TOKEN_TYPES）
+ * @returns 绝对范围列表（保持文档顺序）
+ */
+export function decodeSemanticTokens(
+  data: number[],
+  types: readonly string[] = LSP_SEMANTIC_TOKEN_TYPES,
+): LspSemanticTokenRange[] {
+  const out: LspSemanticTokenRange[] = []
+  let line = 0
+  let character = 0
+  for (let i = 0; i + 4 < data.length; i += 5) {
+    const deltaLine = data[i] ?? 0
+    const deltaCharacter = data[i + 1] ?? 0
+    const length = Math.max(0, data[i + 2] ?? 0)
+    const typeIndex = data[i + 3] ?? 0
+    const modifiers = data[i + 4] ?? 0
+    line += deltaLine
+    character = deltaLine === 0 ? character + deltaCharacter : deltaCharacter
+    out.push({
+      start: { line, character },
+      end: { line, character: character + length },
+      type: types[typeIndex] ?? 'variable',
+      modifiers,
+    })
+  }
+  return out
+}
+
 /** LSP 服务器能力子集：本插件会用到的方法。 */
 export interface LspServerCapabilities {
   definition: boolean
+  declaration: boolean
   references: boolean
   documentSymbol: boolean
   workspaceSymbol: boolean

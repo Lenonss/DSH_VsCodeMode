@@ -7,7 +7,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { monoToLsp, lspToMono, fileUriToPath as sharedFileUriToPath } from '../src/shared/lsp.js'
+import { monoToLsp, lspToMono, fileUriToPath as sharedFileUriToPath, decodeSemanticTokens, isNavigableTokenType } from '../src/shared/lsp.js'
 import { encodeMessage, parseFrame, createFrameParser } from '../src/lsp/jsonrpc.js'
 import { pathToFileUri, fileUriToPath, isInside } from '../src/lsp/uri.js'
 import { platformServerDir, exeSuffix, listMatchingDirs, candidateEmmyLua, resolveLuaProvider, resolveCSharpProvider, findInPath, clearProviderCache } from '../src/lsp/providers.js'
@@ -18,6 +18,7 @@ import { toEdrvUri, targetOpenPath } from '../src/client/monaco/lsp/lspClient.js
 import { installLspSettingsSection } from '../src/lsp/settings.js'
 import { LSP_SETTINGS_NS } from '../src/lsp/config.js'
 import { parseOutline, SK } from '../src/client/outline/parse.js'
+import { deriveDefinitionFromLocations } from '../src/lsp/derive.js'
 
 describe('shared/lsp 坐标换算', () => {
   it('mono→lsp 0-based', () => {
@@ -331,5 +332,103 @@ describe('outline/parse parseLua 注解', () => {
   it('---@field 无类时忽略', () => {
     const out = parseOutline('lua', ['---@field orphan number', 'function M.a() end'].join('\n'))
     expect(out.map((s) => s.name)).toEqual(['M.a'])
+  })
+})
+
+describe('lsp/derive 定义降级推导', () => {
+  // 同 GameUtil.lua 场景（0-based 行号）：this 声明 2:6；IsNullByGameObject 声明 15:9-31；pTarget 声明 15:33
+  const DOC = [
+    '---@class GameUtil',
+    'GameUtil = {}',
+    'local this = GameUtil',
+    '',
+    'GameUtil.Vec = {',
+    '    Up = CS.UnityEngine.Vector3(0, 0, 1),',
+    '}',
+    '',
+    'function this.IsNull(pTarget)',
+    '    if pTarget == false or pTarget == nil then',
+    '        return true',
+    '    end',
+    '    return false',
+    'end',
+    '',
+    'function this.IsNullByGameObject(pTarget)',
+    '    if pTarget == nil or pTarget == false or LuaHelper.IsNullByGameObject(pTarget) then',
+    '        return true',
+    '    end',
+    '    return false',
+    'end',
+  ].join('\n')
+
+  const FILE = 'file:///D:/Work/PopIsland/IslandSplash_BugFix2/Assets/Scripts/Lua/Utils/GameUtil.lua'
+  const loc = (line: number, ch: number, endCh: number) =>
+    ({ uri: FILE, range: { start: { line, character: ch }, end: { line, character: endCh } } })
+  const locOther = (line: number, ch: number, endCh: number) =>
+    ({ uri: 'file:///D:/Work/PopIsland/IslandSplash_BugFix2/Assets/Scripts/Lua/Utils/LuaHelper.lua', range: { start: { line, character: ch }, end: { line, character: endCh } } })
+
+  const THIS_REFS = [loc(2, 6, 10), loc(8, 9, 13), loc(15, 9, 13)]
+  const PTARGET_REFS = [loc(15, 33, 40), loc(16, 7, 14), loc(16, 25, 32), loc(16, 74, 81)]
+  const VEC_REFS = [loc(64, 62, 65), loc(70, 5, 8)]
+
+  it('点击 this 使用处 → 推导回 local this 声明（2:6）', () => {
+    const d = deriveDefinitionFromLocations({ line: 8, character: 9 }, THIS_REFS, DOC, 'D:/Work/PopIsland/IslandSplash_BugFix2/Assets/Scripts/Lua/Utils/GameUtil.lua')
+    expect(d?.range.start).toEqual({ line: 2, character: 6 })
+  })
+
+  it('点击 this 声明处 → 返回自身（不越跳）', () => {
+    const d = deriveDefinitionFromLocations({ line: 2, character: 6 }, THIS_REFS, DOC, 'D:/Work/PopIsland/IslandSplash_BugFix2/Assets/Scripts/Lua/Utils/GameUtil.lua')
+    expect(d?.range.start).toEqual({ line: 2, character: 6 })
+  })
+
+  it('点击 pTarget 使用处 → 推导回参数声明（15:33）', () => {
+    const d = deriveDefinitionFromLocations({ line: 16, character: 7 }, PTARGET_REFS, DOC, 'D:/Work/PopIsland/IslandSplash_BugFix2/Assets/Scripts/Lua/Utils/GameUtil.lua')
+    expect(d?.range.start).toEqual({ line: 15, character: 33 })
+  })
+
+  it('点击 pTarget 声明处 → 返回自身', () => {
+    const d = deriveDefinitionFromLocations({ line: 15, character: 33 }, PTARGET_REFS, DOC, 'D:/Work/PopIsland/IslandSplash_BugFix2/Assets/Scripts/Lua/Utils/GameUtil.lua')
+    expect(d?.range.start).toEqual({ line: 15, character: 33 })
+  })
+
+  it('字段声明处（引用不含声明）→ 不猜测返回 null', () => {
+    const d = deriveDefinitionFromLocations({ line: 4, character: 10 }, VEC_REFS, DOC, 'D:/Work/PopIsland/IslandSplash_BugFix2/Assets/Scripts/Lua/Utils/GameUtil.lua')
+    expect(d).toBeNull()
+  })
+
+  it('词文本不一致/异文件 → null', () => {
+    const d1 = deriveDefinitionFromLocations({ line: 16, character: 7 }, [locOther(3, 7, 14)], DOC, 'D:/Work/PopIsland/IslandSplash_BugFix2/Assets/Scripts/Lua/Utils/GameUtil.lua')
+    expect(d1).toBeNull()
+    const d2 = deriveDefinitionFromLocations({ line: 16, character: 7 }, [loc(16, 20, 27)], DOC, 'D:/Work/PopIsland/IslandSplash_BugFix2/Assets/Scripts/Lua/Utils/GameUtil.lua')
+    expect(d2).toBeNull()
+  })
+
+  it('空列表 → null', () => {
+    expect(deriveDefinitionFromLocations({ line: 0, character: 0 }, [], DOC, 'x/y.lua')).toBeNull()
+  })
+})
+
+describe('shared/lsp 语义 token 解码', () => {
+  it('delta 流 → 绝对范围（跨行/同行）', () => {
+    const ranges = decodeSemanticTokens([0, 5, 4, 0, 0, 1, 3, 2, 1, 0])
+    expect(ranges).toEqual([
+      { start: { line: 0, character: 5 }, end: { line: 0, character: 9 }, type: 'namespace', modifiers: 0 },
+      { start: { line: 1, character: 3 }, end: { line: 1, character: 5 }, type: 'type', modifiers: 0 },
+    ])
+  })
+
+  it('同行相邻 token 位置连续累计', () => {
+    const ranges = decodeSemanticTokens([0, 0, 3, 19, 0, 0, 3, 6, 7, 0])
+    expect(ranges[0]).toEqual({ start: { line: 0, character: 0 }, end: { line: 0, character: 3 }, type: 'number', modifiers: 0 })
+    expect(ranges[1]).toEqual({ start: { line: 0, character: 3 }, end: { line: 0, character: 9 }, type: 'parameter', modifiers: 0 })
+  })
+
+  it('可导航类型判定', () => {
+    expect(isNavigableTokenType('parameter')).toBe(true)
+    expect(isNavigableTokenType('property')).toBe(true)
+    expect(isNavigableTokenType('method')).toBe(true)
+    expect(isNavigableTokenType('comment')).toBe(false)
+    expect(isNavigableTokenType('keyword')).toBe(false)
+    expect(isNavigableTokenType('string')).toBe(false)
   })
 })
