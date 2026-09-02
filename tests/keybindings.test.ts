@@ -48,7 +48,8 @@ describe('parseChord / formatChord', () => {
   })
 
   it('drops invalid segments and dedupes multi-candidates', () => {
-    expect(parseChords('Alt+X|bad|Alt+X||Ctrl')).toEqual([
+    // 注意：单 token 是合法单键键位（F5 风格），非法段须是「双主键」或纯修饰符
+    expect(parseChords('Alt+X|Ctrl+P+Q|Alt+X||Ctrl')).toEqual([
       { ctrl: false, shift: false, alt: true, meta: false, key: 'X' },
     ])
     expect(parseChords('')).toEqual([])
