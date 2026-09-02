@@ -291,11 +291,5 @@
 [data-edrv-view] .edrv-search-toggle.on { background: var(--dsw-alias-interactive-bg-hover, rgba(15,157,88,.14)); color: var(--dsw-alias-label-primary, #1f2933); border-color: var(--dsw-alias-brand-primary, #0f9d58); }
 [data-edrv-view] .edrv-search-toggle:disabled { opacity: .4; cursor: default; }
 
-/* LSP 引用结果浮动面板（Shift+F12 / 右键「查找所有引用」） */
-[data-edrv-view] .edrv-refs { position: absolute; right: 12px; top: 40px; z-index: 60; width: 360px; max-height: 60%; display: flex; flex-direction: column; border: 1px solid var(--dsw-alias-border-l2, #555); border-radius: 8px; background: var(--dsw-alias-bg-panel, #161b22); box-shadow: 0 6px 24px rgba(0,0,0,.4); overflow: hidden; font-size: 12px; }
-[data-edrv-view] .edrv-refs-head { padding: 6px 10px; font-weight: 600; color: var(--dsw-alias-label-primary, #eee); border-bottom: 1px solid var(--dsw-alias-border-l2, #333); background: var(--dsw-alias-bg-layer-1, transparent); }
-[data-edrv-view] .edrv-refs-list { overflow-y: auto; }
-[data-edrv-view] .edrv-refs-row { padding: 4px 10px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--dsw-alias-label-secondary, #c0c8d0); font-family: var(--ds-font-family-code, ui-monospace, monospace); }
-[data-edrv-view] .edrv-refs-row:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(15,157,88,.10)); color: var(--dsw-alias-label-primary, #fff); }
 
 
