@@ -145,7 +145,7 @@ describe('lsp/providers 解析', () => {
 
   it('EmmyLua 扩展入口自动发现', () => {
     const ext = join(dir, 'dsh-vscode-mode', 'extensions', 'tangzx.emmylua-0.9.41')
-    const exe = join(ext, 'server', 'emmylua_ls.exe')
+    const exe = join(ext, 'server', 'emmylua_ls' + exeSuffix(process.platform))
     mkdirSync(join(ext, 'server'), { recursive: true })
     writeFileSync(exe, 'x')
     writeFileSync(join(ext, 'package.json'), JSON.stringify({ version: '0.9.41' }))
