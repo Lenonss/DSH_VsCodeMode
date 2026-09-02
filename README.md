@@ -10,7 +10,9 @@
   **可选依赖**：未安装 dsh-better-sidebar 时自动回退旧「中央文件编辑页签」形态（插件零新依赖仍完整可用），
   并在编辑器顶部与设置页「兼容性」子 Tab 引导安装（`dsh plugin --profile web add dsh-better-sidebar`）。
   文件页签（脏点/关闭/「+」打开）+ `Ctrl+P` 快速打开（QuickOpen）+ **Monaco Editor**
-  （语法高亮/行号/`Ctrl+F`/`Ctrl+G`/`Ctrl+S`/700ms 防抖自动保存）+ 顶部工具栏（路径/语言/Ln,Col/保存状态/差异/侧边栏/刷新）。
+  （语法高亮/行号/`Ctrl+F`/`Ctrl+G`/`Ctrl+S`/700ms 防抖自动保存）+ 顶部工具栏（路径/语言/Ln,Col/保存状态/差异/侧边栏/刷新）
+  + **导航历史**（后退/前进：跨文件恢复焦点位置，工具栏 `←`/`→` 按钮、键盘 `Alt+←/→` 与 `Ctrl+Alt+-`/`Ctrl+Shift+-`、
+  鼠标侧键 XButton 均可触发；后退后新导航自动清空前进栈）。
 - **差异审查**：Host 捕获 agent 的 `edit`/`write`（`tools/result`），客户端统一使用**唯一一个挂在 DSH `conversation.input.dock` 的 DiffBox 实例**：
   编辑器未打开时显示紧凑「差异 N 个文件 · 查看下一个」按钮（点击自动打开侧栏编辑器并聚焦差异）；编辑器打开后 dock 切换为
   完整操作条（Keep / Undo / 跳转 / 回滚 / 归档对比），不会再出现第二个差异栏。header 差异角标 +
