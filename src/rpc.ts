@@ -284,7 +284,10 @@ export function buildHandlers(
       try {
         const target = await resolveTarget(ctx, sc.session, args.path)
         const info = await fs.stat(target)
-        if (!info || info.type !== 'file') return { ok: false, error: '文件不存在' }
+        if (!info || info.type !== 'file') {
+          // 带上解析后的真实路径：跳转失败时可直接看出是路径解析错还是目标本身不存在
+          return { ok: false, error: '文件不存在', resolvedPath: fs.processPath(target) }
+        }
         if ((info.size ?? 0) > READ_CAP) return { ok: false, error: '文件过大（>8MB），不支持整文件预览' }
         const content = await fs.readText(target)
         return { ok: true, content, size: content.length }

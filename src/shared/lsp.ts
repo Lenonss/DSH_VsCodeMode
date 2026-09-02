@@ -49,6 +49,26 @@ export interface LspHover {
   range?: LspRange
 }
 
+/** LSP semantic token 标准类型（host 归一化后，client 与 Monaco 共用）。 */
+export const LSP_SEMANTIC_TOKEN_TYPES = [
+  'namespace', 'type', 'class', 'enum', 'interface', 'struct', 'typeParameter',
+  'parameter', 'variable', 'property', 'enumMember', 'event', 'function', 'method',
+  'macro', 'label', 'comment', 'string', 'keyword', 'number', 'regexp', 'operator',
+  'decorator',
+] as const
+
+/** LSP semantic token 标准修饰符（host 归一化后，client 与 Monaco 共用）。 */
+export const LSP_SEMANTIC_TOKEN_MODIFIERS = [
+  'declaration', 'definition', 'readonly', 'static', 'deprecated', 'abstract',
+  'async', 'modification', 'documentation', 'defaultLibrary', 'global', 'local', 'mutable',
+] as const
+
+/** 归一化后的 LSP semanticTokens/full 结果（data 使用 LSP delta 编码）。 */
+export interface LspSemanticTokens {
+  data: number[]
+  resultId?: string
+}
+
 /** LSP 服务器能力子集：本插件会用到的方法。 */
 export interface LspServerCapabilities {
   definition: boolean
@@ -56,6 +76,9 @@ export interface LspServerCapabilities {
   documentSymbol: boolean
   workspaceSymbol: boolean
   hover: boolean
+  semanticTokens: boolean
+  semanticTokenTypes?: string[]
+  semanticTokenModifiers?: string[]
 }
 
 /** 服务器进程/会话状态。 */
@@ -77,6 +100,7 @@ export interface LspServerStatus {
   progress?: number // LSP 工作区解析进度（0–100，未知时省略）
   progressMessage?: string
   root?: string     // 绑定工作区根（相对显示）
+  providerName?: string // provider 名称（如 EmmyLua / LuaLS）
 }
 
 /**

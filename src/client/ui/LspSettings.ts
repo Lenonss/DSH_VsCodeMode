@@ -10,7 +10,7 @@ import { rpc } from '../rpc.js'
 import '../styles/mcp.css'
 
 const LANGUAGES = [
-  { id: 'lua', label: 'Lua（LuaLS）', hint: 'lua-language-server，EmmyLua 注解原生支持' },
+  { id: 'lua', label: 'Lua（EmmyLua / LuaLS）', hint: '优先使用已安装 EmmyLua；未安装时回退 LuaLS 或 PATH 中的 lua-language-server' },
   { id: 'csharp', label: 'C#（Roslyn / OmniSharp）', hint: '需 dotnet + ms-dotnettools.csharp 的 .roslyn 服务器，或手动指定' },
 ]
 
@@ -25,8 +25,8 @@ const TABS = [
   { id: 'updates', label: '更新' },
 ]
 
-/** 语言卡片：状态 + 启用开关 + 命令/路径配置。 */
-function LangCard({ lang, config, status, busy, onToggle, onSave }) {
+/** 语言卡片：状态 + 启用开关 + 命令/路径配置 + 重新检测。 */
+function LangCard({ lang, config, status, busy, onToggle, onSave, onRedetect }) {
   const [pathDraft, setPathDraft] = React.useState(config?.path ?? '')
   const [commandDraft, setCommandDraft] = React.useState(config?.command ?? '')
   React.useEffect(() => { setPathDraft(config?.path ?? ''); setCommandDraft(config?.command ?? '') }, [config?.path, config?.command])
@@ -40,12 +40,15 @@ function LangCard({ lang, config, status, busy, onToggle, onSave }) {
         React.createElement('button', { className: 'vsm-switch ' + (config?.enabled !== false ? 'on' : ''), onClick: () => onToggle(lang.id, config?.enabled !== false ? false : true), 'aria-label': '启用/禁用' }, config?.enabled !== false ? '●' : '○'))),
     React.createElement('div', { className: 'vsm-mcp-meta' },
       PHASE_LABEL[phase] ?? phase, ' · ', SOURCE_LABEL[status?.source] ?? status?.source,
+      status?.providerName ? ' · ' + status.providerName : '',
+      status?.version ? ' · v' + status.version : '',
       (phase === 'ready' && status?.root) ? ' · ' + String(status.root).split(/[\\/]/).pop() : ''),
     status?.reason ? React.createElement('div', { className: 'vsm-mcp-error' }, status.reason) : null,
     React.createElement('div', { className: 'vsm-lsp-form' },
       React.createElement('label', null, React.createElement('span', null, '可执行文件路径（绝对路径，优先）'), React.createElement('input', { value: pathDraft, placeholder: '如 C:/.../lua-language-server.exe', onChange: (e) => setPathDraft(e.target.value) })),
       React.createElement('label', null, React.createElement('span', null, '命令名（PATH 内查找）'), React.createElement('input', { value: commandDraft, placeholder: '如 lua-language-server', onChange: (e) => setCommandDraft(e.target.value) })),
-      React.createElement('button', { className: 'vsm-primary', disabled: busy === lang.id, onClick: () => onSave(lang.id, pathDraft, commandDraft) }, busy === lang.id ? '保存中…' : '保存配置')),
+      React.createElement('button', { className: 'vsm-primary', disabled: busy === lang.id, onClick: () => onSave(lang.id, pathDraft, commandDraft) }, busy === lang.id ? '保存中…' : '保存配置'),
+      React.createElement('button', { className: 'vsm-primary vsm-small', disabled: busy === lang.id, onClick: () => onRedetect(lang.id), title: '清缓存并重新选择语言服务器（EmmyLua / LuaLS）' }, busy === lang.id ? '检测中…' : '重新检测')),
     React.createElement('div', { className: 'vsm-lsp-hint' }, lang.hint))
 }
 
@@ -129,6 +132,18 @@ export function LspSettings() {
     if (next === 'servers') void refreshServers()
   }
 
+  /** 合并 redetect/configUpdate 返回的服务器状态：只替换该语言条目。 */
+  const mergeServers = (languageId, list) => {
+    setServers((prev) => Array.isArray(list)
+      ? [...prev.filter((s) => s.languageId !== languageId), ...list]
+      : prev)
+  }
+
+  /** 重检测后通知编辑器：与 host 重新同步已打开的模型（触发重新 acquire）。 */
+  const notifyResync = (languageId) => {
+    window.dispatchEvent(new CustomEvent('edrv:lsp-redetect', { detail: { languageId } }))
+  }
+
   const saveLang = (languageId, path, command) => {
     setBusy(languageId)
     setError('')
@@ -136,6 +151,8 @@ export function LspSettings() {
       .then((res) => {
         if (!res?.ok) { setError(res?.error ?? '保存失败'); return }
         setConfig(res.config ?? {})
+        mergeServers(languageId, res.servers)
+        notifyResync(languageId) // 保存后自动重新检测 + 同步模型
       })
       .catch((e) => setError(String(e)))
       .finally(() => setBusy(''))
@@ -145,8 +162,23 @@ export function LspSettings() {
     setBusy(languageId)
     rpc('edrv.lsp.configUpdate', { languageId, enabled })
       .then((res) => {
-        if (res?.ok) { setConfig(res.config ?? {}); void refreshServers() }
-        else setError(res?.error ?? '切换失败')
+        if (!res?.ok) { setError(res?.error ?? '切换失败'); return }
+        setConfig(res.config ?? {})
+        mergeServers(languageId, res.servers)
+        notifyResync(languageId) // 切换启用状态后自动重新检测 + 同步模型
+      })
+      .catch((e) => setError(String(e)))
+      .finally(() => setBusy(''))
+  }
+
+  const redetectLang = (languageId) => {
+    setBusy(languageId)
+    setError('')
+    rpc('edrv.lsp.redetect', { languageId })
+      .then((res) => {
+        if (!res?.ok) { setError(res?.error ?? '重新检测失败'); return }
+        mergeServers(languageId, res.servers)
+        notifyResync(languageId)
       })
       .catch((e) => setError(String(e)))
       .finally(() => setBusy(''))
@@ -239,7 +271,7 @@ export function LspSettings() {
         key: lang.id, lang,
         config: config[lang.id] ?? {},
         status: servers.find((s) => s.languageId === lang.id),
-        busy, onToggle: toggleLang, onSave: saveLang,
+        busy, onToggle: toggleLang, onSave: saveLang, onRedetect: redetectLang,
       })),
       React.createElement('div', { className: 'vsm-lsp-hint' }, '提示：打开 Lua/C# 文件即自动（惰性）启动对应语言服务器；未配置时编辑器功能不受影响，大纲回退内置解析。')))
   } else if (tab === 'installed') {

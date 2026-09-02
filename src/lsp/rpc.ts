@@ -6,10 +6,11 @@
 import type { Ctx } from '../store.js'
 import { searchRoot } from '../search/ripgrep.js'
 import { sessionOf, cwdOf } from '../registry.js'
-import { resolveProviderSpec, langOfPath, configFromPlugin, configFromSettings, LSP_SETTINGS_NS, type LspConfig } from './config.js'
+import { resolveProviderSpec, langOfPath, configFromPlugin, configFromSettings, LSP_LANGUAGES, LSP_SETTINGS_NS, type LspConfig } from './config.js'
+import { clearProviderCache } from './providers.js'
 import type { LspManager } from './manager.js'
 import type { RpcHandlerMap } from '../shared/rpc.js'
-import type { LspLocation } from '../shared/lsp.js'
+import type { LspLocation, LspServerStatus } from '../shared/lsp.js'
 import { installFromMarket, installVsixFile, listInstalled, marketGet, marketSearch, uninstall, updateExtension, type ExtInfo } from './extmgr.js'
 
 export interface LspRpcDeps {
@@ -85,6 +86,21 @@ function createDocTracker() {
       sessionDocs.delete(sessionId)
       return [...toRelease]
     },
+    /** 清除指定语言的文档归属，让当前客户端重新同步时重新 acquire。 */
+    resetLanguage(languageId: string): void {
+      for (const [docKey, owners] of openDocs) {
+        if (!docKey.includes('|' + languageId + '|')) continue
+        for (const sessionId of owners) forgetDoc(sessionId, docKey)
+        openDocs.delete(docKey)
+      }
+      for (const key of [...rootLangRefs.keys()]) if (key.endsWith('|' + languageId)) rootLangRefs.delete(key)
+    },
+    /** 返回指定会话已打开的文档路径，用于重检测后恢复同步。 */
+    pathsFor(sessionId: string, languageId: string): string[] {
+      const docs = sessionDocs.get(sessionId)
+      if (!docs) return []
+      return [...docs].filter((key) => key.includes('|' + languageId + '|')).map((key) => key.slice(key.lastIndexOf('|') + 1))
+    },
   }
 }
 
@@ -121,6 +137,41 @@ export function createLspRpc(deps: LspRpcDeps): { handlers: Partial<RpcHandlerMa
 
   const rootLocations = (locations: LspLocation[], root: string): LspLocation[] =>
     locations.map((location) => ({ ...location, root }))
+
+  /** 当前 provider 检测结论 → 设置页 idle 状态（不启动 server）。 */
+  const detectedStatus = (languageId: string, root?: string): LspServerStatus => {
+    const spec = resolveProviderSpec(ctx, pluginConfig, languageId)
+    return {
+      languageId,
+      source: spec.kind,
+      phase: 'idle',
+      reason: spec.ready ? undefined : spec.reason,
+      version: spec.version,
+      providerName: spec.providerName,
+      root,
+    }
+  }
+
+  /**
+   * 清发现缓存并重置旧 server（保留 tracker 文档记录）；
+   * 下一次模型同步会按最新配置重新 acquire，已打开文档无需重开。
+   * 作者 ddj 2026年09月02号
+   * @param languageId 语言 id
+   * @param sessionId 会话语境（缺省重置全部工作区该语言）
+   * @returns 检测后的 idle 状态列表
+   */
+  const redetectLanguage = async (languageId: string, sessionId?: string): Promise<LspServerStatus[]> => {
+    clearProviderCache()
+    if (sessionId) {
+      const sc = await rootOf(sessionId)
+      if ('err' in sc) return []
+      manager.reset(sc.root, languageId)
+      return [detectedStatus(languageId, sc.root)]
+    }
+    const roots = [...new Set(manager.statusAll().filter((s) => s.languageId === languageId).map((s) => s.root))]
+    manager.resetLanguage(languageId)
+    return roots.length ? roots.map((root) => detectedStatus(languageId, root)) : [detectedStatus(languageId)]
+  }
 
   const disposeSession = (sessionId: string): void => {
     for (const rl of tracker.closeSession(sessionId)) {
@@ -160,10 +211,12 @@ export function createLspRpc(deps: LspRpcDeps): { handlers: Partial<RpcHandlerMa
         const settings = ctx.get('settings')
         if (!settings?.update) return { ok: false, error: '设置服务不可用' }
         await settings.update(LSP_SETTINGS_NS, { [lang]: target })
+        // 保存/切换后立即重新检测：清缓存 + 重置旧 server，旧状态不残留
+        const servers = await redetectLanguage(lang)
         const descriptor = settings.describe?.({ redactSecrets: true })?.find((item: { ns?: string }) => item.ns === LSP_SETTINGS_NS)
         const stored = descriptor?.value as Record<string, unknown> | undefined
         const merged: LspConfig = { ...configFromPlugin(pluginConfig), ...(stored as LspConfig) }
-        return { ok: true, config: merged as unknown as Record<string, unknown> }
+        return { ok: true, config: merged as unknown as Record<string, unknown>, servers }
       } catch (error) {
         return { ok: false, error: '配置保存失败：' + String(error) }
       }
@@ -274,6 +327,31 @@ export function createLspRpc(deps: LspRpcDeps): { handlers: Partial<RpcHandlerMa
       }
     },
 
+    'edrv.lsp.semanticTokens': async (args) => {
+      const lang = langOfPath(args.path)
+      if (!lang) return { ok: true, tokens: undefined }
+      const sc = await rootOf(args.sessionId)
+      if ('err' in sc) return { ok: false, error: sc.err }
+      try {
+        const server = serverOf(sc.root, lang)
+        if (!server) return { ok: true, tokens: undefined }
+        return { ok: true, tokens: (await server.semanticTokens(args.path)) ?? undefined }
+      } catch (error) {
+        return { ok: false, error: 'LSP 语义分色查询失败：' + String(error) }
+      }
+    },
+
+    'edrv.lsp.redetect': async (args) => {
+      if (!(LSP_LANGUAGES as readonly string[]).includes(args.languageId)) {
+        return { ok: false, error: '不支持的语言：' + args.languageId }
+      }
+      try {
+        return { ok: true, servers: await redetectLanguage(args.languageId) }
+      } catch (error) {
+        return { ok: false, error: '重新检测失败：' + String(error) }
+      }
+    },
+
     // --region 扩展管理（edrv.lsp.ext.*：已装/市场/安装/卸载/更新）
     'edrv.lsp.ext.list': async () => ({ ok: true, extensions: listInstalled() }),
 
@@ -292,6 +370,7 @@ export function createLspRpc(deps: LspRpcDeps): { handlers: Partial<RpcHandlerMa
         if (args.vsixPath) info = await installVsixFile(args.vsixPath)
         else if (args.namespace && args.name) info = await installFromMarket(args.namespace, args.name, args.version)
         else return { ok: false, error: '缺少安装源（vsixPath 或 namespace+name）' }
+        clearProviderCache() // 新扩展可能成为 Lua provider，立即丢弃旧发现结果
         return { ok: true, extension: info }
       } catch (error) {
         return { ok: false, error: '安装失败：' + String(error) }
@@ -299,7 +378,9 @@ export function createLspRpc(deps: LspRpcDeps): { handlers: Partial<RpcHandlerMa
     },
 
     'edrv.lsp.ext.uninstall': async (args) => {
-      return uninstall(args.id) ? { ok: true } : { ok: false, error: '扩展未安装：' + args.id }
+      const ok = uninstall(args.id)
+      if (ok) clearProviderCache()
+      return ok ? { ok: true } : { ok: false, error: '扩展未安装：' + args.id }
     },
 
     'edrv.lsp.ext.update': async (args) => {
@@ -309,6 +390,7 @@ export function createLspRpc(deps: LspRpcDeps): { handlers: Partial<RpcHandlerMa
           const current = listInstalled().find((e) => e.id === args.id)
           return current ? { ok: true, extension: current, updated: false } : { ok: false, error: '扩展未安装：' + args.id }
         }
+        clearProviderCache()
         return { ok: true, extension: updated, updated: true }
       } catch (error) {
         return { ok: false, error: '更新失败：' + String(error) }

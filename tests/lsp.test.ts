@@ -10,7 +10,7 @@ import { join } from 'node:path'
 import { monoToLsp, lspToMono, fileUriToPath as sharedFileUriToPath } from '../src/shared/lsp.js'
 import { encodeMessage, parseFrame, createFrameParser } from '../src/lsp/jsonrpc.js'
 import { pathToFileUri, fileUriToPath, isInside } from '../src/lsp/uri.js'
-import { platformServerDir, exeSuffix, listMatchingDirs, resolveLuaProvider, resolveCSharpProvider, findInPath } from '../src/lsp/providers.js'
+import { platformServerDir, exeSuffix, listMatchingDirs, candidateEmmyLua, resolveLuaProvider, resolveCSharpProvider, findInPath, clearProviderCache } from '../src/lsp/providers.js'
 import { createLspManager } from '../src/lsp/manager.js'
 import { createLspClient, type LspClientTransport } from '../src/lsp/client.js'
 import { parseFrame } from '../src/lsp/jsonrpc.js'
@@ -101,6 +101,17 @@ describe('lsp/uri 转换（Windows 风格）', () => {
     expect(toEdrvUri(uri, root)).toBe('edrv:///Assets/Scripts/TeamModel.lua')
     expect(targetOpenPath({ uri, root })).toBe('Assets/Scripts/TeamModel.lua')
   })
+  it('LSP 目标保留原始 root，避免 edrv scheme 泄漏', () => {
+    const root = 'D:/Work/PopIsland/IslandSplash_BugFix2'
+    const location = {
+      uri: { scheme: 'edrv', path: '/Assets/Scripts/TeamModel.lua' },
+      range: { startLineNumber: 1, startColumn: 2 },
+      lspUri: 'file:///D:/Work/PopIsland/IslandSplash_BugFix2/Assets/Scripts/TeamModel.lua',
+      lspRoot: root,
+      lspRange: { start: { line: 0, character: 1 }, end: { line: 0, character: 8 } },
+    }
+    expect(targetOpenPath(location)).toBe('Assets/Scripts/TeamModel.lua')
+  })
   it('isInside 边界', () => {
     expect(isInside('D:/root', 'D:/root/a/b.ts')).toBe(true)
     expect(isInside('D:/root', 'D:/root2/a.ts')).toBe(false)
@@ -130,6 +141,17 @@ describe('lsp/providers 解析', () => {
     mkdirSync(join(dir, 'other.ext-1.0.0'), { recursive: true })
     expect(listMatchingDirs(dir, 'sumneko.lua-')).toEqual([join(dir, 'sumneko.lua-3.19.1')])
     expect(listMatchingDirs(join(dir, 'not-exists'), 'x')).toEqual([])
+  })
+
+  it('EmmyLua 扩展入口自动发现', () => {
+    const ext = join(dir, 'dsh-vscode-mode', 'extensions', 'tangzx.emmylua-0.9.41')
+    const exe = join(ext, 'server', 'emmylua_ls.exe')
+    mkdirSync(join(ext, 'server'), { recursive: true })
+    writeFileSync(exe, 'x')
+    writeFileSync(join(ext, 'package.json'), JSON.stringify({ version: '0.9.41' }))
+    const found = candidateEmmyLua(dir)
+    expect(found).toEqual({ path: exe, version: '0.9.41' })
+    clearProviderCache(dir)
   })
 
   it('lua 手动路径解析', () => {

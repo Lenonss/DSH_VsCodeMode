@@ -25,6 +25,8 @@ export const DSH_DIR_NAME = '.dsh'
 export const DSH_HOME_ENV = 'DSH_HOME'
 /** 树缓存 schema 版本（文件名携带；版本递增即触发旧版清理）。 */
 export const TREE_CACHE_SCHEMA = 1
+/** LSP provider 发现缓存 schema 版本（格式变更即递增，旧文件自动失效）。 */
+export const LSP_SPEC_CACHE_SCHEMA = 4
 /** 树缓存保留期：超期文件视为废弃（工作区搬迁/废弃残留）。 */
 export const TREE_RETENTION_MS = 30 * 24 * 60 * 60 * 1000
 /** 插件缓存目录总预算：超限按 mtime 从旧到新删文件，防任意增长撑爆磁盘（最后兜底）。 */
@@ -139,6 +141,11 @@ export function workspaceCacheDir(workspaceId: string, home = dshHome()): string
 /** 用户级缓存目录（跨工作区共享；当前无实例，预留供全局偏好类缓存使用）。 */
 export function userCacheDir(home = dshHome()): string {
   return join(pluginCacheRoot(home), 'user')
+}
+
+/** LSP provider 发现结果缓存文件（用户级：user/lsp-specs.v<schema>.json，跨会话/跨重启共享）。 */
+export function lspSpecCacheFile(home = dshHome(), schema = LSP_SPEC_CACHE_SCHEMA): string {
+  return join(userCacheDir(home), 'lsp-specs.v' + schema + '.json')
 }
 
 /** 插件日志根（~/.dsh/dsh-vscode-mode/logs，用户级）。 */

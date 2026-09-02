@@ -5,6 +5,7 @@ lib/
 *.tgz
 .tmp-build/
 .pnpm-store/
+.npm-cache/
 
 # 运行时 sidecar / 调试日志（审查插件写在工作区的旁车，不入库）
 .dsh-edit-review.json
@@ -12,6 +13,17 @@ lib/
 .dsh-edit-review-debug.log
 .dsh-vscode-mode-tree.json
 
+# 本地工具 / 编辑器缓存（codegraph 索引、workbuddy、计划草稿等）
+.codegraph/
+.workbuddy/
+plans/
+codegraph.json
+.mcp.json
+
 # 本地环境
 .DS_Store
 Thumbs.db
+.DS_Store/
+Thumbs.db
+pnpm-lock.yaml.*.tmp
+pnpm-lock.yaml.??????

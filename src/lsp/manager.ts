@@ -25,6 +25,10 @@ export interface LspManager {
   release(root: string, languageId: string): void
   /** 释放工作区下全部语言（session/disposed 用）。 */
   releaseRoot(root: string): void
+  /** 重置单个工作区语言 server（重新检测 provider 用）。 */
+  reset(root: string, languageId: string): void
+  /** 重置全部工作区的指定语言 server。 */
+  resetLanguage(languageId: string): void
   /** 状态快照。 */
   statusAll(): LspServerStatus[]
   /** 查询已注册的工作区+语言服务器，不增加引用计数。 */
@@ -107,6 +111,17 @@ export function createLspManager(logger?: (line: string) => void): LspManager {
     releaseRoot(root: string): void {
       for (const entry of [...entries.values()]) {
         if (entry.server.root === root) dropEntry(entry)
+      }
+    },
+
+    reset(root: string, languageId: string): void {
+      const entry = entries.get(keyOf(root, languageId))
+      if (entry) dropEntry(entry)
+    },
+
+    resetLanguage(languageId: string): void {
+      for (const entry of [...entries.values()]) {
+        if (entry.server.languageId === languageId) dropEntry(entry)
       }
     },
 

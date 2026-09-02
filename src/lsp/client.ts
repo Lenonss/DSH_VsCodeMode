@@ -5,7 +5,7 @@
  * 作者 ddj 2026-08-27
  */
 import { createFrameParser, encodeMessage, requestMessage, notifyMessage } from './jsonrpc.js'
-import type { LspServerCapabilities } from '../shared/lsp.js'
+import { LSP_SEMANTIC_TOKEN_TYPES, LSP_SEMANTIC_TOKEN_MODIFIERS, type LspServerCapabilities } from '../shared/lsp.js'
 
 export interface LspClientEvents {
   onReady?: (capabilities: LspServerCapabilities) => void
@@ -54,7 +54,16 @@ export function createLspClient(
   let nextId = 1
   let alive = transport.alive
   const pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>()
-  let serverCapabilities: LspServerCapabilities = { definition: false, references: false, documentSymbol: false, workspaceSymbol: false, hover: false }
+  let serverCapabilities: LspServerCapabilities = {
+    definition: false,
+    references: false,
+    documentSymbol: false,
+    workspaceSymbol: false,
+    hover: false,
+    semanticTokens: false,
+    semanticTokenTypes: [],
+    semanticTokenModifiers: [],
+  }
 
   const log = (line: string): void => events.onLog?.(line)
   const parser = createFrameParser()
@@ -153,6 +162,9 @@ export function createLspClient(
           documentSymbolProvider?: unknown
           workspaceSymbolProvider?: unknown
           hoverProvider?: unknown
+          semanticTokensProvider?: {
+            legend?: { tokenTypes?: unknown; tokenModifiers?: unknown }
+          }
         }
       }>('initialize', {
         processId: process.pid,
@@ -170,16 +182,31 @@ export function createLspClient(
             references: { dynamicRegistration: false },
             documentSymbol: { dynamicRegistration: false },
             hover: { dynamicRegistration: false },
+            semanticTokens: {
+              dynamicRegistration: false,
+              requests: { range: false, full: { delta: false } },
+              tokenTypes: [...LSP_SEMANTIC_TOKEN_TYPES],
+              tokenModifiers: [...LSP_SEMANTIC_TOKEN_MODIFIERS],
+              formats: ['relative'],
+            },
           },
         },
       })
       const caps = init?.capabilities ?? {}
+      const legend = caps.semanticTokensProvider?.legend
       serverCapabilities = {
         definition: Boolean(caps.definitionProvider),
         references: Boolean(caps.referencesProvider),
         documentSymbol: Boolean(caps.documentSymbolProvider),
         workspaceSymbol: Boolean(caps.workspaceSymbolProvider),
         hover: Boolean(caps.hoverProvider),
+        semanticTokens: Boolean(caps.semanticTokensProvider),
+        semanticTokenTypes: Array.isArray(legend?.tokenTypes)
+          ? legend.tokenTypes.filter((item): item is string => typeof item === 'string')
+          : [...LSP_SEMANTIC_TOKEN_TYPES],
+        semanticTokenModifiers: Array.isArray(legend?.tokenModifiers)
+          ? legend.tokenModifiers.filter((item): item is string => typeof item === 'string')
+          : [...LSP_SEMANTIC_TOKEN_MODIFIERS],
       }
       client.notify('initialized', {})
       events.onReady?.(serverCapabilities)

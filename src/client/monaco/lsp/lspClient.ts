@@ -113,6 +113,14 @@ export async function fetchHover(path, text, position) {
   return res.hover || null
 }
 
+/** 查询当前文档的 semantic tokens（host 已归一化 legend 与 delta data）。 */
+export async function fetchSemanticTokens(path, text) {
+  await syncDoc(path, text, true)
+  const res = await rpc('edrv.lsp.semanticTokens', { sessionId, path }).catch(() => null)
+  if (!res || !res.ok || !res.tokens || !Array.isArray(res.tokens.data)) return null
+  return res.tokens
+}
+
 /** 拉取服务器状态（带 5s 缓存）。 */
 export async function refreshStatus(force = false) {
   if (!force && Date.now() - statusCache.at < 1500) return statusCache.servers
@@ -148,6 +156,10 @@ function toClientLocation(loc) {
       Math.max(1, (end.line ?? 0) + 1),
       Math.max(1, (end.character ?? 0) + 1),
     ),
+    // 保留原始 LSP uri/root：后续跳转不能把 Monaco edrv Uri 当作磁盘路径
+    lspUri: loc.uri,
+    lspRoot: loc.root,
+    lspRange: loc.range,
   }
 }
 
@@ -161,32 +173,74 @@ export function toEdrvUri(uri, root) {
 
 /** 将 LSP 目标解析为当前工作区相对路径（跨文件跳转与 model URI 对齐）。 */
 export function targetOpenPath(loc) {
-  return relativeLspPath(loc?.uri, loc?.root)
+  return relativeLspPath(loc?.lspUri ?? loc?.uri, loc?.lspRoot ?? loc?.root)
 }
 
-/** file URI/裸路径 → root 下的 / 分隔相对路径；root 不匹配时保留规范化绝对路径。 */
+/**
+ * 归一化 Location 的 uri → 工作区路径（剥离 scheme，不补盘符）。
+ * 三种输入形态（缺一即导致 scheme 泄漏进文件路径 → 跳转"文件不存在"）：
+ * - Monaco Uri 对象（toClientLocation 产物，scheme=edrv）→ 取 .path（已是工作区相对路径）
+ * - 'edrv:///x' 字符串 → 取路径部分
+ * - 'file:///D:/x' → 去 authority 空段保留盘符
+ * @author ddj 2026年08月28号
+ * @param uri Monaco Uri 对象 / file:// 或 edrv:// URI / 裸路径
+ * @returns / 分隔的路径（edrv 相对路径 或 带盘符绝对路径）
+ */
+export function lspUriToAbs(uri) {
+  if (!uri) return ''
+  const isObject = typeof uri === 'object'
+  // Monaco Uri 对象：优先取其 path（已剥离 scheme）
+  const raw = isObject && typeof uri.path === 'string' ? uri.path : String(uri)
+  let path = raw
+  if (path.startsWith('file://')) {
+    try { path = decodeURIComponent(path.replace(/^file:\/\/\/?/, '')) } catch (error) { path = path.replace(/^file:\/\/\/?/, '') }
+    // file:///D:/x → D:/x（去 authority 空段保留盘符）；/home/x 保留前导 /（Unix 绝对路径）
+    return path.replace(/\\/g, '/').replace(/^\/([A-Za-z]:)/, '$1')
+  }
+  if (path.startsWith('edrv://')) {
+    try { path = decodeURIComponent(path.replace(/^edrv:\/\/\/?/, '')) } catch (error) { path = path.replace(/^edrv:\/\/\/?/, '') }
+  }
+  // edrv Uri（对象或字符串）→ 工作区相对路径：必须剥前导 /，否则 host 按绝对路径解析丢 cwd
+  if (isObject ? uri.scheme === 'edrv' : raw.startsWith('edrv://')) {
+    return path.replace(/\\/g, '/').replace(/^\/+/, '')
+  }
+  return path.replace(/\\/g, '/').replace(/^\/([A-Za-z]:)/, '$1')
+}
+
+/**
+ * file URI/裸路径 → root 下的 / 分隔相对路径。
+ * root 匹配返回工作区相对路径；root 不匹配返回完整绝对路径（保留盘符），
+ * 供 edrv.read 按绝对路径解析（原先错误剥掉首个 / 导致跳转"文件不存在"）。
+ * @author ddj 2026年08月28号
+ * @param uri file:// URI 或裸路径
+ * @param root 工作区根（可选）
+ * @returns 可 edrv.read 的路径
+ */
 function relativeLspPath(uri, root) {
   if (!uri) return ''
-  let path = String(uri)
-  if (path.startsWith('file://')) {
-    try { path = decodeURIComponent(path.replace(/^file:\/\//, '')) } catch (error) { path = path.replace(/^file:\/\//, '') }
-  }
-  path = path.replace(/\\/g, '/').replace(/^\/([A-Za-z]:)/, '$1')
+  const path = lspUriToAbs(uri)
   const normalizedRoot = root ? String(root).replace(/\\/g, '/').replace(/^\/([A-Za-z]:)/, '$1').replace(/\/+$/, '') : ''
   const lowerPath = path.toLowerCase()
   const lowerRoot = normalizedRoot.toLowerCase()
   if (normalizedRoot && (lowerPath === lowerRoot || lowerPath.startsWith(lowerRoot + '/'))) {
     return path.slice(normalizedRoot.length).replace(/^\/+/, '')
   }
-  return path.replace(/^\/+/, '')
+  return path
 }
 
 /** 目标行/列（0-based LSP → 1-based Monaco）。 */
 export function targetMonoPosition(loc) {
-  const range = loc.range || {}
-  const start = range.start || {}
+  // 优先使用原始 LSP range（0-based）；无原始值时兼容 Monaco Range（1-based）
+  const lspRange = loc?.lspRange
+  if (lspRange?.start) {
+    return {
+      line: Math.max(1, (lspRange.start.line ?? 0) + 1),
+      column: Math.max(1, (lspRange.start.character ?? 0) + 1),
+    }
+  }
+  const range = loc?.range ?? {}
   return {
-    line: Math.max(1, (start.line ?? 0) + 1),
-    column: Math.max(1, (start.character ?? 0) + 1),
+    line: Math.max(1, range.startLineNumber ?? 1),
+    column: Math.max(1, range.startColumn ?? 1),
   }
 }

@@ -8,8 +8,10 @@ import { spawnServer, type Transport } from './transport.js'
 import { createLspClient, type LspClient } from './client.js'
 import { pathToFileUri } from './uri.js'
 import type { LspProviderSpec } from './providers.js'
+import { LSP_SEMANTIC_TOKEN_MODIFIERS, LSP_SEMANTIC_TOKEN_TYPES } from '../shared/lsp.js'
 import type {
   LspLocation,
+  LspSemanticTokens,
   LspServerCapabilities,
   LspServerPhase,
   LspServerStatus,
@@ -31,6 +33,7 @@ export interface LspServer {
   documentSymbol(path: string): Promise<LspSymbol[]>
   workspaceSymbol(query: string): Promise<LspSymbol[]>
   hover(path: string, line: number, character: number): Promise<{ contents: string[] } | null>
+  semanticTokens(path: string): Promise<LspSemanticTokens | null>
   dispose(): Promise<void>
 }
 
@@ -59,18 +62,39 @@ export function createLspServer(spec: LspProviderSpec, root: string, languageId:
   let phase: LspServerPhase = 'idle'
   let transport: Transport | null = null
   let client: LspClient | null = null
-  let capabilities: LspServerCapabilities = { definition: false, references: false, documentSymbol: false, workspaceSymbol: false, hover: false }
+  let capabilities: LspServerCapabilities = {
+    definition: false,
+    references: false,
+    documentSymbol: false,
+    workspaceSymbol: false,
+    hover: false,
+    semanticTokens: false,
+    semanticTokenTypes: [...LSP_SEMANTIC_TOKEN_TYPES],
+    semanticTokenModifiers: [...LSP_SEMANTIC_TOKEN_MODIFIERS],
+  }
   let disposed = false
   let readyWait: Promise<boolean> = Promise.resolve(false)
   let resolveReady: ((ready: boolean) => void) | null = null
   let lastProgress: { value?: number; message?: string } = {}
-  let lastStatus: LspServerStatus = { languageId, source: spec.kind, phase: 'idle', reason: spec.ready ? undefined : spec.reason, root }
+  let lastStatus: LspServerStatus = {
+    languageId,
+    source: spec.kind,
+    phase: 'idle',
+    reason: spec.ready ? undefined : spec.reason,
+    root,
+    version: spec.version,
+    providerName: spec.providerName ?? (spec.version ? '语言服务器扩展' : undefined),
+  }
 
   const log = (line: string): void => logger?.('[' + languageId + '@' + root + '] ' + line)
+  const providerInfo = {
+    version: spec.version,
+    providerName: spec.providerName ?? (spec.version ? 'EmmyLua' : undefined),
+  }
 
   const setPhase = (next: LspServerPhase, reason?: string): void => {
     phase = next
-    lastStatus = { languageId, source: spec.kind, phase: next, reason, root, ...progressFields() }
+    lastStatus = { languageId, source: spec.kind, phase: next, reason, root, ...providerInfo, ...progressFields() }
     server.onStateChange?.(lastStatus)
   }
 
@@ -254,6 +278,25 @@ export function createLspServer(spec: LspProviderSpec, root: string, languageId:
       return { contents: stringifyHoverContents(result.contents) }
     },
 
+    /** 查询全文 semantic tokens，并将服务器 legend 归一到插件固定 legend。 */
+    async semanticTokens(path: string): Promise<LspSemanticTokens | null> {
+      const doc = docs.get(path)
+      if (!doc || !(await readyWait) || !capabilities.semanticTokens) return null
+      const result = await ensureClient().request<{ data?: unknown; resultId?: unknown } | null>(
+        'textDocument/semanticTokens/full',
+        { textDocument: { uri: doc.uri } },
+      )
+      if (!result || !Array.isArray(result.data)) return null
+      return {
+        data: normalizeSemanticData(
+          result.data,
+          capabilities.semanticTokenTypes ?? [],
+          capabilities.semanticTokenModifiers ?? [],
+        ),
+        resultId: typeof result.resultId === 'string' ? result.resultId : undefined,
+      }
+    },
+
     async dispose(): Promise<void> {
       disposed = true
       resolveReady?.(false)
@@ -343,4 +386,38 @@ function stringifyHoverContents(contents: unknown): string[] {
 function toInt(value: unknown): number {
   const n = Number(value)
   return Number.isFinite(n) ? Math.max(0, Math.floor(n)) : 0
+}
+
+/** 把服务器 legend 下的 5 元组流转换为插件固定 legend 下的 5 元组流。 */
+function normalizeSemanticData(data: unknown[], types: string[], modifiers: string[]): number[] {
+  const out: number[] = []
+  let previousLine = 0
+  let previousCharacter = 0
+  let outputLine = 0
+  let outputCharacter = 0
+  for (let i = 0; i + 4 < data.length; i += 5) {
+    const deltaLine = toInt(data[i])
+    const deltaCharacter = toInt(data[i + 1])
+    const length = toInt(data[i + 2])
+    const sourceType = types[toInt(data[i + 3])] ?? 'variable'
+    const sourceModifiers = toInt(data[i + 4])
+    const line = previousLine + deltaLine
+    const character = deltaLine === 0 ? previousCharacter + deltaCharacter : deltaCharacter
+    const typeIndex = Math.max(0, LSP_SEMANTIC_TOKEN_TYPES.indexOf(sourceType as never))
+    let modifierBits = 0
+    for (let bit = 0; bit < modifiers.length; bit++) {
+      if ((sourceModifiers & (1 << bit)) === 0) continue
+      const modifier = modifiers[bit]
+      const targetBit = LSP_SEMANTIC_TOKEN_MODIFIERS.indexOf(modifier as never)
+      if (targetBit >= 0) modifierBits |= 1 << targetBit
+    }
+    const outputDeltaLine = line - outputLine
+    const outputDeltaCharacter = outputDeltaLine === 0 ? character - outputCharacter : character
+    out.push(outputDeltaLine, outputDeltaCharacter, length, typeIndex, modifierBits)
+    previousLine = line
+    previousCharacter = character
+    outputLine = line
+    outputCharacter = character
+  }
+  return out
 }

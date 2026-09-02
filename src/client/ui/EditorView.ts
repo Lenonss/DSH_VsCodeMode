@@ -9,6 +9,7 @@ import React from 'react'
 import { dbg, rpc } from '../rpc.js'
 import { emitRefresh } from '../events.js'
 import { langOf, loadMonaco } from '../monaco/loader.js'
+import { applyTheme, registerThemes, themeNameOf } from '../monaco/theme.js'
 import { createDiffRenderer } from '../monaco/diffRender.js'
 import { ST, callIdAttr, noopHunk, summarize } from '../state/records.js'
 import { diffRegions } from '../state/regions.js'
@@ -244,7 +245,9 @@ export function EditorView(props) {
         setLoadStage((prev) => ({ progress: Math.max(84, prev.progress), message: '文件已读取，准备创建编辑器…' }))
         setStatus('已加载')
       } else {
-        const message = res?.error ? String(res.error) : '读取失败'
+        const base = res?.error ? String(res.error) : '读取失败'
+        // 带出 host 解析后的真实路径：跳转失败时一眼看出是路径解析错还是目标不存在
+        const message = res?.resolvedPath ? base + '：' + String(res.resolvedPath) : base
         setLoadError(message)
         setError(message)
         setStatus('读取失败')
@@ -496,6 +499,22 @@ export function EditorView(props) {
     return () => { alive = false }
   }, [monaco, monacoErr])
 
+  // 分色主题：Monaco 就绪后注册（幂等）+ 应用；DSH 明暗切换时跟随重刷。
+  React.useEffect(() => {
+    if (!monaco) return
+    registerThemes(monaco)
+    applyTheme(monaco)
+    if (typeof window.matchMedia !== 'function') return
+    const query = window.matchMedia('(prefers-color-scheme: dark)')
+    const onChange = () => applyTheme(monaco)
+    if (typeof query.addEventListener === 'function') {
+      query.addEventListener('change', onChange)
+      return () => query.removeEventListener('change', onChange)
+    }
+    query.addListener(onChange)
+    return () => query.removeListener(onChange)
+  }, [monaco])
+
   monacoRef.current = monaco
 
   const getModel = (path, text) => {
@@ -587,7 +606,7 @@ export function EditorView(props) {
     const ed = m.editor.create(node, {
       value: '',
       language: 'plaintext',
-      theme: 'vs',
+      theme: themeNameOf(),
       fontFamily: 'var(--ds-font-family-code, ui-monospace, monospace)',
       fontSize: 13,
       lineHeight: 20,

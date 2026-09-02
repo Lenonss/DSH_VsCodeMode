@@ -8,10 +8,16 @@
  */
 import {
   pathOfModel, syncDoc, closeDoc, findDefinition, findReferences,
-  fetchDocumentSymbols, fetchHover, targetOpenPath, targetMonoPosition, lspStatusFor,
+  fetchDocumentSymbols, fetchHover, fetchSemanticTokens,
+  targetOpenPath, targetMonoPosition, lspStatusFor, refreshStatus,
 } from './lspClient.js'
+import { LSP_SEMANTIC_TOKEN_MODIFIERS, LSP_SEMANTIC_TOKEN_TYPES } from '../../../shared/lsp.js'
 
 const LSP_LANGS = ['lua', 'csharp']
+const SEMANTIC_LEGEND = {
+  tokenTypes: [...LSP_SEMANTIC_TOKEN_TYPES],
+  tokenModifiers: [...LSP_SEMANTIC_TOKEN_MODIFIERS],
+}
 let registered = false
 const disposables = []
 let overlayEl = null
@@ -47,6 +53,22 @@ export function registerLspProviders(monaco) {
   }
   disposables.push(monaco.editor.onDidCreateModel(attachModel))
   for (const model of monaco.editor.getModels()) attachModel(model)
+
+  // —— 重新检测事件：保存配置/切换启用/手动重检测后，把已打开模型重新同步给 host ——
+  // （host 已重置该语言 server，下一次 sync 会按最新配置重新 acquire，无需重开文件）
+  const onRedetect = (event) => {
+    const languageId = event?.detail?.languageId
+    if (!languageId) return
+    for (const model of monaco.editor.getModels()) {
+      const path = pathOfModel(model)
+      if (!path) continue
+      if (model.getLanguageId && model.getLanguageId() !== languageId) continue
+      void syncDoc(path, model.getValue(), true)
+    }
+    void refreshStatus(true)
+  }
+  window.addEventListener('edrv:lsp-redetect', onRedetect)
+  disposables.push(() => window.removeEventListener('edrv:lsp-redetect', onRedetect))
 
   // —— 数据 provider ——
   disposables.push(
@@ -86,6 +108,17 @@ export function registerLspProviders(monaco) {
           range: range || undefined,
         }
       },
+    }),
+    monaco.languages.registerDocumentSemanticTokensProvider(LSP_LANGS, {
+      getLegend: () => SEMANTIC_LEGEND,
+      provideDocumentSemanticTokens: async (model, token) => {
+        const path = pathOfModel(model)
+        if (!path || token?.isCancellationRequested) return { data: new Uint32Array() }
+        const result = await fetchSemanticTokens(path, model.getValue())
+        if (!result || token?.isCancellationRequested) return { data: new Uint32Array() }
+        return { data: Uint32Array.from(result.data) }
+      },
+      releaseDocumentSemanticTokens: () => {},
     }),
   )
 }

@@ -4,6 +4,7 @@
  * 迁移自原 src/client/index.ts 的 MONACO_BASE/LANG_BY_EXT/langOf/loadMonaco，语义不改。
  * 作者 ddj 2026-08-20
  */
+import { applyTheme, registerThemes } from './theme.js'
 
 export const MONACO_BASE = '/edrv/vendor/monaco/vs'
 let monacoPromise = null
@@ -58,7 +59,12 @@ export const LANG_BY_EXT = {
   py: 'python', sh: 'shell', bash: 'shell', zsh: 'shell', ps1: 'powershell',
   lua: 'lua', java: 'java', c: 'c', h: 'c', cpp: 'cpp', cc: 'cpp', cxx: 'cpp', hpp: 'cpp',
   cs: 'csharp', go: 'go', rs: 'rust', rb: 'ruby', php: 'php', sql: 'sql',
-  swift: 'swift', kt: 'kotlin', kts: 'kotlin', dart: 'dart', dockerfile: 'dockerfile'
+  swift: 'swift', kt: 'kotlin', kts: 'kotlin', dart: 'dart', dockerfile: 'dockerfile',
+  // 工程/配置文件（拿到正确语法分色，而非 plaintext）
+  csproj: 'xml', props: 'xml', targets: 'xml', plist: 'xml',
+  lua51: 'lua', luac: 'lua',
+  gitattributes: 'ini', editorconfig: 'ini', env: 'ini', properties: 'ini',
+  json5: 'jsonc', log: 'plaintext', txt: 'plaintext',
 }
 
 /**
@@ -96,6 +102,11 @@ export function loadMonaco(onProgress) {
           publishStage('core', MONACO_STAGES.core.progress, MONACO_STAGES.core.message)
           window.require(['vs/editor/editor.main'], () => {
             publishStage('ready', MONACO_STAGES.ready.progress, MONACO_STAGES.ready.message)
+            // 分色主题注册 + 应用（rich token 配色，替掉内置基础 vs 的少层次着色）
+            try {
+              registerThemes(window.monaco)
+              applyTheme(window.monaco)
+            } catch (error) { /* 主题失败不阻塞编辑器 */ }
             resolve(window.monaco)
           }, (err) => fail(new Error('Monaco 模块加载失败：' + String(err))))
         } catch (error) {
