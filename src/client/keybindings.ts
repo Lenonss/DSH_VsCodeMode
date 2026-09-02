@@ -163,7 +163,7 @@ export function formatChord(binding: Binding): string {
 export function matchEvent(e: { ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean; altKey?: boolean; key?: string }, bindings: Binding | Binding[] | null): boolean {
   const list = Array.isArray(bindings) ? bindings : bindings ? [bindings] : []
   for (const binding of list) {
-    if ((e.ctrlKey || e.metaKey) !== (binding.ctrl || binding.meta)) continue
+    if (Boolean(e.ctrlKey || e.metaKey) !== (binding.ctrl || binding.meta)) continue
     if (Boolean(e.shiftKey) !== binding.shift) continue
     if (Boolean(e.altKey) !== binding.alt) continue
     if (normalizeKey(e.key ?? '') === binding.key) return true
