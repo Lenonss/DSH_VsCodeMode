@@ -211,11 +211,15 @@ function CompatSection({ getSummary }) {
   )
   const warnings = report?.warnings ?? []
   const devForm = report?.devForm
+  const versionText = report?.dshVersion
+    ? '（DSH ' + report.dshVersion + ' · 插件 ' + (report?.pluginVersion ?? '') + '）'
+    : report?.pluginVersion ? '（插件版本 ' + report.pluginVersion + '）' : ''
   return React.createElement('section', { className: 'vsm-general-page' },
     React.createElement('h2', null, '兼容性'),
-    React.createElement('p', null, '检测与其他插件 / DSH 版本的适配状态与已知问题。' + (report?.pluginVersion ? '（插件版本 ' + report.pluginVersion + '）' : '')),
+    React.createElement('p', null, '检测与其他插件 / DSH 版本的适配状态与已知问题。' + versionText),
     error && React.createElement('div', { className: 'vsm-mcp-error vsm-mcp-banner' }, error),
     devForm?.enabled && group('开发形态', React.createElement('div', { className: 'vsm-compat-item ok' }, React.createElement('span', { className: 'vsm-compat-name' }, '开发形态开启（工作区链接安装）'), React.createElement('span', { className: 'vsm-compat-note' }, devForm.path))),
+    group('版本适配', renderItems(report?.adapters)),
     group('外部插件与服务', renderItems(report?.external)),
     group('客户端适配', renderItems(getSummary?.() ?? [])),
     group('护栏', renderItems(report?.guards)),

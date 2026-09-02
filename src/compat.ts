@@ -10,8 +10,9 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { entriesOf } from './mcp.js'
-import { loadSettingsDeps } from './fileOpenSettings.js'
+import { loadSettingsDeps, settingsInstallNote, settingsInstallStrategy } from './fileOpenSettings.js'
 import { readDevForm } from './devForm.js'
+import { compareDshVersions, detectDshVersion, familyLabel, parseDshVersion } from './dshVersion.js'
 import type { CompatAdapter, CompatReport } from './shared/compat.js'
 import type { Ctx } from './store.js'
 import { ROUTE_PREFIX } from './paths.js'
@@ -127,24 +128,64 @@ export function detectGuards(ctx: Ctx): CompatAdapter[] {
   ]
 }
 
+/** 已实测覆盖的最高 DSH 版本（适配矩阵上界，超过则提示，见 buildReport）。 */
+const TESTED_DSH_MAX = '0.1.2-alpha.4'
+
+/** 版本适配机制状态行：DSH 版本探测 + 设置 section 安装策略。 */
+export function versionAdapters(dshVersion: string): CompatAdapter[] {
+  const adapters: CompatAdapter[] = []
+  const parsed = parseDshVersion(dshVersion)
+  if (dshVersion === '') {
+    adapters.push({ name: 'DSH 版本', active: false, note: '未探测到版本号（能力探测模式运行）' })
+  } else if (!parsed) {
+    adapters.push({ name: 'DSH 版本', active: false, note: '无法解析版本号 ' + dshVersion + '（能力探测模式运行）' })
+  } else {
+    adapters.push({ name: 'DSH 版本', active: true, note: dshVersion + ' · ' + familyLabel(dshVersion) })
+  }
+  const strategy = settingsInstallStrategy()
+  adapters.push({
+    name: '设置 section 安装（版本适配）',
+    active: strategy === 'legacy' || strategy === 'service',
+    note: settingsInstallNote(),
+  })
+  return adapters
+}
+
 /**
  * 构建完整兼容性报告（RPC 与启动日志共用）。
- * @author ddj 2026年08月24号
+ * @author ddj 2026年08月24号 / 2026年09月02号
  * @param ctx DSH host 上下文
- * @param options 测试注入：depsAvailable 跳过动态导入、version 固定版本号
+ * @param options 测试注入：depsAvailable 跳过动态导入、version 固定插件版本、dshVersion 固定 DSH 版本
  * @returns 兼容性报告
  */
 export async function buildReport(
   ctx: Ctx,
-  options?: { depsAvailable?: boolean; version?: string },
+  options?: { depsAvailable?: boolean; version?: string; dshVersion?: string },
 ): Promise<CompatReport> {
   const deps = options?.depsAvailable ?? (await loadSettingsDeps()) !== null
+  const dshVersion = options?.dshVersion ?? detectDshVersion()
   const external = detectExternal(ctx, deps)
   const guards = detectGuards(ctx)
+  const adapters = versionAdapters(dshVersion)
   const warnings: string[] = []
   if (!deps) warnings.push('未安装 @deepseek-ai/dsh-settings：文件打开工具设置持久化不可用（降级为配置值）')
+  const strategy = settingsInstallStrategy()
+  if (strategy === 'none') warnings.push('设置 section 安装不可用：' + settingsInstallNote())
+  const parsed = parseDshVersion(dshVersion)
+  const testedMax = parseDshVersion(TESTED_DSH_MAX)
+  if (parsed && testedMax && compareDshVersions(parsed, testedMax) > 0) {
+    warnings.push('DSH ' + dshVersion + ' 高于已实测版本（' + TESTED_DSH_MAX + '）：设置 API 按能力探测运行，异常时请回报适配矩阵')
+  }
   for (const guard of guards) {
     if (!guard.active && guard.note) warnings.push(guard.note)
   }
-  return { pluginVersion: options?.version ?? pluginVersionOf(), external, guards, warnings, devForm: readDevForm() }
+  return {
+    pluginVersion: options?.version ?? pluginVersionOf(),
+    external,
+    guards,
+    adapters,
+    warnings,
+    devForm: readDevForm(),
+    dshVersion,
+  }
 }

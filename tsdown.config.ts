@@ -26,8 +26,6 @@ const CLIENT_EXTERNALS = [
   'react-dom',
   'react-dom/client',
   'cordis',
-  '@deepseek-ai/dsh-client-ui-slots',
-  '@deepseek-ai/dsh-client-runtime/client',
   '@deepseek-ai/dsh-client-ui-settings',
 ]
 
@@ -35,7 +33,6 @@ const CLIENT_EXTERNALS = [
 const HOST_EXTERNALS = [
   'cordis',
   'schemastery',
-  '@deepseek-ai/dsh-client-ui-slots',
   '@deepseek-ai/dsh-llm',
   '@deepseek-ai/dsh-tools',
   '@deepseek-ai/dsh-settings',

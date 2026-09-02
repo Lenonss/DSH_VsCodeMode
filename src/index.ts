@@ -92,7 +92,8 @@ async function logCompatSummary(ctx: Ctx, warnings: string[]): Promise<void> {
     for (const warning of warnings) report.warnings.push(warning)
     const logger = ctx.logger
     if (!logger?.info) return
-    const head = '[' + PLUGIN_NAME + '] 兼容性：' + report.external.length + ' 项外部适配 / ' + report.guards.length + ' 项护栏'
+    const dsh = report.dshVersion ? 'DSH ' + report.dshVersion : 'DSH 未探测'
+    const head = '[' + PLUGIN_NAME + '] 兼容性：' + dsh + ' · ' + report.external.length + ' 项外部适配 / ' + report.guards.length + ' 项护栏 / ' + (report.adapters?.length ?? 0) + ' 项版本适配'
     if (report.warnings.length) {
       logger.warn?.(head + '，警告 ' + report.warnings.length + ' 条：' + report.warnings.join('；'))
     } else {
