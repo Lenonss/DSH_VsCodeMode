@@ -154,7 +154,7 @@ export function createLspServer(spec: LspProviderSpec, root: string, languageId:
       setPhase('starting')
       try {
         transport = spawnServer(
-          { argv: spec.argv, cwd: spec.cwd ?? root },
+          { argv: spec.argv, cwd: spec.cwd ?? root, env: spec.env },
           (message) => { /* 由 client 接管 */ },
           (line) => log('stderr: ' + line),
         )
@@ -187,6 +187,13 @@ export function createLspServer(spec: LspProviderSpec, root: string, languageId:
         })
         // 让 client 接管 stdout 消息
         const caps = await client.initialize(rootUri, [rootUri])
+        // DotRush 服务器阻塞等待带 dotrush 段的配置通知才继续初始化（加载工作区），
+        // 不发则所有文档类查询返回空；官方 VSCode 扩展经 configurationSection 自动发送。
+        // 按 csharp 语言统一发送：手动配置的 DotRush 与其它 C# 服务器（OmniSharp 等）
+        // 对不认识的配置段按协议忽略，均安全
+        if (languageId === 'csharp') {
+          client.notify('workspace/didChangeConfiguration', { settings: { dotrush: { roslyn: {} } } })
+        }
         capabilities = caps
         return true
       } catch (error) {

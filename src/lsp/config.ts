@@ -5,6 +5,7 @@
  */
 import type { Ctx } from '../store.js'
 import { PROVIDER_RESOLVERS, type LspProviderSpec } from './providers.js'
+import { provisionRuntime } from './dotnetProvision.js'
 
 /** 单语言配置。 */
 export interface LspLangConfig {
@@ -91,7 +92,10 @@ export function resolveProviderSpec(ctx: Ctx, pluginConfig: unknown, languageId:
   if (lang && lang.enabled === false) {
     return { languageId, kind: 'none', argv: [], ready: false, reason: '已在设置中禁用' }
   }
-  return resolver({ command: lang?.command, path: lang?.path })
+  const spec = resolver({ command: lang?.command, path: lang?.path })
+  // DotRush 缺运行时：后台自动下载官方 .NET runtime（用户零操作），完成后经监听者重载
+  if (spec.provisionRuntime) provisionRuntime(spec.provisionRuntime)
+  return spec
 }
 
 /** 语言 → 扩展名（供客户端判断是否触发 LSP）。 */

@@ -14,7 +14,7 @@ import type {
 } from './types.js'
 import type { MpcConfig, MpcProject, MpcProjectSaveInput, MpcServer } from './mcp.js'
 import type { CompatReport, DevFormInfo } from './compat.js'
-import type { LspExtInfo, LspExtUpdate, LspHover, LspLocation, LspMarketItem, LspPosition, LspSemanticTokens, LspServerStatus, LspSymbol } from './lsp.js'
+import type { LspEnvInstallState, LspExtInfo, LspExtUpdate, LspHover, LspLocation, LspMarketItem, LspPosition, LspSemanticTokens, LspServerStatus, LspSymbol } from './lsp.js'
 
 /** webServer 精确路由。 */
 export const RPC_PATH = '/edrv/rpc'
@@ -145,6 +145,8 @@ export interface RpcRequestMap {
   'edrv.lsp.hover': { sessionId?: string; path: string; position: LspPosition }
   'edrv.lsp.semanticTokens': { sessionId?: string; path: string }
   'edrv.lsp.redetect': { languageId: string }
+  'edrv.lsp.envInstall': { languageId: string; id: string }
+  'edrv.lsp.envState': {}
   'edrv.lsp.configGet': {}
   'edrv.lsp.configUpdate': { languageId: string; enabled?: boolean; command?: string; path?: string }
   'edrv.lsp.ext.list': {}
@@ -209,6 +211,8 @@ export interface RpcOkMap {
   'edrv.lsp.hover': { hover?: LspHover }
   'edrv.lsp.semanticTokens': { tokens?: LspSemanticTokens }
   'edrv.lsp.redetect': { servers: LspServerStatus[] }
+  'edrv.lsp.envInstall': { started: boolean }
+  'edrv.lsp.envState': { states: LspEnvInstallState[] }
   'edrv.lsp.configGet': { config: Record<string, unknown> }
   'edrv.lsp.configUpdate': { config: Record<string, unknown>; servers?: LspServerStatus[] }
   'edrv.lsp.ext.list': { extensions: LspExtInfo[] }

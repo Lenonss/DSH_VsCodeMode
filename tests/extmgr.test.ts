@@ -138,8 +138,13 @@ describe('lsp/extmgr VSIX 管理', () => {
 
 describe('lsp/providers 扩展源', () => {
   let home: string
-  beforeEach(() => { home = mkdtempSync(join(tmpdir(), 'dsh-extsrc-')) })
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), 'dsh-extsrc-'))
+    // 隔离真实机器扩展：只扫描临时 extensions 目录（DSH_LSP_EXT_DIRS 覆盖）
+    process.env.DSH_LSP_EXT_DIRS = join(home, 'dsh-vscode-mode', 'extensions')
+  })
   afterEach(() => {
+    delete process.env.DSH_LSP_EXT_DIRS
     rmSync(home, { recursive: true, force: true })
     clearExtensionProviders()
   })

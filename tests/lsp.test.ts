@@ -124,8 +124,11 @@ describe('lsp/providers 解析', () => {
   let dir: string
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'dsh-lsp-test-'))
+    // 隔离真实机器扩展：只扫描临时 extensions 目录（DSH_LSP_EXT_DIRS 覆盖）
+    process.env.DSH_LSP_EXT_DIRS = join(dir, 'dsh-vscode-mode', 'extensions')
   })
   afterEach(() => {
+    delete process.env.DSH_LSP_EXT_DIRS
     rmSync(dir, { recursive: true, force: true })
   })
 

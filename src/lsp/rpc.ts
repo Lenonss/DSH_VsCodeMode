@@ -8,10 +8,13 @@ import { searchRoot } from '../search/ripgrep.js'
 import { sessionOf, cwdOf } from '../registry.js'
 import { resolveProviderSpec, langOfPath, configFromPlugin, configFromSettings, LSP_LANGUAGES, LSP_SETTINGS_NS, type LspConfig } from './config.js'
 import { clearProviderCache } from './providers.js'
+import { onRuntimeProvisioned, envInstallStates } from './dotnetProvision.js'
+import { envRequirementsFor, installRequirement } from './envRequirements.js'
 import type { LspManager } from './manager.js'
 import type { RpcHandlerMap } from '../shared/rpc.js'
 import type { LspLocation, LspServerStatus } from '../shared/lsp.js'
 import { installFromMarket, installVsixFile, listInstalled, marketGet, marketSearch, uninstall, updateExtension, type ExtInfo } from './extmgr.js'
+import { dshHome } from '../paths.js'
 
 export interface LspRpcDeps {
   ctx: Ctx
@@ -114,6 +117,12 @@ export function createLspRpc(deps: LspRpcDeps): { handlers: Partial<RpcHandlerMa
   const { ctx, pluginConfig, manager } = deps
   const tracker = createDocTracker()
 
+  // 运行时自动配置成功：清 provider 缓存并重置 C# 服务器，下一次文档同步即用新运行时重启
+  onRuntimeProvisioned(() => {
+    clearProviderCache()
+    manager.resetLanguage('csharp')
+  })
+
   /** 解析会话与工作区根（失败 → null + error）。 */
   const rootOf = async (sessionId: string | undefined): Promise<{ root: string; sessionId: string } | { err: string }> => {
     const session = sessionOf(ctx, sessionId)
@@ -138,9 +147,10 @@ export function createLspRpc(deps: LspRpcDeps): { handlers: Partial<RpcHandlerMa
   const rootLocations = (locations: LspLocation[], root: string): LspLocation[] =>
     locations.map((location) => ({ ...location, root }))
 
-  /** 当前 provider 检测结论 → 设置页 idle 状态（不启动 server）。 */
+  /** 当前 provider 检测结论 → 设置页 idle 状态（不启动 server）；附带未满足的环境需求。 */
   const detectedStatus = (languageId: string, root?: string): LspServerStatus => {
     const spec = resolveProviderSpec(ctx, pluginConfig, languageId)
+    const missingEnv = envRequirementsFor(languageId, dshHome())
     return {
       languageId,
       source: spec.kind,
@@ -149,6 +159,7 @@ export function createLspRpc(deps: LspRpcDeps): { handlers: Partial<RpcHandlerMa
       version: spec.version,
       providerName: spec.providerName,
       root,
+      missingEnv: missingEnv.length ? missingEnv : undefined,
     }
   }
 
@@ -350,6 +361,18 @@ export function createLspRpc(deps: LspRpcDeps): { handlers: Partial<RpcHandlerMa
       } catch (error) {
         return { ok: false, error: '重新检测失败：' + String(error) }
       }
+    },
+
+    // 环境需求：一键安装（内置安装器）与安装进度查询
+    'edrv.lsp.envInstall': async (args) => {
+      if (!installRequirement(args.id)) {
+        return { ok: false, started: false, error: '该需求不支持一键安装：' + args.id }
+      }
+      return { ok: true, started: true }
+    },
+
+    'edrv.lsp.envState': async () => {
+      return { ok: true, states: envInstallStates() }
     },
 
     // --region 扩展管理（edrv.lsp.ext.*：已装/市场/安装/卸载/更新）

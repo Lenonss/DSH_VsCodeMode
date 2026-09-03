@@ -1,8 +1,9 @@
 /**
  * dsh-vscode-mode host — 语言服务器 provider 解析。
  * 优先级：手动配置 > extmgr 扩展源(Phase 2 挂载) > 自动发现(~/.vscode/extensions、
- * ~/.dsh/dsh-vscode-mode/extensions、PATH)。产物 LspProviderSpec：{ ready, argv, cwd, reason }，
- * 供 manager 启动服务器。
+ * ~/.dsh/dsh-vscode-mode/extensions、PATH)。C# 自动发现覆盖 ms-dotnettools.csharp
+ * （Roslyn/OmniSharp）与 DotRush（自带 DotRush.dll 服务器，需对应 .NET 运行时）。
+ * 产物 LspProviderSpec：{ ready, argv, cwd, reason }，供 manager 启动服务器。
  * 作者 ddj 2026-08-27
  */
 import { existsSync, readdirSync, readFileSync, writeFileSync, mkdirSync, rmSync, type Dirent } from 'node:fs'
@@ -20,6 +21,9 @@ export interface LspProviderSpec {
   kind: LspProviderKind
   argv: string[]
   cwd?: string
+  env?: Record<string, string>
+  /** 需自动配置的 .NET 运行时大版本（发现 DotRush 但缺运行时时设置，见 dotnetProvision.ts）。 */
+  provisionRuntime?: number
   ready: boolean
   reason?: string
   version?: string
@@ -56,8 +60,16 @@ export function listMatchingDirs(dir: string, prefix: string): string[] {
   return entries.filter((e) => e.isDirectory() && e.name.startsWith(prefix)).map((e) => join(dir, e.name))
 }
 
-/** VSCode 扩展目录（~/.vscode/extensions、~/.vscode-server/extensions + extmgr 目录；无则空数组）。 */
+/**
+ * VSCode 扩展目录（~/.vscode/extensions、~/.vscode-server/extensions + extmgr 目录；无则空数组）。
+ * 测试可用 DSH_LSP_EXT_DIRS（平台路径分隔符分隔）完全覆盖扫描列表，避免受真实机器扩展影响。
+ * @author ddj 2026年09月03号
+ */
 export function vscodeExtensionsDirs(home = dshHome()): string[] {
+  const override = process.env.DSH_LSP_EXT_DIRS
+  if (override) {
+    return override.split(sep === '\\' ? ';' : ':').map((dir) => dir.trim()).filter((dir) => dir && existsSync(dir))
+  }
   const userHome = homedir()
   return [
     join(userHome, '.vscode', 'extensions'),
@@ -90,7 +102,7 @@ export function registerExtensionProvider(languageId: string, argv: string[], cw
 export function extensionProviderFor(languageId: string): LspProviderSpec | null {
   const p = extProviders.get(languageId)
   if (!p || !p.argv.length) return null
-  return { languageId, kind: 'extension', argv: p.argv, cwd: p.cwd, ready: true, version: p.version, providerName: p.version ? 'EmmyLua' : '语言服务器扩展' }
+  return { languageId, kind: 'extension', argv: p.argv, cwd: p.cwd, ready: true, version: p.version, providerName: '语言服务器扩展' }
 }
 
 /** 清空全部扩展源注册（插件卸载/扩展目录重建时）。 */
@@ -113,16 +125,102 @@ export function findInPath(name: string): string | null {
   return null
 }
 
-/** 查找 dotnet（PATH + 常见安装路径）。 */
-export function findDotnet(): string | null {
-  const inPath = findInPath('dotnet')
-  if (inPath) return inPath
-  const candidates = [
+/** dotnet 候选（PATH 命中 + 常见安装路径 + 用户级安装位置），仅保留真实存在者。 */
+export function dotnetCandidates(): string[] {
+  const localAppData = process.env.LOCALAPPDATA
+  const out = [
+    findInPath('dotnet'),
     'C:/Program Files/dotnet/dotnet.exe',
     'C:/Program Files (x86)/dotnet/dotnet.exe',
+    localAppData ? join(localAppData, 'Microsoft', 'dotnet', 'dotnet.exe') : null,
   ]
-  for (const c of candidates) if (existsSync(c)) return c
+  return out.filter((p): p is string => !!p && existsSync(p))
+}
+
+/** 查找 dotnet（PATH + 常见安装路径）。 */
+export function findDotnet(): string | null {
+  return dotnetCandidates()[0] ?? null
+}
+
+/**
+ * 查找具备指定 .NET 运行时大版本的 dotnet（按 dotnetCandidates 顺序探测）。
+ * @author ddj 2026年09月03号
+ * @param minMajor 运行时最低大版本（如 10）
+ * @param candidates dotnet 候选路径（缺省 dotnetCandidates()；测试可注入）
+ * @returns 满足条件的 dotnet 路径；无满足者返回 null
+ */
+export function dotnetWithRuntime(minMajor: number, candidates: string[] = dotnetCandidates()): string | null {
+  for (const dotnet of candidates) {
+    const sharedDir = join(dirname(dotnet), 'shared', 'Microsoft.NETCore.App')
+    let versions: string[] = []
+    try {
+      versions = readdirSync(sharedDir)
+    } catch (error) {
+      continue
+    }
+    const found = versions.some((name) => {
+      const major = Number.parseInt(name.split('.')[0] ?? '', 10)
+      return Number.isInteger(major) && major >= minMajor
+    })
+    if (found) return dotnet
+  }
   return null
+}
+
+/**
+ * 探测含 .NET SDK 的 dotnet 根目录（MSBuild 工程求值与 restore 需要，runtime-only 不够）。
+ * @author ddj 2026年09月03号
+ * @param candidates dotnet 候选路径（缺省 dotnetCandidates()；测试可注入）
+ * @returns 含 SDK 的 dotnet 根目录；无则 null
+ */
+export function findSdkRoot(candidates: string[] = dotnetCandidates()): string | null {
+  for (const dotnet of candidates) {
+    const root = dirname(dotnet)
+    if (sdkVersionOf(root)) return root
+  }
+  return null
+}
+
+/**
+ * dotnet 根目录下最新 SDK 版本号（无 SDK 返回 null）。
+ * @author ddj 2026年09月03号
+ * @param root dotnet 根目录
+ * @returns SDK 版本号
+ */
+export function sdkVersionOf(root: string): string | null {
+  try {
+    const versions = readdirSync(join(root, 'sdk')).filter((name) => /^\d+\.\d+/.test(name))
+    if (!versions.length) return null
+    return versions.sort((a, b) => b.localeCompare(a, undefined, { numeric: true }))[0] ?? null
+  } catch (error) {
+    return null
+  }
+}
+
+/**
+ * C# 服务器所需的 MSBuild 环境变量（SDK 解析 + restore 的 muxer 定位）。
+ * @author ddj 2026年09月03号
+ * @param sdkRoot 含 SDK 的 dotnet 根目录
+ * @returns 环境变量表
+ */
+export function sdkEnvOf(sdkRoot: string): Record<string, string> {
+  const version = sdkVersionOf(sdkRoot)
+  const env: Record<string, string> = {
+    DOTNET_ROOT: sdkRoot,
+    DOTNET_MSBUILD_SDK_RESOLVER_CLI_DIR: sdkRoot,
+  }
+  if (version) env.DOTNET_SDK_PATH = join(sdkRoot, 'sdk', version)
+  return env
+}
+
+/** 读扩展目录 package.json 的 version（读取失败不影响入口使用，返回 undefined）。 */
+function manifestVersionOf(extDir: string): string | undefined {
+  try {
+    const manifest = JSON.parse(readFileSync(join(extDir, 'package.json'), 'utf8')) as { version?: unknown }
+    return typeof manifest.version === 'string' ? manifest.version : undefined
+  } catch (error) {
+    return undefined
+  }
 }
 
 /** EmmyLua 自动发现候选（tangzx.emmylua-* / server/emmylua_ls）。 */
@@ -132,12 +230,7 @@ export function candidateEmmyLua(home = dshHome()): { path: string; version?: st
     for (const extDir of listMatchingDirs(dir, 'tangzx.emmylua-')) {
       const server = join(extDir, 'server', 'emmylua_ls' + exeSuffix())
       if (!existsSync(server)) continue
-      let version: string | undefined
-      try {
-        const manifest = JSON.parse(readFileSync(join(extDir, 'package.json'), 'utf8')) as { version?: unknown }
-        if (typeof manifest.version === 'string') version = manifest.version
-      } catch (error) { /* 清单读取失败不影响入口使用 */ }
-      candidates.push({ path: server, version })
+      candidates.push({ path: server, version: manifestVersionOf(extDir) })
     }
   }
   candidates.sort((a, b) => (b.version ?? '').localeCompare(a.version ?? '', undefined, { numeric: true }) || a.path.localeCompare(b.path))
@@ -161,9 +254,25 @@ export function candidateLuaServers(home = dshHome()): string[] {
   return out
 }
 
-/** C# 自动发现候选：Roslyn dll（需 dotnet）或 OmniSharp 可执行。 */
-export function candidateCSharpServers(home = dshHome()): { roslynDll?: string; omnisharpExe?: string; dotnet?: string } {
-  const out: { roslynDll?: string; omnisharpExe?: string; dotnet?: string } = {}
+/** C# 服务器发现结果（ms-Roslyn / DotRush / OmniSharp + 系统 dotnet）。 */
+export interface CSharpCandidates {
+  roslynDll?: string
+  dotrushDll?: string
+  dotrushVersion?: string
+  omnisharpExe?: string
+  dotnet?: string
+}
+
+/**
+ * C# 自动发现候选：ms-dotnettools.csharp 的 Roslyn dll（需 dotnet）/ OmniSharp 可执行，
+ * 以及 DotRush 扩展自带服务器（extension/bin/LanguageServer/DotRush.dll，需对应 .NET 运行时）。
+ * @author ddj 2026年09月03号
+ * @param home DSH home（缺省真实；测试可注入临时目录）
+ * @returns 发现结果
+ */
+export function candidateCSharpServers(home = dshHome()): CSharpCandidates {
+  const out: CSharpCandidates = {}
+  const dotrushHits: { dll: string; version?: string }[] = []
   for (const dir of vscodeExtensionsDirs(home)) {
     for (const extDir of listMatchingDirs(dir, 'ms-dotnettools.csharp-')) {
       const roslyn = join(extDir, '.roslyn', 'Microsoft.CodeAnalysis.LanguageServer.dll')
@@ -171,10 +280,55 @@ export function candidateCSharpServers(home = dshHome()): { roslynDll?: string; 
       const omni = join(extDir, '.omnisharp', 'OmniSharp' + exeSuffix())
       if (!out.omnisharpExe && existsSync(omni)) out.omnisharpExe = omni
     }
+    for (const extDir of listMatchingDirs(dir, 'nromanov.dotrush-')) {
+      const dll = join(extDir, 'extension', 'bin', 'LanguageServer', 'DotRush.dll')
+      if (!existsSync(dll)) continue
+      dotrushHits.push({ dll, version: manifestVersionOf(extDir) })
+    }
+  }
+  // 多版本并存时取清单版本最高者（与 EmmyLua 发现的排序策略一致）
+  const best = dotrushHits.sort((a, b) => (b.version ?? '').localeCompare(a.version ?? '', undefined, { numeric: true }) || a.dll.localeCompare(b.dll))[0]
+  if (best) {
+    out.dotrushDll = best.dll
+    out.dotrushVersion = best.version
   }
   const dotnet = findDotnet()
   if (dotnet) out.dotnet = dotnet
   return out
+}
+
+/**
+ * 从服务器 dll 同目录的 *.runtimeconfig.json 解析所需 .NET 运行时大版本。
+ * @author ddj 2026年09月03号
+ * @param dllDir 服务器 dll 所在目录
+ * @returns 运行时大版本；无清单或解析失败返回 null
+ */
+export function runtimeMajorOf(dllDir: string): number | null {
+  try {
+    for (const name of readdirSync(dllDir)) {
+      if (!name.endsWith('.runtimeconfig.json')) continue
+      const config = JSON.parse(readFileSync(join(dllDir, name), 'utf8')) as { runtimeOptions?: { framework?: { version?: unknown } } }
+      const version = config.runtimeOptions?.framework?.version
+      if (typeof version !== 'string') continue
+      const major = Number.parseInt(version.split('.')[0] ?? '', 10)
+      if (Number.isInteger(major)) return major
+    }
+  } catch (error) { /* 清单读取失败按无约束处理 */ }
+  return null
+}
+
+/**
+ * 解析 DotRush 启动参数：优先扩展内置 SDK dotnet，否则找满足其运行时大版本的 dotnet。
+ * @author ddj 2026年09月03号
+ * @param dll DotRush.dll 绝对路径
+ * @returns argv 可直接启动；reason 为不可启动的原因
+ */
+function dotrushLaunch(dll: string): { argv: string[] } | { reason: string } {
+  const sdkDotnet = join(dirname(dirname(dll)), 'Sdk', 'dotnet' + exeSuffix())
+  const major = runtimeMajorOf(dirname(dll))
+  const dotnet = existsSync(sdkDotnet) ? sdkDotnet : major !== null ? dotnetWithRuntime(major) : findDotnet()
+  if (dotnet) return { argv: [dotnet, dll] }
+  return { reason: 'DotRush 需 .NET ' + (major ?? '') + ' 运行时，未找到满足的 dotnet' }
 }
 
 /**
@@ -221,7 +375,8 @@ export function resolveLuaProvider(manual?: { command?: string; path?: string },
 }
 
 /**
- * 解析 C# provider（优先级：手动 > 扩展源 > 自动发现；需 dotnet + Roslyn dll；或 OmniSharp）。
+ * 解析 C# provider（优先级：手动 > 扩展源 > 自动发现；Roslyn dll 需 dotnet；
+ * DotRush 需满足其运行时的 dotnet；或 OmniSharp）。
  * @author ddj 2026年08月27号
  * @param manual 手动配置
  * @param home DSH home（缺省真实；测试可注入临时目录）
@@ -235,16 +390,34 @@ export function resolveCSharpProvider(manual?: { command?: string; path?: string
     const ext = extensionProviderFor('csharp')
     if (ext) return ext
     const discovered = candidateCSharpServers(h)
+    // SDK 环境注入：runtime-only 的 dotnet 会导致 MSBuild 求值/restore 退化
+    const sdkRoot = findSdkRoot()
+    const msbuildEnv = sdkRoot ? sdkEnvOf(sdkRoot) : undefined
     if (discovered.roslynDll && discovered.dotnet) {
-      return { ...base, kind: 'discover', argv: [discovered.dotnet, discovered.roslynDll, '--stdio'], ready: true }
+      return { ...base, kind: 'discover', argv: [discovered.dotnet, discovered.roslynDll, '--stdio'], env: msbuildEnv, ready: true }
+    }
+    let dotrushReason: string | null = null
+    let provisionMajor: number | undefined
+    if (discovered.dotrushDll) {
+      const major = runtimeMajorOf(dirname(discovered.dotrushDll))
+      const launch = dotrushLaunch(discovered.dotrushDll)
+      if ('argv' in launch) {
+        return { ...base, kind: 'discover', argv: launch.argv, env: msbuildEnv, ready: true, version: discovered.dotrushVersion, providerName: 'DotRush' }
+      }
+      dotrushReason = launch.reason
+      provisionMajor = major ?? undefined
     }
     if (discovered.omnisharpExe) {
       return { ...base, kind: 'discover', argv: [discovered.omnisharpExe, '--stdio'], ready: true }
     }
     const reasons: string[] = []
-    if (!discovered.dotnet) reasons.push('未找到 dotnet')
-    if (!discovered.roslynDll && !discovered.omnisharpExe) reasons.push('未发现 ms-dotnettools.csharp 扩展')
-    return { ...base, kind: 'none', argv: [], ready: false, reason: reasons.join('；') + '（可手动指定 Roslyn/OmniSharp 入口）' }
+    if (dotrushReason) {
+      reasons.push(dotrushReason)
+    } else {
+      if (!discovered.dotnet) reasons.push('未找到 dotnet')
+      reasons.push('未发现 ms-dotnettools.csharp / DotRush 扩展')
+    }
+    return { ...base, kind: 'none', argv: [], ready: false, provisionRuntime: provisionMajor, reason: reasons.join('；') + '（可手动指定 Roslyn/OmniSharp 入口）' }
   })
 }
 
@@ -319,7 +492,7 @@ function fingerprintOf(home: string): string {
       return '?'
     }
   })
-  return process.platform + '|' + marks.join('|')
+  return process.platform + '|' + (findSdkRoot() ?? 'no-sdk') + '|' + marks.join('|')
 }
 
 /**

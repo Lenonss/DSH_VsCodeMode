@@ -147,6 +147,23 @@ export type LspServerPhase =
   | 'unavailable' // 连续失败，停止自动重启
   | 'stopped'     // 已停止（禁用/卸载/会话结束）
 
+/** 单条缺失环境需求（edrv.lsp.status.missingEnv 元素，仅含未满足项）。 */
+export interface LspMissingEnv {
+  id: string          // 需求标识（如 dotnet-runtime:10，同时是安装器键）
+  label: string       // 显示名（如 '.NET 运行时 10.0'）
+  detail?: string     // 说明（哪个服务器需要）
+  installable: boolean // 支持一键安装
+  manualUrl?: string  // 官网手动下载地址
+  manualLabel?: string
+}
+
+/** 环境安装进行态（edrv.lsp.envState 载荷元素）。 */
+export interface LspEnvInstallState {
+  id: string
+  phase: 'idle' | 'downloading' | 'extracting' | 'done' | 'failed'
+  message?: string
+}
+
 /** 单语言服务器状态（edrv.lsp.status 载荷元素）。 */
 export interface LspServerStatus {
   languageId: string
@@ -158,6 +175,7 @@ export interface LspServerStatus {
   progressMessage?: string
   root?: string     // 绑定工作区根（相对显示）
   providerName?: string // provider 名称（如 EmmyLua / LuaLS）
+  missingEnv?: LspMissingEnv[] // 未满足的环境需求（无则省略）
 }
 
 /**

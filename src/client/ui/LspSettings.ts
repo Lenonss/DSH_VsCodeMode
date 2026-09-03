@@ -11,7 +11,7 @@ import '../styles/mcp.css'
 
 const LANGUAGES = [
   { id: 'lua', label: 'Lua（EmmyLua / LuaLS）', hint: '优先使用已安装 EmmyLua；未安装时回退 LuaLS 或 PATH 中的 lua-language-server' },
-  { id: 'csharp', label: 'C#（Roslyn / OmniSharp）', hint: '需 dotnet + ms-dotnettools.csharp 的 .roslyn 服务器，或手动指定' },
+  { id: 'csharp', label: 'C#（Roslyn / DotRush / OmniSharp）', hint: '优先自动发现 ms-dotnettools.csharp / DotRush 扩展（DotRush 需 .NET 10 运行时）；也可手动指定' },
 ]
 
 const PHASE_LABEL = {
@@ -25,8 +25,18 @@ const TABS = [
   { id: 'updates', label: '更新' },
 ]
 
-/** 语言卡片：状态 + 启用开关 + 命令/路径配置 + 重新检测。 */
-function LangCard({ lang, config, status, busy, onToggle, onSave, onRedetect }) {
+/** 环境安装按钮文案（按安装进行态）。 */
+function envButtonLabel(req, envStates) {
+  const state = (envStates ?? []).find((s) => s.id === req.id)
+  if (state?.phase === 'downloading') return '下载中…'
+  if (state?.phase === 'extracting') return '安装中…'
+  if (state?.phase === 'done') return '已完成'
+  if (state?.phase === 'failed') return '重试'
+  return '一键安装'
+}
+
+/** 语言卡片：状态 + 缺失环境提示（一键安装/官网下载） + 启用开关 + 命令/路径配置 + 重新检测。 */
+function LangCard({ lang, config, status, busy, envStates, onInstallEnv, onToggle, onSave, onRedetect }) {
   const [pathDraft, setPathDraft] = React.useState(config?.path ?? '')
   const [commandDraft, setCommandDraft] = React.useState(config?.command ?? '')
   React.useEffect(() => { setPathDraft(config?.path ?? ''); setCommandDraft(config?.command ?? '') }, [config?.path, config?.command])
@@ -44,6 +54,21 @@ function LangCard({ lang, config, status, busy, onToggle, onSave, onRedetect }) 
       status?.version ? ' · v' + status.version : '',
       (phase === 'ready' && status?.root) ? ' · ' + String(status.root).split(/[\\/]/).pop() : ''),
     status?.reason ? React.createElement('div', { className: 'vsm-mcp-error' }, status.reason) : null,
+    Array.isArray(status?.missingEnv) && status.missingEnv.length
+      ? React.createElement('div', { className: 'vsm-lsp-hint' },
+        '缺少运行环境（一键安装后自动生效）：',
+        status.missingEnv.map((req) => React.createElement('div', { key: req.id, className: 'vsm-mcp-actions' },
+          React.createElement('span', null, req.label, req.detail ? '（' + req.detail + '）' : ''),
+          req.installable ? React.createElement('button', {
+            className: 'vsm-primary vsm-small',
+            disabled: busy === 'env:' + req.id,
+            onClick: () => onInstallEnv(lang.id, req),
+          }, envButtonLabel(req, envStates)) : null,
+          req.manualUrl ? React.createElement('a', {
+            href: req.manualUrl, target: '_blank', rel: 'noreferrer',
+            style: { color: 'inherit', textDecoration: 'underline', alignSelf: 'center' },
+          }, req.manualLabel ?? '官网下载') : null)))
+      : null,
     React.createElement('div', { className: 'vsm-lsp-form' },
       React.createElement('label', null, React.createElement('span', null, '可执行文件路径（绝对路径，优先）'), React.createElement('input', { value: pathDraft, placeholder: '如 C:/.../lua-language-server.exe', onChange: (e) => setPathDraft(e.target.value) })),
       React.createElement('label', null, React.createElement('span', null, '命令名（PATH 内查找）'), React.createElement('input', { value: commandDraft, placeholder: '如 lua-language-server', onChange: (e) => setCommandDraft(e.target.value) })),
@@ -96,6 +121,8 @@ export function LspSettings() {
   const [busy, setBusy] = React.useState('')
   const [error, setError] = React.useState('')
   const [loading, setLoading] = React.useState(true)
+  const [envStates, setEnvStates] = React.useState([])
+  const [envLang, setEnvLang] = React.useState('')
 
   const refreshServers = React.useCallback(() => {
     Promise.all([rpc('edrv.lsp.configGet', {}), rpc('edrv.lsp.status', {})])
@@ -115,6 +142,15 @@ export function LspSettings() {
         setError('')
       })
       .catch((e) => setError(String(e)))
+  }, [])
+
+  const refreshEnvStates = React.useCallback(() => {
+    return rpc('edrv.lsp.envState', {})
+      .then((res) => {
+        if (res?.ok) setEnvStates(res.states ?? [])
+        return res?.states ?? []
+      })
+      .catch(() => [])
   }, [])
 
   const refresh = React.useCallback(() => {
@@ -140,9 +176,51 @@ export function LspSettings() {
   }
 
   /** 重检测后通知编辑器：与 host 重新同步已打开的模型（触发重新 acquire）。 */
-  const notifyResync = (languageId) => {
+  const notifyResync = React.useCallback((languageId) => {
     window.dispatchEvent(new CustomEvent('edrv:lsp-redetect', { detail: { languageId } }))
+  }, [])
+
+  /** 一键安装缺失环境：启动内置安装器（成功后进入轮询，完成自动重同步）。 */
+  const installEnv = (languageId, req) => {
+    const key = 'env:' + req.id
+    setBusy(key)
+    setError('')
+    setEnvLang(languageId)
+    rpc('edrv.lsp.envInstall', { languageId, id: req.id })
+      .then((res) => {
+        if (!res?.ok) { setError(res?.error ?? '无法启动安装'); return }
+        void refreshEnvStates()
+        void refreshServers()
+      })
+      .catch((e) => setError(String(e)))
+      .finally(() => setBusy(''))
   }
+
+  // 环境安装进行中：2s 轮询进度并刷新状态；某项转入 done 时由下方过渡检测重同步
+  React.useEffect(() => {
+    const states = envStates ?? []
+    const installing = states.some((s) => s.phase === 'downloading' || s.phase === 'extracting')
+    if (!installing) return
+    const timer = setInterval(() => {
+      void refreshEnvStates()
+      void refreshServers()
+    }, 2000)
+    return () => clearInterval(timer)
+  }, [envStates, refreshEnvStates, refreshServers])
+
+  // 环境安装完成过渡检测：刷新状态并通知编辑器重新同步对应语言
+  const prevEnvPhases = React.useRef({})
+  React.useEffect(() => {
+    const states = envStates ?? []
+    for (const s of states) {
+      const prev = prevEnvPhases.current[s.id]
+      if (prev && prev !== 'done' && s.phase === 'done' && envLang) {
+        void refreshServers()
+        notifyResync(envLang)
+      }
+      prevEnvPhases.current[s.id] = s.phase
+    }
+  }, [envStates, envLang, refreshServers, notifyResync])
 
   const saveLang = (languageId, path, command) => {
     setBusy(languageId)
@@ -271,7 +349,7 @@ export function LspSettings() {
         key: lang.id, lang,
         config: config[lang.id] ?? {},
         status: servers.find((s) => s.languageId === lang.id),
-        busy, onToggle: toggleLang, onSave: saveLang, onRedetect: redetectLang,
+        busy, envStates, onInstallEnv: installEnv, onToggle: toggleLang, onSave: saveLang, onRedetect: redetectLang,
       })),
       React.createElement('div', { className: 'vsm-lsp-hint' }, '提示：打开 Lua/C# 文件即自动（惰性）启动对应语言服务器；未配置时编辑器功能不受影响，大纲回退内置解析。')))
   } else if (tab === 'installed') {
