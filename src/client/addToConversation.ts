@@ -15,6 +15,21 @@ export interface RefRange {
 /** 引用动作的返回状态。 */
 export type AddOutcome = 'ok' | 'busy' | 'unavailable'
 
+/** 引用外观类型：文件/文件夹（DSH reference source 均支持）。 */
+export type RefAppearance = 'file' | 'folder'
+
+/** 把追加引用结果映射为可读文案（ok 用 okText；busy 提示已降级纯文本；unavailable 提示不可用）。
+ * @author ddj 2026年09月03号
+ * @param outcome 追加结果状态
+ * @param okText 成功文案（如「已添加文件引用」/「已添加文件夹引用」）
+ * @returns 状态栏/通知用文案
+ */
+export function statusOfAdd(outcome: AddOutcome, okText: string): string {
+  if (outcome === 'ok') return okText
+  if (outcome === 'busy') return okText + '（输入框忙，已降级纯文本）'
+  return '无法添加到对话（无会话或输入框不可用）'
+}
+
 /** DSH reference source 名（dsh-client-ui-reference 注册的 @file/@session 统一源）。 */
 const REF_SOURCE = 'reference'
 
@@ -61,11 +76,17 @@ export function refOf(mention: string, range: RefRange | undefined): string {
     : `${mention} L${range.startLine}-${range.endLine}`
 }
 
-/** 构造 DSH 文件引用插入载荷（source=reference，发送序列化为 mention(+range) 文本）。 */
+/** 构造 DSH 文件引用插入载荷（source=reference，发送序列化为 mention(+range) 文本）。
+ * @param path 目标路径（相对 cwd 或绝对）
+ * @param cwd 会话工作区目录（可选）
+ * @param range 行区间（可选）
+ * @param appearance 引用外观：'file'（默认）| 'folder'
+ */
 export function buildFileRef(
   path: string,
   cwd: string | undefined,
   range?: RefRange,
+  appearance: RefAppearance = 'file',
 ): { reference: ReferenceInsertLike; mention: string } {
   const mention = mentionOf(path, cwd)
   return {
@@ -74,7 +95,7 @@ export function buildFileRef(
       source: REF_SOURCE,
       ref: refOf(mention, range),
       label: labelOf(path, range),
-      appearance: 'file',
+      appearance,
       clipboardText: mention,
     },
   }
@@ -85,7 +106,6 @@ export interface InputLike {
   state: { getSnapshot: () => { draft: string; draftRev: number } }
   insertReference: (ref: ReferenceInsertLike, span: TokenSpanLike) => boolean
   setDraft: (text: string) => void
-  notify: (level: 'info' | 'error', text: string) => void
 }
 
 /** ReferenceInsert 结构形状（与 dsh-client-ui-input-trigger 类型一致）。 */
@@ -111,8 +131,13 @@ export interface CtxLike {
 
 /** 注入器产物：给 EditorView 用的动作集合。 */
 export interface AddToConversation {
-  /** 追加文件引用 chip（@path [Lstart-end]）；忙态自动降级纯文本。 */
-  appendReference(sessionId: string | undefined, path: string, range?: RefRange): Promise<AddOutcome>
+  /** 追加文件/文件夹引用 chip（@path [Lstart-end]）；忙态自动降级纯文本。 */
+  appendReference(
+    sessionId: string | undefined,
+    path: string,
+    range?: RefRange,
+    appearance?: RefAppearance,
+  ): Promise<AddOutcome>
 }
 
 /**
@@ -161,16 +186,6 @@ function cwdOf(ctx: CtxLike, sessionId: string | undefined): string | undefined 
   }
 }
 
-/** 写入成功后的 composer 内联提示（门面可用时；失败静默）。
- * @author ddj 2026年08月25号 */
-function notify(input: InputLike, text: string): void {
-  try {
-    input.notify?.('info', text)
-  } catch {
-    /* 提示失败忽略 */
-  }
-}
-
 /** 输入门面插入引用（拦截异常视作未应用，走降级）。
  * @author ddj 2026年08月25号 */
 function safeInsert(input: InputLike, reference: ReferenceInsertLike, span: TokenSpanLike): boolean {
@@ -188,22 +203,20 @@ function safeInsert(input: InputLike, reference: ReferenceInsertLike, span: Toke
  * @returns 动作集
  */
 export function createAddToConversation(ctx: CtxLike): AddToConversation {
-  const appendReference: AddToConversation['appendReference'] = async (sessionId, path, range) => {
+  const appendReference: AddToConversation['appendReference'] = async (sessionId, path, range, appearance) => {
     const input = inputFor(ctx, sessionId)
     if (!input) return 'unavailable'
     const cur = draftCursor(input)
     if (!cur) return 'unavailable'
-    const { reference, mention } = buildFileRef(path, cwdOf(ctx, sessionId), range)
+    const { reference, mention } = buildFileRef(path, cwdOf(ctx, sessionId), range, appearance)
     const span: TokenSpanLike = { start: cur.draft.length, end: cur.draft.length, draftRev: cur.draftRev }
     const ok = safeInsert(input, reference, span)
     if (!ok) {
       // 忙态（adjudicating/submitting）或 CAS 失败：降级纯文本追加，保证动作有落点。
       const gap = cur.draft.length > 0 && !/\s$/.test(cur.draft) ? ' ' : ''
       input.setDraft(cur.draft + gap + mention + ' ')
-      notify(input, '已添加文件引用 ' + mention)
       return 'busy'
     }
-    notify(input, '已添加文件引用 ' + mention)
     return 'ok'
   }
 

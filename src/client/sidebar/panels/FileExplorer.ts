@@ -11,7 +11,6 @@
 import React from 'react'
 import { rpc } from '../../rpc.js'
 import { ContextMenu } from '../../ui/ContextMenu.js'
-import { rowMenuPosition } from '../../ui/menuPosition.js'
 import { buildTreeMenu } from '../contextMenu.js'
 import { explorerLoad, explorerSave } from '../../state/explorerCache.js'
 import { entriesCacheGet, entriesCacheIsFresh, entriesCachePut } from '../../state/explorerEntriesCache.js'
@@ -219,9 +218,8 @@ export function FileExplorer(props) {
       onContextMenu: (ev) => {
         ev.preventDefault()
         ev.stopPropagation()
-        const rect = ev.currentTarget?.getBoundingClientRect?.()
-        const position = rowMenuPosition(rect, ev.clientX, ev.clientY)
-        setMenu({ x: position.left, y: position.top, target: { path: e.path, type: e.type } })
+        // 菜单左上角对齐鼠标点击位置（视口坐标，ContextMenu 内再做 viewport clamp）
+        setMenu({ x: ev.clientX, y: ev.clientY, target: { path: e.path, type: e.type } })
       },
     },
       React.createElement('span', { className: 'edrv-tree-chev' },

@@ -1,20 +1,9 @@
 /**
- * client/ui/menuPosition.ts 纯函数测试（锚点与 viewport clamp）。
- * 作者 ddj 2026-08-28
+ * client/ui/menuPosition.ts 纯函数测试（viewport clamp）。
+ * 作者 ddj 2026-08-28 / 2026-09-03
  */
 import { describe, expect, it } from 'vitest'
-import { clampMenuPosition, rowMenuPosition } from '../src/client/ui/menuPosition.js'
-
-describe('rowMenuPosition', () => {
-  it('将菜单放在目标行右侧并对齐行顶部', () => {
-    expect(rowMenuPosition({ top: 120, right: 260, width: 220, height: 22 }, 100, 100)).toEqual({ left: 264, top: 120 })
-  })
-
-  it('测量不到目标行时回退到鼠标坐标', () => {
-    expect(rowMenuPosition(undefined, 100, 200)).toEqual({ left: 100, top: 200 })
-    expect(rowMenuPosition({ top: 0, right: 260, width: 0, height: 22 }, 100, 200)).toEqual({ left: 100, top: 200 })
-  })
-})
+import { clampMenuPosition } from '../src/client/ui/menuPosition.js'
 
 describe('clampMenuPosition', () => {
   it('限制左下角菜单不越出 viewport', () => {

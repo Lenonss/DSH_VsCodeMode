@@ -24,6 +24,7 @@ import { setSidePending, SIDEBAR_INSTALL_CMD } from '../sidebarBridge.js'
 import { upsertViewState, viewStatesLoad, viewStatesSave } from '../state/viewStateCache.js'
 import { bindingsOf, chordOf, matchEvent, useKeybindingsVersion } from '../keybindings.js'
 import { createNavHistory } from '../navHistory.js'
+import { statusOfAdd } from '../addToConversation.js'
 import { CACHE_KEY } from '../paths.js'
 import { bindLspEditor, runGoToDefinition, runFindReferences, hideReferencesOverlay } from '../monaco/lsp/providers.js'
 import { bindLspUnderline } from '../monaco/lsp/underline.js'
@@ -1119,15 +1120,7 @@ export function EditorView(props) {
     setTabMenu(null)
   }
 
-  /** 把「添加到对话」返回状态映射为状态栏文案。
-   * @author ddj 2026年08月25号 */
-  const statusOfAdd = (outcome, okText) => {
-    if (outcome === 'ok') return okText
-    if (outcome === 'busy') return okText + '（输入框忙，已降级纯文本）'
-    return '无法添加到对话（无会话或输入框不可用）'
-  }
-
-  /** 添加文件/选中区引用到对话（异步，状态栏反馈）。 */
+  /** 添加文件/选中区引用到对话（异步，状态栏反馈；状态文案走共享 statusOfAdd）。 */
   const addRefToChat = (path, range) => {
     if (!path) { setStatus('无活动文件'); return }
     if (!addToConversation) { setStatus('添加到对话不可用'); return }
@@ -1406,6 +1399,7 @@ export function EditorView(props) {
     editor: () => editorRef.current,
     outlineSources: props.outlineSources,
     fileMenuItems: props.fileMenuItems,
+    addToConversation,
     notify: (message) => setStatus(message),
   }
 

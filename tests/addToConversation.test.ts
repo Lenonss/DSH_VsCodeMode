@@ -3,7 +3,7 @@
  * 作者 ddj 2026年08月25号
  */
 import { describe, expect, it, vi } from 'vitest'
-import { buildFileRef, createAddToConversation, mentionOf } from '../src/client/addToConversation.js'
+import { buildFileRef, createAddToConversation, mentionOf, statusOfAdd } from '../src/client/addToConversation.js'
 
 /** 构造假 ctx：sessions.scope + conversation.input.for 返回假 shell。 */
 const makeCtx = (shell) => ({
@@ -19,13 +19,12 @@ const makeCtx = (shell) => ({
   },
 })
 
-/** 假 shell：state + insertReference/setDraft/notify 记录调用。 */
+/** 假 shell：state + insertReference/setDraft 记录调用。 */
 const makeShell = () => {
   const shell = {
     state: { getSnapshot: () => ({ draft: '', draftRev: 0 }) },
     insertReference: vi.fn(() => true),
     setDraft: vi.fn(),
-    notify: vi.fn(),
   }
   return { shell }
 }
@@ -71,6 +70,27 @@ describe('buildFileRef', () => {
     expect(single.reference.ref).toBe('@src/index.ts L5')
     expect(single.reference.label).toBe('index.ts L5')
   })
+
+  it('文件夹引用：appearance 为 folder，ref/label 用目录名（缺省外观仍为 file）', () => {
+    const dir = buildFileRef('src/components', 'C:/work/app', undefined, 'folder')
+    expect(dir.mention).toBe('@src/components')
+    expect(dir.reference).toMatchObject({
+      source: 'reference',
+      ref: '@src/components',
+      label: 'components',
+      appearance: 'folder',
+      clipboardText: '@src/components',
+    })
+    expect(buildFileRef('src/index.ts', 'C:/work/app').reference.appearance).toBe('file')
+  })
+})
+
+describe('statusOfAdd', () => {
+  it('三态文案映射：ok / busy 降级提示 / unavailable', () => {
+    expect(statusOfAdd('ok', '已添加文件引用')).toBe('已添加文件引用')
+    expect(statusOfAdd('busy', '已添加文件引用')).toBe('已添加文件引用（输入框忙，已降级纯文本）')
+    expect(statusOfAdd('unavailable', '已添加文件引用')).toBe('无法添加到对话（无会话或输入框不可用）')
+  })
 })
 
 describe('createAddToConversation.appendReference', () => {
@@ -84,7 +104,6 @@ describe('createAddToConversation.appendReference', () => {
       { start: 0, end: 0, draftRev: 0 },
     )
     expect(shell.setDraft).not.toHaveBeenCalled()
-    expect(shell.notify).toHaveBeenCalledWith('info', expect.stringContaining('@src/index.ts'))
   })
 
   it('带行区间时引用载荷含 L 区间', async () => {
@@ -93,6 +112,16 @@ describe('createAddToConversation.appendReference', () => {
     await add.appendReference('s1', 'src/index.ts', { startLine: 10, endLine: 20 })
     expect(shell.insertReference).toHaveBeenCalledWith(
       expect.objectContaining({ ref: '@src/index.ts L10-20', label: 'index.ts L10-20' }),
+      expect.anything(),
+    )
+  })
+
+  it('folder 外观透传：insertReference 载荷 appearance 为 folder', async () => {
+    const { shell } = makeShell()
+    const add = createAddToConversation(makeCtx(shell))
+    await add.appendReference('s1', 'src/components', undefined, 'folder')
+    expect(shell.insertReference).toHaveBeenCalledWith(
+      expect.objectContaining({ source: 'reference', ref: '@src/components', label: 'components', appearance: 'folder' }),
       expect.anything(),
     )
   })
