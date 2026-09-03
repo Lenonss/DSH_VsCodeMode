@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { envRequirementsFor, installRequirement } from '../src/lsp/envRequirements.js'
+import { dotnetWithRuntime } from '../src/lsp/providers.js'
 
 /** 本轮测试创建的临时 home（afterEach 统一清理）。 */
 const homes: string[] = []
@@ -52,12 +53,16 @@ describe('envRequirementsFor', () => {
     expect(missing[0].detail).toContain('DotRush')
   })
 
-  it('运行时已满足 → 无 dotnet-runtime:10 缺失项', () => {
+  it('运行时已满足 → 无 dotnet-runtime:10 缺失项；缺失机器 → 正确报告缺失', () => {
     const home = makeHome()
     installDotRush(home, '26.9.244', '10.0.0')
     const missing = envRequirementsFor('csharp', home)
-    // 本机装有 .NET 10（用户级）→ 满足；未装的机器上返回缺失项亦属正确行为
-    expect(missing.every((m) => m.id !== 'dotnet-runtime:10')).toBe(true)
+    // CI（Linux）无 .NET 10：应报告缺失；本机装有用户级 .NET 10：应满足——两种机器都断言正确行为
+    if (dotnetWithRuntime(10)) {
+      expect(missing.every((m) => m.id !== 'dotnet-runtime:10')).toBe(true)
+    } else {
+      expect(missing.some((m) => m.id === 'dotnet-runtime:10')).toBe(true)
+    }
   })
 
   it('lua 无外部环境依赖 → 恒为空', () => {
