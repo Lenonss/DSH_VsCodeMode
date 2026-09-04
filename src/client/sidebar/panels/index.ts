@@ -1,11 +1,12 @@
 // @ts-nocheck
 /**
- * dsh-vscode-mode client — 侧边栏面板定义（文件管理 + 搜索）。
- * 作者 ddj 2026-08-26 / 2026-08-26
+ * dsh-vscode-mode client — 侧边栏面板定义（文件管理 + 搜索 + 规则）。
+ * 作者 ddj 2026-08-26 / 2026-09-03
  */
 import React from 'react'
 import { FileExplorer } from './FileExplorer.js'
 import { SearchPanel } from './SearchPanel.js'
+import { RulesPanel } from './RulesPanel.js'
 import type { SidebarPanelDef, SidebarCtx } from '../types.js'
 
 /**
@@ -36,5 +37,20 @@ export function createSearchPanel(): SidebarPanelDef {
     icon: '🔍',
     order: 15,
     render: (ctx: SidebarCtx) => React.createElement(SearchPanel, { ctx }),
+  }
+}
+
+/**
+ * 构造规则管理面板定义（Codebuddy 规则形态：用户规则/项目规则双 Tab + 开关）。
+ * @author ddj 2026年09月03号
+ * @returns 面板定义（无徽标；活动栏图标 📏，与大纲 📜 区分）
+ */
+export function createRulesPanel(): SidebarPanelDef {
+  return {
+    id: 'rules',
+    title: '规则',
+    icon: '📏',
+    order: 20,
+    render: (ctx: SidebarCtx) => React.createElement(RulesPanel, { ctx }),
   }
 }

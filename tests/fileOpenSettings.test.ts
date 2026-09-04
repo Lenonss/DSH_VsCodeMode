@@ -17,6 +17,7 @@ describe('file open settings', () => {
       z: {
         object: (shape) => { shapes.push(shape); return { shape, default: (value) => value } },
         string: () => ({ default: (value) => value }),
+        number: () => ({ default: (value) => value }),
       },
     })
     const hooks = { setSource: vi.fn(), onChange: vi.fn() }
@@ -28,6 +29,7 @@ describe('file open settings', () => {
     expect(shapes[0]).toEqual({ ...KEYBINDING_DEFAULTS })
     expect(shapes[1].fileOpenTool).toBe('auto')
     expect(shapes[1].keybindings).toEqual({ ...KEYBINDING_DEFAULTS })
+    expect(shapes[1].sidebarMinWidth).toBe(300)
   })
 
   it('degrades gracefully when deps are missing', async () => {

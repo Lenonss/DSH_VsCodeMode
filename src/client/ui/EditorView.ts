@@ -23,6 +23,7 @@ import { revealInExplorer as revealPathInExplorer } from '../fileReveal.js'
 import { setSidePending, SIDEBAR_INSTALL_CMD } from '../sidebarBridge.js'
 import { upsertViewState, viewStatesLoad, viewStatesSave } from '../state/viewStateCache.js'
 import { bindingsOf, chordOf, matchEvent, useKeybindingsVersion } from '../keybindings.js'
+import { getSidebarMinWidth } from '../sidebarMin.js'
 import { createNavHistory } from '../navHistory.js'
 import { statusOfAdd } from '../addToConversation.js'
 import { CACHE_KEY } from '../paths.js'
@@ -67,7 +68,7 @@ export function EditorView(props) {
   const [fileIdx, setFileIdx] = React.useState(0) // 全局差异文件位置（x/x 文件 显示）
   const [tabMenu, setTabMenu] = React.useState(null) // Tab 右键菜单 { x,y,path }（编辑区右键走 Monaco 原生菜单，无此浮层）
   const [sidebarOn, setSidebarOn] = React.useState(layout !== 'side') // 侧边栏显隐（侧栏形态默认收起）
-  const [sidebarW, setSidebarW] = React.useState(240) // 侧边栏宽度
+  const [sidebarW, setSidebarW] = React.useState(() => getSidebarMinWidth()) // 侧边栏宽度（初值 = 最小宽度，默认 300）
   const [activePanel, setActivePanel] = React.useState('explorer') // 激活面板 id
   const [focusRequest, setFocusRequest] = React.useState(0) // 外部差异聚焦请求版本
   const kbVersion = useKeybindingsVersion() // 快捷键配置版本（tooltip 文案随键位刷新）
@@ -508,6 +509,7 @@ export function EditorView(props) {
   }, [tabs, active, sessionId])
 
   // 侧边栏状态：恢复（显隐/宽度/激活面板）；侧栏形态独立键（默认收起，不共享页签形态偏好）
+  // 宽度下限来自通用设置 sidebarMinWidth（默认 300），恢复值按其重夹
   const sidebarKey = CACHE_KEY.sidebar + (layout === 'side' ? 'side.' : '') + String(sessionId)
   React.useEffect(() => {
     if (!sessionId) return
@@ -516,11 +518,22 @@ export function EditorView(props) {
       if (raw) {
         const saved = JSON.parse(raw)
         if (typeof saved.on === 'boolean') setSidebarOn(saved.on)
-        if (typeof saved.width === 'number') setSidebarW(Math.max(180, Math.min(560, saved.width)))
+        if (typeof saved.width === 'number') setSidebarW(Math.max(getSidebarMinWidth(), Math.min(560, saved.width)))
         if (typeof saved.panel === 'string') setActivePanel(saved.panel)
       }
     } catch (e) { /* 损坏忽略 */ }
   }, [sessionId, sidebarKey])
+
+  // 侧边栏最小宽度设置变更（edrv:sidebar-min-width）→ 更新 minW 并重夹当前宽度
+  const [sidebarMinW, setSidebarMinW] = React.useState(() => getSidebarMinWidth())
+  React.useEffect(() => {
+    const onMinChange = () => {
+      setSidebarMinW(getSidebarMinWidth())
+      setSidebarW((w) => Math.max(getSidebarMinWidth(), w))
+    }
+    window.addEventListener('edrv:sidebar-min-width', onMinChange)
+    return () => window.removeEventListener('edrv:sidebar-min-width', onMinChange)
+  }, [])
 
   // 侧边栏状态持久化
   React.useEffect(() => {
@@ -1244,7 +1257,7 @@ export function EditorView(props) {
       'aria-label': '前进',
       onClick: navForward,
     }, '→'),
-    React.createElement('button', { className: 'edrv-chip-btn' + (sidebarOn ? ' edrv-chip-on' : ''), title: '切换侧边栏 (' + (chordOf('edrv.toggleSidebar') ?? 'Ctrl+B') + ')', onClick: () => setSidebarOn((v) => !v) }, '☰'),
+    React.createElement('button', { className: 'edrv-chip-btn' + (sidebarOn ? ' edrv-chip-on' : ''), title: '切换面板区 (' + (chordOf('edrv.toggleSidebar') ?? 'Ctrl+B') + ')，图标列常显', onClick: () => setSidebarOn((v) => !v) }, '☰'),
     React.createElement('button', { className: 'edrv-chip-btn', title: '刷新', onClick: reloadFile }, '⟳'),
     React.createElement(QuickOpen, { sessionId, onOpen: (p) => openFile(p, false) }))
 
@@ -1390,6 +1403,8 @@ export function EditorView(props) {
   const sidebarPanels = props.sidebarPanels
   const sidebarCtx = {
     sessionId,
+    // 当前会话工作区（sessions 快照 byId[sessionId].cwd；规则面板项目 Tab 自动匹配）
+    cwd: props.sessions?.list?.getSnapshot?.()?.byId?.[sessionId]?.cwd ?? null,
     openFile: (p) => openFile(p, false),
     openFileAt,
     activePath: active,
@@ -1432,15 +1447,18 @@ export function EditorView(props) {
   // 编辑器根节点按 composer 顶部边界动态限高，底部对话区域继续由 DSH 原生渲染。
   // 侧栏形态由面板容器给高（100%），不做 composer 几何同步。
   const editorRow = React.createElement('div', { className: 'edrv-editor-row' },
-    (sidebarOn && sidebarPanels
+    (sidebarPanels
       ? React.createElement(SidebarView, {
           registry: sidebarPanels,
           ctx: sidebarCtx,
           activePanel,
           onActive: setActivePanel,
+          visible: sidebarOn,
+          onShow: () => setSidebarOn(true),
           width: sidebarW,
           onWidth: setSidebarW,
           onHide: () => setSidebarOn(false),
+          minWidth: sidebarMinW,
         })
       : null),
     mainCol)

@@ -24,6 +24,8 @@ export const CACHE_KEY = {
   sideHint: 'edrv.side-hint-dismissed',
   /** 「性能优化」页工作区栏目展开状态（workspaceFoldCache v1，全局不按会话）。 */
   workspaceFold: 'edrv.ws-fold.v1.',
+  /** 规则面板 UI 状态（RulesPanel v1：Tab 与项目工作区选择，全局不按会话）。 */
+  rules: 'edrv.rules.v1.',
 } as const
 
 /** 按前缀拼会话键（侧边栏/编辑器等需要布局段时自行拼接后传入）。 */

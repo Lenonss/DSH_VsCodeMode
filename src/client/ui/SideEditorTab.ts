@@ -44,5 +44,6 @@ export function SideEditorTab(props) {
     sidebarPanels: props?.sidebarPanels,
     outlineSources: props?.outlineSources,
     fileMenuItems: props?.fileMenuItems,
+    sessions: props?.sessions,
   })
 }

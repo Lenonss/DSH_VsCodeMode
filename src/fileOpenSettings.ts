@@ -28,6 +28,7 @@ export interface SettingsDeps {
     object: (shape: Record<string, unknown>) => { default: (value: Record<string, unknown>) => unknown }
     string: () => { default: (value: string) => unknown }
     boolean: () => { default: (value: boolean) => unknown }
+    number: () => { default: (value: number) => unknown }
   }
 }
 
@@ -208,6 +209,7 @@ export async function installOpenSettingsSection(
   const schema = deps.z.object({
     fileOpenTool: deps.z.string().default(FILE_OPEN_DEFAULT),
     keybindings: deps.z.object(keybindingsShape(deps.z)).default({ ...KEYBINDING_DEFAULTS }),
+    sidebarMinWidth: deps.z.number().default(300),
   })
   const strategy = await runSettingsInstall(ctx, ns, schema, entry, {
     setSource: (source) => hooks.setSource(source as () => FileOpenSettings),

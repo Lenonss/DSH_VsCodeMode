@@ -19,6 +19,7 @@ function zStub() {
     object: (shape: unknown) => ({ default: (value: unknown) => ({ shape, value }) }),
     string: () => ({ default: (value: unknown) => value }),
     boolean: () => ({ default: (value: unknown) => value }),
+    number: () => ({ default: (value: unknown) => value }),
   }
 }
 

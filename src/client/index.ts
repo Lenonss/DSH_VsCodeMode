@@ -33,12 +33,14 @@ import { createAddToConversation } from './addToConversation.js'
 import { createSidebarPanelRegistry } from './sidebar/registry.js'
 import { createFilePanel } from './sidebar/panels/index.js'
 import { createSearchPanel } from './sidebar/panels/index.js'
+import { createRulesPanel } from './sidebar/panels/index.js'
 import { createTreeMenuRegistry } from './sidebar/contextMenu.js'
 import { createDefaultFileMenuItems } from './sidebar/menuItems.js'
 import { createOutlinePanel } from './outline/index.js'
 import { createOutlineSourceRegistry, registerBuiltinOutlineSources } from './outline/sources.js'
 import { createLspOutlineSource } from './outline/lspSource.js'
 import { keybindingsApply } from './keybindings.js'
+import { sidebarMinApply } from './sidebarMin.js'
 import { setupLsp, setSession } from './monaco/lsp/index.js'
 import type { CompatAdapter } from '../shared/compat.js'
 
@@ -114,6 +116,8 @@ export function apply(ctx: any): void {
   ctx.effect(() => sidebarPanels.register(createFilePanel()), 'vscode-mode: sidebar panel')
   // 搜索面板：活动栏「搜索」页签（Ctrl+Shift+F 唤起，VSCode 搜索视图形态）
   ctx.effect(() => sidebarPanels.register(createSearchPanel()), 'vscode-mode: sidebar panel search')
+  // 规则面板：活动栏「规则」页签（Codebuddy 规则管理形态：用户/项目规则 + 启用开关，host 注入生效）
+  ctx.effect(() => sidebarPanels.register(createRulesPanel()), 'vscode-mode: sidebar panel rules')
   // 文件右键菜单项注册表（对外 provide，供本插件/第三方注册；内置「在文件浏览器中打开」）
   const fileMenuItems = createTreeMenuRegistry()
   ctx.provide('edrvFileContextMenuItems', fileMenuItems)
@@ -147,12 +151,15 @@ export function apply(ctx: any): void {
     return settings.subscribe(sync)
   }, 'vscode-mode: file opener setting sync')
   // 快捷键配置同步：设置提交后立即刷新键位匹配（编辑器/QuickOpen 按事件时读取）
+  // 同一订阅里顺带同步侧边栏最小宽度（sidebarMinWidth）→ 派发 edrv:sidebar-min-width 通知编辑器重夹
   ctx.effect(() => {
     if (!settings) return undefined
     const sync = (): void => {
       const snapshot = settings.getSnapshot()
       if (snapshot.status === 'loading') return
       keybindingsApply(snapshot.value?.keybindings)
+      const minW = sidebarMinApply(snapshot.value?.sidebarMinWidth)
+      window.dispatchEvent(new CustomEvent('edrv:sidebar-min-width', { detail: { value: minW } }))
     }
     sync()
     return settings.subscribe(sync)
@@ -181,7 +188,7 @@ export function apply(ctx: any): void {
       order: 5,
       label: '文件编辑',
       inject: (sessionId: string) => ({ sessionId }),
-    }, (props: unknown) => React.createElement(EditorView, Object.assign({}, props, { layout: 'tab', sideHint: SIDEBAR_INSTALL_CMD, schedule, addToConversation, sidebarPanels, outlineSources, fileMenuItems })))
+    }, (props: unknown) => React.createElement(EditorView, Object.assign({}, props, { layout: 'tab', sideHint: SIDEBAR_INSTALL_CMD, schedule, addToConversation, sidebarPanels, outlineSources, fileMenuItems, sessions })))
   }
 
   // 侧边栏/中央页签两形态互斥切换：sideDisposer（侧边栏 Tab）与 legacyDisposer（中央页签）只保留其一。
@@ -197,7 +204,7 @@ export function apply(ctx: any): void {
       if (legacyDisposer !== null) { legacyDisposer(); legacyDisposer = null }
       sideDisposer = ctx.effect(() => installSideEditor({
         service: sideService as NonNullable<typeof sideService>,
-        renderTab: (props: Record<string, unknown>) => React.createElement(SideEditorTab, Object.assign({}, props, { schedule, addToConversation, sidebarPanels, outlineSources, fileMenuItems })),
+        renderTab: (props: Record<string, unknown>) => React.createElement(SideEditorTab, Object.assign({}, props, { schedule, addToConversation, sidebarPanels, outlineSources, fileMenuItems, sessions })),
         activeSession: () => {
           const snapshot = sessions?.list?.getSnapshot?.() as { current?: string; byId?: Record<string, { cwd?: string }> } | undefined
           const sessionId = snapshot?.current

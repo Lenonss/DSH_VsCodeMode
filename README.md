@@ -24,7 +24,14 @@
 - **Monaco 离线分发**：`assets/vendor/monaco` AMD 构建随包发布，经 `/edrv/vendor/*` 前缀路由提供，全离线可用。
 - **文件管理侧边栏**（类 VSCode 活动栏 + 面板）：编辑器内嵌活动栏 + 可拖拽调宽的面板区；首期「资源管理器」= 懒加载目录树
   （展开目录实时读取、点文件在编辑器打开、差异角标、活动文件高亮、`edrv:refresh`/手动 ⟳ 刷新、`Ctrl+B` 显隐并持久化；
-  侧栏形态默认收起以节省面板宽度）。面板通过注册表装配（`ctx.provide('edrvSidebarPanels')`），新增面板只加一条注册，不改编辑器布局。
+  侧栏形态默认收起以节省面板宽度；拖拽调宽下限 = 最小宽度（默认 300，设置 → VSCodeMode → 通用「编辑器」可调 180–560），
+  拖拽低于最小宽度自动收起）。面板通过注册表装配（`ctx.provide('edrvSidebarPanels')`），新增面板只加一条注册，不改编辑器布局。
+- **规则管理**（v0.1.49，参考 Codebuddy）：活动栏「规则」面板，管理 Cursor/Codebuddy 式 `.mdc` 规则文件——
+  「用户规则」（`~/.dsh/rules/`，全局生效）与「项目规则」（`<工作区>/.dsh/rules/`，随仓库共享）双 Tab；
+  每条规则显示文件名/相对路径/类型徽标（总是=`alwaysApply`、自动=`globs`、手动=仅索引）+ 描述 + 编辑/删除/启用开关
+  （开关只改写 frontmatter `enabled` 行，即时生效无需重启）。启用的规则经 host `systemPrompt.section`（order 400）
+  注入每次装配：用户规则全局注入，项目规则按会话工作区注入（单条 16KB/单域 64KB 截断预算；旧版 DSH 无 systemPrompt
+  服务时自动降级为纯管理 UI）。RPC：`rules.list/read/save/remove/toggle`。
 - **MCP 可视化管理**（设置 → VSCodeMode）：子 Tab「我的 MCP」（profile 全局）+「项目 MCP」（各项目根 `.mcp.json`）。
   项目级 MCP 对齐 Claude Code/Cursor：配置存于项目根目录 `.mcp.json`（`mcpServers`），随仓库共享；
   可查看各项目连接状态/工具、添加（stdio / streamable-http）、刷新、启用/禁用、删除。工具全局生效。
@@ -119,6 +126,7 @@ src/
 ├── revert.ts           Host 回滚/删除（fs + subprocess，fs.contains 边界校验）
 ├── registry.ts         Host 每工作区记录桶注册表
 ├── tree.ts             Host 目录树纯函数（normalizeRel/toTreeEntries，edrv.listDir 用，可单测）
+├── rules.ts            Host 规则管理：.mdc 解析/开关改写/注入渲染（纯函数可单测）+ IO + systemPrompt section 装配
 ├── rpc.ts              Host RPC 分发表（类型化 handler 表替代巨型 switch，含 compat）
 ├── routes.ts           Host webServer 路由（/edrv/rpc、/edrv/assets/*、/edrv/vendor/*，带冲突护栏）
 └── client/
@@ -132,6 +140,7 @@ src/
     ├── diffDock.ts     差异 dock 轮转/文案/形态纯函数（对话 dock 与 DiffBox 共用）
     ├── sidebar/        ★ 侧边栏面板系统：registry.ts（注册表，镜像 fileOpeners）+ SidebarView.ts（活动栏/面板区/拖拽调宽）
     │                   + types.ts（SidebarPanelDef/SidebarCtx）+ panels/FileExplorer.ts（文件树面板 #1）
+    │                   + panels/SearchPanel.ts（搜索面板）+ panels/RulesPanel.ts（规则面板：用户/项目规则 + 开关）
     ├── styles/editor.css  编辑区样式（tsdown CSS-inline 注入；含侧栏形态/引导条）
     └── ui/             EditorView（编排，tab/side 双形态）/ SideEditorTab（betterSidebar Tab 包装）/ QuickOpen
                         / DiffBox（chat/editor 双模式）/ ConversationDiffDock / DiffBarEmpty / DiffLauncher

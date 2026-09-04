@@ -14,6 +14,7 @@ import type {
 } from './types.js'
 import type { MpcConfig, MpcProject, MpcProjectSaveInput, MpcServer } from './mcp.js'
 import type { CompatReport, DevFormInfo } from './compat.js'
+import type { RuleInfo, RuleProject, RuleRefInput, RuleSaveInput } from './rules.js'
 import type { LspEnvInstallState, LspExtInfo, LspExtUpdate, LspHover, LspLocation, LspMarketItem, LspPosition, LspSemanticTokens, LspServerStatus, LspSymbol } from './lsp.js'
 
 /** webServer 精确路由。 */
@@ -165,6 +166,11 @@ export interface RpcRequestMap {
   'edrv.perf.configGet': {}
   'edrv.perf.configApply': {}
   'edrv.perf.configUndo': {}
+  'rules.list': {}
+  'rules.read': RuleRefInput
+  'rules.save': RuleSaveInput
+  'rules.remove': RuleRefInput
+  'rules.toggle': RuleRefInput & { enabled: boolean }
 }
 
 export type RpcMethod = keyof RpcRequestMap
@@ -231,6 +237,11 @@ export interface RpcOkMap {
   'edrv.perf.configGet': { profileDir?: string; patchPath?: string; applied: boolean; block: string; backup?: string }
   'edrv.perf.configApply': { applied: boolean; backup: string; restart: boolean }
   'edrv.perf.configUndo': { restored: boolean; error?: string; backup?: string }
+  'rules.list': { user: RuleInfo[]; projects: RuleProject[] }
+  'rules.read': { content: string }
+  'rules.save': { rule: RuleInfo }
+  'rules.remove': object
+  'rules.toggle': { rule: RuleInfo }
 }
 
 /** 统一响应：{ok:true, ...payload} 或 {ok:false, error}。 */

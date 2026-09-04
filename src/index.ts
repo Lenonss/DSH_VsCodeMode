@@ -22,6 +22,7 @@ import { createLspManager } from './lsp/manager.js'
 import { createLspRpc } from './lsp/rpc.js'
 import { installLspSettingsSection } from './lsp/settings.js'
 import { disposeAllServers } from './lsp/transport.js'
+import { installRulesSection } from './rules.js'
 import type { RpcHandlerMap } from './shared/rpc.js'
 import type { Registry } from './registry.js'
 import type { Ctx } from './store.js'
@@ -45,6 +46,9 @@ export function apply(ctx: Ctx, config?: unknown): void {
   const warnings: string[] = []
   setupOpenSettings(ctx, config, () => {})
   void installLspSettingsSection(ctx, {})
+  /** 规则注入 section（~/.dsh/rules 与 <工作区>/.dsh/rules；旧版 DSH 无 systemPrompt 时静默降级）。 */
+  const rulesInstalled = installRulesSection(ctx)
+  if (!rulesInstalled) ctx.logger?.warn?.('[' + name + '] 未检测到 systemPrompt 服务，规则仅可管理不注入')
   /** LSP RPC 与会话清理（一次性创建，tracker 状态跨请求保留）。 */
   const lspRpc = createLspRpc({ ctx, pluginConfig: config, manager: lspManager })
   const lspHandlers: Partial<RpcHandlerMap> = lspRpc.handlers
@@ -77,7 +81,7 @@ export function apply(ctx: Ctx, config?: unknown): void {
     disposeAllServers()
   })
 
-  ctx.logger?.info?.('[' + name + '] 编辑差异审查已装配（/edrv/rpc 路由就绪，项目 MCP 隔离已启用，语言服务器 LSP 已接入）')
+  ctx.logger?.info?.('[' + name + '] 编辑差异审查已装配（/edrv/rpc 路由就绪，项目 MCP 隔离已启用，语言服务器 LSP 已接入，规则注入' + (rulesInstalled ? '已接入' : '未接入') + '）')
 }
 
 /**

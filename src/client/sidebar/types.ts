@@ -10,6 +10,8 @@ import type { TreeMenuRegistry } from './contextMenu.js'
 /** 面板可用的共享上下文（由 SidebarView 从 EditorView 注入，面板不直碰其内部）。 */
 export interface SidebarCtx {
   sessionId?: string
+  /** 当前会话工作区 cwd（来自 sessions 快照；规则面板项目 Tab 自动匹配用）。 */
+  cwd?: string | null
   openFile: (path: string) => void
   /** 打开文件并跳转到指定行/列（搜索面板命中跳转；缺省仅打开）。 */
   openFileAt?: (path: string, line?: number, column?: number) => void

@@ -28,6 +28,7 @@ import { newSearcher } from './search/orchestrator.js'
 import type { ContentSearcher } from './search/content.js'
 import { newContentSearcher } from './search/content.js'
 import { restoreFile, revertCall, revertHunk } from './revert.js'
+import { rulesList, rulesRead, rulesRemove, rulesSave, rulesToggle } from './rules.js'
 import { listMcp, refreshMcp, removeMcp, saveMcp, toggleMcp } from './mcp.js'
 import { listProjects, projectRefresh, projectRemove, projectSave, projectToggle } from './mcpProject.js'
 import { normalizeFileOpenTool, FILE_OPEN_DEFAULT, FILE_OPEN_SETTINGS_NS } from './fileOpenSettings.js'
@@ -659,6 +660,42 @@ export function buildHandlers(
         return { ok: true, restored: true }
       } catch (error) {
         return { ok: false, error: '撤销压缩配置失败：' + String(error) }
+      }
+    },
+    'rules.list': async () => {
+      try {
+        return { ok: true, ...(await rulesList(ctx)) }
+      } catch (error) {
+        return { ok: false, error: '读取规则失败：' + String(error) }
+      }
+    },
+    'rules.read': async (args) => {
+      try {
+        return { ok: true, content: await rulesRead(ctx, args) }
+      } catch (error) {
+        return { ok: false, error: '读取规则失败：' + String(error) }
+      }
+    },
+    'rules.save': async (args) => {
+      try {
+        return { ok: true, rule: await rulesSave(ctx, args) }
+      } catch (error) {
+        return { ok: false, error: '保存规则失败：' + String(error) }
+      }
+    },
+    'rules.remove': async (args) => {
+      try {
+        await rulesRemove(ctx, args)
+        return { ok: true }
+      } catch (error) {
+        return { ok: false, error: '删除规则失败：' + String(error) }
+      }
+    },
+    'rules.toggle': async (args) => {
+      try {
+        return { ok: true, rule: await rulesToggle(ctx, args, args.enabled === true) }
+      } catch (error) {
+        return { ok: false, error: '切换规则失败：' + String(error) }
       }
     },
   }

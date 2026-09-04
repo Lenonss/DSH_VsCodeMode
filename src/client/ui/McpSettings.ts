@@ -10,6 +10,7 @@ import type { MpcProject, MpcServer } from '../../shared/mcp.js'
 import '../styles/mcp.css'
 import { availableOpeners, AUTO_OPEN_TOOL } from '../fileOpeners.js'
 import { SettingsContext } from '../settingsContext.js'
+import { normalizeSidebarMinWidth, SIDEBAR_MIN_DEFAULT } from '../sidebarMin.js'
 import { KeybindingsPanel } from './KeybindingsPanel.js'
 import { LspSettings } from './LspSettings.js'
 import { PerfSettings } from './PerfSettings.js'
@@ -122,7 +123,7 @@ function ProjectGroup({ project, busy, onAdd, onRefresh, onToggle, onRemove }) {
   return React.createElement('section', { className: 'vsm-project' }, head, body)
 }
 
-/** 通用设置：选择当前对话文件链接的打开器 + 开发形态开关。 */
+/** 通用设置：选择当前对话文件链接的打开器 + 开发形态开关 + 编辑器布局（侧边栏最小宽度）。 */
 function GeneralSettings({ registry }) {
   const [tool, setTool] = React.useState(AUTO_OPEN_TOOL)
   const [busy, setBusy] = React.useState(false)
@@ -130,6 +131,8 @@ function GeneralSettings({ registry }) {
   const [devForm, setDevForm] = React.useState(null)
   const [devBusy, setDevBusy] = React.useState(false)
   const [devMessage, setDevMessage] = React.useState('')
+  const [minW, setMinW] = React.useState(SIDEBAR_MIN_DEFAULT)
+  const [minDraft, setMinDraft] = React.useState(null) // 输入草稿（null=跟随已保存值；blur/Enter 提交）
   const settings = React.useContext(SettingsContext)
   const snapshot = settings?.getSnapshot?.()
   const loading = !snapshot || snapshot.status === 'loading'
@@ -137,8 +140,10 @@ function GeneralSettings({ registry }) {
   const notReady = snapshot?.status !== 'ready'
   React.useEffect(() => {
     const onChange = () => {
-      const next = settings?.getSnapshot?.().value?.fileOpenTool
+      const snap = settings?.getSnapshot?.()
+      const next = snap?.value?.fileOpenTool
       if (typeof next === 'string') setTool(next)
+      setMinW(normalizeSidebarMinWidth(snap?.value?.sidebarMinWidth))
     }
     onChange()
     return settings?.subscribe?.(onChange)
@@ -152,6 +157,19 @@ function GeneralSettings({ registry }) {
     setTool(value); setBusy(true); setError('')
     if (!settings?.set) { setError('设置服务不可用'); setBusy(false); return }
     settings.set('fileOpenTool', value).catch((e) => setError(String(e))).finally(() => setBusy(false))
+  }
+  /** 提交侧边栏最小宽度（归一化夹取 180–560 后持久化）。 */
+  const saveMinW = (raw) => {
+    const next = normalizeSidebarMinWidth(raw)
+    setMinW(next); setBusy(true); setError('')
+    if (!settings?.set) { setError('设置服务不可用'); setBusy(false); return }
+    settings.set('sidebarMinWidth', next).catch((e) => setError(String(e))).finally(() => setBusy(false))
+  }
+  /** 结束输入（blur/Enter）时提交草稿。 */
+  const commitMinW = () => {
+    if (minDraft === null) return
+    setMinDraft(null)
+    saveMinW(minDraft)
   }
   const closeDevForm = () => {
     if (!window.confirm('关闭开发形态：插件将切换为正式版安装（版本依赖 + 删除工作区链接），pnpm 装配后需重启 DSH 生效。确认关闭？')) return
@@ -182,6 +200,23 @@ function GeneralSettings({ registry }) {
       React.createElement('div', { className: 'vsm-panel-body' },
         React.createElement('label', { className: 'vsm-general-row' }, React.createElement('span', null, '文件链接使用工具'), React.createElement('select', { value: currentOption, disabled: loading || unavailable || notReady || busy || snapshot?.writable === false, onChange: (event) => save(event.target.value) }, options.map((item) => React.createElement('option', { key: item.id, value: item.id }, item.label))), loading && React.createElement('small', null, '读取中…')),
         devFormRow,
+      ),
+    ),
+    React.createElement('section', { className: 'vsm-panel' },
+      React.createElement('h3', { className: 'vsm-panel-title' }, '编辑器'),
+      React.createElement('div', { className: 'vsm-panel-body' },
+        React.createElement('label', { className: 'vsm-general-row' },
+          React.createElement('span', null, '侧边栏最小宽度'),
+          React.createElement('input', {
+            type: 'number', min: 180, max: 560, step: 10,
+            value: minDraft ?? minW,
+            disabled: loading || unavailable || notReady || busy || snapshot?.writable === false,
+            title: '180–560 px；拖拽侧边栏低于该宽度时自动隐藏',
+            onChange: (event) => setMinDraft(event.target.value),
+            onBlur: commitMinW,
+            onKeyDown: (event) => { if (event.key === 'Enter') commitMinW() },
+          }),
+          React.createElement('small', null, '180–560 px；拖拽低于该宽度自动隐藏')),
       ),
     ),
   )
