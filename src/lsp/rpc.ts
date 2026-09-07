@@ -1,12 +1,14 @@
 /**
  * dsh-vscode-mode host — edrv.lsp.* RPC handlers。
  * 文档跟踪（openDocs 集合 + root|lang 引用计数）→ 懒启动服务器、用完释放。
- * 作者 ddj 2026-08-27
+ * LSP 配置降级为配置值：插件组合配置 + 会话内运行时覆盖层（原 settings section
+ * 命名空间不合法，永久不可注册，见 lsp/config.ts 头注释）。
+ * 作者 ddj 2026-08-27 / 2026-09-02
  */
 import type { Ctx } from '../store.js'
 import { searchRoot } from '../search/ripgrep.js'
 import { sessionOf, cwdOf } from '../registry.js'
-import { resolveProviderSpec, langOfPath, configFromPlugin, configFromSettings, LSP_LANGUAGES, LSP_SETTINGS_NS, type LspConfig } from './config.js'
+import { resolveProviderSpec, langOfPath, configFromPlugin, mergeConfig, sanitizeLang, LSP_LANGUAGES, type LspConfig, type LspLangConfig } from './config.js'
 import { clearProviderCache, candidatesFor } from './providers.js'
 import { onRuntimeProvisioned, envInstallStates } from './dotnetProvision.js'
 import { envRequirementsFor, installRequirement } from './envRequirements.js'
@@ -116,6 +118,8 @@ function createDocTracker() {
 export function createLspRpc(deps: LspRpcDeps): { handlers: Partial<RpcHandlerMap>; disposeSession: (sessionId: string) => void } {
   const { ctx, pluginConfig, manager } = deps
   const tracker = createDocTracker()
+  /** 运行时覆盖层：设置页保存值（内存态，重启回落组合配置值；每 apply 新建，插件重载自动复位）。 */
+  const runtimeConfig: LspConfig = {}
 
   // 运行时自动配置成功：清 provider 缓存并重置 C# 服务器，下一次文档同步即用新运行时重启
   onRuntimeProvisioned(() => {
@@ -139,7 +143,7 @@ export function createLspRpc(deps: LspRpcDeps): { handlers: Partial<RpcHandlerMa
   }
 
   const acquireServer = (root: string, lang: string) =>
-    manager.acquire(root, lang, (languageId: string) => resolveProviderSpec(ctx, pluginConfig, languageId))
+    manager.acquire(root, lang, (languageId: string) => resolveProviderSpec(pluginConfig, languageId, runtimeConfig))
 
   const serverOf = (root: string, lang: string) =>
     manager.peek(root, lang)
@@ -149,7 +153,7 @@ export function createLspRpc(deps: LspRpcDeps): { handlers: Partial<RpcHandlerMa
 
   /** 当前 provider 检测结论 → 设置页 idle 状态（不启动 server）；附带未满足的环境需求与候选服务器。 */
   const detectedStatus = (languageId: string, root?: string): LspServerStatus => {
-    const spec = resolveProviderSpec(ctx, pluginConfig, languageId)
+    const spec = resolveProviderSpec(pluginConfig, languageId, runtimeConfig)
     const missingEnv = envRequirementsFor(languageId, dshHome())
     const candidates = candidatesFor(languageId, spec)
     return {
@@ -207,10 +211,8 @@ export function createLspRpc(deps: LspRpcDeps): { handlers: Partial<RpcHandlerMa
     },
 
     'edrv.lsp.configGet': async () => {
-      const settings = configFromSettings(ctx)
-      const plugin = configFromPlugin(pluginConfig)
-      const merged: LspConfig = { ...plugin }
-      for (const lang of Object.keys(settings)) merged[lang] = { ...plugin[lang], ...settings[lang] }
+      // 配置值降级：插件组合配置 + 运行时覆盖层（原 settings section 已废弃）
+      const merged = mergeConfig(configFromPlugin(pluginConfig), runtimeConfig)
       return { ok: true, config: merged as unknown as Record<string, unknown> }
     },
 
@@ -219,21 +221,16 @@ export function createLspRpc(deps: LspRpcDeps): { handlers: Partial<RpcHandlerMa
       if (!lang || !(LSP_LANGUAGES as readonly string[]).includes(lang)) {
         return { ok: false, error: '不支持的语言：' + lang }
       }
-      const current = configFromSettings(ctx)
-      const next: LspConfig = { ...current, [lang]: { ...(current[lang] ?? {}) } }
-      const target = next[lang]!
+      // 覆盖层基于当前运行时值增量修改；清空字段剥离 undefined → 回落组合配置
+      const target: LspLangConfig = { ...(runtimeConfig[lang] ?? {}) }
       if (args.enabled !== undefined) target.enabled = args.enabled
       if (args.command !== undefined) target.command = args.command || undefined
       if (args.path !== undefined) target.path = args.path || undefined
+      runtimeConfig[lang] = sanitizeLang(target) ?? {}
       try {
-        const settings = ctx.get('settings')
-        if (!settings?.update) return { ok: false, error: '设置服务不可用' }
-        await settings.update(LSP_SETTINGS_NS, { [lang]: target })
         // 保存/切换后立即重新检测：清缓存 + 重置旧 server，旧状态不残留
         const servers = await redetectLanguage(lang)
-        const descriptor = settings.describe?.({ redactSecrets: true })?.find((item: { ns?: string }) => item.ns === LSP_SETTINGS_NS)
-        const stored = descriptor?.value as Record<string, unknown> | undefined
-        const merged: LspConfig = { ...configFromPlugin(pluginConfig), ...(stored as LspConfig) }
+        const merged = mergeConfig(configFromPlugin(pluginConfig), runtimeConfig)
         return { ok: true, config: merged as unknown as Record<string, unknown>, servers }
       } catch (error) {
         return { ok: false, error: '配置保存失败：' + String(error) }

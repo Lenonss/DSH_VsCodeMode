@@ -15,8 +15,7 @@ import { createLspManager } from '../src/lsp/manager.js'
 import { createLspClient, type LspClientTransport } from '../src/lsp/client.js'
 import { parseFrame } from '../src/lsp/jsonrpc.js'
 import { toEdrvUri, targetOpenPath } from '../src/client/monaco/lsp/lspClient.js'
-import { installLspSettingsSection } from '../src/lsp/settings.js'
-import { LSP_SETTINGS_NS } from '../src/lsp/config.js'
+import { resolveProviderSpec, mergeConfig } from '../src/lsp/config.js'
 import { parseOutline, SK } from '../src/client/outline/parse.js'
 import { deriveDefinitionFromLocations } from '../src/lsp/derive.js'
 
@@ -272,26 +271,50 @@ describe('lsp/client 服务器请求分发', () => {
   })
 })
 
-describe('lsp/settings 设置 section 安装（schemastery 兼容回归）', () => {
-  it('构造 schemastery schema 不抛错（无 .optional 依赖）并注册 section', async () => {
-    const registered: string[] = []
-    const mockCtx = {
-      inject(_deps: string[], cb: (sctx: unknown) => void) {
-        const sctx = {
-          settings: {
-            register(ns: string, _schema: unknown, opts: { base?: unknown }) {
-              registered.push(ns)
-              return { get: () => opts.base, watch: (_cb: unknown) => {} }
-            },
-          },
-          effect: (_cb: unknown) => () => {},
-        }
-        cb(sctx)
-      },
+describe('lsp/config 运行时覆盖（settings section 降级为配置值）', () => {
+  /** 建临时目录并写入两个假服务器文件（override 用 / 组合配置用），返回两条路径。 */
+  const fakeServers = (): { overridePath: string; pluginPath: string; cleanup: () => void } => {
+    const dir = mkdtempSync(join(tmpdir(), 'edrv-lsp-cfg-'))
+    const overridePath = join(dir, 'override-server.exe')
+    const pluginPath = join(dir, 'plugin-server.exe')
+    writeFileSync(overridePath, '')
+    writeFileSync(pluginPath, '')
+    return { overridePath, pluginPath, cleanup: () => rmSync(dir, { recursive: true, force: true }) }
+  }
+
+  it('override enabled:false 禁用该语言（优先于组合配置）', () => {
+    const spec = resolveProviderSpec({ languageServers: { lua: { path: 'whatever' } } }, 'lua', { lua: { enabled: false } })
+    expect(spec.kind).toBe('none')
+    expect(spec.ready).toBe(false)
+    expect(spec.reason).toContain('已在设置中禁用')
+  })
+
+  it('override path 优先于插件组合配置（manual 解析取覆盖值）', () => {
+    const { overridePath, pluginPath, cleanup } = fakeServers()
+    try {
+      const spec = resolveProviderSpec({ languageServers: { lua: { path: pluginPath } } }, 'lua', { lua: { path: overridePath } })
+      expect(spec.kind).toBe('manual')
+      expect(spec.argv).toEqual([overridePath])
+    } finally {
+      cleanup()
     }
-    const ok = await installLspSettingsSection(mockCtx as never, {})
-    expect(ok).toBe(true)
-    expect(registered).toContain(LSP_SETTINGS_NS)
+  })
+
+  it('无 override 时回落插件组合配置', () => {
+    const { pluginPath, cleanup } = fakeServers()
+    try {
+      const spec = resolveProviderSpec({ languageServers: { lua: { path: pluginPath } } }, 'lua')
+      expect(spec.kind).toBe('manual')
+      expect(spec.argv).toEqual([pluginPath])
+    } finally {
+      cleanup()
+    }
+  })
+
+  it('mergeConfig：覆盖层字段级合并，空覆盖不改变组合配置', () => {
+    const plugin = { lua: { enabled: true, command: 'a' } }
+    expect(mergeConfig(plugin, { lua: { command: 'b' } })).toEqual({ lua: { enabled: true, command: 'b' } })
+    expect(mergeConfig(plugin, {})).toEqual(plugin)
   })
 })
 

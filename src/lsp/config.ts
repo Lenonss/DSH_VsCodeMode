@@ -1,9 +1,11 @@
 /**
  * dsh-vscode-mode host — LSP 配置读取与 provider 解析装配。
- * 配置来源优先级：settings 持久化（ns dsh-vscode-mode.languageServers）> 插件组合配置 > 默认。
- * 作者 ddj 2026-08-27
+ * 配置来源优先级：运行时覆盖（设置页保存，重启失效）> 插件组合配置 > 默认。
+ * 原 settings section（ns dsh-vscode-mode.languageServers）命名空间不合法
+ * （DSH settings 仅允许 /^[a-z][a-z0-9-]*$/，点号命名空间永久不可注册），
+ * 已降级为配置值（插件组合配置 + 会话内运行时覆盖），不再尝试 settings 安装。
+ * 作者 ddj 2026-08-27 / 2026-09-02
  */
-import type { Ctx } from '../store.js'
 import { PROVIDER_RESOLVERS, type LspProviderSpec } from './providers.js'
 import { provisionRuntime } from './dotnetProvision.js'
 
@@ -21,10 +23,10 @@ export interface LspConfig {
   [languageId: string]: LspLangConfig | undefined
 }
 
-export const LSP_SETTINGS_NS = 'dsh-vscode-mode.languageServers'
 export const LSP_LANGUAGES = ['lua', 'csharp'] as const
 
-function sanitizeLang(raw: unknown): LspLangConfig | undefined {
+/** 清洗单语言配置：仅保留合法字段并剥离 undefined（稀疏覆盖语义，清空字段即回落组合配置）。 */
+export function sanitizeLang(raw: unknown): LspLangConfig | undefined {
   if (!raw || typeof raw !== 'object') return undefined
   const obj = raw as Record<string, unknown>
   const out: LspLangConfig = {}
@@ -46,25 +48,7 @@ export function configFromPlugin(config: unknown): LspConfig {
   return out
 }
 
-/** 从 settings 描述符读取（无 settings 服务/无该 section → {}）。 */
-export function configFromSettings(ctx: Ctx): LspConfig {
-  try {
-    const settings = ctx.get('settings')
-    const descriptor = settings?.describe?.({ redactSecrets: true })?.find((item: { ns?: string }) => item.ns === LSP_SETTINGS_NS)
-    const value = descriptor?.value
-    if (!value || typeof value !== 'object') return {}
-    const out: LspConfig = {}
-    for (const lang of LSP_LANGUAGES) {
-      const v = sanitizeLang((value as Record<string, unknown>)[lang])
-      if (v) out[lang] = v
-    }
-    return out
-  } catch (error) {
-    return {}
-  }
-}
-
-/** 合并配置：settings 覆盖插件配置。 */
+/** 合并配置：上层（运行时覆盖/settings）覆盖插件组合配置。 */
 export function mergeConfig(a: LspConfig, b: LspConfig): LspConfig {
   const out: LspConfig = { ...a }
   for (const lang of LSP_LANGUAGES) {
@@ -77,17 +61,17 @@ export function mergeConfig(a: LspConfig, b: LspConfig): LspConfig {
 }
 
 /**
- * 解析某语言的 provider spec（合并配置后）。
- * @author ddj 2026年08月27号
- * @param ctx DSH 上下文
+ * 解析某语言的 provider spec（插件组合配置 + 运行时覆盖层合并后）。
+ * @author ddj 2026年08月27号 / 2026年09月02号
  * @param pluginConfig 插件组合配置
  * @param languageId 语言 id
+ * @param override 运行时覆盖层（设置页保存值，重启失效；缺省为空）
  * @returns provider 规格
  */
-export function resolveProviderSpec(ctx: Ctx, pluginConfig: unknown, languageId: string): LspProviderSpec {
+export function resolveProviderSpec(pluginConfig: unknown, languageId: string, override?: LspConfig): LspProviderSpec {
   const resolver = PROVIDER_RESOLVERS[languageId]
   if (!resolver) return { languageId, kind: 'none', argv: [], ready: false, reason: '不支持的语言：' + languageId }
-  const merged = mergeConfig(configFromPlugin(pluginConfig), configFromSettings(ctx))
+  const merged = mergeConfig(configFromPlugin(pluginConfig), override ?? {})
   const lang = merged[languageId]
   if (lang && lang.enabled === false) {
     return { languageId, kind: 'none', argv: [], ready: false, reason: '已在设置中禁用' }

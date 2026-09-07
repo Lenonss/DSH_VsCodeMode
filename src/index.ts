@@ -20,7 +20,6 @@ import { sweepTreeCache } from './paths.js'
 import { PLUGIN_NAME, buildReport } from './compat.js'
 import { createLspManager } from './lsp/manager.js'
 import { createLspRpc } from './lsp/rpc.js'
-import { installLspSettingsSection } from './lsp/settings.js'
 import { disposeAllServers } from './lsp/transport.js'
 import { installRulesSection } from './rules.js'
 import type { RpcHandlerMap } from './shared/rpc.js'
@@ -45,7 +44,7 @@ export function apply(ctx: Ctx, config?: unknown): void {
   /** 兼容性警告收集（route 护栏等写入，启动日志一并输出）。 */
   const warnings: string[] = []
   setupOpenSettings(ctx, config, () => {})
-  void installLspSettingsSection(ctx, {})
+  /** LSP 配置为配置值模式：插件组合配置 + 会话内运行时覆盖（原 settings section 命名空间不合法，见 lsp/config.ts）。 */
   /** 规则注入 section（~/.dsh/rules 与 <工作区>/.dsh/rules；旧版 DSH 无 systemPrompt 时静默降级）。 */
   const rulesInstalled = installRulesSection(ctx)
   if (!rulesInstalled) ctx.logger?.warn?.('[' + name + '] 未检测到 systemPrompt 服务，规则仅可管理不注入')
