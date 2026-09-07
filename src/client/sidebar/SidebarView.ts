@@ -125,7 +125,8 @@ export function SidebarView(props) {
 
   return React.createElement('div', {
     className: 'edrv-sidebar' + (visible ? '' : ' edrv-sidebar-rail-only'),
-    style: { width: visible ? width : RAIL_ONLY_W + SEAM_W },
+    // maxWidth 兜底：持久化宽度超过容器可用空间时也不允许布局宽溢出（配合 flex-shrink:1 收缩）
+    style: { width: visible ? width : RAIL_ONLY_W + SEAM_W, maxWidth: '100%' },
   },
     rail,
     visible

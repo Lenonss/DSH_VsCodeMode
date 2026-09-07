@@ -26,10 +26,13 @@
   （展开目录实时读取、点文件在编辑器打开、差异角标、活动文件高亮、`edrv:refresh`/手动 ⟳ 刷新、`Ctrl+B` 显隐并持久化；
   侧栏形态默认收起以节省面板宽度；拖拽调宽下限 = 最小宽度（默认 300，设置 → VSCodeMode → 通用「编辑器」可调 180–560），
   拖拽低于最小宽度自动收起）。面板通过注册表装配（`ctx.provide('edrvSidebarPanels')`），新增面板只加一条注册，不改编辑器布局。
-- **规则管理**（v0.1.49，参考 Codebuddy）：活动栏「规则」面板，管理 Cursor/Codebuddy 式 `.mdc` 规则文件——
+- **规则管理**（v0.1.49 初版 / v0.1.50 交互优化，参考 Codebuddy）：活动栏「规则」面板，管理 Cursor/Codebuddy 式 `.mdc` 规则文件——
   「用户规则」（`~/.dsh/rules/`，全局生效）与「项目规则」（`<工作区>/.dsh/rules/`，随仓库共享）双 Tab；
-  每条规则显示文件名/相对路径/类型徽标（总是=`alwaysApply`、自动=`globs`、手动=仅索引）+ 描述 + 编辑/删除/启用开关
-  （开关只改写 frontmatter `enabled` 行，即时生效无需重启）。启用的规则经 host `systemPrompt.section`（order 400）
+  每条规则显示文件名/相对路径，第二行类型徽标（总是=`alwaysApply`、自动=`globs`、手动=仅索引）与描述，
+  右侧常驻 编辑/删除 图标与滑动启用开关（行 hover 高亮；开关只改写 frontmatter `enabled` 行，即时生效无需重启）；
+  描述随面板宽度自适应截断（保底 8 字），面板宽 < 420px 自动隐藏路径提示。
+  新建/编辑提供面包屑头部 + 规则类型下拉（总是/自动/手动）与 描述/globs 控件，与原始 `.mdc` 文本域双向同步
+  （控件改写 frontmatter，文本域回读控件；`enabled` 与其余键原样保留）。启用的规则经 host `systemPrompt.section`（order 400）
   注入每次装配：用户规则全局注入，项目规则按会话工作区注入（单条 16KB/单域 64KB 截断预算；旧版 DSH 无 systemPrompt
   服务时自动降级为纯管理 UI）。RPC：`rules.list/read/save/remove/toggle`。
 - **MCP 可视化管理**（设置 → VSCodeMode）：子 Tab「我的 MCP」（profile 全局）+「项目 MCP」（各项目根 `.mcp.json`）。
