@@ -12,6 +12,7 @@ import { dirname, join, sep } from 'node:path'
 import { isAbsolute } from 'node:path'
 import { extensionsRoot } from './extmgr.js'
 import { dshHome, lspSpecCacheFile } from '../paths.js'
+import type { LspCandidate } from '../shared/lsp.js'
 
 /** provider 来源标记（与 shared/lsp.ts 的 status.source 一致）。 */
 export type LspProviderKind = 'extension' | 'discover' | 'manual' | 'none'
@@ -237,26 +238,33 @@ export function candidateEmmyLua(home = dshHome()): { path: string; version?: st
   return candidates[0] ?? null
 }
 
-/** LuaLS 自动发现候选（VSCode 扩展目录 + extmgr 目录下 sumneko.lua-* 的 server/bin 可执行）。 */
-export function candidateLuaServers(home = dshHome()): string[] {
+/**
+ * LuaLS 自动发现候选（VSCode 扩展目录 + extmgr 目录下 sumneko.lua-* 的 server/bin 可执行）。
+ * 多版本并存时按清单版本降序、路径升序排序（与 EmmyLua/DotRush 发现的排序策略一致）。
+ * @author ddj 2026年09月03号
+ * @param home DSH home（缺省真实；测试可注入临时目录）
+ * @returns 排序后的候选列表（首个为建议选用者）
+ */
+export function candidateLuaServers(home = dshHome()): { path: string; version?: string }[] {
   const plat = platformServerDir()
   const suffix = exeSuffix()
-  const out: string[] = []
+  const out: { path: string; version?: string }[] = []
   for (const dir of vscodeExtensionsDirs(home)) {
     for (const extDir of listMatchingDirs(dir, 'sumneko.lua-')) {
       const binDir = join(extDir, 'server', 'bin')
       const binName = 'lua-language-server' + suffix
       // 新布局（3.x 平台变体 vsix）：server/bin/xxx.exe；旧布局：server/bin/<平台>/xxx.exe
       const bin = existsSync(join(binDir, binName)) ? join(binDir, binName) : join(binDir, plat, binName)
-      if (existsSync(bin) && !out.includes(bin)) out.push(bin)
+      if (existsSync(bin) && !out.some((c) => c.path === bin)) out.push({ path: bin, version: manifestVersionOf(extDir) })
     }
   }
-  return out
+  return out.sort((a, b) => (b.version ?? '').localeCompare(a.version ?? '', undefined, { numeric: true }) || a.path.localeCompare(b.path))
 }
 
-/** C# 服务器发现结果（ms-Roslyn / DotRush / OmniSharp + 系统 dotnet）。 */
+/** C# 服务器发现结果（ms-Roslyn / DotRush / OmniSharp + 系统 dotnet；各取清单版本最高者）。 */
 export interface CSharpCandidates {
   roslynDll?: string
+  roslynVersion?: string
   dotrushDll?: string
   dotrushVersion?: string
   omnisharpExe?: string
@@ -266,31 +274,44 @@ export interface CSharpCandidates {
 /**
  * C# 自动发现候选：ms-dotnettools.csharp 的 Roslyn dll（需 dotnet）/ OmniSharp 可执行，
  * 以及 DotRush 扩展自带服务器（extension/bin/LanguageServer/DotRush.dll，需对应 .NET 运行时）。
+ * 同类多版本并存时取清单版本最高者（与 EmmyLua/DotRush 发现的排序策略一致）。
  * @author ddj 2026年09月03号
  * @param home DSH home（缺省真实；测试可注入临时目录）
  * @returns 发现结果
  */
 export function candidateCSharpServers(home = dshHome()): CSharpCandidates {
   const out: CSharpCandidates = {}
-  const dotrushHits: { dll: string; version?: string }[] = []
+  /** 命中收集 → 清单版本降序取最高（平级按路径稳定排序）。 */
+  const bestOf = (hits: { entry: string; version?: string }[]): { entry: string; version?: string } | null =>
+    hits.sort((a, b) => (b.version ?? '').localeCompare(a.version ?? '', undefined, { numeric: true }) || a.entry.localeCompare(b.entry))[0] ?? null
+  const roslynHits: { entry: string; version?: string }[] = []
+  const omniHits: { entry: string; version?: string }[] = []
+  const dotrushHits: { entry: string; version?: string }[] = []
   for (const dir of vscodeExtensionsDirs(home)) {
     for (const extDir of listMatchingDirs(dir, 'ms-dotnettools.csharp-')) {
+      const version = manifestVersionOf(extDir)
       const roslyn = join(extDir, '.roslyn', 'Microsoft.CodeAnalysis.LanguageServer.dll')
-      if (!out.roslynDll && existsSync(roslyn)) out.roslynDll = roslyn
+      if (existsSync(roslyn)) roslynHits.push({ entry: roslyn, version })
       const omni = join(extDir, '.omnisharp', 'OmniSharp' + exeSuffix())
-      if (!out.omnisharpExe && existsSync(omni)) out.omnisharpExe = omni
+      if (existsSync(omni)) omniHits.push({ entry: omni, version })
     }
     for (const extDir of listMatchingDirs(dir, 'nromanov.dotrush-')) {
       const dll = join(extDir, 'extension', 'bin', 'LanguageServer', 'DotRush.dll')
       if (!existsSync(dll)) continue
-      dotrushHits.push({ dll, version: manifestVersionOf(extDir) })
+      dotrushHits.push({ entry: dll, version: manifestVersionOf(extDir) })
     }
   }
-  // 多版本并存时取清单版本最高者（与 EmmyLua 发现的排序策略一致）
-  const best = dotrushHits.sort((a, b) => (b.version ?? '').localeCompare(a.version ?? '', undefined, { numeric: true }) || a.dll.localeCompare(b.dll))[0]
-  if (best) {
-    out.dotrushDll = best.dll
-    out.dotrushVersion = best.version
+  const roslynBest = bestOf(roslynHits)
+  if (roslynBest) {
+    out.roslynDll = roslynBest.entry
+    out.roslynVersion = roslynBest.version
+  }
+  const omniBest = bestOf(omniHits)
+  if (omniBest) out.omnisharpExe = omniBest.entry
+  const dotrushBest = bestOf(dotrushHits)
+  if (dotrushBest) {
+    out.dotrushDll = dotrushBest.entry
+    out.dotrushVersion = dotrushBest.version
   }
   const dotnet = findDotnet()
   if (dotnet) out.dotnet = dotnet
@@ -367,7 +388,8 @@ export function resolveLuaProvider(manual?: { command?: string; path?: string },
     const emmy = candidateEmmyLua(h)
     if (emmy) return { ...base, kind: 'extension', argv: [emmy.path], ready: true, version: emmy.version, providerName: 'EmmyLua' }
     const candidates = candidateLuaServers(h)
-    if (candidates.length) return { ...base, kind: 'discover', argv: [candidates[0]], cwd: undefined, ready: true }
+    const best = candidates[0]
+    if (best) return { ...base, kind: 'discover', argv: [best.path], cwd: undefined, ready: true, version: best.version, providerName: 'LuaLS' }
     const inPath = findInPath('lua-language-server' + exeSuffix())
     if (inPath) return { ...base, kind: 'discover', argv: [inPath], ready: true }
     return { ...base, kind: 'none', argv: [], ready: false, reason: manualResolved.reason ?? '未发现 lua-language-server（可安装 LuaLS 或手动指定路径）' }
@@ -427,6 +449,44 @@ export type ProviderResolver = (manual?: { command?: string; path?: string }) =>
 export const PROVIDER_RESOLVERS: Record<string, ProviderResolver> = {
   lua: resolveLuaProvider,
   csharp: resolveCSharpProvider,
+}
+
+/**
+ * 汇总某语言当前检测到的候选服务器（每类服务器一条、取该类最高版本；设置页展示用）。
+ * chosen 以候选路径命中 spec.argv 判定；未选用（kind=none/manual 不匹配）时不标记。
+ * @author ddj 2026年09月03号
+ * @param languageId 语言 id
+ * @param spec 已解析的 provider 规格
+ * @param home DSH home（缺省真实；测试可注入临时目录）
+ * @returns 候选列表（不支持的语言/检测异常返回空）
+ */
+export function candidatesFor(languageId: string, spec: LspProviderSpec, home = dshHome()): LspCandidate[] {
+  /** 候选路径命中 spec.argv 时补 chosen 标记。 */
+  const markChosen = (candidate: LspCandidate): LspCandidate =>
+    spec.ready && candidate.path && spec.argv.includes(candidate.path) ? { ...candidate, chosen: true } : candidate
+  try {
+    if (languageId === 'lua') {
+      const out: LspCandidate[] = []
+      const emmy = candidateEmmyLua(home)
+      if (emmy) out.push(markChosen({ name: 'EmmyLua', version: emmy.version, path: emmy.path }))
+      const lua = candidateLuaServers(home)[0]
+      if (lua) out.push(markChosen({ name: 'LuaLS（sumneko.lua）', version: lua.version, path: lua.path }))
+      const inPath = findInPath('lua-language-server' + exeSuffix())
+      if (inPath) out.push(markChosen({ name: 'lua-language-server（PATH）', path: inPath }))
+      return out
+    }
+    if (languageId === 'csharp') {
+      const out: LspCandidate[] = []
+      const found = candidateCSharpServers(home)
+      if (found.roslynDll) out.push(markChosen({ name: 'Roslyn（ms-dotnettools.csharp）', version: found.roslynVersion, path: found.roslynDll }))
+      if (found.dotrushDll) out.push(markChosen({ name: 'DotRush', version: found.dotrushVersion, path: found.dotrushDll }))
+      if (found.omnisharpExe) out.push(markChosen({ name: 'OmniSharp', path: found.omnisharpExe }))
+      return out
+    }
+    return []
+  } catch (error) {
+    return []
+  }
 }
 
 /** 手动配置是否为绝对路径可执行（供设置页判断输入类型）。 */

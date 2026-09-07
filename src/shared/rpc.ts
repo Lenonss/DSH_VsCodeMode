@@ -137,6 +137,7 @@ export interface RpcRequestMap {
   'vscode.devFormSet': { enabled: boolean; path?: string }
   'compat': {}
   'edrv.lsp.status': { sessionId?: string }
+  'edrv.lsp.detect': {}
   'edrv.lsp.sync': { sessionId?: string; path: string; text: string; version: number }
   'edrv.lsp.close': { sessionId?: string; path: string }
   'edrv.lsp.definition': { sessionId?: string; path: string; position: LspPosition }
@@ -208,6 +209,7 @@ export interface RpcOkMap {
   'vscode.devFormSet': { devForm: DevFormInfo; restart: boolean }
   'compat': { report: CompatReport }
   'edrv.lsp.status': { servers: LspServerStatus[] }
+  'edrv.lsp.detect': { servers: LspServerStatus[] }
   'edrv.lsp.sync': object
   'edrv.lsp.close': object
   'edrv.lsp.definition': { locations: LspLocation[]; truncated?: boolean }

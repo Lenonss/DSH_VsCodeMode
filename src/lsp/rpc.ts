@@ -7,7 +7,7 @@ import type { Ctx } from '../store.js'
 import { searchRoot } from '../search/ripgrep.js'
 import { sessionOf, cwdOf } from '../registry.js'
 import { resolveProviderSpec, langOfPath, configFromPlugin, configFromSettings, LSP_LANGUAGES, LSP_SETTINGS_NS, type LspConfig } from './config.js'
-import { clearProviderCache } from './providers.js'
+import { clearProviderCache, candidatesFor } from './providers.js'
 import { onRuntimeProvisioned, envInstallStates } from './dotnetProvision.js'
 import { envRequirementsFor, installRequirement } from './envRequirements.js'
 import type { LspManager } from './manager.js'
@@ -147,10 +147,11 @@ export function createLspRpc(deps: LspRpcDeps): { handlers: Partial<RpcHandlerMa
   const rootLocations = (locations: LspLocation[], root: string): LspLocation[] =>
     locations.map((location) => ({ ...location, root }))
 
-  /** 当前 provider 检测结论 → 设置页 idle 状态（不启动 server）；附带未满足的环境需求。 */
+  /** 当前 provider 检测结论 → 设置页 idle 状态（不启动 server）；附带未满足的环境需求与候选服务器。 */
   const detectedStatus = (languageId: string, root?: string): LspServerStatus => {
     const spec = resolveProviderSpec(ctx, pluginConfig, languageId)
     const missingEnv = envRequirementsFor(languageId, dshHome())
+    const candidates = candidatesFor(languageId, spec)
     return {
       languageId,
       source: spec.kind,
@@ -160,6 +161,7 @@ export function createLspRpc(deps: LspRpcDeps): { handlers: Partial<RpcHandlerMa
       providerName: spec.providerName,
       root,
       missingEnv: missingEnv.length ? missingEnv : undefined,
+      candidates: candidates.length ? candidates : undefined,
     }
   }
 
@@ -199,6 +201,11 @@ export function createLspRpc(deps: LspRpcDeps): { handlers: Partial<RpcHandlerMa
       return { ok: true, servers: manager.statusAll().filter((status) => status.root === sc.root) }
     },
 
+    'edrv.lsp.detect': async () => {
+      // 全支持语言的检测结果（不启动服务器）：设置页动态渲染卡片 + 候选展示
+      return { ok: true, servers: LSP_LANGUAGES.map((lang) => detectedStatus(lang)) }
+    },
+
     'edrv.lsp.configGet': async () => {
       const settings = configFromSettings(ctx)
       const plugin = configFromPlugin(pluginConfig)
@@ -209,7 +216,7 @@ export function createLspRpc(deps: LspRpcDeps): { handlers: Partial<RpcHandlerMa
 
     'edrv.lsp.configUpdate': async (args) => {
       const lang = args.languageId
-      if (!lang || !resolveProviderSpec(ctx, pluginConfig, lang).languageId) {
+      if (!lang || !(LSP_LANGUAGES as readonly string[]).includes(lang)) {
         return { ok: false, error: '不支持的语言：' + lang }
       }
       const current = configFromSettings(ctx)

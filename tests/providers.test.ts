@@ -1,6 +1,7 @@
 /**
- * lsp/providers.ts C# 发现纯函数测试（临时目录伪造扩展布局，不启动真实服务器）。
+ * lsp/providers.ts 发现纯函数测试（临时目录伪造扩展布局，不启动真实服务器）。
  * 覆盖：DotRush 发现与启动参数、ms-Roslyn 优先级、皆未发现时的 reason、
+ * LuaLS/Roslyn/OmniSharp 多版本并存取清单最高、candidatesFor 候选汇总、
  * dotnetWithRuntime 的运行时版本探测（注入候选目录）。
  * 作者 ddj 2026-09-03
  */
@@ -8,7 +9,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { candidateCSharpServers, dotnetCandidates, dotnetWithRuntime, findSdkRoot, resolveCSharpProvider, sdkEnvOf, sdkVersionOf } from '../src/lsp/providers.js'
+import { candidateCSharpServers, candidatesFor, dotnetCandidates, dotnetWithRuntime, findSdkRoot, resolveCSharpProvider, resolveLuaProvider, sdkEnvOf, sdkVersionOf } from '../src/lsp/providers.js'
 
 /** 本轮测试创建的临时 home（afterEach 统一清理）。 */
 const homes: string[] = []
@@ -39,12 +40,23 @@ function installDotRush(home: string, version = '26.9.244'): string {
   return extDir
 }
 
-/** 在临时 home 安装伪 ms-dotnettools.csharp 扩展（.roslyn 服务器 dll）。 */
+/** 在临时 home 安装伪 ms-dotnettools.csharp 扩展（.roslyn 服务器 dll + 清单）。 */
 function installMsCSharp(home: string, version = '2.75.0'): string {
   const extDir = join(home, 'dsh-vscode-mode', 'extensions', 'ms-dotnettools.csharp-' + version)
   const roslynDir = join(extDir, '.roslyn')
   mkdirSync(roslynDir, { recursive: true })
+  writeFileSync(join(extDir, 'package.json'), JSON.stringify({ publisher: 'ms-dotnettools', name: 'csharp', version }))
   writeFileSync(join(roslynDir, 'Microsoft.CodeAnalysis.LanguageServer.dll'), 'fake')
+  return extDir
+}
+
+/** 在临时 home 安装伪 sumneko.lua 扩展（server/bin/lua-language-server 可执行占位，新布局）。 */
+function installSumneko(home: string, version = '3.13.6'): string {
+  const extDir = join(home, 'dsh-vscode-mode', 'extensions', 'sumneko.lua-' + version)
+  const binDir = join(extDir, 'server', 'bin')
+  mkdirSync(binDir, { recursive: true })
+  writeFileSync(join(extDir, 'package.json'), JSON.stringify({ publisher: 'sumneko', name: 'lua', version }))
+  writeFileSync(join(binDir, 'lua-language-server' + (process.platform === 'win32' ? '.exe' : '')), 'fake')
   return extDir
 }
 
@@ -82,6 +94,89 @@ describe('candidateCSharpServers', () => {
     const found = candidateCSharpServers(home)
     expect(found.dotrushVersion).toBe('26.10.1')
     expect(found.dotrushDll).toContain('26.10.1')
+  })
+
+  it('多版本 ms-Roslyn 并存时取清单版本最高者', () => {
+    const home = makeHome()
+    installMsCSharp(home, '2.75.0')
+    installMsCSharp(home, '2.98.1')
+    const found = candidateCSharpServers(home)
+    expect(found.roslynVersion).toBe('2.98.1')
+    expect(found.roslynDll).toContain('2.98.1')
+  })
+})
+
+describe('resolveLuaProvider 多版本发现', () => {
+  it('多版本 sumneko.lua 并存时取清单版本最高者并标记 LuaLS', () => {
+    const home = makeHome()
+    installSumneko(home, '3.9.3')
+    installSumneko(home, '3.13.6')
+    const spec = resolveLuaProvider(undefined, home)
+    expect(spec.kind).toBe('discover')
+    expect(spec.argv[0]).toContain('3.13.6')
+    expect(spec.providerName).toBe('LuaLS')
+    expect(spec.version).toBe('3.13.6')
+  })
+
+  it('未发现任何服务器 → none（PATH 命中除外）', () => {
+    const spec = resolveLuaProvider(undefined, makeHome())
+    if (spec.kind === 'none') {
+      expect(spec.ready).toBe(false)
+      expect(spec.reason).toContain('lua-language-server')
+    } else {
+      // 本机 PATH 恰有 lua-language-server 时走 discover 分支
+      expect(spec.kind).toBe('discover')
+      expect(spec.ready).toBe(true)
+    }
+  })
+})
+
+describe('candidatesFor', () => {
+  it('Lua 候选含 LuaLS 最高版本并标记当前选用；不支持语言返回空', () => {
+    const home = makeHome()
+    installSumneko(home, '3.9.3')
+    installSumneko(home, '3.13.6')
+    const spec = resolveLuaProvider(undefined, home)
+    const candidates = candidatesFor('lua', spec, home)
+    const lua = candidates.find((c) => c.name.startsWith('LuaLS'))
+    expect(lua).toBeTruthy()
+    expect(lua?.version).toBe('3.13.6')
+    expect(lua?.path).toContain('3.13.6')
+    expect(lua?.chosen).toBe(true)
+    expect(candidatesFor('go', spec, home)).toEqual([])
+  })
+
+  it('C# 候选列出 Roslyn/DotRush，选用者唯一且命中 spec.argv', () => {
+    const home = makeHome()
+    installMsCSharp(home, '2.98.1')
+    installDotRush(home, '26.9.244')
+    const spec = resolveCSharpProvider(undefined, home)
+    const candidates = candidatesFor('csharp', spec, home)
+    const names = candidates.map((c) => c.name)
+    expect(names.some((n) => n.includes('Roslyn'))).toBe(true)
+    expect(names.some((n) => n.includes('DotRush'))).toBe(true)
+    const chosen = candidates.filter((c) => c.chosen)
+    if (dotnetCandidates().length) {
+      // 有 dotnet：Roslyn 优先被选用，DotRush 在候选中不标记
+      expect(chosen).toHaveLength(1)
+      expect(chosen[0]?.name).toContain('Roslyn')
+      expect(spec.argv).toContain(chosen[0]?.path)
+    } else {
+      // 无 dotnet：两类候选都存在但无一可用（spec 为 none 且提示缺运行时）
+      expect(chosen).toHaveLength(0)
+      expect(spec.kind).toBe('none')
+    }
+  })
+
+  it('手动配置命中同路径时仍可标记选用', () => {
+    const home = makeHome()
+    const extDir = installSumneko(home, '3.13.6')
+    const bin = join(extDir, 'server', 'bin', 'lua-language-server' + (process.platform === 'win32' ? '.exe' : ''))
+    const spec = resolveLuaProvider({ path: bin }, home)
+    expect(spec.kind).toBe('manual')
+    const candidates = candidatesFor('lua', spec, home)
+    const lua = candidates.find((c) => c.name.startsWith('LuaLS'))
+    expect(lua?.chosen).toBe(true)
   })
 })
 

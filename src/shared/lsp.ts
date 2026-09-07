@@ -164,6 +164,14 @@ export interface LspEnvInstallState {
   message?: string
 }
 
+/** 同语言检测到的候选服务器（candidates 元素；chosen 标记当前选用者）。 */
+export interface LspCandidate {
+  name: string      // 显示名（如 EmmyLua / LuaLS / Roslyn）
+  version?: string  // 扩展清单版本
+  path?: string     // 服务器入口路径（argv 比对用）
+  chosen?: boolean  // 是否为当前解析选用的服务器
+}
+
 /** 单语言服务器状态（edrv.lsp.status 载荷元素）。 */
 export interface LspServerStatus {
   languageId: string
@@ -176,6 +184,7 @@ export interface LspServerStatus {
   root?: string     // 绑定工作区根（相对显示）
   providerName?: string // provider 名称（如 EmmyLua / LuaLS）
   missingEnv?: LspMissingEnv[] // 未满足的环境需求（无则省略）
+  candidates?: LspCandidate[] // 同语言检测到的候选服务器（设置页展示用，无则省略）
 }
 
 /**

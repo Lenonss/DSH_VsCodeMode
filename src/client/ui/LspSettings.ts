@@ -2,17 +2,38 @@
 /**
  * dsh-vscode-mode client — 「语言服务器」设置子 Tab。
  * 四视图：服务器（状态 + 每语言启用/命令/路径）｜已安装（卸载/更新）｜市场（Open VSX 搜索/安装 + 本地 vsix）｜更新。
- * 状态经 edrv.lsp.status，配置经 edrv.lsp.configGet/Update，扩展经 edrv.lsp.ext.*。
- * 作者 ddj 2026-08-27
+ * 状态经 edrv.lsp.detect（检测结果驱动卡片动态显示），配置经 edrv.lsp.configGet/Update，扩展经 edrv.lsp.ext.*。
+ * 作者 ddj 2026-08-27 / 2026-09-03
  */
 import React from 'react'
 import { rpc } from '../rpc.js'
 import '../styles/mcp.css'
 
-const LANGUAGES = [
-  { id: 'lua', label: 'Lua（EmmyLua / LuaLS）', hint: '优先使用已安装 EmmyLua；未安装时回退 LuaLS 或 PATH 中的 lua-language-server' },
-  { id: 'csharp', label: 'C#（Roslyn / DotRush / OmniSharp）', hint: '优先自动发现 ms-dotnettools.csharp / DotRush 扩展（DotRush 需 .NET 10 运行时）；也可手动指定' },
-]
+/** 支持语言的展示元数据（卡片显示由检测结果驱动；未知 id 走 langMeta 兜底）。 */
+const LANG_META = {
+  lua: { label: 'Lua（EmmyLua / LuaLS）', hint: '优先使用已安装 EmmyLua；未安装时回退 LuaLS 或 PATH 中的 lua-language-server' },
+  csharp: { label: 'C#（Roslyn / DotRush / OmniSharp）', hint: '优先自动发现 ms-dotnettools.csharp / DotRush 扩展（DotRush 需 .NET 10 运行时）；也可手动指定' },
+}
+
+/** 语言展示元数据（含未知 id 兜底）。 */
+function langMeta(id) {
+  return LANG_META[id] || { label: id + '（语言服务器）', hint: '' }
+}
+
+/** 该语言是否已存配置（禁用开关或手动命令/路径）。 */
+function hasStoredConfig(cfg) {
+  if (!cfg || typeof cfg !== 'object') return false
+  if (cfg.enabled === false) return true
+  return Boolean((cfg.command && cfg.command.trim()) || (cfg.path && cfg.path.trim()))
+}
+
+/** 该语言是否显示卡片：检测到可用 LSP、已存配置、或存在待安装的缺失环境。 */
+function langVisible(status, config) {
+  if (!status) return false
+  if (status.source && status.source !== 'none') return true
+  if (hasStoredConfig(config[status.languageId])) return true
+  return Array.isArray(status.missingEnv) && status.missingEnv.length > 0
+}
 
 const PHASE_LABEL = {
   idle: '未启动', starting: '启动中', ready: '就绪', indexing: '索引中', unavailable: '不可用', stopped: '已停止',
@@ -54,6 +75,11 @@ function LangCard({ lang, config, status, busy, envStates, onInstallEnv, onToggl
       status?.version ? ' · v' + status.version : '',
       (phase === 'ready' && status?.root) ? ' · ' + String(status.root).split(/[\\/]/).pop() : ''),
     status?.reason ? React.createElement('div', { className: 'vsm-mcp-error' }, status.reason) : null,
+    Array.isArray(status?.candidates) && status.candidates.length > 1
+      ? React.createElement('div', { className: 'vsm-lsp-hint' },
+        '候选（' + status.candidates.length + '）：' + status.candidates.map((c) =>
+          c.name + (c.version ? ' v' + c.version : '') + (c.chosen ? '（当前）' : '')).join(' · '))
+      : null,
     Array.isArray(status?.missingEnv) && status.missingEnv.length
       ? React.createElement('div', { className: 'vsm-lsp-hint' },
         '缺少运行环境（一键安装后自动生效）：',
@@ -125,10 +151,10 @@ export function LspSettings() {
   const [envLang, setEnvLang] = React.useState('')
 
   const refreshServers = React.useCallback(() => {
-    Promise.all([rpc('edrv.lsp.configGet', {}), rpc('edrv.lsp.status', {})])
-      .then(([cfg, st]) => {
+    Promise.all([rpc('edrv.lsp.configGet', {}), rpc('edrv.lsp.detect', {})])
+      .then(([cfg, det]) => {
         if (cfg?.ok) setConfig(cfg.config ?? {})
-        if (st?.ok) setServers(st.servers ?? [])
+        if (det?.ok) setServers(det.servers ?? [])
         setError('')
       })
       .catch((e) => setError(String(e)))
@@ -282,6 +308,7 @@ export function LspSettings() {
       .then((res) => {
         if (!res?.ok) { setError(res?.error ?? '安装失败'); return }
         void refreshExt()
+        void refreshServers() // 新装 LSP 使对应语言卡片出现
       })
       .catch((e) => setError(String(e)))
       .finally(() => setBusy(''))
@@ -296,6 +323,7 @@ export function LspSettings() {
         if (!res?.ok) { setError(res?.error ?? '安装失败'); return }
         setVsixPath('')
         void refreshExt()
+        void refreshServers() // 新装 LSP 使对应语言卡片出现
       })
       .catch((e) => setError(String(e)))
       .finally(() => setBusy(''))
@@ -309,6 +337,7 @@ export function LspSettings() {
       .then((res) => {
         if (!res?.ok) setError(res?.error ?? '卸载失败')
         void refreshExt()
+        void refreshServers() // 卸载后对应语言卡片按最新检测隐匿
       })
       .catch((e) => setError(String(e)))
       .finally(() => setBusy(''))
@@ -321,6 +350,7 @@ export function LspSettings() {
       .then((res) => {
         if (!res?.ok) setError(res?.error ?? '更新失败')
         void refreshExt()
+        void refreshServers() // 更新后选用版本随之变化
       })
       .catch((e) => setError(String(e)))
       .finally(() => setBusy(''))
@@ -344,14 +374,24 @@ export function LspSettings() {
 
   let body = null
   if (tab === 'servers') {
+    // 动态显示：检测结果（detect 全量）驱动卡片可见性；未检出语言灰字列出
+    const detected = Array.isArray(servers) ? servers : []
+    const visible = detected.filter((s) => langVisible(s, config))
+    const hidden = detected.filter((s) => !visible.includes(s))
     body = panel('语言服务器', React.createElement(React.Fragment, null,
-      LANGUAGES.map((lang) => React.createElement(LangCard, {
-        key: lang.id, lang,
-        config: config[lang.id] ?? {},
-        status: servers.find((s) => s.languageId === lang.id),
-        busy, envStates, onInstallEnv: installEnv, onToggle: toggleLang, onSave: saveLang, onRedetect: redetectLang,
-      })),
-      React.createElement('div', { className: 'vsm-lsp-hint' }, '提示：打开 Lua/C# 文件即自动（惰性）启动对应语言服务器；未配置时编辑器功能不受影响，大纲回退内置解析。')))
+      visible.length ? visible.map((status) => {
+        const meta = langMeta(status.languageId)
+        return React.createElement(LangCard, {
+          key: status.languageId, lang: { id: status.languageId, label: meta.label, hint: meta.hint },
+          config: config[status.languageId] ?? {},
+          status,
+          busy, envStates, onInstallEnv: installEnv, onToggle: toggleLang, onSave: saveLang, onRedetect: redetectLang,
+        })
+      }) : React.createElement('div', { className: 'vsm-mcp-empty' },
+        '未检测到已安装的语言服务器；可切换到「市场」搜索安装（如 sumneko.lua），或安装本地 .vsix 后刷新。'),
+      hidden.length ? React.createElement('div', { className: 'vsm-lsp-hint' },
+        '未检测到：' + hidden.map((s) => langMeta(s.languageId).label).join('、') + ' —— 可在「市场」安装后刷新。') : null,
+      React.createElement('div', { className: 'vsm-lsp-hint' }, '提示：打开对应语言的文件即自动（惰性）启动语言服务器；未配置时编辑器功能不受影响，大纲回退内置解析。')))
   } else if (tab === 'installed') {
     body = panel('已安装扩展', React.createElement(React.Fragment, null,
       React.createElement('div', { className: 'vsm-lsp-hint' }, '已安装的语言服务器扩展（存于 ~/.dsh/dsh-vscode-mode/extensions/）。语言服务器被自动发现为「扩展」源。'),
