@@ -5,7 +5,7 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
 
 # dsh-vscode-mode 开发/发布经验集（自我更新型技能）
 
-> updated: 2026-09-22 · 维护者：ddj（AI 会话按文末协议追加，保持精炼、去重）
+> updated: 2026-09-08 · 维护者：ddj（AI 会话按文末协议追加，保持精炼、去重）
 
 ## 何时使用
 
@@ -27,6 +27,11 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
 7. CI 失败排查：jobs 日志 API 需 admin 权限；用公开接口
    `GET /repos/Lenonss/DSH_VsCodeMode/commits/<sha>/check-runs` → 失败 check 的
    `/annotations` 可直接拿到失败用例名与断言差异（无需任何凭据）。
+- 2026-09-08 坑：工作区有未提交 WIP 时，步骤 2 的 `git add -A` 会把未完成代码扫进发布，且 CI 构建
+  的是推送树而非本地目录（脏树跑过的三门不代表发布内容）→ 先 `git stash push -u` 隔离，净树跑
+  三门，release commit 只 add package.json，tag 推送后 `git stash pop` 还原（v0.1.57 实测）。
+- 2026-09-08 事实：awesome 收录条目（PR #2532，category git）的 `tarball:` 钉在 v0.1.36，发版即过期；
+  npm 映射自动、该字段冗余 → 改自己条目时删 tarball 行，勿再钉版本号。
 
 ## 开发/部署形态切换（profile 安装形态）
 
@@ -67,7 +72,8 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
 - 2026-09-08 坑：DSH 会话沙箱内 vitest 必挂 esbuild `spawn EPERM`（esbuild 异步 build/transform
   API 恒 spawn 服务子进程，`ESBUILD_WORKER_THREADS` 只救 *Sync 变体，vite 不用）→ 测试/发布
   三门在用户真实终端或 CI 执行，会话内只跑 typecheck（tsc 无子进程）与 build（rolldown 原生）；
-  2026-09-22 补：沙箱文件策略升到 danger-full-access 后进程 spawn 不再受限，会话内 vitest 可跑。
+  2026-09-22 补：策略 danger-full-access 时 vitest 直接可跑；workspace-write（审批 ask）下对同一
+  `npm run test` 命令一次性升 danger-full-access 重跑即可（v0.1.57 三门实测 597 passed）。
 
 ## DSH host 环境约束
 
@@ -86,8 +92,15 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
   （cwd 非边界），插件可读任意绝对路径文件，保存仍受会话沙箱 `policyOf` 约束。
 - 2026-09-22 坑：沙箱内 `git push` 挂在凭据辅助器（Git sh.exe `couldn't create signal pipe`，Win32 error 5
   → could not read Username），commit 正常 → push 对同一命令一次性升 danger-full-access 重试即可。
-- 2026-09-22 坑：后台 pwsh 任务出站 HTTPS 恒报 `The SSL connection could not be established` → 会话内
-  查 CI/registry 用 web_fetch 工具（api.github.com、registry.npmjs.org 直达），不起后台轮询任务。
+- 2026-09-22 坑：沙箱内出站 HTTPS 受限——后台任务报 `The SSL connection could not be established`，
+  前台 Invoke-WebRequest 报 `Authentication failed`（TLS 认证失败）→ 会话内查 CI/registry/公开 API
+  用 web_fetch 工具（api.github.com、registry.npmjs.org 直达），不起后台轮询任务。
+- 2026-09-08 事实：gh CLI v2.94 已登录 Lenonss（keyring token，credential.helper=`!gh auth git-credential`，
+  gh git 协议默认 ssh）→ `gh repo edit/fork/pr`、git clone/ls-remote/推 fork 一次性升权后可用；
+  外部仓库克隆用显式 https URL 走 gh 凭据助手，别用 gh 的 ssh URL。
+- 2026-09-08 坑：git 身份只配在主检出仓库级（.git/config）无全局 → 新克隆 commit 报
+  `Author identity unknown` → 克隆内补 `git config user.name/user.email`
+  （Lenonss / lenonss@users.noreply.github.com）。
 
 ## Unity 外部编辑器（com.dsh.editor）
 
