@@ -37,6 +37,9 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
 - .NET Framework 的 csc 是 **C# 5 方言**：无局部函数、无字符串插值、无 is-pattern；
   给 launcher 写编译探针时用传统语法。
 - 本地 Windows 全绿不代表 CI 绿——发布前自问：新断言在 Linux 上成立吗？
+- 2026-09-08 坑：DSH 会话沙箱内 vitest 必挂 esbuild `spawn EPERM`（esbuild 异步 build/transform
+  API 恒 spawn 服务子进程，`ESBUILD_WORKER_THREADS` 只救 *Sync 变体，vite 不用）→ 测试/发布
+  三门在用户真实终端或 CI 执行，会话内只跑 typecheck（tsc 无子进程）与 build（rolldown 原生）。
 
 ## DSH host 环境约束
 

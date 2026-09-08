@@ -9,6 +9,7 @@ import React from 'react'
 import { dbg, rpc } from '../rpc.js'
 import { emitRefresh } from '../events.js'
 import { langOf, loadMonaco } from '../monaco/loader.js'
+import { dataUrlOf, isImagePath, isSvgPath } from '../imagePreview.js'
 import { applyTheme, registerThemes, themeNameOf } from '../monaco/theme.js'
 import { createDiffRenderer } from '../monaco/diffRender.js'
 import { ST, callIdAttr, noopHunk, summarize } from '../state/records.js'
@@ -53,6 +54,10 @@ export function EditorView(props) {
   const [dirtyMap, setDirtyMap] = React.useState({})
   const [content, setContent] = React.useState(null)
   const [contentPath, setContentPath] = React.useState(null)
+  const [imageSrc, setImageSrc] = React.useState(null) // 图片预览 data URL（图片 tab 专用，文本 tab 恒为 null）
+  const [imgSize, setImgSize] = React.useState(null) // 图片自然尺寸 { w, h }（路径栏 meta）
+  const [imgBroken, setImgBroken] = React.useState(false) // 图片解码失败（onError），显示占位与重试
+  const svgTextRef = React.useRef(new Set()) // 强制以文本打开的 SVG 路径集合（toggleSvgText 维护）
   const [status, setStatus] = React.useState('')
   const [lspServers, setLspServers] = React.useState([])
   const [error, setError] = React.useState(null)
@@ -117,6 +122,8 @@ export function EditorView(props) {
   }, [records, active])
 
   const contentReady = content !== null && contentPath === active
+  // 当前 tab 是否处于图片预览模式（与 loadContent 的分派条件同源；SVG 文本模式时为 false）
+  const isImageActive = !!active && isImagePath(active) && !svgTextRef.current.has(active)
   const regions = React.useMemo(() => diffRegions(currentRecords, contentReady ? content : null).filter((r) => !r.superseded), [currentRecords, content, contentPath, active])
   // useMemo 稳定引用：否则 hover 等重渲染会让 view zone effect 反复重建（- 号闪烁）
   const pendingRegions = React.useMemo(() => regions.filter((r) => r.status === ST.PENDING && !r.stale), [regions])
@@ -318,6 +325,11 @@ export function EditorView(props) {
    */
   const loadContent = (path, sid, force) => {
     const seq = ++loadSeqRef.current
+    // 图片文件走专用通道：base64 → data URL 预览，不建 Monaco model、不进文本/差异流程
+    if (isImagePath(path) && !svgTextRef.current.has(path)) {
+      loadImage(path, sid, seq)
+      return
+    }
     const cachedModel = force ? null : modelsRef.current.get(path)
     if (cachedModel) {
       // model 命中：直接显示其内容（切 tab 零等待），后台静默校验
@@ -352,6 +364,47 @@ export function EditorView(props) {
         setError(message)
         setStatus('读取失败')
       }
+    }).catch((e) => {
+      if (seq !== loadSeqRef.current) return
+      const message = 'read异常:' + String(e)
+      setLoadError(message)
+      setError(message)
+      setStatus('读取失败')
+    })
+  }
+
+  /**
+   * 加载图片文件为 data URL（编辑区只读预览）；失败走 loadError 面板（重试经 loadContent 分派回此）。
+   * @author ddj 2026年09月08号
+   * @param path 图片文件路径
+   * @param sid 会话 id
+   * @param seq 加载序号（过期响应丢弃）
+   */
+  const loadImage = (path, sid, seq) => {
+    setImageSrc(null)
+    setImgSize(null)
+    setImgBroken(false)
+    setLoadStage({ progress: monaco ? 72 : 12, message: '读取图片…' })
+    rpc('edrv.read', { sessionId: sid, path, encoding: 'base64' }).then((res) => {
+      if (seq !== loadSeqRef.current || path !== active) return
+      if (res && res.ok && res.encoding === 'base64') {
+        if (!res.mime) {
+          setLoadError('host 版本过旧：图片响应缺少 mime')
+          setError('host 版本过旧：图片响应缺少 mime')
+          setStatus('读取失败')
+          return
+        }
+        setImageSrc(dataUrlOf(res.content, res.mime))
+        setLoadStage({ progress: 100, message: '图片已就绪' })
+        setStatus('已加载')
+        return
+      }
+      const base = res?.error ? String(res.error) : '读取失败'
+      // 带出 host 解析后的真实路径：跳转失败时一眼看出是路径解析错还是目标不存在
+      const message = res?.resolvedPath ? base + '：' + String(res.resolvedPath) : base
+      setLoadError(message)
+      setError(message)
+      setStatus('读取失败')
     }).catch((e) => {
       if (seq !== loadSeqRef.current) return
       const message = 'read异常:' + String(e)
@@ -633,6 +686,9 @@ export function EditorView(props) {
     if (!active) return
     setContent(null)
     setContentPath(null)
+    setImageSrc(null)
+    setImgSize(null)
+    setImgBroken(false)
     setLoadError(null)
     setLoadStage({ progress: 10, message: '准备读取文件…' })
     setStatus('加载中…')
@@ -703,6 +759,7 @@ export function EditorView(props) {
   const doSave = (silent) => {
     const ed = editorRef.current
     if (!active || !ed) return
+    if (isImageActive) { setStatus('图片只读预览'); return }
     const text = ed.getValue()
     if (!silent) setStatus('保存中…')
     rpc('edrv.save', { sessionId, path: active, content: text }).then((res) => {
@@ -976,6 +1033,53 @@ export function EditorView(props) {
   }
 
   /**
+   * SVG 在图片预览与文本编辑间切换（按路径记忆；重载分派随集合状态自动路由）。
+   * @author ddj 2026年09月08号
+   * @param path SVG 文件路径
+   */
+  const toggleSvgText = (path) => {
+    const next = new Set(svgTextRef.current)
+    if (next.has(path)) next.delete(path)
+    else next.add(path)
+    svgTextRef.current = next
+    setContent(null)
+    setContentPath(null)
+    setImageSrc(null)
+    setImgSize(null)
+    setImgBroken(false)
+    setLoadError(null)
+    setStatus(next.has(path) ? '已切换为文本模式' : '已切换为图片预览')
+    loadContent(path, sessionId, true)
+  }
+
+  /**
+   * 图片预览面板：工具条（尺寸 meta / SVG 文本切换 / 刷新）+ 棋盘底自适应图片。
+   * @author ddj 2026年09月08号
+   */
+  const imagePanel = () => React.createElement('div', { className: 'edrv-imgview' },
+    React.createElement('div', { className: 'edrv-imgview-bar' },
+      React.createElement('span', { className: 'edrv-imgview-meta' },
+        imgBroken ? '图片无法显示' : (imgSize ? imgSize.w + '×' + imgSize.h : '…')),
+      React.createElement('span', { style: { flex: 1 } }),
+      (isSvgPath(active) ? React.createElement('button', {
+        className: 'edrv-pill edrv-pill-ghost', title: '以文本方式查看/编辑（SVG 为文本格式）',
+        onClick: () => toggleSvgText(active),
+      }, '以文本打开') : null),
+      React.createElement('button', { className: 'edrv-pill edrv-pill-ghost', title: '重新加载图片', onClick: () => reloadFile() }, '⟳ 刷新')),
+    React.createElement('div', { className: 'edrv-imgview-stage' },
+      (imgBroken
+        ? React.createElement('div', { className: 'edrv-imgview-broken' },
+            React.createElement('div', null, '图片解码失败，文件可能已损坏'),
+            React.createElement('button', { className: 'edrv-pill edrv-pill-ghost', onClick: () => reloadFile() }, '重试'))
+        : React.createElement('img', {
+            className: 'edrv-imgview-img',
+            src: imageSrc,
+            alt: active || '',
+            onLoad: (e) => { setImgBroken(false); setImgSize({ w: e.target.naturalWidth, h: e.target.naturalHeight }) },
+            onError: () => setImgBroken(true),
+          }))))
+
+  /**
    * 关闭当前差异浮窗并清理 hover 锚点。
    * @author ddj 2026年08月21号
    */
@@ -1183,6 +1287,12 @@ export function EditorView(props) {
   const openPath = () => {
     const p = (pathDraft || '').trim()
     if (!p) return
+    // 图片文件跳过文本读探测（二进制会被 host 拒绝），直接进 tab 由 loadImage 接管
+    if (isImagePath(p)) {
+      openFile(p, false)
+      setOpenInput(false); setPathDraft(''); setStatus('已打开'); setError(null)
+      return
+    }
     setStatus('打开中…')
     rpc('edrv.read', { sessionId, path: p }).then((res) => {
       if (res && res.ok) {
@@ -1214,7 +1324,8 @@ export function EditorView(props) {
   const pathBar = React.createElement('div', { className: 'edrv-pathbar', title: active || '' },
     React.createElement('span', { className: 'edrv-pb-name' }, active ? String(active).split(/[\\/]/).pop() : '未打开文件'),
     React.createElement('span', { className: 'edrv-pb-full' }, active || '使用右上搜索框 (' + (chordOf('edrv.quickOpen') ?? 'Ctrl+P') + ') 打开文件'),
-    (active && langOf(active) ? React.createElement('span', { className: 'edrv-pb-meta' }, langOf(active)) : null),
+    (active && !isImageActive && langOf(active) ? React.createElement('span', { className: 'edrv-pb-meta' }, langOf(active)) : null),
+    (isImageActive && imgSize ? React.createElement('span', { className: 'edrv-pb-meta' }, imgSize.w + '×' + imgSize.h) : null),
     (cursor ? React.createElement('span', { className: 'edrv-pb-meta' }, cursor) : null),
     (status ? React.createElement('span', { className: 'edrv-pb-meta edrv-pb-status' }, status) : null))
 
@@ -1304,6 +1415,10 @@ export function EditorView(props) {
       setLoadStage({ progress: 10, message: '重新读取文件…' })
       loadContent(active, sessionId)
     })
+  } else if (isImageActive && imageSrc) {
+    body = imagePanel()
+  } else if (isImageActive) {
+    body = loadingBody(loadStage.message || '读取图片…', loadStage.progress)
   } else if (content === null) {
     body = loadingBody(loadStage.message || '读取文件内容…', loadStage.progress)
   } else {

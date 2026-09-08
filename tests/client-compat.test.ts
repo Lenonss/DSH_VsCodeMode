@@ -1,6 +1,6 @@
-/** client 兼容层测试：设置桥优先序 / slot 安全注册 / openPath 链式补丁。作者 ddj 2026年08月24号 */
+/** client 兼容层测试：设置桥优先序 / slot 安全注册 / openPath 链式补丁 / accessor 感知补丁。作者 ddj 2026年08月24号 */
 import { describe, expect, it, vi } from 'vitest'
-import { PLUGIN_NAME, SIDEBAR_PLUGIN, patchMethod, pickSettingsBinder, registerSlotSafely } from '../src/client/compat.js'
+import { PLUGIN_NAME, SIDEBAR_PLUGIN, patchAccessor, patchMethod, pickSettingsBinder, registerSlotSafely } from '../src/client/compat.js'
 
 describe('pickSettingsBinder', () => {
   const binderOf = (scope) => ({ bind: vi.fn(() => scope) })
@@ -110,6 +110,73 @@ describe('patchMethod', () => {
     dispose()
     dispose()
     expect(owner.open('x')).toBe('orig')
+  })
+})
+
+describe('patchAccessor', () => {
+  /** 复刻 DSH remote 命名空间方法形态：getter-only accessor，每次访问返回一次性函数。 */
+  const makeAccessorOwner = () => {
+    const owner = {}
+    Object.defineProperty(owner, 'open', {
+      configurable: true,
+      enumerable: true,
+      get: () => (path) => 'orig:' + path,
+    })
+    return owner
+  }
+
+  it('getter-only accessor 经描述符替换拦截，dispose 恢复原描述符', () => {
+    const owner = makeAccessorOwner()
+    const originalDescriptor = Object.getOwnPropertyDescriptor(owner, 'open')
+    const calls = []
+    const dispose = patchAccessor(owner, 'open', (original, path) => {
+      calls.push('patched')
+      return 'wrap(' + original(path) + ')'
+    })
+    expect(owner.open('x')).toBe('wrap(orig:x)')
+    expect(calls).toEqual(['patched'])
+    dispose()
+    const restored = Object.getOwnPropertyDescriptor(owner, 'open')
+    expect(restored.get).toBe(originalDescriptor.get)
+    expect(owner.open('y')).toBe('orig:y')
+  })
+
+  it('original 实时取自原 getter（跟随内部实现变化）', () => {
+    let impl = (path) => 'v1:' + path
+    const owner = {}
+    Object.defineProperty(owner, 'open', { configurable: true, get: () => impl })
+    patchAccessor(owner, 'open', (original, path) => original(path))
+    expect(owner.open('x')).toBe('v1:x')
+    impl = (path) => 'v2:' + path
+    expect(owner.open('y')).toBe('v2:y')
+  })
+
+  it('他人已替换 getter 时不还原（归属校验）', () => {
+    const owner = makeAccessorOwner()
+    const dispose = patchAccessor(owner, 'open', (original, path) => original(path))
+    Object.defineProperty(owner, 'open', { configurable: true, get: () => () => 'external' })
+    dispose()
+    expect(owner.open('x')).toBe('external')
+  })
+
+  it('dispose 幂等', () => {
+    const owner = makeAccessorOwner()
+    const dispose = patchAccessor(owner, 'open', (original, path) => original(path))
+    dispose()
+    dispose()
+    expect(owner.open('x')).toBe('orig:x')
+  })
+
+  it('data 属性降级 patchMethod 语义', () => {
+    const owner = { open: (path) => 'orig:' + path }
+    const dispose = patchAccessor(owner, 'open', (original, path) => 'wrap(' + original(path) + ')')
+    expect(owner.open('x')).toBe('wrap(orig:x)')
+    dispose()
+    expect(owner.open('y')).toBe('orig:y')
+  })
+
+  it('属性缺失返回 null', () => {
+    expect(patchAccessor({}, 'open', () => {})).toBeNull()
   })
 })
 

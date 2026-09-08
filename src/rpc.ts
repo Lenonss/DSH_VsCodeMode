@@ -5,6 +5,7 @@
  * 作者 ddj 2026-08-20
  */
 import type { DecideItem, DecideResult, RpcHandlerMap, RpcMethod, RpcRequestMap, RpcResult, RpcScope } from './shared/rpc.js'
+import { imageMimeOf } from './shared/rpc.js'
 import type { DiffRecord, RecordView } from './shared/types.js'
 import type { Ctx, Session } from './store.js'
 import {
@@ -303,6 +304,12 @@ export function buildHandlers(
           return { ok: false, error: '文件不存在', resolvedPath: fs.processPath(target) }
         }
         if ((info.size ?? 0) > READ_CAP) return { ok: false, error: '文件过大（>8MB），不支持整文件预览' }
+        if (args.encoding === 'base64') {
+          // 图片等二进制预览：readBytes 无解码、无二进制拒绝；超上限已由上方 stat 拦截
+          const bytes = await fs.readBytes(target, undefined, READ_CAP)
+          const content = Buffer.from(bytes).toString('base64')
+          return { ok: true, content, size: bytes.byteLength, encoding: 'base64', mime: imageMimeOf(args.path) }
+        }
         const content = await fs.readText(target)
         return { ok: true, content, size: content.length }
       } catch (error) {

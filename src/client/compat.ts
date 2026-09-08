@@ -92,3 +92,34 @@ export function patchMethod<T extends object, K extends keyof T>(
     if (owner[key] === patched) owner[key] = original
   }
 }
+
+/** patchAccessor 的包装实现形状（original 为补丁前的实时实现）。 */
+export type PatchWrapper = (original: (...args: never[]) => unknown, ...args: never[]) => unknown
+
+/**
+ * accessor 感知的链式补丁：DSH 0.1.3+ 的 remote 命名空间方法（如
+ * remote.session.openWorkspacePath）是 getter-only accessor（Object.defineProperty
+ * 仅定义 get，直接赋值在严格模式下抛 TypeError），须整体替换属性描述符。
+ * 新 getter 每次访问现场调用原 getter 取最新一次性函数作 original，天然跟随
+ * DSH 内部 methods 表变化；data 属性降级走 patchMethod；属性缺失返回 null。
+ * @author ddj 2026年09月08号
+ * @param owner 目标对象
+ * @param key 属性名
+ * @param wrapper 包装实现（original 为补丁前的实时实现）
+ * @returns 恢复函数（幂等、带归属校验）；属性缺失时返回 null
+ */
+export function patchAccessor(owner: object, key: string, wrapper: PatchWrapper): (() => void) | null {
+  const descriptor = Object.getOwnPropertyDescriptor(owner, key)
+  if (!descriptor) return null
+  if (typeof descriptor.get !== 'function') return patchMethod(owner, key as never, wrapper as never)
+  const rawGet = descriptor.get as (this: object) => unknown
+  const patchedGet = function (): unknown {
+    const original = (...args: never[]) => (rawGet.call(owner) as (...args: never[]) => unknown)(...args)
+    return (...args: never[]) => wrapper(original, ...args)
+  }
+  Object.defineProperty(owner, key, { configurable: true, enumerable: descriptor.enumerable, get: patchedGet })
+  return () => {
+    const current = Object.getOwnPropertyDescriptor(owner, key)
+    if (current?.get === patchedGet) Object.defineProperty(owner, key, descriptor)
+  }
+}

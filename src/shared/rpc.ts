@@ -21,6 +21,36 @@ import type { LspEnvInstallState, LspExtInfo, LspExtUpdate, LspHover, LspLocatio
 /** webServer 精确路由。 */
 export const RPC_PATH = '/edrv/rpc'
 
+/**
+ * 图片扩展名（小写、无点）→ MIME。edrv.read base64 响应与 client 图片预览共用，
+ * 收敛在此避免 host/client 两处漂移。
+ * @author ddj 2026年09月08号
+ */
+export const IMAGE_MIME: Record<string, string> = {
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  gif: 'image/gif',
+  webp: 'image/webp',
+  bmp: 'image/bmp',
+  ico: 'image/x-icon',
+  avif: 'image/avif',
+  svg: 'image/svg+xml',
+}
+
+/**
+ * 路径 → 图片 MIME：按 basename 扩展名小写查 {@link IMAGE_MIME}，未命中回退 application/octet-stream。
+ * @author ddj 2026年09月08号
+ * @param path 文件路径（`/` 或 `\` 分隔均可）
+ * @returns MIME 字符串
+ */
+export function imageMimeOf(path: string): string {
+  const base = String(path || '').split(/[\\/]/).pop() || ''
+  const dot = base.lastIndexOf('.')
+  const ext = dot > 0 ? base.slice(dot + 1).toLowerCase() : ''
+  return IMAGE_MIME[ext] ?? 'application/octet-stream'
+}
+
 /** 决策作用域：call=整条记录，hunk=单个差异块。 */
 export type RpcScope = 'call' | 'hunk'
 
@@ -111,7 +141,7 @@ export interface RpcRequestMap {
   'edrv.accept': { sessionId?: string; callId: string; scope?: RpcScope; hunkIndex?: number }
   'edrv.reject': { sessionId?: string; callId: string; scope?: RpcScope; hunkIndex?: number }
   'edrv.decideBatch': { sessionId?: string; items: DecideItem[] }
-  'edrv.read': { sessionId?: string; path: string }
+  'edrv.read': { sessionId?: string; path: string; encoding?: 'base64' }
   'edrv.original': { sessionId?: string; path: string }
   'edrv.save': { sessionId?: string; path: string; content: string }
   'edrv.archiveList': { sessionId?: string }
@@ -194,7 +224,7 @@ export interface RpcOkMap {
   'edrv.accept': { record: RecordView }
   'edrv.reject': { record: RecordView }
   'edrv.decideBatch': { results: DecideResult[] }
-  'edrv.read': { content: string; size: number }
+  'edrv.read': { content: string; size: number; encoding?: 'base64'; mime?: string }
   'edrv.original': { content: string; size: number; stale: StaleHunk[]; fallback: boolean }
   'edrv.save': object
   'edrv.archiveList': { entries: ArchiveEntry[] }

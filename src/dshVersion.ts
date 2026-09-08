@@ -86,6 +86,7 @@ export function inDshRange(version: DshVersion | null | undefined, range: DshRan
 export function familyLabel(input: string): string {
   const version = parseDshVersion(input)
   if (!version) return '未知'
+  if (inDshRange(version, { from: '0.1.3-alpha.1' })) return '0.1.3-alpha 及更新（对话文件链接=remote.session.openWorkspacePath）'
   if (inDshRange(version, { from: '0.1.2-alpha.1' })) return '0.1.2-alpha 及更新（设置 API=settings.installSection）'
   return '0.1.0/0.1.1 rc 线（设置 API=installSettingsSection）'
 }

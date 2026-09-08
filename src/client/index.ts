@@ -25,6 +25,7 @@ import { loadMonaco } from './monaco/loader.js'
 import { createFileOpenerRegistry, scanSidebar, type FileOpenContext } from './fileOpeners.js'
 import type { FileOpenerRegistry } from './fileOpeners.js'
 import { installOpenPathRouter, vscodeOpener, autoValue } from './openPathRouter.js'
+import { patchRemoteOpen, probeRemoteOpen } from './remoteOpenRouter.js'
 import { setupExtOpen } from './externalOpen.js'
 import { SettingsContext } from './settingsContext.js'
 import { SIDEBAR_PLUGIN, pickSettingsBinder, registerSlotSafely } from './compat.js'
@@ -98,6 +99,17 @@ export function apply(ctx: any): void {
   const binder = pickSettingsBinder(ctx)
   const settings = binder.scope
   let selected = autoValue('auto')
+  /** 0.1.3+ 会话文件链接路由（remote.session.openWorkspacePath）是否已安装（compatSummary 展示用）。 */
+  let remoteOpenInstalled = false
+  /** 两条文件链接路由共用的路由日志（openPathRouter / remoteOpenRouter）。 */
+  const routeLogger = (message: string): void => console.warn('[dsh-vscode-mode] ' + message)
+  /** 两条路由共用的 FileOpenContext：当前会话 id 与工作区 cwd。 */
+  const openContext = (): FileOpenContext => {
+    const current = sessions?.list?.getSnapshot?.()
+    const sessionId = current?.current
+    const summary = sessionId ? current?.byId?.[sessionId] : undefined
+    return { sessionId, cwd: summary?.cwd } as FileOpenContext
+  }
   /** 可选探测 betterSidebar 服务（不进 inject：缺失会让插件停靠等待，杀死回退路径）。 */
   let sideService = detectSidebarService(ctx)
   /** 「添加到对话」动作集：编辑区/Tab 右键菜单注入文件引用与代码块（conversation 服务缺失时各动作安全降级）。 */
@@ -106,7 +118,8 @@ export function apply(ctx: any): void {
   /** 客户端侧兼容摘要（与 host 报告合并展示；惰性求值保证 HMR 后仍新鲜）。 */
   const compatSummary = (): CompatAdapter[] => [
     { name: '设置桥', active: settings !== undefined, note: settings !== undefined ? '使用 ' + binder.service + ' 桥' : '未绑定设置服务（fileOpenTool 持久化不可用）' },
-    { name: '文件打开路由（workspaces.openPath）', active: Boolean(workspaces?.openPath), note: 'vscode 打开器优先，失败回退系统打开' },
+    { name: '文件打开路由（workspaces.openPath）', active: Boolean(workspaces?.openPath), note: 'vscode 打开器优先，失败回退系统打开（0.1.2 及更早 DSH 的对话文件链接主路径）' },
+    { name: '会话文件链接路由（remote.session.openWorkspacePath）', active: remoteOpenInstalled, note: '0.1.3+ 对话文件引用/产物打开优先走插件打开器，失败回退系统打开' },
     { name: '侧边栏打开器（' + SIDEBAR_PLUGIN + '）', active: registry.get(SIDEBAR_PLUGIN) !== undefined, note: registry.get(SIDEBAR_PLUGIN) !== undefined ? '已注册（优先级 80）' : '未检测到侧边栏打开能力' },
     { name: '侧边栏编辑区（' + SIDEBAR_PLUGIN + '）', active: sideService !== undefined, note: sideService !== undefined ? '编辑区=侧边栏 Tab（对话+编辑同屏）' : '未检测到；安装 dsh-better-sidebar 后刷新启用侧边栏形态（' + SIDEBAR_INSTALL_CMD + '）' },
   ]
@@ -173,15 +186,40 @@ export function apply(ctx: any): void {
       workspaces,
       registry,
       selected: () => selected,
-      context: () => {
-        const current = sessions?.list?.getSnapshot?.()
-        const sessionId = current?.current
-        const summary = sessionId ? current?.byId?.[sessionId] : undefined
-        return { sessionId, cwd: summary?.cwd } as FileOpenContext
-      },
-      logger: (message: string) => console.warn('[dsh-vscode-mode] ' + message),
+      context: openContext,
+      logger: routeLogger,
     }), 'vscode-mode: file link routing')
   }
+  // 0.1.3+ 会话文件链接主路径：dsh-client-ui-chat 的 openFile 直接调
+  // remote.session.openWorkspacePath（session/openWorkspacePath RPC），绕开
+  // workspaces.openPath；该 namespace 由 api-remotes 在 loader.await 后挂载，
+  // 晚于本插件 apply，且旧版 DSH 可能整段不存在——不加 inject（避免旧版停等
+  // 永不激活），改为定时探测有界重试（与侧栏服务探测同款节奏）。
+  let remoteRetries = 0
+  const retryRemoteOpen = (): void => {
+    if (remoteOpenInstalled || remoteRetries >= 15) {
+      if (!remoteOpenInstalled) console.warn('[dsh-vscode-mode] 未探测到 remote.session.openWorkspacePath，0.1.3+ 会话文件链接路由未安装')
+      return
+    }
+    remoteRetries += 1
+    schedule(() => {
+      if (remoteOpenInstalled) return
+      const service = probeRemoteOpen(ctx)
+      if (!service) {
+        retryRemoteOpen()
+        return
+      }
+      const disposer = patchRemoteOpen(service, { registry, selected: () => selected, context: openContext, logger: routeLogger })
+      if (!disposer) {
+        console.warn('[dsh-vscode-mode] remote.session 存在但 openWorkspacePath 不可补丁，会话文件链接路由未安装')
+        return
+      }
+      remoteOpenInstalled = true
+      ctx.effect(() => disposer, 'vscode-mode: remote file link routing')
+      console.info('[dsh-vscode-mode] 已安装 0.1.3+ 会话文件链接路由（remote.session.openWorkspacePath）')
+    }, 2000)
+  }
+  retryRemoteOpen()
 
   // 中央「文件编辑」页签（旧形态回退）：类 VSCode 编辑器；侧边栏形态可用时编辑器住 betterSidebar Tab，
   // 本页签不注册（避免双实例：Monaco×2 + diff dock 每会话单源抢占）。
