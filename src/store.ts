@@ -11,6 +11,8 @@ import { SIDECAR, SIDECAR_ARCHIVE } from './paths.js'
 
 export { SIDECAR, SIDECAR_ARCHIVE }
 export const READ_CAP = 8 * 1024 * 1024
+/** 二进制预览/写回上限（PDF 等整文件 base64 传输；文本侧仍用 READ_CAP）。 */
+export const BINARY_READ_CAP = 32 * 1024 * 1024
 
 /** DSH 上下文与会话类型较宽松：本地无 dsh 类型声明，显式 any + 文档约束。 */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

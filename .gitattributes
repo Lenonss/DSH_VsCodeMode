@@ -11,3 +11,5 @@
 *.woff2 binary
 *.ttf binary
 *.ico binary
+*.bcmap binary
+*.pfb binary

@@ -22,6 +22,13 @@
   完整操作条（Keep / Undo / 跳转 / 回滚 / 归档对比），不会再出现第二个差异栏。header 差异角标 +
   DiffLauncher 全局总览 + 归档/批次回滚；状态持久化到工作区旁车（`.dsh-edit-review.json`，重启不丢）。
 - **Monaco 离线分发**：`assets/vendor/monaco` AMD 构建随包发布，经 `/edrv/vendor/*` 前缀路由提供，全离线可用。
+- **PDF 浏览与编辑**（v0.1.55，借鉴开源 [pdf.js](https://github.com/mozilla/pdf.js)，Apache-2.0）：
+  打开 `.pdf` 文件在编辑区页签内直接浏览（连续滚动/翻页/缩放/文本选择，cmaps 支持中文渲染）；
+  工具条进入注释编辑：✎ 文本框 / 🖌 画笔 / 🖍 高亮，`Ctrl+S` 或 💾 保存把批注写回原文件
+  （`pdfDocument.saveDocument()` → `edrv.saveBinary` base64 回写，工作区边界 + 32MB 上限约束）。
+  引擎离线 vendor 于 `assets/vendor/pdfjs`（build + viewer 组件 + cmaps + standard_fonts，约 5MB），
+  与 Monaco 同模式经 `/edrv/vendor/pdfjs/*` 分发；升级版本用 `node scripts/vendor-pdfjs.mjs [版本]`。
+  能力边界：注释级编辑（浏览器开源方案不支持无损改写既有正文文字）；加密 PDF 暂不支持。
 - **文件管理侧边栏**（类 VSCode 活动栏 + 面板）：编辑器内嵌活动栏 + 可拖拽调宽的面板区；首期「资源管理器」= 懒加载目录树
   （展开目录实时读取、点文件在编辑器打开、差异角标、活动文件高亮、`edrv:refresh`/手动 ⟳ 刷新、`Ctrl+B` 显隐并持久化；
   侧栏形态默认收起以节省面板宽度；拖拽调宽下限 = 最小宽度（默认 300，设置 → VSCodeMode → 通用「编辑器」可调 180–560），
@@ -148,6 +155,10 @@ src/
     ├── events.ts       窗口事件助手（edrv:refresh/open-editor/show-launcher；侧栏路由优先、旧页签回退）
     ├── state/          records.ts（摘要/计数/空差异）+ regions.ts（差异区域/行裁剪）纯函数
     ├── monaco/         loader.ts（AMD 加载/语言映射）+ diffRender.ts（差异自绘渲染器）
+    ├── pdf/            pdfLoader.ts（pdf.js vendor 产物 module-script 加载）+ pdfPanel.ts（PDF 面板控制器：
+    │                   PDFViewer 接线/注释编辑模式/saveDocument 保存回写）
+    ├── pdfPreview.ts   PDF 判定与 base64 编解码纯函数（可单测）
+    ├── imagePreview.ts 图片判定与 data URL 纯函数（可单测）
     ├── diffDock.ts     差异 dock 轮转/文案/形态纯函数（对话 dock 与 DiffBox 共用）
     ├── sidebar/        ★ 侧边栏面板系统：registry.ts（注册表，镜像 fileOpeners）+ SidebarView.ts（活动栏/面板区/拖拽调宽）
     │                   + types.ts（SidebarPanelDef/SidebarCtx）+ panels/FileExplorer.ts（文件树面板 #1）

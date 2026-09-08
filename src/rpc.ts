@@ -5,10 +5,11 @@
  * 作者 ddj 2026-08-20
  */
 import type { DecideItem, DecideResult, RpcHandlerMap, RpcMethod, RpcRequestMap, RpcResult, RpcScope } from './shared/rpc.js'
-import { imageMimeOf } from './shared/rpc.js'
+import { binaryMimeOf } from './shared/rpc.js'
 import type { DiffRecord, RecordView } from './shared/types.js'
 import type { Ctx, Session } from './store.js'
 import {
+  BINARY_READ_CAP,
   READ_CAP,
   appendArchiveEntries,
   archiveRecords,
@@ -151,6 +152,36 @@ async function requireSession(ctx: Ctx, sessionId: string | undefined): Promise<
   const cwd = cwdOf(session)
   if (!cwd) return { err: '会话无工作区' }
   return { session, cwd }
+}
+
+/**
+ * 手动保存收尾（edrv.save / edrv.saveBinary 共用）：目录树失效 + 该路径 pending
+ * 文本差异记录标记 superseded 并归档（旧文本 diff 不得再应用到新内容上）。
+ * @author ddj 2026年09月22号
+ * @param ctx DSH 上下文
+ * @param registry 差异记录桶注册表
+ * @param sc requireSession 成功结果（session + cwd）
+ * @param path 保存的文件路径
+ */
+async function afterManualSave(
+  ctx: Ctx,
+  registry: Registry,
+  sc: { session: Session; cwd: string },
+  path: string,
+): Promise<void> {
+  // 手动保存后目录树可能变化（新建/删除文件）：父目录+祖先进失效，后台自愈。
+  invalidateIndex(ctx, sc.cwd, path)
+  const bucket = await bucketOf(registry, ctx, sc.cwd)
+  let changed = false
+  for (const rec of bucket.values()) {
+    if (rec.path === path && rec.superseded !== true) { rec.superseded = true; rec.at = new Date().toISOString(); changed = true }
+  }
+  if (changed) {
+    const done: DiffRecord[] = []
+    for (const rec of bucket.values()) if (rec.path === path && rec.superseded) done.push(rec)
+    if (done.length) await archiveRecords(ctx, sc.session, sc.cwd, bucket, done, '被手动编辑覆盖')
+    else await saveBucket(ctx, sc.cwd, bucket, sc.session)
+  }
 }
 
 /**
@@ -303,13 +334,14 @@ export function buildHandlers(
           // 带上解析后的真实路径：跳转失败时可直接看出是路径解析错还是目标本身不存在
           return { ok: false, error: '文件不存在', resolvedPath: fs.processPath(target) }
         }
-        if ((info.size ?? 0) > READ_CAP) return { ok: false, error: '文件过大（>8MB），不支持整文件预览' }
+        if ((info.size ?? 0) > BINARY_READ_CAP) return { ok: false, error: '文件过大（>32MB），不支持整文件预览' }
         if (args.encoding === 'base64') {
-          // 图片等二进制预览：readBytes 无解码、无二进制拒绝；超上限已由上方 stat 拦截
-          const bytes = await fs.readBytes(target, undefined, READ_CAP)
+          // 图片/PDF 等二进制预览：readBytes 无解码、无二进制拒绝；超上限已由上方 stat 拦截
+          const bytes = await fs.readBytes(target, undefined, BINARY_READ_CAP)
           const content = Buffer.from(bytes).toString('base64')
-          return { ok: true, content, size: bytes.byteLength, encoding: 'base64', mime: imageMimeOf(args.path) }
+          return { ok: true, content, size: bytes.byteLength, encoding: 'base64', mime: binaryMimeOf(args.path) }
         }
+        if ((info.size ?? 0) > READ_CAP) return { ok: false, error: '文件过大（>8MB），不支持整文件预览' }
         const content = await fs.readText(target)
         return { ok: true, content, size: content.length }
       } catch (error) {
@@ -349,22 +381,35 @@ export function buildHandlers(
       try {
         const target = await resolveTarget(ctx, sc.session, args.path)
         await fs.writeText(target, args.content, void 0, void 0, policyOf(ctx, sc.session))
-        // 手动保存后目录树可能变化（新建/删除文件）：父目录+祖先进失效，后台自愈。
-        invalidateIndex(ctx, sc.cwd, args.path)
-        const bucket = await bucketOf(registry, ctx, sc.cwd)
-        let changed = false
-        for (const rec of bucket.values()) {
-          if (rec.path === args.path && rec.superseded !== true) { rec.superseded = true; rec.at = new Date().toISOString(); changed = true }
-        }
-        if (changed) {
-          const done: DiffRecord[] = []
-          for (const rec of bucket.values()) if (rec.path === args.path && rec.superseded) done.push(rec)
-          if (done.length) await archiveRecords(ctx, sc.session, sc.cwd, bucket, done, '被手动编辑覆盖')
-          else await saveBucket(ctx, sc.cwd, bucket, sc.session)
-        }
+        await afterManualSave(ctx, registry, sc, args.path)
         return { ok: true }
       } catch (error) {
         return { ok: false, error: '保存失败：' + String(error) }
+      }
+    },
+    'edrv.saveBinary': async (args) => {
+      if (args.encoding !== 'base64') return { ok: false, error: '仅支持 base64 编码' }
+      const sc = await requireSession(ctx, args.sessionId)
+      if ('err' in sc) return { ok: false, error: sc.err }
+      const fs = ctx.get('fs')
+      if (!fs) return { ok: false, error: '缺少 fs' }
+      try {
+        const target = await resolveTarget(ctx, sc.session, args.path)
+        const info = await fs.stat(target)
+        if (!info || info.type !== 'file') return { ok: false, error: '文件不存在' }
+        // fs 服务仅提供文本写（writeText/editText），二进制回写经 node:fs 直写解析后的
+        // 真实路径；以工作区边界 + 大小上限 + 用户显式保存动作三重约束兜底（对齐
+        // revert.ts deleteCreated 的 contains 用法）。
+        const rootTarget = await fs.resolve(policyOf(ctx, sc.session)?.workspaceRoot ?? '.', {})
+        if (!fs.contains(rootTarget, target)) return { ok: false, error: '拒绝保存：目标不在会话工作区内' }
+        const bytes = Buffer.from(args.content, 'base64')
+        if (bytes.byteLength === 0) return { ok: false, error: '内容为空，拒绝写回' }
+        if (bytes.byteLength > BINARY_READ_CAP) return { ok: false, error: '内容过大（>32MB），拒绝写回' }
+        await writeFile(fs.processPath(target), bytes)
+        await afterManualSave(ctx, registry, sc, args.path)
+        return { ok: true }
+      } catch (error) {
+        return { ok: false, error: '二进制保存失败：' + String(error) }
       }
     },
     'edrv.archiveList': async (args) => {

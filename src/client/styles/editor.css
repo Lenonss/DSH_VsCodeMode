@@ -64,6 +64,17 @@
 [data-edrv-view] .edrv-imgview-stage { flex: 1 1 auto; min-height: 0; display: flex; align-items: center; justify-content: center; overflow: auto; padding: 14px; background-color: var(--dsw-alias-bg-layer-1, #f0f4f4); background-image: conic-gradient(rgba(128,128,128,.14) 25%, transparent 0 50%, rgba(128,128,128,.14) 0 75%, transparent 0); background-size: 16px 16px; }
 [data-edrv-view] .edrv-imgview-img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 4px; box-shadow: 0 2px 12px rgba(31,41,51,.18); }
 [data-edrv-view] .edrv-imgview-broken { display: flex; flex-direction: column; align-items: center; gap: 10px; font-size: 13px; color: var(--dsw-alias-label-tertiary, #777); }
+[data-edrv-view] .edrv-pdf-host { flex: 1 1 auto; min-width: 0; min-height: 0; position: relative; overflow: hidden; }
+[data-edrv-view] .edrv-pdf-host > .edrv-pdf { position: absolute; inset: 0; }
+[data-edrv-view] .edrv-pdf { min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+[data-edrv-view] .edrv-pdf-bar { display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 10px; flex-shrink: 0; border-bottom: 1px solid var(--dsw-alias-border-l1, #e0e6e8); background: var(--dsw-alias-bg-layer-1, transparent); }
+[data-edrv-view] .edrv-pdf-page { font-size: 11px; color: var(--dsw-alias-label-tertiary, #9aa5b1); white-space: nowrap; min-width: 52px; text-align: center; }
+[data-edrv-view] .edrv-pdf-zoom { min-width: 26px; text-align: center; padding: 3px 7px; }
+[data-edrv-view] .edrv-pdf-sep { width: 1px; height: 16px; background: var(--dsw-alias-border-l1, #e0e6e8); margin: 0 2px; }
+[data-edrv-view] .edrv-pdf-mode-on { background: var(--dsw-alias-interactive-bg-hover, rgba(15,157,88,.12)); color: var(--dsw-alias-brand-primary, #0f9d58); border-color: var(--dsw-alias-brand-primary, #0f9d58); }
+[data-edrv-view] .edrv-pdf-dirty { color: var(--dsw-alias-state-warn-primary, #d97706); border-color: var(--dsw-alias-state-warn-primary, #d97706); }
+[data-edrv-view] .edrv-pdf-stage { position: absolute; top: 34px; left: 0; right: 0; bottom: 0; overflow: auto; }
+[data-edrv-view] .edrv-pdf-stage .edrv-pdf-viewer { margin: 0 auto; }
 [data-edrv-view] .edrv-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; height: 100%; color: var(--dsw-alias-label-tertiary, #777); font-size: 13px; }
 [data-edrv-view] .edrv-diffbar { position: absolute; left: 0; right: 0; bottom: 10px; margin: 0 auto; z-index: 25; width: fit-content; max-width: calc(100% - 20px); border-radius: 12px; background: var(--dsw-specific-tip, var(--dsw-alias-bg-layer-2, #f0f4f4)); border: 1px solid var(--dsw-alias-border-l1, #e0e6e8); box-shadow: none; overflow: visible; display: flex; flex-direction: column; }
 [data-edrv-view] .edrv-editor-area > .edrv-diffbar { max-height: calc(100% - 20px); }

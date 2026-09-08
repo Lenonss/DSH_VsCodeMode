@@ -19,6 +19,7 @@ const IMG_ROUTES = [
 /** Monaco AMD 构建静态资源（随包发布，离线可用；前缀路由 /edrv/vendor/*）。 */
 const VENDOR_MIME: Record<string, string> = {
   '.js': 'text/javascript; charset=utf-8',
+  '.mjs': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
   '.json': 'application/json',
   '.map': 'application/json',
@@ -32,6 +33,8 @@ const VENDOR_MIME: Record<string, string> = {
   '.ttf': 'font/ttf',
   '.html': 'text/html; charset=utf-8',
   '.md': 'text/markdown',
+  '.bcmap': 'application/octet-stream',
+  '.pfb': 'application/octet-stream',
 }
 
 /** 图标目录（paths.ts 统一解析：config.imageDir 覆盖优先，否则插件包 assets/）。 */

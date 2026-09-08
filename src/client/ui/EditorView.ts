@@ -10,6 +10,8 @@ import { dbg, rpc } from '../rpc.js'
 import { emitRefresh } from '../events.js'
 import { langOf, loadMonaco } from '../monaco/loader.js'
 import { dataUrlOf, isImagePath, isSvgPath } from '../imagePreview.js'
+import { base64ToBytes, isPdfPath } from '../pdfPreview.js'
+import { createPdfPanel } from '../pdf/pdfPanel.js'
 import { applyTheme, registerThemes, themeNameOf } from '../monaco/theme.js'
 import { createDiffRenderer } from '../monaco/diffRender.js'
 import { ST, callIdAttr, noopHunk, summarize } from '../state/records.js'
@@ -58,6 +60,10 @@ export function EditorView(props) {
   const [imgSize, setImgSize] = React.useState(null) // 图片自然尺寸 { w, h }（路径栏 meta）
   const [imgBroken, setImgBroken] = React.useState(false) // 图片解码失败（onError），显示占位与重试
   const svgTextRef = React.useRef(new Set()) // 强制以文本打开的 SVG 路径集合（toggleSvgText 维护）
+  const [pdfBytes, setPdfBytes] = React.useState(null) // 当前 PDF tab 的原始字节（null=加载中/非 PDF）
+  const pdfB64CacheRef = React.useRef(new Map()) // path → base64（tab 切回免重读；FIFO 上限防内存膨胀）
+  const pdfCtlRef = React.useRef(new Map()) // path → PDF 面板控制器（mount 产出，关闭/卸载销毁）
+  const pdfHostRef = React.useRef(null) // PDF 面板外壳 div（命令式控制器接管）
   const [status, setStatus] = React.useState('')
   const [lspServers, setLspServers] = React.useState([])
   const [error, setError] = React.useState(null)
@@ -124,6 +130,8 @@ export function EditorView(props) {
   const contentReady = content !== null && contentPath === active
   // 当前 tab 是否处于图片预览模式（与 loadContent 的分派条件同源；SVG 文本模式时为 false）
   const isImageActive = !!active && isImagePath(active) && !svgTextRef.current.has(active)
+  // 当前 tab 是否为 PDF 面板（与 loadContent 分派条件同源）
+  const isPdfActive = !!active && isPdfPath(active)
   const regions = React.useMemo(() => diffRegions(currentRecords, contentReady ? content : null).filter((r) => !r.superseded), [currentRecords, content, contentPath, active])
   // useMemo 稳定引用：否则 hover 等重渲染会让 view zone effect 反复重建（- 号闪烁）
   const pendingRegions = React.useMemo(() => regions.filter((r) => r.status === ST.PENDING && !r.stale), [regions])
@@ -274,6 +282,10 @@ export function EditorView(props) {
   const closeTab = (path) => {
     flushSave()
     if (path === active) { saveViewState(path); recordNav() }
+    // PDF tab 关闭：销毁面板控制器并清缓存（未保存注释随之丢弃，脏点已提示）
+    const pdfCtl = pdfCtlRef.current.get(path)
+    if (pdfCtl) { pdfCtl.destroy(); pdfCtlRef.current.delete(path) }
+    pdfB64CacheRef.current.delete(path)
     setTabs((prev) => {
       const idx = prev.findIndex((t) => t.path === path)
       if (idx < 0) return prev
@@ -328,6 +340,11 @@ export function EditorView(props) {
     // 图片文件走专用通道：base64 → data URL 预览，不建 Monaco model、不进文本/差异流程
     if (isImagePath(path) && !svgTextRef.current.has(path)) {
       loadImage(path, sid, seq)
+      return
+    }
+    // PDF 文件走专用通道：base64 → PDF 面板（浏览 + 注释编辑），不建 Monaco model
+    if (isPdfPath(path)) {
+      loadPdf(path, sid, seq, force === true)
       return
     }
     const cachedModel = force ? null : modelsRef.current.get(path)
@@ -401,6 +418,53 @@ export function EditorView(props) {
       }
       const base = res?.error ? String(res.error) : '读取失败'
       // 带出 host 解析后的真实路径：跳转失败时一眼看出是路径解析错还是目标不存在
+      const message = res?.resolvedPath ? base + '：' + String(res.resolvedPath) : base
+      setLoadError(message)
+      setError(message)
+      setStatus('读取失败')
+    }).catch((e) => {
+      if (seq !== loadSeqRef.current) return
+      const message = 'read异常:' + String(e)
+      setLoadError(message)
+      setError(message)
+      setStatus('读取失败')
+    })
+  }
+
+  /**
+   * 加载 PDF 文件为原始字节（编辑区 PDF 面板）；命中 base64 缓存秒切，force 绕过缓存重读。
+   * 面板控制器由 pdf host mount effect 产出（per-path，关闭/卸载销毁）。
+   * @author ddj 2026年09月22号
+   * @param path PDF 文件路径
+   * @param sid 会话 id
+   * @param seq 加载序号（过期响应丢弃）
+   * @param force true=绕过缓存强制 RPC 重读（刷新按钮）
+   */
+  const loadPdf = (path, sid, seq, force) => {
+    setPdfBytes(null)
+    setLoadStage({ progress: monaco ? 72 : 12, message: '读取 PDF…' })
+    const cache = pdfB64CacheRef.current
+    const hit = !force ? cache.get(path) : undefined
+    if (typeof hit === 'string' && hit) {
+      // 刷新插入序（Map 按插入序 FIFO 驱逐）后秒切
+      cache.delete(path)
+      cache.set(path, hit)
+      setPdfBytes(base64ToBytes(hit))
+      setLoadStage({ progress: 100, message: 'PDF 已就绪' })
+      setStatus('已加载')
+      return
+    }
+    rpc('edrv.read', { sessionId: sid, path, encoding: 'base64' }).then((res) => {
+      if (seq !== loadSeqRef.current || path !== active) return
+      if (res && res.ok && res.encoding === 'base64') {
+        cache.set(path, res.content)
+        while (cache.size > 6) cache.delete(cache.keys().next().value)
+        setPdfBytes(base64ToBytes(res.content))
+        setLoadStage({ progress: 100, message: 'PDF 已就绪' })
+        setStatus('已加载')
+        return
+      }
+      const base = res?.error ? String(res.error) : '读取失败'
       const message = res?.resolvedPath ? base + '：' + String(res.resolvedPath) : base
       setLoadError(message)
       setError(message)
@@ -689,6 +753,7 @@ export function EditorView(props) {
     setImageSrc(null)
     setImgSize(null)
     setImgBroken(false)
+    setPdfBytes(null)
     setLoadError(null)
     setLoadStage({ progress: 10, message: '准备读取文件…' })
     setStatus('加载中…')
@@ -757,8 +822,17 @@ export function EditorView(props) {
   }
 
   const doSave = (silent) => {
+    if (!active) return
+    // PDF tab：保存委托给面板控制器（saveDocument → base64 → edrv.saveBinary）
+    if (isPdfPath(active)) {
+      const ctl = pdfCtlRef.current.get(active)
+      if (!ctl) { if (!silent) setStatus('PDF 未就绪'); return }
+      if (!ctl.isDirty()) { if (!silent) setStatus('PDF 无未保存修改'); return }
+      void ctl.savePdf()
+      return
+    }
     const ed = editorRef.current
-    if (!active || !ed) return
+    if (!ed) return
     if (isImageActive) { setStatus('图片只读预览'); return }
     const text = ed.getValue()
     if (!silent) setStatus('保存中…')
@@ -794,6 +868,30 @@ export function EditorView(props) {
     setLoadStage((prev) => ({ progress: Math.max(96, prev.progress), message: '创建编辑器视图…' }))
   }, [monaco, active, content])
 
+  // PDF 面板外壳 ref 回调（div 仅在 PDF 分支渲染，refs 先于 effect 就绪）
+  const ensurePdfHost = (node) => { pdfHostRef.current = node }
+
+  // PDF 面板装配：控制器挂进外壳 div，切换 tab/卸载即销毁（重开重挂，base64 缓存兜底秒切）
+  React.useEffect(() => {
+    const host = pdfHostRef.current
+    if (!isPdfActive || !pdfBytes || !host) return
+    const path = active
+    const ctl = createPdfPanel({
+      sessionId,
+      path,
+      setStatus,
+      setError,
+      onDirtyChange: (d) => setDirtyMap((prev) => Object.assign({}, prev, { [path]: d })),
+      onReload: () => loadContent(path, sessionId, true),
+    })
+    pdfCtlRef.current.set(path, ctl)
+    void ctl.mount(host, pdfBytes)
+    return () => {
+      ctl.destroy()
+      if (pdfCtlRef.current.get(path) === ctl) pdfCtlRef.current.delete(path)
+    }
+  }, [isPdfActive, pdfBytes, active])
+
   // 行内差异自绘（decorations / view zones / minus overlay）→ diffRenderer
   React.useEffect(() => {
     if (!monaco || !editorRef.current || !active || content === null) return
@@ -809,6 +907,8 @@ export function EditorView(props) {
     if (editorRef.current) { editorRef.current.dispose(); editorRef.current = null }
     for (const m of modelsRef.current.values()) m.dispose()
     modelsRef.current.clear()
+    for (const ctl of pdfCtlRef.current.values()) ctl.destroy()
+    pdfCtlRef.current.clear()
     const root = editorRef.current && editorRef.current.getDomNode ? editorRef.current.getDomNode() : null
     if (root) {
       const ov = root.querySelector('.edrv-minus-overlay')
@@ -1287,8 +1387,8 @@ export function EditorView(props) {
   const openPath = () => {
     const p = (pathDraft || '').trim()
     if (!p) return
-    // 图片文件跳过文本读探测（二进制会被 host 拒绝），直接进 tab 由 loadImage 接管
-    if (isImagePath(p)) {
+    // 图片/PDF 文件跳过文本读探测（二进制会被 host 拒绝），直接进 tab 由专用预览接管
+    if (isImagePath(p) || isPdfPath(p)) {
       openFile(p, false)
       setOpenInput(false); setPathDraft(''); setStatus('已打开'); setError(null)
       return
@@ -1419,6 +1519,10 @@ export function EditorView(props) {
     body = imagePanel()
   } else if (isImageActive) {
     body = loadingBody(loadStage.message || '读取图片…', loadStage.progress)
+  } else if (isPdfActive && pdfBytes) {
+    body = React.createElement('div', { className: 'edrv-pdf-host', ref: ensurePdfHost, key: active })
+  } else if (isPdfActive) {
+    body = loadingBody(loadStage.message || '读取 PDF…', loadStage.progress)
   } else if (content === null) {
     body = loadingBody(loadStage.message || '读取文件内容…', loadStage.progress)
   } else {

@@ -5,7 +5,7 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
 
 # dsh-vscode-mode 开发/发布经验集（自我更新型技能）
 
-> updated: 2026-09-08 · 维护者：ddj（AI 会话按文末协议追加，保持精炼、去重）
+> updated: 2026-09-22 · 维护者：ddj（AI 会话按文末协议追加，保持精炼、去重）
 
 ## 何时使用
 
@@ -40,6 +40,20 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
   pnpm v11 默认拦截依赖构建脚本，白名单在 profile `pnpm-workspace.yaml` 的 `allowBuilds`。
 - 2026-09-08 事实：`@vscode/ripgrep` 新版经平台可选包（`@vscode/ripgrep-win32-x64`）分发 rg.exe，
   不在 `@vscode/ripgrep/bin`（勿按旧路径判缺失）；rg 不可用时插件搜索报「ripgrep 不可用」并降级。
+- 2026-09-22 坑：裸 Junction（manifest 依赖仍是版本号）会被 DSH 启动从插件缓存恢复成实目录覆盖 →
+  持久开发形态 = manifest 依赖写 `link:<源码目录>` + Junction + profile `pnpm install`
+  （本插件可直接 RPC `vscode.devFormSet {enabled:true,path}`，返回 restart:true 后重启生效）。
+- 2026-09-22 事实：运行中判别 host 是否新构建——POST /edrv/rpc 调只有新代码才有的方法，旧版统一回
+  「未知方法: ...」；vendor 静态资源看 `/edrv/vendor/*` 状态码与 Content-Type。
+- 2026-09-22 坑：client CSS 构建期内联 `<style data-plugin-css>`（同 tagId 幂等跳过）→ 同文档热重载
+  旧样式残留，改 CSS 必须整页刷新才生效；验证是否随包生效直接 grep lib/client.js。
+- 2026-09-22 坑：编辑区新增命令式面板外壳（React 条件分支的空 div）不给尺寸样式 → flex 子项
+  0 高度，面板执行正常但整片空白无报错；对齐 .edrv-monaco-host 模式（外壳 flex:1+min-height:0+
+  position:relative，内层 absolute inset:0）。
+- 2026-09-22 事实：client 包内加载第三方 ESM 库（v0.1.55 pdf.js）= vendor 产物入 assets/vendor/ +
+  VENDOR_MIME 补扩展名（.mjs 必须 text/javascript，ESM import 严格校验 MIME；.bcmap/.pfb 等标 binary）+
+  运行时一条 module-script 按序 import 产物挂 window handoff（打包器会改写源码内 import(URL)）；
+  库枚举值跨版本漂移（pdf.js AnnotationEditorType.NONE=0/1），对照官方接线源码核实后再硬编码。
 
 ## CI/测试平台陷阱（写测试前必读）
 
@@ -52,7 +66,8 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
 - 本地 Windows 全绿不代表 CI 绿——发布前自问：新断言在 Linux 上成立吗？
 - 2026-09-08 坑：DSH 会话沙箱内 vitest 必挂 esbuild `spawn EPERM`（esbuild 异步 build/transform
   API 恒 spawn 服务子进程，`ESBUILD_WORKER_THREADS` 只救 *Sync 变体，vite 不用）→ 测试/发布
-  三门在用户真实终端或 CI 执行，会话内只跑 typecheck（tsc 无子进程）与 build（rolldown 原生）。
+  三门在用户真实终端或 CI 执行，会话内只跑 typecheck（tsc 无子进程）与 build（rolldown 原生）；
+  2026-09-22 补：沙箱文件策略升到 danger-full-access 后进程 spawn 不再受限，会话内 vitest 可跑。
 
 ## DSH host 环境约束
 

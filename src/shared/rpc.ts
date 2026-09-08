@@ -51,6 +51,22 @@ export function imageMimeOf(path: string): string {
   return IMAGE_MIME[ext] ?? 'application/octet-stream'
 }
 
+/** PDF 统一 MIME（host base64 响应与 client PDF 面板同源，避免两处漂移）。 */
+export const PDF_MIME = 'application/pdf'
+
+/**
+ * 路径 → 二进制预览 MIME：PDF 特判 {@link PDF_MIME}，其余走图片表回退 octet-stream。
+ * @author ddj 2026年09月22号
+ * @param path 文件路径（`/` 或 `\` 分隔均可）
+ * @returns MIME 字符串
+ */
+export function binaryMimeOf(path: string): string {
+  const base = String(path || '').split(/[\\/]/).pop() || ''
+  const dot = base.lastIndexOf('.')
+  if (dot > 0 && base.slice(dot + 1).toLowerCase() === 'pdf') return PDF_MIME
+  return imageMimeOf(path)
+}
+
 /** 决策作用域：call=整条记录，hunk=单个差异块。 */
 export type RpcScope = 'call' | 'hunk'
 
@@ -144,6 +160,7 @@ export interface RpcRequestMap {
   'edrv.read': { sessionId?: string; path: string; encoding?: 'base64' }
   'edrv.original': { sessionId?: string; path: string }
   'edrv.save': { sessionId?: string; path: string; content: string }
+  'edrv.saveBinary': { sessionId?: string; path: string; content: string; encoding: 'base64' }
   'edrv.archiveList': { sessionId?: string }
   'edrv.archiveRead': { sessionId?: string; path?: string }
   'edrv.rollback': { sessionId?: string; path: string; batch?: number }
@@ -227,6 +244,7 @@ export interface RpcOkMap {
   'edrv.read': { content: string; size: number; encoding?: 'base64'; mime?: string }
   'edrv.original': { content: string; size: number; stale: StaleHunk[]; fallback: boolean }
   'edrv.save': object
+  'edrv.saveBinary': object
   'edrv.archiveList': { entries: ArchiveEntry[] }
   'edrv.archiveRead': { batches: ArchiveBatch[] }
   'edrv.rollback': { path: string; batch: number | null }
