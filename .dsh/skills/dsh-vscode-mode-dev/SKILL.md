@@ -28,6 +28,19 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
    `GET /repos/Lenonss/DSH_VsCodeMode/commits/<sha>/check-runs` → 失败 check 的
    `/annotations` 可直接拿到失败用例名与断言差异（无需任何凭据）。
 
+## 开发/部署形态切换（profile 安装形态）
+
+- 开发形态 = profile node_modules 里 Junction → 源码目录（构建即生效）；正式形态 = npm 版本依赖。
+  解除：备份 profile `package.json` → 依赖改 `^<version>` → `cmd /c rmdir` 删 Junction（只删重解析点，
+  禁用 `Remove-Item -Recurse` 以防触达源码）→ profile 内 `pnpm install` → 重启 DSH 生效
+  （运行中 host 半仍是旧代码）。解除后源码改动不再直达 profile，需走 tag 发布 + `pnpm install`。
+- 2026-09-08 坑：profile 依赖写 `file:...tgz` 但实际装的是手动 Junction 时，`readDevForm` 只认
+  `link:` 前缀 → 兼容性报告误报「非开发形态」；依赖声明必须与实际安装方式一致。
+- 2026-09-08 事实：web profile pnpm 为 `nodeLinker: hoisted`（无 .pnpm 分层，包是顶层实目录）；
+  pnpm v11 默认拦截依赖构建脚本，白名单在 profile `pnpm-workspace.yaml` 的 `allowBuilds`。
+- 2026-09-08 事实：`@vscode/ripgrep` 新版经平台可选包（`@vscode/ripgrep-win32-x64`）分发 rg.exe，
+  不在 `@vscode/ripgrep/bin`（勿按旧路径判缺失）；rg 不可用时插件搜索报「ripgrep 不可用」并降级。
+
 ## CI/测试平台陷阱（写测试前必读）
 
 - CI 跑 ubuntu：新测试断言**禁止写死 Windows 反斜杠路径**。`path.join` 结果在 Linux 是 `/`
