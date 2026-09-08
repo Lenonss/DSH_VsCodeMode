@@ -56,12 +56,13 @@ describe('iniContent / 工具路径', () => {
     expect(iniContent('')).toBe('[dsh]\nbase=' + INTEGRATION_BASE_DEFAULT + '\n')
   })
 
-  it('reg.exe / csc.exe 由 SystemRoot 派生', () => {
-    expect(regExe({ SystemRoot: 'D:\\Win' })).toBe('D:\\Win\\System32\\reg.exe')
-    expect(regExe({})).toBe('C:\\Windows\\System32\\reg.exe')
-    const candidates = cscCandidates({ SystemRoot: 'C:\\Windows' })
+  it('reg.exe / csc.exe 由 SystemRoot 派生（分隔符随平台，归一后断言）', () => {
+    const slash = (p: string): string => p.replace(/\\/g, '/')
+    expect(slash(regExe({ SystemRoot: 'D:\\Win' }))).toBe('D:/Win/System32/reg.exe')
+    expect(slash(regExe({}))).toBe('C:/Windows/System32/reg.exe')
+    const candidates = cscCandidates({ SystemRoot: 'C:\\Windows' }).map(slash)
     expect(candidates[0]).toContain('Framework64')
-    expect(candidates[1]).toContain('Microsoft.NET\\Framework\\v4.0.30319')
+    expect(candidates[1]).toContain('Microsoft.NET/Framework/v4.0.30319')
     expect(LAUNCHER_EXE).toBe('dsh-open.exe')
     expect(LAUNCHER_PS1).toBe('dsh-open.ps1')
   })

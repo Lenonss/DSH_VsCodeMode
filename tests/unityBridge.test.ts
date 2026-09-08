@@ -67,11 +67,12 @@ describe('纯函数', () => {
     expect(isUnityProject([])).toBe(false)
   })
 
-  it('unityTargetOf 固定到 Packages/com.dsh.editor；unitySourceDir 按 moduleUrl 推导', () => {
-    expect(unityTargetOf('D:\\Work\\PopIsland')).toBe('D:\\Work\\PopIsland\\Packages\\com.dsh.editor')
+  it('unityTargetOf 固定到 Packages/com.dsh.editor；unitySourceDir 按 moduleUrl 推导（分隔符归一后断言）', () => {
+    const slash = (p: string): string => p.replace(/\\/g, '/')
+    expect(slash(unityTargetOf('D:\\Work\\PopIsland'))).toBe('D:/Work/PopIsland/Packages/com.dsh.editor')
     const moduleUrl = pathToFileURL('C:\\x\\y\\lib\\index.js').href
-    expect(unitySourceDir(moduleUrl).replace(/\\/g, '/')).toBe('C:/x/y/unity/com.dsh.editor')
-    expect(unityProjectsFile('C:\\home\\.dsh')).toBe('C:\\home\\.dsh\\dsh-vscode-mode\\unity-projects.json')
+    expect(slash(unitySourceDir(moduleUrl))).toBe('C:/x/y/unity/com.dsh.editor')
+    expect(slash(unityProjectsFile('C:\\home\\.dsh'))).toBe('C:/home/.dsh/dsh-vscode-mode/unity-projects.json')
   })
 
   it('readPackageVersion 缺失/非法 → null', async () => {
