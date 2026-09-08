@@ -67,12 +67,21 @@ describe('纯函数', () => {
     expect(isUnityProject([])).toBe(false)
   })
 
-  it('unityTargetOf 固定到 Packages/com.dsh.editor；unitySourceDir 按 moduleUrl 推导（分隔符归一后断言）', () => {
+  it('unityTargetOf 固定到 Packages/com.dsh.editor；unityProjectsFile 固定（分隔符归一后断言）', () => {
     const slash = (p: string): string => p.replace(/\\/g, '/')
     expect(slash(unityTargetOf('D:\\Work\\PopIsland'))).toBe('D:/Work/PopIsland/Packages/com.dsh.editor')
-    const moduleUrl = pathToFileURL('C:\\x\\y\\lib\\index.js').href
-    expect(slash(unitySourceDir(moduleUrl))).toBe('C:/x/y/unity/com.dsh.editor')
     expect(slash(unityProjectsFile('C:\\home\\.dsh'))).toBe('C:/home/.dsh/dsh-vscode-mode/unity-projects.json')
+  })
+
+  it('unitySourceDir 按 moduleUrl 推导（按平台构造合法 file URL）', () => {
+    const slash = (p: string): string => p.replace(/\\/g, '/')
+    if (process.platform === 'win32') {
+      const url = pathToFileURL('C:\\x\\y\\lib\\index.js').href
+      expect(slash(unitySourceDir(url))).toBe('C:/x/y/unity/com.dsh.editor')
+    } else {
+      // Linux：无盘符 file URL → fileURLToPath 得 /x/y/lib/index.js
+      expect(slash(unitySourceDir('file:///x/y/lib/index.js'))).toBe('/x/y/unity/com.dsh.editor')
+    }
   })
 
   it('readPackageVersion 缺失/非法 → null', async () => {
