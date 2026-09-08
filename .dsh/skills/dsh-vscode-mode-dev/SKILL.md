@@ -84,6 +84,10 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
 - 诊断通道：工作区注册表在 `~/.dsh/storages/workspace.json`
   （`tables.workspaces[id] = {path,title,sessionIds}`）；DSH `fs.resolve` 绝对路径直过
   （cwd 非边界），插件可读任意绝对路径文件，保存仍受会话沙箱 `policyOf` 约束。
+- 2026-09-22 坑：沙箱内 `git push` 挂在凭据辅助器（Git sh.exe `couldn't create signal pipe`，Win32 error 5
+  → could not read Username），commit 正常 → push 对同一命令一次性升 danger-full-access 重试即可。
+- 2026-09-22 坑：后台 pwsh 任务出站 HTTPS 恒报 `The SSL connection could not be established` → 会话内
+  查 CI/registry 用 web_fetch 工具（api.github.com、registry.npmjs.org 直达），不起后台轮询任务。
 
 ## Unity 外部编辑器（com.dsh.editor）
 
@@ -92,6 +96,9 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
 - `CodeEditor.Register` 的安装条目路径可能被下拉按存在性过滤 → 用真实存在路径
   （`EditorApplication.applicationPath`），`TryGetInstallationForPath` 同时认虚拟路径与真实路径。
 - "Open C# Project" 传入**空路径** → 视为打开 Unity 项目根。
+- Unity 内置 `CodeEditor.OnOpenAsset` 对双击的**任何**资产（含 prefab/scene）回调 `OpenProject`，返回 true
+  即视为已处理 → 外部编辑器必须按扩展名白名单过滤、不支持时 return false（对齐
+  `DefaultExternalCodeEditor`），否则双击预制体/场景被外部编辑器劫持（v0.1.56 修复）。
 - 极简 JSON 提取器偏移：`"key":` 起点 = `key.Length + 3`；`"key":"` 起点 = `key.Length + 4`。
 - 内嵌包更新 = 整目录替换 + Unity 重新聚焦自动生效；版本号驱动设置页「可更新」徽标；
   Unity 生成的 `.meta` 文件要随 git 提交（稳定 GUID）。
