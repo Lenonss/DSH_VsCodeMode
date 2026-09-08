@@ -2,6 +2,6 @@
   "name": "com.dsh.editor",
   "displayName": "DSH 文件编辑",
   "description": "DSH（dsh-vscode-mode）编辑器集成：把「DSH 文件编辑」注册为 Unity 外部脚本编辑器，双击脚本或 Console 报错跳转时，优先把打开请求移交已打开的 DSH 页面就地执行（不重复开新页），无活跃页面时回退经默认浏览器深链打开对应文件与行列。支持从 DSH 设置页一键安装/更新（内嵌包方式，无需手动改 manifest.json）。",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "unity": "2019.4"
 }

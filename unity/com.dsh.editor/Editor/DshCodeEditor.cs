@@ -6,6 +6,9 @@
 // 回退 Application.OpenURL 深链。移交全程后台线程（不阻塞编辑器主线程），
 // 回退开浏览器经 EditorApplication.delayCall 切回主线程。
 // 深链契约见插件 src/shared/externalOpen.ts（edrvOpen/edrvPaths/edrvLine/edrvColumn）。
+// 过滤：Unity 对双击的任何资产（含 prefab/scene）都会回调 OpenProject；仅放行文本/代码类
+// 扩展名（白名单 + Project Settings 用户扩展），其余返回 false 交还 Unity 原生处理
+// （双击预制体进预制体模式、双击场景开场景），对齐 DefaultExternalCodeEditor 行为。
 // 作者 ddj 2026-09-08
 using System;
 using System.IO;
@@ -25,7 +28,7 @@ namespace Dsh.EditorIntegration
         private const string VirtualPath = "dsh-editor://vscode-mode";
         private const string BaseUrlPref = "DshEditor.BaseUrl";
         private const string DefaultBaseUrl = "http://127.0.0.1:3080";
-        private const string DshVersion = "0.2.3";
+        private const string DshVersion = "0.2.4";
         internal const string VersionText = DshVersion;
 
         static DshCodeEditor()
@@ -96,9 +99,52 @@ namespace Dsh.EditorIntegration
         public bool OpenProject(string path, int line, int column)
         {
             // Open C# Project（Assets 菜单）传入空路径：视为打开 Unity 项目根（按文件夹规则路由）
-            var target = string.IsNullOrEmpty(path) ? ProjectRoot() : ResolveAbsolute(path);
-            BeginOpen(target, line, column);
+            if (string.IsNullOrEmpty(path))
+            {
+                BeginOpen(ProjectRoot(), line, column);
+                return true;
+            }
+
+            // 非文本/代码文件（prefab/scene/asset/模型/纹理等）不交 DSH：返回 false 交还 Unity 原生
+            // 处理（双击预制体进预制体模式、双击场景开场景），否则 Unity 双击资产会被本编辑器劫持。
+            var absPath = ResolveAbsolute(path);
+            if (!IsSupportedFile(absPath)) return false;
+
+            BeginOpen(absPath, line, column);
             return true;
+        }
+
+        /// <summary>文本/代码类扩展名白名单：官方 DefaultExternalCodeEditor 支持集 + 常见文本/脚本类型。</summary>
+        private static readonly string[] SupportedExtensions =
+        {
+            "cs", "txt", "log", "json", "xml", "md", "yaml", "yml", "meta", "ini", "csv", "tsv",
+            "lua", "py", "js", "jsx", "ts", "tsx", "css", "html", "htm", "sql",
+            "sh", "bat", "ps1", "c", "h", "cpp", "hpp", "cc",
+            "shader", "compute", "cginc", "hlsl", "glslinc", "template", "raytrace",
+            "asmdef", "asmref", "uxml", "uss"
+        };
+
+        /// <summary>
+        /// 判定文件是否支持交 DSH 打开：白名单命中，或 Unity Project Settings 用户自定义扩展命中。
+        /// @author ddj 2026年09月22号
+        /// </summary>
+        /// <param name="absPath">资产绝对路径</param>
+        /// <returns>true = 支持 DSH 打开；false = 交还 Unity 原生处理</returns>
+        private static bool IsSupportedFile(string absPath)
+        {
+            var ext = Path.GetExtension(absPath);
+            if (string.IsNullOrEmpty(ext)) return false;
+            ext = ext.Substring(1).ToLowerInvariant();
+            if (Array.IndexOf(SupportedExtensions, ext) >= 0) return true;
+
+            var userExts = EditorSettings.projectGenerationUserExtensions;
+            if (userExts == null) return false;
+            foreach (var userExt in userExts)
+            {
+                if (string.Equals(userExt, ext, StringComparison.OrdinalIgnoreCase)) return true;
+                if (string.Equals(userExt, "." + ext, StringComparison.OrdinalIgnoreCase)) return true;
+            }
+            return false;
         }
 
         /// <summary>

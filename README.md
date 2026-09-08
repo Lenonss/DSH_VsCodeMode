@@ -285,6 +285,10 @@ V8 展开约 10×）。会话越多越大，启动内存越高，可能冲爆堆
   `Editor/com.dsh.editor.asmdef`，`"unity": "2019.4"` 基线；机制参照 com.unity.ide.traeCN 的
   `IExternalCodeEditor`：虚拟安装 `dsh-editor://vscode-mode`，`OpenProject` → `Application.OpenURL(深链)`，
   不需要本地可执行文件，不生成 csproj）。
+- **打开过滤**：Unity 对双击的任何资产（含 prefab/scene）都会回调 `OpenProject`；仅文本/代码类扩展名
+  （白名单 + Project Settings 用户自定义扩展 `EditorSettings.projectGenerationUserExtensions`）交 DSH
+  打开，其余返回 `false` 交还 Unity 原生处理（双击预制体进预制体模式、双击场景开场景），对齐官方
+  `DefaultExternalCodeEditor` 行为。
 - **一键安装/更新**：设置页登记 Unity 项目根（校验 `Assets` + `ProjectSettings` 特征）后，点「安装/更新」把包源
   整目录复制为 `<项目>/Packages/com.dsh.editor`（Unity **内嵌包**自动发现，无需改 manifest.json）；更新 = 整目录
   替换，列表显示已装版本与「可更新」徽标；目标已存在且 `package.json` name 不是 `com.dsh.editor` 时拒绝覆盖。

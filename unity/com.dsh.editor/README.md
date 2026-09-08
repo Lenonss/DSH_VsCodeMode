@@ -29,5 +29,7 @@
 - 本包为虚拟外部编辑器：不需要本地可执行文件。打开优先走「移交」：POST 到 DSH host 的
   `edrv.external.handoff`，已打开页面 3s 轮询领取并执行打开规则（文件夹/文件的智能路由见插件 README）；
   无活跃页面或 2s 未领取时回退 `Application.OpenURL` 深链。移交在后台线程执行，不阻塞编辑器。
+- 仅文本/代码类文件（扩展名白名单 + Project Settings 用户自定义扩展）交 DSH 打开；双击预制体、
+  场景、模型、纹理等资源不受影响，仍由 Unity 原生处理（预制体编辑模式、场景打开等）。
 - 编辑器内查看任意绝对路径文件；保存受 DSH 会话沙箱策略约束（工作区外保存会被拒绝，属预期安全行为）。
 - 卸载：删除 `<项目>/Packages/com.dsh.editor` 目录，并在 External Script Editor 换回其他编辑器。
