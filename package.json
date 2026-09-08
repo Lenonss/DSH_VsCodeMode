@@ -39,7 +39,7 @@
     "unity",
     "cordis.patch.yml"
   ],
-  "license": "BSD-3-Clause",
+  "license": "MIT",
   "dependencies": {
     "@vscode/ripgrep": "^1.18.0"
   },
