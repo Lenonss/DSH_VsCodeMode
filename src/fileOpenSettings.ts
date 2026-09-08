@@ -9,10 +9,11 @@
  */
 import type { Ctx } from './store.js'
 import { KEYBINDING_DEFAULTS } from './shared/keybindings.js'
+import { INTEGRATION_BASE_DEFAULT } from './shared/integration.js'
 
 export const FILE_OPEN_SETTINGS_NS = 'dsh-vscode-mode'
 export const FILE_OPEN_DEFAULT = 'auto'
-export interface FileOpenSettings { fileOpenTool: string }
+export interface FileOpenSettings { fileOpenTool: string; integrationBaseUrl: string }
 export interface FileOpenSettingsState { value: string; revision?: number; update: (value: string, expectedRevision?: number) => Promise<void> }
 
 type SettingsProvider = {
@@ -182,6 +183,12 @@ function configValue(config: unknown): string {
   return normalizeValue((config as { fileOpenTool?: unknown } | undefined)?.fileOpenTool)
 }
 
+/** 配置/设置里的深链基址（缺省/非法回退默认值）。 */
+function baseValueOf(config: unknown): string {
+  const raw = (config as { integrationBaseUrl?: unknown } | undefined)?.integrationBaseUrl
+  return typeof raw === 'string' && raw.trim() ? raw.trim() : INTEGRATION_BASE_DEFAULT
+}
+
 /**
  * 安装设置 section（版本自适应；任一策略不可用返回 false 不抛错）。
  * @author ddj 2026年08月24号 / 2026年09月02号
@@ -210,6 +217,7 @@ export async function installOpenSettingsSection(
     fileOpenTool: deps.z.string().default(FILE_OPEN_DEFAULT),
     keybindings: deps.z.object(keybindingsShape(deps.z)).default({ ...KEYBINDING_DEFAULTS }),
     sidebarMinWidth: deps.z.number().default(300),
+    integrationBaseUrl: deps.z.string().default(INTEGRATION_BASE_DEFAULT),
   })
   const strategy = await runSettingsInstall(ctx, ns, schema, entry, {
     setSource: (source) => hooks.setSource(source as () => FileOpenSettings),
@@ -238,7 +246,7 @@ export function setupOpenSettings(ctx: Ctx, config: unknown, onChange: (value: s
   const setSource = (source: () => FileOpenSettings): void => notify(source().fileOpenTool)
   const settingsChange = (): void => syncRevision()
 
-  void installOpenSettingsSection(ctx, FILE_OPEN_SETTINGS_NS, { fileOpenTool: current }, { setSource, onChange: settingsChange })
+  void installOpenSettingsSection(ctx, FILE_OPEN_SETTINGS_NS, { fileOpenTool: current, integrationBaseUrl: baseValueOf(config) }, { setSource, onChange: settingsChange })
   ctx.inject?.(['settings'], (settingsCtx: Ctx) => {
     provider = settingsCtx.get('settings')
     syncRevision()

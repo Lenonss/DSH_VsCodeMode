@@ -25,6 +25,7 @@ import { loadMonaco } from './monaco/loader.js'
 import { createFileOpenerRegistry, scanSidebar, type FileOpenContext } from './fileOpeners.js'
 import type { FileOpenerRegistry } from './fileOpeners.js'
 import { installOpenPathRouter, vscodeOpener, autoValue } from './openPathRouter.js'
+import { setupExtOpen } from './externalOpen.js'
 import { SettingsContext } from './settingsContext.js'
 import { SIDEBAR_PLUGIN, pickSettingsBinder, registerSlotSafely } from './compat.js'
 import { detectSidebarService, installSideEditor, setEnsureSideEditor, SIDEBAR_INSTALL_CMD } from './sidebarBridge.js'
@@ -61,6 +62,9 @@ export function apply(ctx: any): void {
   const registry: FileOpenerRegistry = createFileOpenerRegistry()
   const workspaces = ctx.get('workspaces')
   const sessions = ctx.get('sessions')
+
+  // 外部深链落地：Windows 右键菜单 / Unity 外部编辑器 → 浏览器 URL 参数 → 打开规则路由
+  setupExtOpen(ctx)
 
   // Monaco 加载时机：不再 DSH 启动即预热，改为进入会话界面（sessions.list.current 出现）后再后台加载，
   // 用户点开「文件编辑」页签即用；空闲时仍由 EditorView 挂载兜底加载。

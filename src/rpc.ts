@@ -32,6 +32,10 @@ import { rulesList, rulesRead, rulesRemove, rulesSave, rulesToggle } from './rul
 import { listMcp, refreshMcp, removeMcp, saveMcp, toggleMcp } from './mcp.js'
 import { listProjects, projectRefresh, projectRemove, projectSave, projectToggle } from './mcpProject.js'
 import { normalizeFileOpenTool, FILE_OPEN_DEFAULT, FILE_OPEN_SETTINGS_NS } from './fileOpenSettings.js'
+import { INTEGRATION_BASE_DEFAULT } from './shared/integration.js'
+import { shellMenuRegister, shellMenuRemove, shellMenuStatus } from './integrate.js'
+import { unityAdd, unityInstall, unityList, unityRemove } from './unityBridge.js'
+import { handoffOpen, pendingState, pollPending } from './externalHandoff.js'
 import { buildReport } from './compat.js'
 import { findProfileDir, readDevForm, setDevForm } from './devForm.js'
 import { normalizeRel } from './tree.js'
@@ -214,6 +218,15 @@ async function latestPatchBackup(patchPath: string): Promise<string | undefined>
   const base = basename(patchPath)
   const names = await readdir(dir).catch(() => [])
   return names.filter((n) => n.startsWith(base + '.bak-')).sort().reverse()[0]
+}
+
+/** 读取设置中的深链基址（缺省/非法回退默认 3080）。 */
+async function integrationBaseUrlOf(ctx: Ctx): Promise<string> {
+  const settings = ctx.get('settings')
+  const descriptor = settings?.describe?.({ redactSecrets: true })?.find((item: { ns?: string }) => item.ns === FILE_OPEN_SETTINGS_NS)
+  const value = descriptor?.value as { integrationBaseUrl?: unknown } | undefined
+  const raw = typeof value?.integrationBaseUrl === 'string' ? value.integrationBaseUrl.trim() : ''
+  return raw || INTEGRATION_BASE_DEFAULT
 }
 
 /** 各方法 handler 表（类型由 shared/rpc 的 RpcHandlerMap 约束）。 */
@@ -524,16 +537,18 @@ export function buildHandlers(
       const settings = ctx.get('settings')
       const descriptor = settings?.describe?.({ redactSecrets: true })?.find((item: { ns?: string }) => item.ns === FILE_OPEN_SETTINGS_NS)
       const value = descriptor?.value as { fileOpenTool?: unknown } | undefined
-      return { ok: true, fileOpenTool: normalizeFileOpenTool(value?.fileOpenTool ?? FILE_OPEN_DEFAULT), revision: descriptor?.revision }
+      return { ok: true, fileOpenTool: normalizeFileOpenTool(value?.fileOpenTool ?? FILE_OPEN_DEFAULT), integrationBaseUrl: await integrationBaseUrlOf(ctx), revision: descriptor?.revision }
     },
     'vscode.fileOpenSettingsUpdate': async (args) => {
       const settings = ctx.get('settings')
       if (!settings?.update) return { ok: false, error: '设置服务不可用' }
       try {
-        await settings.update(FILE_OPEN_SETTINGS_NS, { fileOpenTool: normalizeFileOpenTool(args.fileOpenTool) }, args.expectedRevision)
+        const patch: Record<string, unknown> = { fileOpenTool: normalizeFileOpenTool(args.fileOpenTool) }
+        if (typeof args.integrationBaseUrl === 'string' && args.integrationBaseUrl.trim()) patch.integrationBaseUrl = args.integrationBaseUrl.trim()
+        await settings.update(FILE_OPEN_SETTINGS_NS, patch, args.expectedRevision)
         const descriptor = settings.describe?.({ redactSecrets: true })?.find((item: { ns?: string }) => item.ns === FILE_OPEN_SETTINGS_NS)
         const value = descriptor?.value as { fileOpenTool?: unknown } | undefined
-        return { ok: true, fileOpenTool: normalizeFileOpenTool(value?.fileOpenTool), revision: descriptor?.revision }
+        return { ok: true, fileOpenTool: normalizeFileOpenTool(value?.fileOpenTool), integrationBaseUrl: await integrationBaseUrlOf(ctx), revision: descriptor?.revision }
       } catch (error) { return { ok: false, error: String(error) }
       }
     },
@@ -548,6 +563,78 @@ export function buildHandlers(
         return { ok: false, error: String(error) }
       }
     },
+    'edrv.integration.status': async () => {
+      try {
+        return { ok: true, ...(await shellMenuStatus(ctx, await integrationBaseUrlOf(ctx))) }
+      } catch (error) {
+        return { ok: false, error: String(error) }
+      }
+    },
+    'edrv.integration.register': async () => {
+      try {
+        return { ok: true, ...(await shellMenuRegister(ctx, await integrationBaseUrlOf(ctx))) }
+      } catch (error) {
+        return { ok: false, error: String(error) }
+      }
+    },
+    'edrv.integration.unregister': async () => {
+      try {
+        return { ok: true, ...(await shellMenuRemove(ctx, await integrationBaseUrlOf(ctx))) }
+      } catch (error) {
+        return { ok: false, error: String(error) }
+      }
+    },
+    'edrv.unity.list': async () => {
+      try {
+        return { ok: true, ...(await unityList()) }
+      } catch (error) {
+        return { ok: false, error: String(error) }
+      }
+    },
+    'edrv.unity.add': async (args) => {
+      try {
+        return { ok: true, project: await unityAdd(args.path) }
+      } catch (error) {
+        return { ok: false, error: String(error) }
+      }
+    },
+    'edrv.unity.remove': async (args) => {
+      try {
+        await unityRemove(args.path)
+        return { ok: true }
+      } catch (error) {
+        return { ok: false, error: String(error) }
+      }
+    },
+    'edrv.unity.install': async (args) => {
+      try {
+        return { ok: true, project: await unityInstall(args.path) }
+      } catch (error) {
+        return { ok: false, error: String(error) }
+      }
+    },
+    'edrv.externalStat': async (args) => {
+      // 深链判型（无会话依赖）：绝对路径直过 resolve；缺失/其他类型归入 missing
+      const fs = ctx.get('fs')
+      if (!fs) return { ok: false, error: '缺少 fs' }
+      try {
+        const target = await fs.resolve(args.path)
+        const info = await fs.stat(target)
+        if (!info || info.type === 'other') return { ok: true, kind: 'missing' }
+        return { ok: true, kind: info.type === 'directory' ? 'directory' : 'file' }
+      } catch (error) {
+        return { ok: false, error: String(error) }
+      }
+    },
+    'edrv.external.handoff': async (args) => ({
+      ok: true,
+      ...handoffOpen({ paths: args.paths, line: args.line, column: args.column }),
+    }),
+    'edrv.external.pending': async () => ({ ok: true, open: pollPending() }),
+    'edrv.external.pendingState': async (args) => ({
+      ok: true,
+      delivered: pendingState(args.token, args.take === true).delivered,
+    }),
     'edrv.perf.inventory': async () => {
       try {
         const home = dshHome()

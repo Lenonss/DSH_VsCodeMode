@@ -14,6 +14,7 @@ import type {
 } from './types.js'
 import type { MpcConfig, MpcProject, MpcProjectSaveInput, MpcServer } from './mcp.js'
 import type { CompatReport, DevFormInfo } from './compat.js'
+import type { ShellIntegrationStatus, UnityListPayload, UnityProjectEntry } from './integration.js'
 import type { RuleInfo, RuleProject, RuleRefInput, RuleSaveInput } from './rules.js'
 import type { LspEnvInstallState, LspExtInfo, LspExtUpdate, LspHover, LspLocation, LspMarketItem, LspPosition, LspSemanticTokens, LspServerStatus, LspSymbol } from './lsp.js'
 
@@ -132,7 +133,18 @@ export interface RpcRequestMap {
   'mcp.projectToggle': { workspacePath: string; serverName: string; enabled: boolean }
   'mcp.projectRefresh': { workspacePath: string; serverName: string }
   'vscode.fileOpenSettingsGet': {}
-  'vscode.fileOpenSettingsUpdate': { fileOpenTool: string; expectedRevision?: number }
+  'vscode.fileOpenSettingsUpdate': { fileOpenTool: string; integrationBaseUrl?: string; expectedRevision?: number }
+  'edrv.integration.status': {}
+  'edrv.integration.register': {}
+  'edrv.integration.unregister': {}
+  'edrv.unity.list': {}
+  'edrv.unity.add': { path: string }
+  'edrv.unity.remove': { path: string }
+  'edrv.unity.install': { path: string }
+  'edrv.externalStat': { path: string }
+  'edrv.external.handoff': { paths: string[]; line?: number; column?: number }
+  'edrv.external.pending': {}
+  'edrv.external.pendingState': { token: string; take?: boolean }
   'vscode.devFormGet': {}
   'vscode.devFormSet': { enabled: boolean; path?: string }
   'compat': {}
@@ -203,8 +215,19 @@ export interface RpcOkMap {
   'mcp.projectRemove': { project: MpcProject }
   'mcp.projectToggle': { project: MpcProject }
   'mcp.projectRefresh': { project: MpcProject }
-  'vscode.fileOpenSettingsGet': { fileOpenTool: string; revision?: number }
-  'vscode.fileOpenSettingsUpdate': { fileOpenTool: string; revision?: number }
+  'vscode.fileOpenSettingsGet': { fileOpenTool: string; integrationBaseUrl: string; revision?: number }
+  'vscode.fileOpenSettingsUpdate': { fileOpenTool: string; integrationBaseUrl: string; revision?: number }
+  'edrv.integration.status': ShellIntegrationStatus
+  'edrv.integration.register': ShellIntegrationStatus
+  'edrv.integration.unregister': ShellIntegrationStatus
+  'edrv.unity.list': UnityListPayload
+  'edrv.unity.add': { project: UnityProjectEntry }
+  'edrv.unity.remove': object
+  'edrv.unity.install': { project: UnityProjectEntry }
+  'edrv.externalStat': { kind: 'file' | 'directory' | 'missing' }
+  'edrv.external.handoff': { clients: number; token: string }
+  'edrv.external.pending': { open: { paths: string[]; line?: number; column?: number } | null }
+  'edrv.external.pendingState': { delivered: boolean }
   'vscode.devFormGet': { devForm: DevFormInfo }
   'vscode.devFormSet': { devForm: DevFormInfo; restart: boolean }
   'compat': { report: CompatReport }

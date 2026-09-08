@@ -45,6 +45,14 @@
   `compaction-basic`/`tool-result-pruner` 阈值写入 profile `cordis.patch.yml`（带备份与撤销，重启生效）；
   ④ 侧车摘要接口指引。对话 header 另有**会话体积指示器**（`edrv-perf-size`，≥1MB 显示、超 2MB 琥珀、超 8MB 红），
   引导"一次任务一个短会话"。
+- **系统集成**（v0.1.53，设置 → VSCodeMode → 通用「系统集成」卡片）：
+  ① **文件管理器右键菜单**——一键把「在 DSH 文件编辑中打开」注册进系统（Windows 资源管理器三类入口 / Linux
+  Nautilus+Dolphin / macOS Automator 配方），插件卸载自动清理、更新自动恢复；点击经 launcher 打开默认浏览器深链
+  `?edrvOpen=1&edrvPaths=…`，编辑器直接打开所选文件；DSH 未运行时弹提示。
+  ② **Unity 外部脚本编辑器**——内置 UPM 包 `com.dsh.editor`（参照 com.unity.ide.traeCN 机制实现
+  `IExternalEditor` 虚拟安装，无需本地 exe），设置页**一键安装/更新**为 Unity 内嵌包
+  （复制到 `<项目>/Packages/com.dsh.editor`，自动发现，不改 manifest.json），Unity Preferences →
+  External Tools 下拉选「DSH 文件编辑」后，双击脚本/Console 报错跳转即在浏览器打开对应文件与行列。
 
 ## 界面截图
 
@@ -211,6 +219,69 @@ V8 展开约 10×）。会话越多越大，启动内存越高，可能冲爆堆
 
 > 治理原则：存量靠「移出到归档」；增量靠「压缩调优 + 短会话习惯 + 体积指示器」；packChunks（chunk 打包存储）为
 > DSH 默认开启，无需再配置。
+
+## 系统集成（Windows 右键菜单 + Unity 外部脚本编辑器）
+
+设置 → VSCodeMode → 通用 →「系统集成」卡片。深链契约（launcher / Unity 包 / client 三端共用）：
+`http://127.0.0.1:3080/?edrvOpen=1&edrvPaths=<enc1>[,<enc2>…][&edrvLine=N][&edrvColumn=M]`
+（每段路径独立 `encodeURIComponent`，逗号连接；client 解析后按下方「打开规则」路由，处理完剥离参数防刷新重开，
+跨源 referrer 守卫防外部网页诱导）。
+
+### 打开规则（智能路由）
+
+按首路径类型分派（其余路径：文件进编辑器、文件夹补引用）：
+
+| 场景 | 行为 |
+|---|---|
+| **文件夹** 且位于某已注册工作区内 | 页面内弹窗二选一（同「添加 MCP」模态）：**使用最近的工作区** = 跳转该工作区 + 新增对话 + 添加文件夹引用 + 打开文件编辑页；**新建工作区** = 以该文件夹注册新工作区 + 新增对话 + 引用 + 编辑页；取消则中止 |
+| **文件夹** 不在任何已注册工作区 | 不弹窗，直接以**该文件夹本身**为根注册新工作区 + 新增对话 + 文件夹引用 + 编辑页 |
+| **文件** 且位于某已注册工作区内（工作区亲和） | 该工作区**有会话** → 打开其最近一次对话 + 编辑器展开该文件（行列透传）；**无会话** → 在该工作区**新建对话** + 添加文件引用 + 编辑器展开 |
+| **文件** 不在任何已注册工作区 | 打开最近一次对话 + 文件编辑器展开该文件 |
+| **文件** 且无任何工作区/对话 | 以文件父目录注册工作区 + 新增对话 + 添加文件引用到对话 + 编辑器打开该文件 |
+
+**页面复用**：launcher 先向 host 投递待打开请求（`edrv.external.handoff`）——已打开的 DSH 页面
+（3s 移交轮询）就地执行打开规则，**不重复开新页**；2s 未领取（页面刚关/后台节流）或无活跃页面时
+回退打开新页（URL 深链）。
+
+时序：等待会话/工作区列表就绪（≤15s）；`sessions.create/workspaces.create` 为 DSH 官方服务方法
+（与 New Session 同路径）；引用插入轮询输入门面就绪（忙态自动降级纯文本）。
+
+### 文件管理器右键菜单（Windows / Linux / macOS）
+
+- **Windows**：launcher 源 `assets/shell/dsh-open.cs` 复制到 `~/.dsh/dsh-vscode-mode/shell/` 并用 .NET Framework 4.x
+  `csc.exe` 编译为 `dsh-open.exe`（WinExe 无闪窗；csc 缺失自动降级 `dsh-open.ps1`）；随后写三类 HKCU 键
+  `HKCU\Software\Classes\{\*,Directory,Directory\Background}\shell\DSHEditor`（显示名 + Icon（DSH 小鲸鱼
+  `dsh-whale.ico`）+ command，首次注册前 `reg export` 备份到安装目录）。全部 reg/csc 调用走 host
+  `subprocess.spawn` argv 数组（stdio `inherit`，受管环境禁管道），无 shell 插值。
+- **Linux**（纯文件写入，无需管理员）：GNOME Files（Nautilus）右键脚本
+  `~/.local/share/nautilus/scripts/在 DSH 文件编辑中打开`（`NAUTILUS_SCRIPT_SELECTED_FILE_PATHS` 多选）+
+  KDE Dolphin 服务菜单 `~/.local/share/kio/servicemenus/dsh-editor.desktop`（兼容旧 `kservices5/ServiceMenus/`，
+  `%F` 多选）；其他文件管理器暂未支持。
+- **macOS**：Finder 菜单不做自动生成——设置页「复制 Automator 配方」按步骤创建快速操作（约 1 分钟，脚本指向
+  `~/.dsh/dsh-vscode-mode/shell/dsh-open.sh`），创建后面板自动检测显示 ✓；「移除注册」仅删除引用本插件
+  launcher 的 workflow。
+- **行为**：launcher 读同目录 `dsh-open.ini`（`base=<深链基址>`，注册时按设置写入）→ 探测端口（Windows TcpClient /
+  POSIX curl，1s）→ 未运行弹提示（MessageBox / osascript / notify-send / zenity）→ 把路径编码合并为一个 URL
+  交给默认浏览器（POSIX 侧 `LC_ALL=C` 逐字节 percent-encode，中文/空格/任意字符安全）。改「DSH 服务地址」后点「注册」刷新 ini。
+- **生命周期**：注册成功写 marker（`shell/registered.json`）→ 插件卸载/reload 自动清理注册痕迹，重启/更新后自动恢复
+  （开发态反复 reload 不丢注册）；点「移除注册」删除 marker，此后不再自动恢复；强杀进程跳过清理时残留键会被
+  下一次启动的幂等重写与「移除注册」兜底。
+- RPC：`edrv.integration.status / register / unregister`。
+
+### Unity 一键安装 / 更新（内嵌包）
+
+- 包源随插件分发于 `unity/com.dsh.editor/`（UPM 包：`package.json` + `Editor/DshCodeEditor.cs` +
+  `Editor/com.dsh.editor.asmdef`，`"unity": "2019.4"` 基线；机制参照 com.unity.ide.traeCN 的
+  `IExternalCodeEditor`：虚拟安装 `dsh-editor://vscode-mode`，`OpenProject` → `Application.OpenURL(深链)`，
+  不需要本地可执行文件，不生成 csproj）。
+- **一键安装/更新**：设置页登记 Unity 项目根（校验 `Assets` + `ProjectSettings` 特征）后，点「安装/更新」把包源
+  整目录复制为 `<项目>/Packages/com.dsh.editor`（Unity **内嵌包**自动发现，无需改 manifest.json）；更新 = 整目录
+  替换，列表显示已装版本与「可更新」徽标；目标已存在且 `package.json` name 不是 `com.dsh.editor` 时拒绝覆盖。
+  Unity 已打开时切回窗口自动刷新生效。卸载 = 删除该目录。
+- 手动兜底：Package Manager → Add package from disk 选 `unity/com.dsh.editor`（面板「复制包源路径」）。
+- RPC：`edrv.unity.list / add / remove / install`；登记清单存 `~/.dsh/dsh-vscode-mode/unity-projects.json`。
+- 安全说明：深链可在编辑器中查看任意绝对路径文件（与用户手动打开等价）；保存仍受会话沙箱 `policyOf` 约束，
+  工作区外保存被拒是预期行为。
 
 ## 开发 / 卸载（超级模组注入器，开发期可选）
 

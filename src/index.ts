@@ -15,6 +15,7 @@ import { installIsolation } from './mcpIsolation.js'
 import { dropFileIndex } from './workspace.js'
 import { cwdOf } from './registry.js'
 import { setupOpenSettings } from './fileOpenSettings.js'
+import { shellMenuLifecycle } from './integrate.js'
 import { disposeIndex } from './treeIndex.js'
 import { sweepTreeCache } from './paths.js'
 import { PLUGIN_NAME, buildReport } from './compat.js'
@@ -71,6 +72,8 @@ export function apply(ctx: Ctx, config?: unknown): void {
 
   registerRoutes(ctx, config, (method, args) => handleRpc(ctx, registry, method, args, searcher, contentSearcher, lspHandlers), (warning) => warnings.push(warning))
   installIsolation(ctx)
+  // 系统集成生命周期：启动自动恢复右键菜单注册（marker 存在时）；插件卸载/reload 清理注册痕迹
+  ctx.effect(() => shellMenuLifecycle(ctx))
   // 启动清理缓存目录：非当前 schema / 超保留期 / 未知残留（best-effort，不阻塞装配）
   void sweepTreeCache()
   void logCompatSummary(ctx, warnings)

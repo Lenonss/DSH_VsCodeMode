@@ -14,6 +14,7 @@ import { normalizeSidebarMinWidth, SIDEBAR_MIN_DEFAULT } from '../sidebarMin.js'
 import { KeybindingsPanel } from './KeybindingsPanel.js'
 import { LspSettings } from './LspSettings.js'
 import { PerfSettings } from './PerfSettings.js'
+import { IntegrationSettings } from './IntegrationSettings.js'
 
 const EMPTY = { serverName: '', transport: 'stdio', command: '', args: '', cwd: '', url: '', headers: '' }
 
@@ -219,6 +220,7 @@ function GeneralSettings({ registry }) {
           React.createElement('small', null, '180–560 px；拖拽低于该宽度自动隐藏')),
       ),
     ),
+    React.createElement(IntegrationSettings, null),
   )
 }
 
