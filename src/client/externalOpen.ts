@@ -8,6 +8,7 @@
 import { EDRV_PARAM_KEYS, parseOpenParams } from '../shared/externalOpen.js'
 import { openDeepLink } from './openFlow.js'
 import { rpc } from './rpc.js'
+import { log } from './log.js'
 
 /** toast 自隐时长。 */
 const TOAST_MS = 5000
@@ -38,12 +39,12 @@ export function setupExtOpen(ctx: unknown, options: ExtOpenOptions = {}): void {
   const referrer = options.referrer ?? (typeof document !== 'undefined' ? document.referrer : '')
   const origin = options.origin ?? (typeof location !== 'undefined' ? location.origin : '')
   if (!referrerAllowed(referrer, origin)) {
-    console.warn('[dsh-vscode-mode] 已忽略跨源深链请求（referrer=' + referrer + '）')
+    log.warn('已忽略跨源深链请求（referrer=' + referrer + '）')
     return
   }
   stripCurrentUrl()
   void openDeepLink(ctx, params).catch((error) => {
-    console.warn('[dsh-vscode-mode] 深链打开失败：' + String(error))
+    log.warn('深链打开失败：' + String(error))
     toastDom('深链打开失败：' + String((error as Error)?.message ?? error))
   })
 }

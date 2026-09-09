@@ -43,6 +43,7 @@ import { createOutlineSourceRegistry, registerBuiltinOutlineSources } from './ou
 import { createLspOutlineSource } from './outline/lspSource.js'
 import { keybindingsApply } from './keybindings.js'
 import { sidebarMinApply } from './sidebarMin.js'
+import { log } from './log.js'
 import { setupLsp, setSession } from './monaco/lsp/index.js'
 import type { CompatAdapter } from '../shared/compat.js'
 
@@ -101,8 +102,8 @@ export function apply(ctx: any): void {
   let selected = autoValue('auto')
   /** 0.1.3+ 会话文件链接路由（remote.session.openWorkspacePath）是否已安装（compatSummary 展示用）。 */
   let remoteOpenInstalled = false
-  /** 两条文件链接路由共用的路由日志（openPathRouter / remoteOpenRouter）。 */
-  const routeLogger = (message: string): void => console.warn('[dsh-vscode-mode] ' + message)
+  /** 两条文件链接路由共用的路由日志（openPathRouter / remoteOpenRouter；统一走插件日志器）。 */
+  const routeLogger = (message: string): void => log.warn(message)
   /** 两条路由共用的 FileOpenContext：当前会话 id 与工作区 cwd。 */
   const openContext = (): FileOpenContext => {
     const current = sessions?.list?.getSnapshot?.()
@@ -198,7 +199,7 @@ export function apply(ctx: any): void {
   let remoteRetries = 0
   const retryRemoteOpen = (): void => {
     if (remoteOpenInstalled || remoteRetries >= 15) {
-      if (!remoteOpenInstalled) console.warn('[dsh-vscode-mode] 未探测到 remote.session.openWorkspacePath，0.1.3+ 会话文件链接路由未安装')
+      if (!remoteOpenInstalled) log.warn('未探测到 remote.session.openWorkspacePath，0.1.3+ 会话文件链接路由未安装')
       return
     }
     remoteRetries += 1
@@ -211,12 +212,12 @@ export function apply(ctx: any): void {
       }
       const disposer = patchRemoteOpen(service, { registry, selected: () => selected, context: openContext, logger: routeLogger })
       if (!disposer) {
-        console.warn('[dsh-vscode-mode] remote.session 存在但 openWorkspacePath 不可补丁，会话文件链接路由未安装')
+        log.warn('remote.session 存在但 openWorkspacePath 不可补丁，会话文件链接路由未安装')
         return
       }
       remoteOpenInstalled = true
       ctx.effect(() => disposer, 'vscode-mode: remote file link routing')
-      console.info('[dsh-vscode-mode] 已安装 0.1.3+ 会话文件链接路由（remote.session.openWorkspacePath）')
+      log.info('已安装 0.1.3+ 会话文件链接路由（remote.session.openWorkspacePath）')
     }, 2000)
   }
   retryRemoteOpen()
@@ -271,7 +272,7 @@ export function apply(ctx: any): void {
       if (sideService !== undefined) return
       sideService = detectSidebarService(ctx)
       if (sideService !== undefined) {
-        console.info('[dsh-vscode-mode] 检测到 ' + SIDEBAR_PLUGIN + '，切换侧边栏编辑形态')
+        log.info('检测到 ' + SIDEBAR_PLUGIN + '，切换侧边栏编辑形态')
         applySideForm()
       } else {
         retrySideService()

@@ -11,6 +11,7 @@ import { fileMaxBatch, prune } from './model.js'
 import type { Registry } from './registry.js'
 import { cwdOf } from './registry.js'
 import { invalidateIndex } from './treeIndex.js'
+import { log } from './log.js'
 
 /** 校验并提取工具 result meta 中的文件 hunk。 */
 function validHunks(raw: unknown): Hunk[] {
@@ -101,6 +102,6 @@ export async function captureToolResult(ctx: Ctx, registry: Registry, exec: any,
     // agent 写盘后目录树可能变化（新建/删除文件/目录）：父目录+祖先进失效，后台自愈。
     invalidateIndex(ctx, cwd, path)
   } catch (error) {
-    console.error('edrv capture failed', error)
+    log.error('capture failed: ' + String(error))
   }
 }

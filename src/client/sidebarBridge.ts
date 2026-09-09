@@ -7,6 +7,7 @@
  */
 
 import React from 'react'
+import { log } from './log.js'
 
 /** betterSidebar 服务名（ctx.get 用；不要加进 inject——缺失会让插件停靠等待）。 */
 export const BETTER_SIDEBAR_SERVICE = 'betterSidebar'
@@ -137,7 +138,7 @@ export function routeSideEditor(path: string | null, focusDiff: boolean): boolea
   try {
     return ensureSideEditor(path, focusDiff) === true
   } catch (error) {
-    console.warn('[dsh-vscode-mode] 侧栏编辑器打开失败（' + String(error) + '），已回退')
+    log.warn('侧栏编辑器打开失败（' + String(error) + '），已回退')
     return false
   }
 }
@@ -177,7 +178,7 @@ export function installSideEditor(options: {
     if (typeof service.isTabEnabled === 'function' && !service.isTabEnabled(SIDE_TAB_ID)) {
       if (!fallbackInstalled) {
         fallbackInstalled = true
-        try { registerLegacyFallback() } catch (error) { console.warn('[dsh-vscode-mode] 回退注册失败（' + String(error) + '）') }
+        try { registerLegacyFallback() } catch (error) { log.warn('回退注册失败（' + String(error) + '）') }
       }
       return false
     }
@@ -192,7 +193,7 @@ export function installSideEditor(options: {
         meta: { openPath: path || undefined, focusDiff },
       }, { sessionId, cwd: scope?.cwd })
     } catch (error) {
-      console.warn('[dsh-vscode-mode] openTab 失败（' + String(error) + '）')
+      log.warn('openTab 失败（' + String(error) + '）')
       return false
     }
     if (sideEditorMounted) {
@@ -215,11 +216,11 @@ export function installSideEditor(options: {
       component: renderTab,
     })
   } catch (error) {
-    console.warn('[dsh-vscode-mode] 侧边栏 Tab 注册失败（' + String(error) + '）')
+    log.warn('侧边栏 Tab 注册失败（' + String(error) + '）')
     // 注册失败 = 侧栏形态不可用：立即回退中央页签，不接管打开路由
     if (!fallbackInstalled) {
       fallbackInstalled = true
-      try { registerLegacyFallback() } catch (inner) { console.warn('[dsh-vscode-mode] 回退注册失败（' + String(inner) + '）') }
+      try { registerLegacyFallback() } catch (inner) { log.warn('回退注册失败（' + String(inner) + '）') }
     }
     return () => {}
   }

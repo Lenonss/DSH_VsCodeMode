@@ -5,6 +5,7 @@
  */
 import type { Ctx, Session } from './store.js'
 import { policyOf } from './store.js'
+import { log } from './log.js'
 
 /** 文件清单缓存 TTL 与扫描上限（避免大工作区反复全量扫描）。 */
 const FILE_INDEX_TTL = 60_000
@@ -60,7 +61,7 @@ export async function listWorkspaceFiles(ctx: Ctx, session: Session, cwd: string
       await run(['/bin/sh', '-c', cmd])
     }
   } catch (error) {
-    console.error('edrv scan failed', error)
+    log.error('scan failed: ' + String(error))
     return null
   }
   const files = lines.slice(0, SCAN_CAP)

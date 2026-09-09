@@ -8,6 +8,7 @@ import type { ReadState } from './shared/diff.js'
 import { fingerprint, isNoopHunk, locateHunks, preciseHunk } from './shared/diff.js'
 import { archiveEntryFor, groupByBatch, normalizeRecord } from './model.js'
 import { SIDECAR, SIDECAR_ARCHIVE } from './paths.js'
+import { log } from './log.js'
 
 export { SIDECAR, SIDECAR_ARCHIVE }
 export const READ_CAP = 8 * 1024 * 1024
@@ -100,7 +101,7 @@ export async function saveBucket(ctx: Ctx, cwd: string, recsMap: Map<string, Dif
     existing.updatedAt = new Date().toISOString()
     await fs.writeText(target, JSON.stringify(existing), void 0, void 0, policyOf(ctx, session))
   } catch (error) {
-    console.error('edrv saveBucket failed', error)
+    log.error('saveBucket failed: ' + String(error))
   }
 }
 
@@ -221,7 +222,7 @@ export async function appendArchiveEntries(ctx: Ctx, cwd: string, entries: Array
     const data: ArchiveData = { version: 1, updatedAt: new Date().toISOString(), batches: existing }
     await fs.writeText(target, JSON.stringify(data), void 0, void 0, policyOf(ctx, session))
   } catch (error) {
-    console.error('edrv appendArchiveEntries failed', error)
+    log.error('appendArchiveEntries failed: ' + String(error))
   }
 }
 

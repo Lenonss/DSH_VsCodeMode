@@ -8,6 +8,7 @@ import { LEGACY_PROJECT_PREFIX, entryHash, isProjectEntryId } from './compat.js'
 import { entriesOf } from './mcp.js'
 import { hashWorkspace } from './mcpProject.js'
 import type { Ctx } from './store.js'
+import { log } from './log.js'
 
 const UNKNOWN_PROJECT = '__unknown_project__'
 
@@ -83,7 +84,7 @@ function syncAgent(ctx: Ctx, state: AgentState, agent: any, tools: ToolProjects)
     try {
       state.dispose = agent.ctx.tools.restrict({ deny: denied })
     } catch (error) {
-      ctx.logger?.warn?.('[dsh-vscode-mode] MCP agent restriction failed: ' + String(error))
+      log.warn('MCP agent restriction failed: ' + String(error))
       return
     }
   }

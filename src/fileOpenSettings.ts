@@ -10,6 +10,7 @@
 import type { Ctx } from './store.js'
 import { KEYBINDING_DEFAULTS } from './shared/keybindings.js'
 import { INTEGRATION_BASE_DEFAULT } from './shared/integration.js'
+import { log } from './log.js'
 
 export const FILE_OPEN_SETTINGS_NS = 'dsh-vscode-mode'
 export const FILE_OPEN_DEFAULT = 'auto'
@@ -121,7 +122,7 @@ export async function runSettingsInstall(
     /* 装载失败按缺失处理 */
   }
   if (!deps) {
-    console.warn('[dsh-vscode-mode] 设置依赖不可用，section ' + ns + ' 未安装（配置回退）')
+    log.warn('设置依赖不可用，section ' + ns + ' 未安装（配置回退）')
     return recordInstall('none', INSTALL_NONE)
   }
   const legacy = deps.installSettingsSection
@@ -130,7 +131,7 @@ export async function runSettingsInstall(
       legacy(ctx, ns, schema, entry, hooks)
       return recordInstall('legacy', INSTALL_LEGACY)
     } catch (error) {
-      console.warn('[dsh-vscode-mode] legacy 设置安装失败，尝试服务路由：' + String(error))
+      log.warn('legacy 设置安装失败，尝试服务路由：' + String(error))
     }
   }
   const ctxInject = (ctx as unknown as { inject?: (services: string[], callback: (sctx: unknown) => void) => unknown }).inject
@@ -141,7 +142,7 @@ export async function runSettingsInstall(
       const provider = typeof sc.get === 'function' ? sc.get('settings') : sc.settings
       const install = (provider as { installSection?: unknown } | undefined)?.installSection
       if (typeof install !== 'function') {
-        console.warn('[dsh-vscode-mode] settings 服务无 installSection（DSH 版本 API 变化），section ' + ns + ' 降级为配置值')
+        log.warn('settings 服务无 installSection（DSH 版本 API 变化），section ' + ns + ' 降级为配置值')
         recordInstall('none', INSTALL_NONE)
         return
       }
@@ -149,12 +150,12 @@ export async function runSettingsInstall(
         install.call(provider, ctx, ns, schema, entry, hooks)
         recordInstall('service', INSTALL_SERVICE)
       } catch (error) {
-        console.warn('[dsh-vscode-mode] settings.installSection 安装失败（' + String(error) + '），section ' + ns + ' 降级为配置值')
+        log.warn('settings.installSection 安装失败（' + String(error) + '），section ' + ns + ' 降级为配置值')
         recordInstall('none', INSTALL_NONE)
       }
     })
   } catch (error) {
-    console.warn('[dsh-vscode-mode] settings 服务路由不可用（' + String(error) + '）')
+    log.warn('settings 服务路由不可用（' + String(error) + '）')
     return recordInstall('none', INSTALL_NONE)
   }
   // inject 回调若同步执行（settings 已就绪）会覆写观测值；仍未执行（unknown）时乐观按 service 记录

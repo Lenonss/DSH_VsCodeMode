@@ -3,6 +3,7 @@
  * 纯逻辑与薄 ctx 胶水，node 环境可单测（不依赖 DOM）。
  * 作者 ddj 2026年08月24号
  */
+import { log } from './log.js'
 
 /** 本插件包名（与 host compat.PLUGIN_NAME 对应）。 */
 export const PLUGIN_NAME = 'dsh-vscode-mode'
@@ -59,14 +60,14 @@ export interface SlotSpec {
 export function registerSlotSafely(ctx: { slots?: { inject?: (name: string, register: () => unknown) => unknown; register?: (...args: unknown[]) => unknown } }, spec: SlotSpec, render: (props: unknown) => unknown): (() => void) | null {
   const slots = ctx?.slots as { inject: (name: string, register: () => unknown) => unknown; register: (...args: unknown[]) => unknown } | undefined
   if (!slots || typeof slots.inject !== 'function' || typeof slots.register !== 'function') {
-    console.warn('[' + PLUGIN_NAME + '] slots 服务不可用，跳过 slot ' + spec.name)
+    log.warn('slots 服务不可用，跳过 slot ' + spec.name)
     return null
   }
   try {
     const disposer = slots.inject(spec.name, () => slots.register(spec, render))
     return typeof disposer === 'function' ? disposer as () => void : null
   } catch (error) {
-    console.warn('[' + PLUGIN_NAME + '] slot ' + spec.name + ' 注册失败（' + String(error) + '），已跳过')
+    log.warn('slot ' + spec.name + ' 注册失败（' + String(error) + '），已跳过')
     return null
   }
 }
