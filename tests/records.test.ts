@@ -51,6 +51,10 @@ describe('isRecPending / pendingCount', () => {
   it('superseded 不再 pending', () => {
     expect(isRecPending(rec({ superseded: true }))).toBe(false)
   })
+  it('conflict 记录仍视为 pending（不再一票否决，差异保留待确认）', () => {
+    expect(isRecPending(rec({ conflict: true }))).toBe(true)
+    expect(pendingCount([rec({ conflict: true })])).toBe(1)
+  })
   it('全部决策后不再 pending', () => {
     expect(isRecPending(rec({ decisions: { call: 'pending', perHunk: ['accepted'] } }))).toBe(false)
   })

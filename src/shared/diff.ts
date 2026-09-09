@@ -53,6 +53,24 @@ export function isNoopHunk(hunk: Hunk | null | undefined): boolean {
   return !!hunk && hunk.oldText !== null && hunk.oldText === hunk.newText
 }
 
+/**
+ * 差异比较口径归一化：剥离 UTF-8 BOM、统一 CRLF 为 LF。
+ * 背景：外部工具（pwsh/编辑器）可能改变 BOM/行尾，导致 after 指纹与 hunk
+ * 定位在内容语义未变的情况下误报 conflict，把待确认修改从 UI 排除。
+ * @author ddj 2026年09月09号
+ */
+export function normalizeForCompare(text: string): string {
+  return text.replace(/^\uFEFF/, '').replace(/\r\n/g, '\n')
+}
+
+/** 归一化一个 hunk 的两侧文本（与 normalizeForCompare 同口径）。 */
+export function normalizeHunk(hunk: Hunk): Hunk {
+  return {
+    oldText: hunk.oldText === null ? null : normalizeForCompare(hunk.oldText),
+    newText: normalizeForCompare(hunk.newText),
+  }
+}
+
 /** splitLines 的空文本语义：真实空文件没有一行变更内容。 */
 export function splitLines(text: string): string[] {
   return text.length ? text.split('\n') : []

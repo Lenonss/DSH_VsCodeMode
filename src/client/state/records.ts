@@ -47,7 +47,7 @@ export function noopHunk(rec: RecordView | undefined, h: Hunk | CallHunk | null 
 
 /** 记录是否仍有待处理差异（superseded / 全部已决策 = false）。 */
 export function isRecPending(rec: RecordView): boolean {
-  if (!rec || rec.superseded === true || rec.conflict === true) return false
+  if (!rec || rec.superseded === true) return false
   const perHunk = Array.isArray(rec.decisions?.perHunk) ? rec.decisions.perHunk : []
   if (perHunk.length) {
     // 只认存在至少一个"非空差异且未决策"的 hunk

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { annotateHunk, annotateHunks, applyLocations, fingerprint, locateHunks } from '../src/shared/diff.js'
+import { annotateHunk, annotateHunks, applyLocations, fingerprint, locateHunks, normalizeForCompare, normalizeHunk } from '../src/shared/diff.js'
 
 describe('shared diff helpers', () => {
   it('locates repeated new text without reusing the first match', () => {
@@ -39,5 +39,20 @@ describe('shared diff helpers', () => {
     expect(fingerprint('')).toBe(fingerprint(''))
     expect(fingerprint(null)).toBeNull()
     expect(fingerprint('a')).not.toBe(fingerprint('b'))
+  })
+})
+
+describe('normalizeForCompare / normalizeHunk', () => {
+  it('剥 BOM 并统一 CRLF 为 LF', () => {
+    expect(normalizeForCompare('\uFEFFa\r\nb\r\n')).toBe('a\nb\n')
+    expect(normalizeForCompare('a\r\nb')).toBe('a\nb')
+    expect(normalizeForCompare('plain')).toBe('plain')
+  })
+  it('normalizeHunk 两侧同口径归一化，null oldText 保持', () => {
+    expect(normalizeHunk({ oldText: null, newText: '\uFEFFx\r\n' })).toEqual({ oldText: null, newText: 'x\n' })
+    expect(normalizeHunk({ oldText: 'a\r\n', newText: 'b\r\n' })).toEqual({ oldText: 'a\n', newText: 'b\n' })
+  })
+  it('BOM/CRLF 不同但语义相同的文本指纹一致', () => {
+    expect(fingerprint(normalizeForCompare('\uFEFFa\r\nb'))).toBe(fingerprint(normalizeForCompare('a\nb')))
   })
 })

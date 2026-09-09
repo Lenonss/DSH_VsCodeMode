@@ -92,6 +92,26 @@ describe('diffRegions', () => {
     const r = rec({ hunks: [{ oldText: 'x', newText: 'x' }], decisions: { call: 'pending', perHunk: ['pending'] } })
     expect(diffRegions([r], 'x')).toHaveLength(0)
   })
+  it('CRLF content 中 LF hunk 归一化后仍能定位（不误标 stale）', () => {
+    const r = rec({ hunks: [{ oldText: 'x', newText: 'AAA' }], decisions: { call: 'pending', perHunk: ['pending'] } })
+    const regs = diffRegions([r], 'line1\r\nAAA\r\nline3')
+    expect(regs[0].stale).toBeUndefined()
+    expect(regs[0].start).toBe(2)
+    expect(regs[0].newLines).toEqual(['AAA'])
+  })
+  it('BOM + CRLF content 归一化后定位与行号正确', () => {
+    const r = rec({ hunks: [{ oldText: 'x', newText: 'AAA' }], decisions: { call: 'pending', perHunk: ['pending'] } })
+    const regs = diffRegions([r], '\uFEFFline1\r\nAAA\r\nline3')
+    expect(regs[0].stale).toBeUndefined()
+    expect(regs[0].start).toBe(2)
+  })
+  it('CRLF create 记录整文件区域行号基于归一化文本', () => {
+    const r = rec({ create: true, hunks: [{ oldText: null, newText: 'line1\nline2' }], decisions: { call: 'pending', perHunk: ['pending'] } })
+    const regs = diffRegions([r], 'line1\r\nline2')
+    expect(regs[0].whole).toBe(true)
+    expect(regs[0].end).toBe(3)
+    expect(regs[0].newLines).toEqual(['line1', 'line2'])
+  })
   it('content 为 null 返回空', () => {
     expect(diffRegions([rec()], null)).toHaveLength(0)
   })

@@ -30,3 +30,6 @@ pnpm-lock.yaml.??????
 
 # 本地临时产物（交换脚本日志、冒烟脚本等）
 tmp/
+
+# apply-patches.mjs 备份文件
+*.bak-patch-*

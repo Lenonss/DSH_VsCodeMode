@@ -5,7 +5,7 @@
  */
 import type { ArchiveBatch, ArchiveData, DiffRecord, SidecarData } from './shared/types.js'
 import type { ReadState } from './shared/diff.js'
-import { fingerprint, isNoopHunk, locateHunks, preciseHunk } from './shared/diff.js'
+import { fingerprint, isNoopHunk, locateHunks, normalizeForCompare, normalizeHunk, preciseHunk } from './shared/diff.js'
 import { archiveEntryFor, groupByBatch, normalizeRecord } from './model.js'
 import { SIDECAR, SIDECAR_ARCHIVE } from './paths.js'
 import { log } from './log.js'
@@ -147,7 +147,10 @@ export async function recordIsStale(ctx: Ctx, session: Session, cache: Map<strin
   if (!pending.length) return true
   const currentFingerprint = fingerprint(state.content)
   if (rec.afterFingerprint && currentFingerprint === rec.afterFingerprint) { rec.conflict = false; return false }
-  const locations = locateHunks(state.content, pending.map((item) => item.hunk!))
+  // 归一化口径对比：外部工具可能改变 BOM/行尾，内容语义未变不应判冲突
+  const normalizedContent = normalizeForCompare(state.content)
+  if (rec.after != null && fingerprint(normalizeForCompare(rec.after)) === fingerprint(normalizedContent)) { rec.conflict = false; return false }
+  const locations = locateHunks(normalizedContent, pending.map((item) => normalizeHunk(item.hunk!)))
   if (locations.some((location) => location.matched)) { rec.conflict = false; return false }
   rec.conflict = true
   return false

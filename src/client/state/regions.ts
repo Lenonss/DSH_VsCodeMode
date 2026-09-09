@@ -4,7 +4,7 @@
  * 作者 ddj 2026-08-20
  */
 import type { Hunk, RecordView } from '../../shared/types.js'
-import { locateHunks, lineBefore, preciseHunk, splitLines } from '../../shared/diff.js'
+import { locateHunks, lineBefore, normalizeForCompare, normalizeHunk, preciseHunk, splitLines } from '../../shared/diff.js'
 import { ST, noopHunk, statusAt } from './records.js'
 import type { Status } from './records.js'
 
@@ -46,11 +46,18 @@ export function trimCommonLines(oldLines: string[], newLines: string[]): { oldLi
   return { oldLines: oldLines.slice(prefix, oldLines.length - suffix), newLines: newLines.slice(prefix, newLines.length - suffix), shift: prefix }
 }
 
-/** 计算文件内各差异区域（行范围 + old/new + 状态），用于行内绿标注与 DiffBox。 */
+/**
+ * 计算文件内各差异区域（行范围 + old/new + 状态），用于行内绿标注与 DiffBox。
+ * 定位统一基于归一化文本（剥 BOM、CRLF→LF）：外部工具可能改变行尾/BOM，
+ * 与 edit 工具的 LF hunk 口径不一致会导致定位失败（差异被误标 stale）。
+ * 行号按 \n 计数，归一化不改变行号，展示语义不变。
+ * @author ddj 2026年09月09号
+ */
 export function diffRegions(records: RecordView[], content: string | null): Region[] {
   const regions: Region[] = []
   if (content === null) return regions
-  const lines = splitLines(content)
+  const normalized = normalizeForCompare(content)
+  const lines = splitLines(normalized)
   for (const rec of records) {
     if (rec.create) {
       for (let i = 0; i < rec.hunks.length; i++) {
@@ -63,9 +70,9 @@ export function diffRegions(records: RecordView[], content: string | null): Regi
     const entries: Array<{ idx: number; hunk: Hunk }> = []
     for (let i = 0; i < rec.hunks.length; i++) {
       const hunk = preciseHunk(rec, i)
-      if (hunk && !noopHunk(rec, hunk)) entries.push({ idx: i, hunk })
+      if (hunk && !noopHunk(rec, hunk)) entries.push({ idx: i, hunk: normalizeHunk(hunk) })
     }
-    const locations = locateHunks(content, entries.map((entry) => entry.hunk))
+    const locations = locateHunks(normalized, entries.map((entry) => entry.hunk))
     for (let i = 0; i < entries.length; i++) {
       const entry = entries[i]
       const location = locations[i]
@@ -74,7 +81,7 @@ export function diffRegions(records: RecordView[], content: string | null): Regi
         regions.push({ callId: rec.callId, idx: entry.idx, stale: true, status, create: false, oldLines: entry.hunk.oldText === null ? [] : entry.hunk.oldText.split('\n'), newLines: entry.hunk.newText ? entry.hunk.newText.split('\n') : [], rec, superseded: rec.superseded === true })
         continue
       }
-      const start = countLinesBefore(content, location.start) + 1
+      const start = countLinesBefore(normalized, location.start) + 1
       const oldLines = entry.hunk.oldText === null ? [] : entry.hunk.oldText.split('\n')
       const newLines = entry.hunk.newText.split('\n')
       const trimmed = trimCommonLines(oldLines, newLines)
