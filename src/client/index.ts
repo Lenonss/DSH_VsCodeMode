@@ -1,7 +1,7 @@
 /**
  * dsh-vscode-mode client — 浏览器半入口：slot 注册 + 装配。
- * 挂点：betterSidebar「文件编辑」Tab（侧边栏形态，对话+编辑同屏；未装 dsh-better-sidebar 时
- * 回退 conversation.view 中央页签）+ conversation.input.dock 差异条 + header 差异角标。
+ * 挂点：官方右侧 Sidebar「文件编辑」Tab（DSH 0.1.5+，对话+编辑同屏）> betterSidebar Tab
+ * （归档，仅旧版 DSH 回退）> conversation.view 中央页签 + conversation.input.dock 差异条 + header 差异角标。
  * 与 Host 通信：同源 fetch('/edrv/rpc')（shared/rpc 契约）。
  *
  * ⚠️ 跨版本 slot 装配（2026-08-21）：新版 DSH 的 slots 系统要求 slot 必须由父 entry
@@ -22,7 +22,7 @@ import { ConversationDiffDock } from './ui/ConversationDiffDock.js'
 import { McpSettings } from './ui/McpSettings.js'
 import { rpc } from './rpc.js'
 import { loadMonaco } from './monaco/loader.js'
-import { createFileOpenerRegistry, scanSidebar, type FileOpenContext } from './fileOpeners.js'
+import { createFileOpenerRegistry, scanSidebar, officialSidebarOpener, shouldClaimFiles, type FileOpenContext } from './fileOpeners.js'
 import type { FileOpenerRegistry } from './fileOpeners.js'
 import { installOpenPathRouter, vscodeOpener, autoValue } from './openPathRouter.js'
 import { patchRemoteOpen, probeRemoteOpen } from './remoteOpenRouter.js'
@@ -30,7 +30,9 @@ import { setupExtOpen } from './externalOpen.js'
 import { SettingsContext } from './settingsContext.js'
 import { SIDEBAR_PLUGIN, pickSettingsBinder, registerSlotSafely } from './compat.js'
 import { detectSidebarService, installSideEditor, setEnsureSideEditor, SIDEBAR_INSTALL_CMD } from './sidebarBridge.js'
+import { detectOfficial, installOfficial, registerOfficialFileClaim, OFFICIAL_TAB_TITLE } from './officialSidebar.js'
 import { SideEditorTab } from './ui/SideEditorTab.js'
+import { OfficialSideTab } from './ui/OfficialSideTab.js'
 import { createAddToConversation } from './addToConversation.js'
 import { createSidebarPanelRegistry } from './sidebar/registry.js'
 import { createFilePanel } from './sidebar/panels/index.js'
@@ -113,6 +115,10 @@ export function apply(ctx: any): void {
   }
   /** 可选探测 betterSidebar 服务（不进 inject：缺失会让插件停靠等待，杀死回退路径）。 */
   let sideService = detectSidebarService(ctx)
+  /** 可选探测官方右侧 Sidebar（DSH 0.1.5-alpha.1+；探测命中 ≡ 版本判定，不进 inject 同上）。 */
+  let officialService = detectOfficial(ctx)
+  /** 官方 file 地址认领的当前注销器（null=未认领；由 syncFileClaim 依设置值切换）。 */
+  let claimDisposer: (() => void) | null = null
   /** 「添加到对话」动作集：编辑区/Tab 右键菜单注入文件引用与代码块（conversation 服务缺失时各动作安全降级）。 */
   const addToConversation = createAddToConversation(ctx)
 
@@ -122,7 +128,9 @@ export function apply(ctx: any): void {
     { name: '文件打开路由（workspaces.openPath）', active: Boolean(workspaces?.openPath), note: 'vscode 打开器优先，失败回退系统打开（0.1.2 及更早 DSH 的对话文件链接主路径）' },
     { name: '会话文件链接路由（remote.session.openWorkspacePath）', active: remoteOpenInstalled, note: '0.1.3+ 对话文件引用/产物打开优先走插件打开器，失败回退系统打开' },
     { name: '侧边栏打开器（' + SIDEBAR_PLUGIN + '）', active: registry.get(SIDEBAR_PLUGIN) !== undefined, note: registry.get(SIDEBAR_PLUGIN) !== undefined ? '已注册（优先级 80）' : '未检测到侧边栏打开能力' },
-    { name: '侧边栏编辑区（' + SIDEBAR_PLUGIN + '）', active: sideService !== undefined, note: sideService !== undefined ? '编辑区=侧边栏 Tab（对话+编辑同屏）' : '未检测到；安装 dsh-better-sidebar 后刷新启用侧边栏形态（' + SIDEBAR_INSTALL_CMD + '）' },
+    { name: '侧边栏编辑区（官方 Sidebar）', active: officialService !== undefined, note: officialService !== undefined ? '编辑区=官方右侧 Sidebar Tab（对话+编辑同屏，DSH 0.1.5+）' : '官方侧边栏服务未探测到（DSH < 0.1.5-alpha.1 时属预期）' },
+    { name: '侧边栏编辑区（' + SIDEBAR_PLUGIN + '，归档）', active: sideService !== undefined, note: sideService !== undefined ? '编辑区=侧边栏 Tab（旧版 DSH 回退形态）' : '未检测到；DSH ≥ 0.1.5 优先官方侧边栏，旧版可安装（' + SIDEBAR_INSTALL_CMD + '）' },
+    { name: '文件链接官方认领（dsh-resource://file）', active: claimDisposer !== null, note: claimDisposer !== null ? '聊天文件链接由本插件编辑器接管（官方侧边栏内打开）' : '链接走官方查看器或旧版路由（未认领）' },
   ]
 
   ctx.provide('fileOpeners', registry)
@@ -157,12 +165,29 @@ export function apply(ctx: any): void {
     const sidebar = scanSidebar(ctx)
     return sidebar ? registry.register(sidebar) : undefined
   }, 'vscode-mode: sidebar file opener')
+  // 官方侧边栏正文组件装配（页类型与 file 认领两类 Tab 共用同一 EditorView 形态）
+  const officialRenderTab = (props: Record<string, unknown>) => React.createElement(OfficialSideTab, Object.assign({}, props, { schedule, addToConversation, sidebarPanels, outlineSources, fileMenuItems, sessions }))
+  /** 官方 file 地址认领同步：自动/VSCodeMode 档认领（链接进本插件编辑器），其余交官方查看器。 */
+  const syncFileClaim = (): void => {
+    const official = officialService
+    const want = official !== undefined && shouldClaimFiles(selected)
+    if (want && claimDisposer === null && official) {
+      const disposer = registerOfficialFileClaim({ tabs: official.tabs, slots: ctx.slots, renderTab: officialRenderTab })
+      if (disposer !== null) claimDisposer = ctx.effect(() => disposer, 'vscode-mode: official file claim')
+      return
+    }
+    if (!want && claimDisposer !== null) {
+      claimDisposer()
+      claimDisposer = null
+    }
+  }
   ctx.effect(() => {
     if (!settings) return undefined
     const sync = (): void => {
       const snapshot = settings.getSnapshot()
       if (snapshot.status === 'loading') return
       selected = autoValue(snapshot.value?.fileOpenTool)
+      syncFileClaim()
       window.dispatchEvent(new CustomEvent('edrv:file-open-tool-change', { detail: { value: selected } }))
     }
     sync()
@@ -222,8 +247,8 @@ export function apply(ctx: any): void {
   }
   retryRemoteOpen()
 
-  // 中央「文件编辑」页签（旧形态回退）：类 VSCode 编辑器；侧边栏形态可用时编辑器住 betterSidebar Tab，
-  // 本页签不注册（避免双实例：Monaco×2 + diff dock 每会话单源抢占）。
+  // 中央「文件编辑」页签（旧形态回退）：类 VSCode 编辑器；侧边栏形态（官方/better-sidebar）可用时
+  // 编辑器住侧边栏 Tab，本页签不注册（避免双实例：Monaco×2 + diff dock 每会话单源抢占）。
   const registerLegacyTab = (): (() => void) | null => {
     return registerSlotSafely(ctx, {
       name: 'conversation.view',
@@ -234,16 +259,51 @@ export function apply(ctx: any): void {
     }, (props: unknown) => React.createElement(EditorView, Object.assign({}, props, { layout: 'tab', sideHint: SIDEBAR_INSTALL_CMD, schedule, addToConversation, sidebarPanels, outlineSources, fileMenuItems, sessions })))
   }
 
-  // 侧边栏/中央页签两形态互斥切换：sideDisposer（侧边栏 Tab）与 legacyDisposer（中央页签）只保留其一。
-  // ⚠️ betterSidebar 服务由 dsh-better-sidebar 的 client bundle（1MB+）在页面加载时提供，本插件
-  // bundle 较小往往先执行完启动检测——一次性探测会误报「未检测到」并永久停在中央页签形态（实测
-  // 竞态：better-sidebar 已装，但「文件编辑」Tab 未注册）。故启动后按 2s 间隔重试（窗口 ~30s），
-  // 命中即自动切换侧边栏形态；始终未命中则保持中央页签回退。
+  // 侧边栏三形态互斥切换：官方（DSH 0.1.5+）> better-sidebar（归档，仅旧版回退）> 中央页签。
+  // officialDisposer / sideDisposer / legacyDisposer 任一时刻只保留其一（避免双实例 Monaco 抢占）。
+  // ⚠️ 两个可选服务都可能晚于本插件就绪（better-sidebar bundle 1MB+ 后加载；官方服务旧 DSH
+  // 不存在），一次性探测会误报——故启动后按 2s 间隔重试（窗口 ~30s）：每 tick 先探官方再探
+  // better-sidebar；better-sidebar 先命中而官方后到时自动切换（官方优先），窗口结束仍未命中
+  // 则保持中央页签回退。
+  let officialDisposer: (() => void) | null = null
   let sideDisposer: (() => void) | null = null
   let legacyDisposer: (() => void) | null = null
+  const installOfficialForm = (): void => {
+    const official = officialService
+    if (officialDisposer !== null || !official) return
+    if (sideDisposer !== null) { sideDisposer(); sideDisposer = null }
+    if (legacyDisposer !== null) { legacyDisposer(); legacyDisposer = null }
+    const outcome = installOfficial({
+      tabs: official.tabs,
+      service: official.service,
+      slots: ctx.slots,
+      renderTab: officialRenderTab,
+      guide: {
+        title: () => OFFICIAL_TAB_TITLE,
+        description: () => 'Monaco 文件编辑器：对话与编辑同屏（差异审查/跳转/大纲）',
+      },
+    })
+    if (outcome === null) {
+      // 官方类型注册失败（API 变更等）：撤下官方标记，回退旧形态链
+      officialService = undefined
+      applySideForm()
+      return
+    }
+    officialDisposer = ctx.effect(() => outcome, 'vscode-mode: official sidebar editor tab')
+    // 官方打开器（下拉「官方侧边栏」选项，动态出现；openResource 能力缺失时跳过）+ 按当前设置同步 file 地址认领
+    if (typeof official.service.openResource === 'function') {
+      ctx.effect(() => registry.register(officialSidebarOpener(official.service)), 'vscode-mode: official sidebar opener')
+    }
+    syncFileClaim()
+  }
   const applySideForm = (): void => {
+    if (officialService) {
+      installOfficialForm()
+      return
+    }
     if (sideService) {
       if (sideDisposer !== null) return
+      if (officialDisposer !== null) { officialDisposer(); officialDisposer = null }
       if (legacyDisposer !== null) { legacyDisposer(); legacyDisposer = null }
       sideDisposer = ctx.effect(() => installSideEditor({
         service: sideService as NonNullable<typeof sideService>,
@@ -256,27 +316,35 @@ export function apply(ctx: any): void {
         },
         registerLegacyFallback: registerLegacyTab,
       }), 'vscode-mode: sidebar editor tab')
-    } else {
-      if (legacyDisposer !== null) return
-      if (sideDisposer !== null) { sideDisposer(); sideDisposer = null }
-      setEnsureSideEditor(null)
-      legacyDisposer = registerLegacyTab()
+      return
     }
+    if (legacyDisposer !== null) return
+    if (officialDisposer !== null) { officialDisposer(); officialDisposer = null }
+    if (sideDisposer !== null) { sideDisposer(); sideDisposer = null }
+    setEnsureSideEditor(null)
+    legacyDisposer = registerLegacyTab()
   }
   applySideForm()
   let sideRetries = 0
   const retrySideService = (): void => {
-    if (sideService !== undefined || sideRetries >= 15) return
+    if (officialService !== undefined || sideRetries >= 15) return
     sideRetries += 1
     schedule(() => {
-      if (sideService !== undefined) return
-      sideService = detectSidebarService(ctx)
-      if (sideService !== undefined) {
-        log.info('检测到 ' + SIDEBAR_PLUGIN + '，切换侧边栏编辑形态')
+      if (officialService !== undefined) return
+      officialService = detectOfficial(ctx)
+      if (officialService !== undefined) {
+        log.info('检测到官方右侧 Sidebar（DSH 0.1.5+），切换官方侧边栏编辑形态')
         applySideForm()
-      } else {
-        retrySideService()
+        return
       }
+      if (sideService === undefined) {
+        sideService = detectSidebarService(ctx)
+        if (sideService !== undefined) {
+          log.info('检测到 ' + SIDEBAR_PLUGIN + '，切换侧边栏编辑形态（官方未探测到，后续仍优先官方）')
+          applySideForm()
+        }
+      }
+      retrySideService()
     }, 2000)
   }
   retrySideService()

@@ -1713,7 +1713,7 @@ export function EditorView(props) {
   }
   const sideHintEl = (layout === 'tab' && sideHint && !hintDismissed)
     ? React.createElement('div', { className: 'edrv-side-hint' },
-        React.createElement('span', { className: 'edrv-side-hint-text' }, '安装 dsh-better-sidebar 后可启用侧边栏编辑（对话+编辑同屏）：'),
+        React.createElement('span', { className: 'edrv-side-hint-text' }, 'DSH 0.1.5+ 自带官方右侧侧边栏（升级即用）；旧版可安装 dsh-better-sidebar 启用侧边栏编辑（对话+编辑同屏）：'),
         React.createElement('code', { className: 'edrv-side-hint-cmd' }, SIDEBAR_INSTALL_CMD),
         React.createElement('button', { className: 'edrv-pill edrv-pill-ghost', title: '复制安装命令', onClick: copyInstallCmd }, '复制命令'),
         React.createElement('button', { className: 'edrv-side-hint-close', title: '关闭提示', 'aria-label': '关闭提示', onClick: dismissHint }, '×'))

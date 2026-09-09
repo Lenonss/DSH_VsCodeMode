@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createFileOpenerRegistry, selectOpener } from '../src/client/fileOpeners.js'
+import { createFileOpenerRegistry, selectOpener, officialSidebarOpener, shouldClaimFiles, OFFICIAL_OPEN_TOOL } from '../src/client/fileOpeners.js'
 import { installOpenPathRouter } from '../src/client/openPathRouter.js'
 
 describe('file opener registry', () => {
@@ -36,5 +36,35 @@ describe('open path router', () => {
     expect(selected).toHaveBeenCalledWith('a.ts', { sessionId: 's1' })
     dispose()
     expect(workspaces.openPath).toBe(original)
+  })
+})
+
+describe('official sidebar opener', () => {
+  it('opens via openResource with a session address for relative paths', () => {
+    const openResource = vi.fn()
+    const opener = officialSidebarOpener({ openResource })
+    expect(opener.id).toBe(OFFICIAL_OPEN_TOOL)
+    opener.open!('src/a b.ts', { sessionId: 's1' })
+    expect(openResource).toHaveBeenCalledWith('dsh-resource://file/session/s1/src/a%20b.ts')
+  })
+  it('opens via openResource with an absolute address for absolute paths', () => {
+    const openResource = vi.fn()
+    const opener = officialSidebarOpener({ openResource })
+    opener.open!('C:\\repo\\x.ts', { sessionId: 's1' })
+    expect(openResource).toHaveBeenCalledWith('dsh-resource://file/absolute/C:/repo/x.ts')
+  })
+  it('throws for relative path without session (routing falls back)', () => {
+    const opener = officialSidebarOpener({ openResource: vi.fn() })
+    expect(() => opener.open!('src/a.ts', {})).toThrow()
+  })
+})
+
+describe('shouldClaimFiles', () => {
+  it('claims only for auto and vscode-mode selections', () => {
+    expect(shouldClaimFiles('auto')).toBe(true)
+    expect(shouldClaimFiles('dsh-vscode-mode')).toBe(true)
+    expect(shouldClaimFiles(OFFICIAL_OPEN_TOOL)).toBe(false)
+    expect(shouldClaimFiles('system')).toBe(false)
+    expect(shouldClaimFiles(undefined)).toBe(false)
   })
 })
