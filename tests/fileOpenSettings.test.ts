@@ -18,6 +18,7 @@ describe('file open settings', () => {
         object: (shape) => { shapes.push(shape); return { shape, default: (value) => value } },
         string: () => ({ default: (value) => value }),
         number: () => ({ default: (value) => value }),
+        boolean: () => ({ default: (value) => value }),
       },
     })
     const hooks = { setSource: vi.fn(), onChange: vi.fn() }

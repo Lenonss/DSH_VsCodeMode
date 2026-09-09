@@ -24,6 +24,7 @@ import { bindHostLog, log } from './log.js'
 import { createLspManager } from './lsp/manager.js'
 import { createLspRpc } from './lsp/rpc.js'
 import { disposeAllServers } from './lsp/transport.js'
+import { createAiRpc } from './ai/rpc.js'
 import { installRulesSection } from './rules.js'
 import type { RpcHandlerMap } from './shared/rpc.js'
 import type { Registry } from './registry.js'
@@ -48,7 +49,8 @@ export function apply(ctx: Ctx, config?: unknown): void {
   const lspManager = createLspManager((line) => log.debug(line))
   /** 兼容性警告收集（route 护栏等写入，启动日志一并输出）。 */
   const warnings: string[] = []
-  setupOpenSettings(ctx, config, () => {})
+  /** 设置状态（fileOpenTool + AI 补全配置读写；settings 不可用时内存态降级）。 */
+  const openSettings = setupOpenSettings(ctx, config, () => {})
   /** LSP 配置为配置值模式：插件组合配置 + 会话内运行时覆盖（原 settings section 命名空间不合法，见 lsp/config.ts）。 */
   /** 规则注入 section（~/.dsh/rules 与 <工作区>/.dsh/rules；旧版 DSH 无 systemPrompt 时静默降级）。 */
   const rulesInstalled = installRulesSection(ctx)
@@ -56,6 +58,9 @@ export function apply(ctx: Ctx, config?: unknown): void {
   /** LSP RPC 与会话清理（一次性创建，tracker 状态跨请求保留）。 */
   const lspRpc = createLspRpc({ ctx, pluginConfig: config, manager: lspManager })
   const lspHandlers: Partial<RpcHandlerMap> = lspRpc.handlers
+  /** AI 内联补全 RPC（settings 状态桥接 + llm 惰性获取）。 */
+  const aiRpc = createAiRpc({ ctx, settings: openSettings })
+  const aiHandlers: Partial<RpcHandlerMap> = aiRpc.handlers
 
   ctx.on('tools/result', (exec: unknown, result: unknown) => {
     void captureToolResult(ctx, registry, exec, result)
@@ -74,7 +79,7 @@ export function apply(ctx: Ctx, config?: unknown): void {
     if (typeof sid === 'string') lspRpc.disposeSession(sid)
   })
 
-  registerRoutes(ctx, config, (method, args) => handleRpc(ctx, registry, method, args, searcher, contentSearcher, lspHandlers), (warning) => warnings.push(warning))
+  registerRoutes(ctx, config, (method, args) => handleRpc(ctx, registry, method, args, searcher, contentSearcher, lspHandlers, aiHandlers), (warning) => warnings.push(warning))
   installIsolation(ctx)
   // 系统集成生命周期：启动自动恢复右键菜单注册（marker 存在时）；插件卸载/reload 清理注册痕迹
   ctx.effect(() => shellMenuLifecycle(ctx))

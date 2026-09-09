@@ -17,6 +17,7 @@ import type { CompatReport, DevFormInfo } from './compat.js'
 import type { ShellIntegrationStatus, UnityListPayload, UnityProjectEntry } from './integration.js'
 import type { RuleInfo, RuleProject, RuleRefInput, RuleSaveInput } from './rules.js'
 import type { LspEnvInstallState, LspExtInfo, LspExtUpdate, LspHover, LspLocation, LspMarketItem, LspPosition, LspSemanticTokens, LspServerStatus, LspSymbol } from './lsp.js'
+import type { AiConfigPatch, AiConfigView, AiDirectoryView, AiInlineRequest, AiInlineResult } from './ai.js'
 
 /** webServer 精确路由。 */
 export const RPC_PATH = '/edrv/rpc'
@@ -216,6 +217,10 @@ export interface RpcRequestMap {
   'edrv.lsp.ext.update': { id: string }
   'edrv.lsp.ext.updates': {}
   'edrv.lsp.ext.market': { query: string; size?: number }
+  'edrv.ai.inline': AiInlineRequest
+  'edrv.ai.models': { force?: boolean }
+  'edrv.ai.configGet': {}
+  'edrv.ai.configUpdate': AiConfigPatch
   'edrv.perf.inventory': { sessionId?: string }
   'edrv.perf.sessionSize': { sessionId?: string; cwd: string }
   'edrv.perf.movePlan': { workspaceKey?: string; sessionIds?: string[]; minBytes?: number; olderThanDays?: number }
@@ -300,6 +305,10 @@ export interface RpcOkMap {
   'edrv.lsp.ext.update': { extension: LspExtInfo; updated: boolean }
   'edrv.lsp.ext.updates': { updates: LspExtUpdate[] }
   'edrv.lsp.ext.market': { extensions: LspMarketItem[] }
+  'edrv.ai.inline': AiInlineResult
+  'edrv.ai.models': AiDirectoryView
+  'edrv.ai.configGet': AiConfigView
+  'edrv.ai.configUpdate': AiConfigView
   'edrv.perf.inventory': { workspaces: PerfWorkspace[]; sessions: PerfSession[]; totals: PerfTotals; activeIds: string[] }
   'edrv.perf.sessionSize': { bytes: number; exists: boolean }
   'edrv.perf.movePlan': { items: PerfMoveItem[]; reclaimedBytes: number }

@@ -33,6 +33,7 @@ import { CACHE_KEY } from '../paths.js'
 import { bindLspEditor, runGoToDefinition, runFindReferences, hideReferencesOverlay } from '../monaco/lsp/providers.js'
 import { bindLspUnderline } from '../monaco/lsp/underline.js'
 import { onLspProgress, refreshStatus } from '../monaco/lsp/index.js'
+import { setupAiInline, trackAiEditor, aiInlineEnabled } from '../ai/inlineProvider.js'
 
 /**
  * 中央编辑区：文件页签（脏点/关闭/打开路径）+ Ctrl+P 搜索 + Monaco 编辑器 +
@@ -66,6 +67,9 @@ export function EditorView(props) {
   const pdfHostRef = React.useRef(null) // PDF 面板外壳 div（命令式控制器接管）
   const [status, setStatus] = React.useState('')
   const [lspServers, setLspServers] = React.useState([])
+  // AI 补全状态（底部状态栏段）：{ state: idle|busy|ok|error, detail, enabled }
+  const [aiStatus, setAiStatus] = React.useState({ state: 'idle', detail: null, enabled: false })
+  const aiStatusTimer = React.useRef(null)
   const [error, setError] = React.useState(null)
   const [loadError, setLoadError] = React.useState(null)
   const [loadStage, setLoadStage] = React.useState({ progress: 0, message: '准备加载编辑器…' })
@@ -496,6 +500,26 @@ export function EditorView(props) {
     return () => { unsubscribe(); clearInterval(timer) }
   }, [sessionId])
 
+  // AI 补全状态事件：busy/ok/error/idle 即时上栏；ok 3s、error 10s 后回落就绪
+  React.useEffect(() => {
+    const apply = (state, detail) => {
+      if (aiStatusTimer.current) { clearTimeout(aiStatusTimer.current); aiStatusTimer.current = null }
+      setAiStatus((prev) => ({ state, detail: detail ?? null, enabled: state === 'config' ? detail?.enabled === true : prev.enabled }))
+      if (state === 'ok') aiStatusTimer.current = setTimeout(() => setAiStatus((p) => (p.state === 'ok' ? { ...p, state: 'idle' } : p)), 3000)
+      else if (state === 'error') aiStatusTimer.current = setTimeout(() => setAiStatus((p) => (p.state === 'error' ? { ...p, state: 'idle' } : p)), 10000)
+    }
+    const onAiStatus = (e) => { if (e?.detail?.state) apply(e.detail.state, e.detail.detail) }
+    const onAiConfig = (e) => apply('config', { enabled: e?.detail?.enabled === true })
+    window.addEventListener('edrv:ai-status', onAiStatus)
+    window.addEventListener('edrv:ai-config', onAiConfig)
+    apply('config', { enabled: aiInlineEnabled() })
+    return () => {
+      window.removeEventListener('edrv:ai-status', onAiStatus)
+      window.removeEventListener('edrv:ai-config', onAiConfig)
+      if (aiStatusTimer.current) clearTimeout(aiStatusTimer.current)
+    }
+  }, [])
+
   React.useEffect(() => {
     const onOpen = (e) => {
       const p = e?.detail?.path
@@ -776,7 +800,12 @@ export function EditorView(props) {
       const progress = stage.phase === 'ready' ? 70 : Math.round(10 + stage.progress * 0.6)
       setLoadStage((prev) => ({ progress: Math.max(prev.progress, progress), message: stage.message }))
     }
-    loadMonaco(onProgress).then((m) => { if (alive) setMonaco(m) }).catch((e) => {
+    loadMonaco(onProgress).then((m) => {
+      if (!alive) return
+      setMonaco(m)
+      // AI 内联补全 provider 注册 + 开关初始化（幂等）
+      setupAiInline(m)
+    }).catch((e) => {
       if (alive) {
         setMonacoErr(String(e?.message ?? e))
         setStatus('Monaco 不可用')
@@ -943,6 +972,8 @@ export function EditorView(props) {
       smoothScrolling: true,
       cursorBlinking: 'smooth',
       padding: { top: side ? 6 : 8 },
+      // AI 内联补全（ghost text）：开关经 edrv.ai.configGet 拉取；provider 见 client/ai/inlineProvider
+      inlineSuggest: { enabled: true },
     })
     // 保存改由窗口级快捷键监听执行（键位可配置；见上方 edrv.save 监听）
     ed.onDidChangeModelContent(() => {
@@ -1014,6 +1045,11 @@ export function EditorView(props) {
     ed.addCommand(m.KeyCode.F12, () => { void runGoToDefinition(ed) })
     bindLspEditor(ed)
     bindLspUnderline(ed, m)
+    // AI 补全：编辑器实例登记（差异静默判定用）+ Alt+\ 手动触发 ghost text
+    trackAiEditor(ed)
+    ed.addCommand(m.KeyMod.Alt | m.KeyCode.Backslash, () => {
+      ed.trigger('edrv-ai', 'editor.action.inlineSuggest.trigger', null)
+    })
     // hover 差异块 → 浮出 Keep/Undo（req：鼠标移到编辑区差异块时显示）
     // 防闪烁：① 区域不变不 setState（浮窗锚定差异块起始行，不跟随鼠标）；② 延迟隐藏；
     // ③ 浮窗自身 onMouseEnter 取消隐藏计时（鼠标在浮窗与编辑器间移动不闪）。
@@ -1437,12 +1473,37 @@ export function EditorView(props) {
     ? 'LSP ' + lspLanguage + ' · ' + (lspPhaseText[lspServer.phase] ?? lspServer.phase) + ' · ' + (lspSourceText[lspServer.source] ?? lspServer.source)
     : 'LSP ' + lspLanguage + ' · 未启动'
   const lspProgress = typeof lspServer?.progress === 'number' ? Math.round(lspServer.progress) : null
-  const lspFooter = (lspLanguage === 'lua' || lspLanguage === 'csharp')
-    ? React.createElement('div', { className: 'edrv-statusbar', title: lspServer?.progressMessage || lspLabel },
+  // 状态段行内样式：单行状态栏内的一段；LSP 段弹性占满空闲宽度，把后续段推到行尾
+  const lspSegStyle = { display: 'inline-flex', alignItems: 'center', gap: '10px', minWidth: 0, flex: '1 1 auto' }
+  const lspSeg = (lspLanguage === 'lua' || lspLanguage === 'csharp')
+    ? React.createElement('span', { className: 'edrv-status-seg', style: lspSegStyle, title: lspServer?.progressMessage || lspLabel },
         React.createElement('span', { className: 'edrv-lsp-status-dot ' + (lspServer?.phase === 'ready' ? 'ready' : lspServer?.phase === 'indexing' || lspServer?.phase === 'starting' ? 'busy' : 'idle') }),
         React.createElement('span', { className: 'edrv-sp-lsp' }, lspLabel),
         lspServer?.progressMessage ? React.createElement('span', { className: 'edrv-sp-progress-message' }, lspServer.progressMessage) : null,
         lspProgress !== null ? React.createElement('span', { className: 'edrv-sp-progress' }, lspProgress + '%') : null)
+    : null
+
+  // AI 补全状态段（全语言可用，不随 LSP 语言过滤）：就绪/请求中/完成·耗时/失败原因
+  const aiEnabled = aiStatus.enabled
+  const aiState = aiStatus.state
+  const aiDotCls = aiState === 'busy' ? 'busy' : aiState === 'ok' ? 'ready' : aiState === 'error' ? 'idle' : 'ready'
+  const aiMsText = aiStatus.detail && aiStatus.detail.ms != null ? (aiStatus.detail.ms / 1000).toFixed(1) + 's' : ''
+  const aiNote = aiStatus.detail && aiStatus.detail.note ? String(aiStatus.detail.note) : ''
+  const aiLabel = !aiEnabled ? 'AI 补全 · 关'
+    : aiState === 'busy' ? 'AI 补全请求中…'
+    : aiState === 'ok' ? 'AI 补全完成' + (aiMsText ? ' · ' + aiMsText : '')
+    : aiState === 'error' ? 'AI 补全失败 · ' + aiNote.slice(0, 48)
+    : 'AI 补全就绪'
+  const aiSegStyle = { display: 'inline-flex', alignItems: 'center', gap: '10px', minWidth: 0, flex: '0 0 auto' }
+  const aiSeg = (active && aiEnabled !== null)
+    ? React.createElement('span', { className: 'edrv-status-seg', style: aiSegStyle, title: aiState === 'error' && aiNote ? aiNote : 'AI 自动补全（设置页「AI 补全」可配置）' },
+        React.createElement('span', { className: 'edrv-lsp-status-dot ' + (!aiEnabled ? 'idle' : aiDotCls) }),
+        React.createElement('span', { className: 'edrv-sp-lsp' }, aiLabel))
+    : null
+
+  // 底部状态栏：单行多段——LSP 段居左（弹性吸收空闲宽度），AI 段固定右对齐
+  const statusBar = (lspSeg || aiSeg)
+    ? React.createElement('div', { className: 'edrv-statusbar' }, lspSeg, aiSeg)
     : null
 
   // 导航历史按钮：目标条目名（tooltip 提示下一步会回到哪个文件）
@@ -1662,7 +1723,7 @@ export function EditorView(props) {
     tabRow,
     sideHintEl,
     editorArea,
-    lspFooter)
+    statusBar)
   // 编辑器根节点按 composer 顶部边界动态限高，底部对话区域继续由 DSH 原生渲染。
   // 侧栏形态由面板容器给高（100%），不做 composer 几何同步。
   const editorRow = React.createElement('div', { className: 'edrv-editor-row' },

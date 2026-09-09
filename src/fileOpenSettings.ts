@@ -10,12 +10,21 @@
 import type { Ctx } from './store.js'
 import { KEYBINDING_DEFAULTS } from './shared/keybindings.js'
 import { INTEGRATION_BASE_DEFAULT } from './shared/integration.js'
+import type { AiConfigPatch, AiConfigView } from './shared/ai.js'
 import { log } from './log.js'
 
 export const FILE_OPEN_SETTINGS_NS = 'dsh-vscode-mode'
 export const FILE_OPEN_DEFAULT = 'auto'
 export interface FileOpenSettings { fileOpenTool: string; integrationBaseUrl: string }
 export interface FileOpenSettingsState { value: string; revision?: number; update: (value: string, expectedRevision?: number) => Promise<void> }
+
+/** AI 内联补全配置默认值（默认关闭；路由空 = 自动；档位空 = 跟随模型默认）。 */
+export const AI_CONFIG_DEFAULT: { enabled: boolean; provider: string; model: string; effort: string } = {
+  enabled: false,
+  provider: '',
+  model: '',
+  effort: '',
+}
 
 type SettingsProvider = {
   update?: (ns: string, patch: object, expectedRevision?: number) => Promise<void>
@@ -219,6 +228,11 @@ export async function installOpenSettingsSection(
     keybindings: deps.z.object(keybindingsShape(deps.z)).default({ ...KEYBINDING_DEFAULTS }),
     sidebarMinWidth: deps.z.number().default(300),
     integrationBaseUrl: deps.z.string().default(INTEGRATION_BASE_DEFAULT),
+    // AI 内联补全（默认关；provider/model 空 = 自动路由；effort 空 = 跟随模型默认）
+    aiInline: deps.z.boolean().default(AI_CONFIG_DEFAULT.enabled),
+    aiProvider: deps.z.string().default(AI_CONFIG_DEFAULT.provider),
+    aiModel: deps.z.string().default(AI_CONFIG_DEFAULT.model),
+    aiEffort: deps.z.string().default(AI_CONFIG_DEFAULT.effort),
   })
   const strategy = await runSettingsInstall(ctx, ns, schema, entry, {
     setSource: (source) => hooks.setSource(source as () => FileOpenSettings),
@@ -227,15 +241,26 @@ export async function installOpenSettingsSection(
   return strategy === 'legacy' || strategy === 'service'
 }
 
+/** AI 配置脏值读取（settings 未就绪时回退默认）。 */
+function aiValueOf(stored: unknown): { enabled: boolean; provider: string; model: string; effort: string } {
+  const raw = (stored ?? {}) as Record<string, unknown>
+  return {
+    enabled: raw.aiInline === true,
+    provider: typeof raw.aiProvider === 'string' ? raw.aiProvider : AI_CONFIG_DEFAULT.provider,
+    model: typeof raw.aiModel === 'string' ? raw.aiModel : AI_CONFIG_DEFAULT.model,
+    effort: typeof raw.aiEffort === 'string' ? raw.aiEffort : AI_CONFIG_DEFAULT.effort,
+  }
+}
+
 /**
  * 注册设置命名空间，并提供 host 侧的读取与更新状态。
  * @author ddj 2026年08月24号
  * @param ctx DSH host 上下文
  * @param config 插件组合配置
  * @param onChange 设置变化回调
- * @returns 设置状态
+ * @returns 设置状态（fileOpenTool 值 + AI 补全配置读写）
  */
-export function setupOpenSettings(ctx: Ctx, config: unknown, onChange: (value: string) => void): FileOpenSettingsState {
+export function setupOpenSettings(ctx: Ctx, config: unknown, onChange: (value: string) => void): FileOpenSettingsState & { ai: () => AiConfigView; aiUpdate: (patch: AiConfigPatch, expectedRevision?: number) => Promise<AiConfigView> } {
   let current = configValue(config)
   let revision: number | undefined
   let provider: SettingsProvider | undefined
@@ -247,9 +272,25 @@ export function setupOpenSettings(ctx: Ctx, config: unknown, onChange: (value: s
   const setSource = (source: () => FileOpenSettings): void => notify(source().fileOpenTool)
   const settingsChange = (): void => syncRevision()
 
-  void installOpenSettingsSection(ctx, FILE_OPEN_SETTINGS_NS, { fileOpenTool: current, integrationBaseUrl: baseValueOf(config) }, { setSource, onChange: settingsChange })
+  /** AI 配置当前值（settings 未就绪回退默认）。 */
+  let aiCurrent: AiConfigView = { ...AI_CONFIG_DEFAULT }
+  const aiSync = (): void => {
+    const descriptor = provider?.describe?.({ redactSecrets: true })?.find((item: { ns?: string }) => item.ns === FILE_OPEN_SETTINGS_NS)
+    const stored = descriptor?.value
+    aiCurrent = stored !== undefined ? aiValueOf(stored) : aiCurrent
+  }
+
+  void installOpenSettingsSection(ctx, FILE_OPEN_SETTINGS_NS, { fileOpenTool: current, integrationBaseUrl: baseValueOf(config) }, {
+    setSource: (source) => {
+      notify(source().fileOpenTool)
+      aiCurrent = aiValueOf(source())
+      syncRevision()
+    },
+    onChange: settingsChange,
+  })
   ctx.inject?.(['settings'], (settingsCtx: Ctx) => {
     provider = settingsCtx.get('settings')
+    aiSync()
     syncRevision()
   })
 
@@ -264,6 +305,26 @@ export function setupOpenSettings(ctx: Ctx, config: unknown, onChange: (value: s
       const stored = descriptor?.value as { fileOpenTool?: unknown } | undefined
       notify(stored?.fileOpenTool ?? next)
       syncRevision()
+    },
+    ai: () => aiCurrent,
+    aiUpdate: async (patch: AiConfigPatch, expectedRevision?: number): Promise<AiConfigView> => {
+      if (!provider?.update) {
+        // settings 不可用：内存态生效（重启回落默认），保持与 fileOpenTool 的降级语义一致
+        if (patch.enabled !== undefined) aiCurrent.enabled = patch.enabled
+        if (patch.provider !== undefined) aiCurrent.provider = patch.provider
+        if (patch.model !== undefined) aiCurrent.model = patch.model
+        if (patch.effort !== undefined) aiCurrent.effort = patch.effort
+        return aiCurrent
+      }
+      const stored = { ...aiCurrent }
+      const body: Record<string, unknown> = {}
+      if (patch.enabled !== undefined) { stored.enabled = patch.enabled; body.aiInline = patch.enabled }
+      if (patch.provider !== undefined) { stored.provider = patch.provider; body.aiProvider = patch.provider }
+      if (patch.model !== undefined) { stored.model = patch.model; body.aiModel = patch.model }
+      if (patch.effort !== undefined) { stored.effort = patch.effort; body.aiEffort = patch.effort }
+      await provider.update(FILE_OPEN_SETTINGS_NS, body, expectedRevision)
+      aiSync()
+      return aiCurrent
     },
   }
 }

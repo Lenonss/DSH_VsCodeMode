@@ -15,6 +15,7 @@ import { KeybindingsPanel } from './KeybindingsPanel.js'
 import { LspSettings } from './LspSettings.js'
 import { PerfSettings } from './PerfSettings.js'
 import { IntegrationSettings } from './IntegrationSettings.js'
+import { AiSettings } from './AiSettings.js'
 
 const EMPTY = { serverName: '', transport: 'stdio', command: '', args: '', cwd: '', url: '', headers: '' }
 
@@ -429,10 +430,11 @@ export function McpSettings(props) {
     refreshGlobal, toggleGlobal, removeGlobal, refreshProject, toggleProject, removeProject })
   else if (tab === 'compat') body = React.createElement(CompatSection, { getSummary: compatSummary })
   else if (tab === 'lsp') body = React.createElement(LspSettings, null)
+  else if (tab === 'ai') body = React.createElement(AiSettings, null)
   else body = React.createElement(PerfSettings, null)
   return React.createElement('section', { className: 'vsm-mcp-page' },
     React.createElement('header', { className: 'vsm-mcp-header' }, React.createElement('div', null, React.createElement('h2', null, 'VSCodeMode'), React.createElement('p', null, '管理当前 profile 与各项目的 Model Context Protocol 服务。'))),
-    React.createElement('nav', { className: 'vsm-mcp-tabs' }, React.createElement('button', { className: tab === 'general' ? 'active' : '', onClick: () => setTab('general') }, '通用'), React.createElement('button', { className: tab === 'keys' ? 'active' : '', onClick: () => setTab('keys') }, '快捷键'), React.createElement('button', { className: tab === 'mcp' ? 'active' : '', onClick: () => setTab('mcp') }, 'MCP 管理'), React.createElement('button', { className: tab === 'lsp' ? 'active' : '', onClick: () => setTab('lsp') }, '语言服务器'), React.createElement('button', { className: tab === 'perf' ? 'active' : '', onClick: () => setTab('perf') }, '性能优化'), React.createElement('button', { className: tab === 'compat' ? 'active' : '', onClick: () => setTab('compat') }, '兼容性')),
+    React.createElement('nav', { className: 'vsm-mcp-tabs' }, React.createElement('button', { className: tab === 'general' ? 'active' : '', onClick: () => setTab('general') }, '通用'), React.createElement('button', { className: tab === 'keys' ? 'active' : '', onClick: () => setTab('keys') }, '快捷键'), React.createElement('button', { className: tab === 'mcp' ? 'active' : '', onClick: () => setTab('mcp') }, 'MCP 管理'), React.createElement('button', { className: tab === 'lsp' ? 'active' : '', onClick: () => setTab('lsp') }, '语言服务器'), React.createElement('button', { className: tab === 'ai' ? 'active' : '', onClick: () => setTab('ai') }, 'AI 补全'), React.createElement('button', { className: tab === 'perf' ? 'active' : '', onClick: () => setTab('perf') }, '性能优化'), React.createElement('button', { className: tab === 'compat' ? 'active' : '', onClick: () => setTab('compat') }, '兼容性')),
     error && React.createElement('div', { className: 'vsm-mcp-error vsm-mcp-banner' }, error),
     body,
   )

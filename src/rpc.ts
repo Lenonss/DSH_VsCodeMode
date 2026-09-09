@@ -200,10 +200,13 @@ export function buildHandlers(
   searcher = newSearcher(ctx),
   contentSearcher = newContentSearcher(ctx),
   lspHandlers?: Partial<RpcHandlerMap>,
+  aiHandlers?: Partial<RpcHandlerMap>,
 ): RpcHandlerMap {
   return {
     // edrv.lsp.* 由 createLspRpc 一次性提供（tracker 跨请求保留），这里并入。
     ...((lspHandlers ?? {}) as RpcHandlerMap),
+    // edrv.ai.* 由 createAiRpc 提供（AI 内联补全/模型目录/配置读写），这里并入。
+    ...((aiHandlers ?? {}) as RpcHandlerMap),
     'edrv.list': async (args) => {
       const sc = await requireSession(ctx, args.sessionId)
       if ('err' in sc) return { ok: false, error: sc.err }
@@ -782,8 +785,9 @@ export async function handleRpc<M extends RpcMethod>(
   searcher = newSearcher(ctx),
   contentSearcher = newContentSearcher(ctx),
   lspHandlers?: Partial<RpcHandlerMap>,
+  aiHandlers?: Partial<RpcHandlerMap>,
 ): Promise<RpcResult<M>> {
-  const handlers = buildHandlers(ctx, registry, searcher, contentSearcher, lspHandlers)
+  const handlers = buildHandlers(ctx, registry, searcher, contentSearcher, lspHandlers, aiHandlers)
   const handler = handlers[method]
   if (!handler) return { ok: false, error: '未知方法: ' + String(method) } as RpcResult<M>
   return handler(args)
