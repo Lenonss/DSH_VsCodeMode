@@ -11,6 +11,7 @@ import React from 'react'
 import { rpc } from '../../rpc.js'
 import type { SidebarCtx } from '../types.js'
 import { CACHE_KEY } from '../../paths.js'
+import { workspaceScopeOf } from '../../state/scopeStore.js'
 
 const DEBOUNCE_MS = 250
 const INCLUDE_PLACEHOLDER = '例如 *.ts, src/**/include'
@@ -44,6 +45,8 @@ function splitHit(text, start, end) {
 export function SearchPanel(props) {
   const ctx = props?.ctx
   const sessionId = ctx?.sessionId
+  // 搜索条件按工作区作用域记忆（同工作区切对话恢复同一份），无 cwd 回退会话
+  const scope = ctx?.scope ?? workspaceScopeOf(null, sessionId)
   const openFileAt = ctx?.openFileAt ?? (() => {})
   const activePath = ctx?.activePath ?? null
   const [query, setQuery] = React.useState('')
@@ -76,11 +79,11 @@ export function SearchPanel(props) {
     exclude: excludeOn ? splitGlobs(excludeText) : [],
   }
 
-  // 按会话恢复上次查询、选项与过滤模式（VSCode 记忆搜索词）
+  // 按作用域恢复上次查询、选项与过滤模式（VSCode 记忆搜索词）
   React.useEffect(() => {
-    if (!sessionId) return
+    if (!scope) return
     try {
-      const saved = JSON.parse(localStorage.getItem(CACHE_KEY.search + String(sessionId)) || 'null')
+      const saved = JSON.parse(localStorage.getItem(CACHE_KEY.search + String(scope)) || 'null')
       if (saved && typeof saved === 'object') {
         if (typeof saved.query === 'string') setQuery(saved.query)
         if (typeof saved.matchCase === 'boolean') setMatchCase(saved.matchCase)
@@ -93,17 +96,17 @@ export function SearchPanel(props) {
         if (typeof saved.sectionOpen === 'boolean') setSectionOpen(saved.sectionOpen)
       }
     } catch (e) { /* 损坏忽略 */ }
-  }, [sessionId])
+  }, [scope])
 
   // 查询/选项/过滤变化 → 持久化
   React.useEffect(() => {
-    if (!sessionId) return
+    if (!scope) return
     try {
-      localStorage.setItem(CACHE_KEY.search + String(sessionId), JSON.stringify({
+      localStorage.setItem(CACHE_KEY.search + String(scope), JSON.stringify({
         query, matchCase, wholeWord, regex, includeText, excludeText, onlyActive, excludeOn, sectionOpen,
       }))
     } catch (e) { /* 忽略 */ }
-  }, [sessionId, query, matchCase, wholeWord, regex, includeText, excludeText, onlyActive, excludeOn, sectionOpen])
+  }, [scope, query, matchCase, wholeWord, regex, includeText, excludeText, onlyActive, excludeOn, sectionOpen])
 
   /**
    * 执行内容搜索（请求参数从 ref 读最新值）。

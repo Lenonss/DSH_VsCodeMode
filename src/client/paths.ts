@@ -6,7 +6,7 @@
  * 作者 ddj 2026-09-01
  */
 
-/** localStorage 键前缀表（按功能隔离；均按会话拼接）。 */
+/** localStorage 键前缀表（按功能隔离；与 scopeStore 作用域键拼接：工作区优先，无 cwd 回退会话）。 */
 export const CACHE_KEY = {
   /** 展开状态（explorerCache v1，当前使用）。 */
   expanded: 'edrv.cache.explorer.v1.',
@@ -20,7 +20,7 @@ export const CACHE_KEY = {
   sidebar: 'edrv.sidebar.',
   /** 搜索面板条件（SearchPanel v1）。 */
   search: 'edrv.search.v1.',
-  /** 侧边栏提示已关闭标记（全局，无会话）。 */
+  /** 侧边栏提示已关闭标记（全局，无作用域）。 */
   sideHint: 'edrv.side-hint-dismissed',
   /** 「性能优化」页工作区栏目展开状态（workspaceFoldCache v1，全局不按会话）。 */
   workspaceFold: 'edrv.ws-fold.v1.',
@@ -28,7 +28,7 @@ export const CACHE_KEY = {
   rules: 'edrv.rules.v1.',
 } as const
 
-/** 按前缀拼会话键（侧边栏/编辑器等需要布局段时自行拼接后传入）。 */
+/** 按前缀拼作用域键（scopeStore 产出作用域；侧边栏/编辑器等需要布局段时自行拼接后传入）。 */
 export function cacheKey(prefix: string, sessionId: string): string {
   return prefix + sessionId
 }

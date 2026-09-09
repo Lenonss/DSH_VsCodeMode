@@ -3,7 +3,7 @@
  * 作者 ddj 2026-09-04
  */
 import { describe, expect, it } from 'vitest'
-import { createNavHistory, NAV_HISTORY_CAP } from '../src/client/navHistory.js'
+import { createNavHistory, NAV_HISTORY_CAP, NAV_SCOPE_CAP, navHistoryFor } from '../src/client/navHistory.js'
 
 describe('createNavHistory record', () => {
   it('pushes entries and clears future on new navigation', () => {
@@ -93,5 +93,35 @@ describe('back / forward', () => {
 
   it('defines a nonzero default capacity', () => {
     expect(NAV_HISTORY_CAP).toBeGreaterThan(0)
+  })
+})
+
+describe('navHistoryFor', () => {
+  it('same scope reuses one instance across calls', () => {
+    const a = navHistoryFor('ws:d:/w')
+    a.record({ path: 'a.ts', line: 1 })
+    a.record({ path: 'b.ts', line: 2 }) // 两条记录后才有后退意义（canBack ≥ 2 条）
+    const b = navHistoryFor('ws:d:/w')
+    expect(b).toBe(a)
+    expect(b.canBack()).toBe(true) // 历史跨调用保留
+  })
+
+  it('different scopes get independent instances', () => {
+    const a = navHistoryFor('ws:d:/w1')
+    const b = navHistoryFor('ws:d:/w2')
+    expect(b).not.toBe(a)
+    a.record({ path: 'a.ts', line: 1 })
+    a.record({ path: 'b.ts', line: 2 })
+    expect(b.canBack()).toBe(false)
+  })
+
+  it('evicts oldest scope beyond cache cap (FIFO)', () => {
+    expect(NAV_SCOPE_CAP).toBeGreaterThan(0)
+    const first = navHistoryFor('ws:evict-0')
+    for (let i = 1; i <= NAV_SCOPE_CAP; i++) navHistoryFor('ws:evict-' + i)
+    // 容量满后最早的作用域被逐出：重新获取得到全新实例（历史为空）
+    const again = navHistoryFor('ws:evict-0')
+    expect(again).not.toBe(first)
+    expect(again.canBack()).toBe(false)
   })
 })

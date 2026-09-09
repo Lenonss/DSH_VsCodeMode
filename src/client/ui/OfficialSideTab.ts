@@ -11,7 +11,7 @@
 import React from 'react'
 import { EditorView } from './EditorView.js'
 import { setSideEditorMounted } from '../sidebarBridge.js'
-import { parseOfficialFileAddress, resolveNavOpen } from '../officialSidebar.js'
+import { editorMountEpoch, markEditorMounted, parseOfficialFileAddress, resolveNavOpen } from '../officialSidebar.js'
 
 /**
  * 官方侧边栏 Tab 正文组件（keyed slot sidebar.right.pane.tab 装配）。
@@ -32,10 +32,29 @@ export function OfficialSideTab(props) {
   }
   const revision = typeof navigation?.revision === 'number' ? navigation.revision : -1
   const revisionRef = React.useRef(-1)
+  // 最新 sessionId 镜像（卸载清理判读「切会话 vs 本会话关闭」用）
+  const sessionIdRef = React.useRef(sessionId)
+  sessionIdRef.current = sessionId
 
+  // 编辑 Tab 激活标记：挂载即激活；卸载时延迟判定「切会话（保持，供新会话自动恢复）
+  // vs 本会话关闭/切走其他 Tab（清除，尊重用户选择）」——通知早于会话状态落定，必须延后读；
+  // 纪元守卫：判定期间有新正文挂载（HMR/自动恢复）则放弃清除
   React.useEffect(() => {
     setSideEditorMounted(true)
-    return () => setSideEditorMounted(false)
+    markEditorMounted()
+    return () => {
+      setSideEditorMounted(false)
+      const epoch = editorMountEpoch()
+      const self = sessionIdRef.current
+      const schedule = props?.schedule
+      const decide = () => {
+        if (editorMountEpoch() !== epoch) return
+        const current = props?.sessions?.list?.getSnapshot?.()?.current
+        markEditorActive(current === self)
+      }
+      if (typeof schedule === 'function') schedule(decide, 0)
+      else decide()
+    }
   }, [])
 
   React.useEffect(() => {

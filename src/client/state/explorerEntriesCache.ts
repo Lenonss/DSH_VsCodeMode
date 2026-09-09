@@ -1,6 +1,6 @@
 /**
  * dsh-vscode-mode client — 资源管理栏目录条目缓存（SWR：旧数据即时渲染 + 后台刷新）。
- * 与 explorerCache（展开状态持久化）互补：本文件只缓存目录条目数据，键按会话隔离。
+ * 与 explorerCache（展开状态持久化）互补：本文件只缓存目录条目数据，键按工作区作用域隔离。
  * 纯函数（序列化/解析/裁剪）导出可单测；内存镜像 Map 同步读避免每次渲染 parse
  * localStorage，落盘 300ms 防抖；配额满/隐私模式 try/catch 降级纯内存。
  * 作者 ddj 2026-08-31
@@ -78,9 +78,9 @@ export function entriesParse(text: string | null): EntriesCacheData | null {
 }
 
 // --region 内存镜像 + 防抖落盘
-/** sessionId → 缓存镜像（同步读，避免每次渲染 parse）。 */
+/** scope → 缓存镜像（同步读，避免每次渲染 parse）。 */
 const mirrors = new Map<string, EntriesCacheData>()
-/** sessionId → 落盘防抖计时器。 */
+/** scope → 落盘防抖计时器。 */
 const saveTimers = new Map<string, ReturnType<typeof setTimeout>>()
 /** 单调时钟：连续 put 的 ts 严格递增（同毫秒不并列，逐出顺序可预期）。 */
 let clock = 0
@@ -92,38 +92,38 @@ function nextTs(): number {
 }
 
 /** localStorage 读取（不可用 → null）。 */
-function readRaw(sessionId: string): string | null {
+function readRaw(scope: string): string | null {
   try {
-    return window.localStorage.getItem(KEY_PREFIX + sessionId)
+    return window.localStorage.getItem(KEY_PREFIX + scope)
   } catch (error) {
     return null
   }
 }
 
 /** localStorage 写入（配额/隐私模式失败静默）。 */
-function writeRaw(sessionId: string, text: string): void {
+function writeRaw(scope: string, text: string): void {
   try {
-    window.localStorage.setItem(KEY_PREFIX + sessionId, text)
+    window.localStorage.setItem(KEY_PREFIX + scope, text)
   } catch (error) { /* 配额满/隐私模式忽略 */ }
 }
 
-/** 取（或建）会话缓存镜像。 */
-function mirrorOf(sessionId: string): EntriesCacheData {
-  const existing = mirrors.get(sessionId)
+/** 取（或建）作用域缓存镜像。 */
+function mirrorOf(scope: string): EntriesCacheData {
+  const existing = mirrors.get(scope)
   if (existing) return existing
-  const data = entriesParse(readRaw(sessionId)) ?? { v: 2, root: null, dirs: {} }
-  mirrors.set(sessionId, data)
+  const data = entriesParse(readRaw(scope)) ?? { v: 2, root: null, dirs: {} }
+  mirrors.set(scope, data)
   return data
 }
 
 /** 调度防抖落盘（重置已有计时器）。 */
-function scheduleSave(sessionId: string): void {
-  const prev = saveTimers.get(sessionId)
+function scheduleSave(scope: string): void {
+  const prev = saveTimers.get(scope)
   if (prev) clearTimeout(prev)
-  saveTimers.set(sessionId, setTimeout(() => {
-    saveTimers.delete(sessionId)
-    const data = mirrors.get(sessionId)
-    if (data) writeRaw(sessionId, entriesSerialize(entriesTrim(data)))
+  saveTimers.set(scope, setTimeout(() => {
+    saveTimers.delete(scope)
+    const data = mirrors.get(scope)
+    if (data) writeRaw(scope, entriesSerialize(entriesTrim(data)))
   }, CACHE_SAVE_DEBOUNCE_MS))
 }
 // --endregion
@@ -131,13 +131,13 @@ function scheduleSave(sessionId: string): void {
 /**
  * 读某目录缓存条目（无 → null；展示不受新鲜度限制）。
  * @author ddj 2026年08月31号
- * @param sessionId 会话 id
+ * @param scope 作用域键（scopeStore.workspaceScopeOf 产物）
  * @param rel 目录相对路径（'' = 根）
  * @returns 缓存条目或 null
  */
-export function entriesCacheGet(sessionId: string | undefined, rel: string): TreeEntry[] | null {
-  if (!sessionId) return null
-  const dir = mirrorOf(sessionId).dirs[rel]
+export function entriesCacheGet(scope: string | undefined, rel: string): TreeEntry[] | null {
+  if (!scope) return null
+  const dir = mirrorOf(scope).dirs[rel]
   if (!dir || !dir.entries.length) return null
   return dir.entries
 }
@@ -145,28 +145,28 @@ export function entriesCacheGet(sessionId: string | undefined, rel: string): Tre
 /**
  * 某目录缓存是否新鲜（预取去重用）。
  * @author ddj 2026年08月31号
- * @param sessionId 会话 id
+ * @param scope 作用域键（scopeStore.workspaceScopeOf 产物）
  * @param rel 目录相对路径
  * @returns 新鲜返回 true
  */
-export function entriesCacheIsFresh(sessionId: string | undefined, rel: string): boolean {
-  if (!sessionId) return false
-  const dir = mirrorOf(sessionId).dirs[rel]
+export function entriesCacheIsFresh(scope: string | undefined, rel: string): boolean {
+  if (!scope) return false
+  const dir = mirrorOf(scope).dirs[rel]
   return Boolean(dir && Date.now() - dir.ts < CACHE_FRESH_MS)
 }
 
 /**
  * 写入某目录缓存条目（内存镜像 + 防抖落盘；单目录条目截断）。
  * @author ddj 2026年08月31号
- * @param sessionId 会话 id
+ * @param scope 作用域键（scopeStore.workspaceScopeOf 产物）
  * @param rel 目录相对路径
  * @param entries 目录条目
  */
-export function entriesCachePut(sessionId: string | undefined, rel: string, entries: TreeEntry[]): void {
-  if (!sessionId) return
-  const data = mirrorOf(sessionId)
+export function entriesCachePut(scope: string | undefined, rel: string, entries: TreeEntry[]): void {
+  if (!scope) return
+  const data = mirrorOf(scope)
   data.dirs[rel] = { ts: nextTs(), entries: entries.slice(0, CACHE_DIR_ENTRIES) }
   const trimmed = entriesTrim(data)
   data.dirs = trimmed.dirs
-  scheduleSave(sessionId)
+  scheduleSave(scope)
 }

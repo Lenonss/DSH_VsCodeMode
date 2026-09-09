@@ -4,7 +4,7 @@
  * 后退回到上一处焦点，前进回到下一处，跨文件生效。
  * 数据模型：past（末位 = 当前）+ future 两个栈；record 压栈并清空 future；
  * 与栈顶同 path+line+column 视为同一位置：仅刷新 viewState 快照，不压栈、不清 future。
- * 纯逻辑无 DOM 依赖，可单测。
+ * 纯逻辑无 DOM 依赖，可单测；navHistoryFor 提供按工作区作用域的实例仓（跨会话复用）。
  * 作者 ddj 2026年09月04号
  */
 
@@ -40,6 +40,12 @@ export interface NavHistory {
 
 /** 后退栈默认容量上限（超出逐出最旧）。 */
 export const NAV_HISTORY_CAP = 200
+
+/** 工作区历史实例缓存上限（FIFO 逐出最久未用作用域，防长期驻留泄漏）。 */
+export const NAV_SCOPE_CAP = 6
+
+/** scope → 导航历史实例（同工作区跨会话复用同一份历史）。 */
+const scopeHistories = new Map<string, NavHistory>()
 
 /** 路径一致（容忍相对路径大小写差异，对齐既有 sameFile 语义常用写法）。 */
 function samePath(a: string, b: string): boolean {
@@ -101,4 +107,25 @@ export function createNavHistory(cap = NAV_HISTORY_CAP): NavHistory {
       return future.length ? future[future.length - 1] : null
     },
   }
+}
+
+/**
+ * 取（或建）某工作区作用域的导航历史实例：同 scope 跨会话复用同一实例，
+ * 后退/前进历史在切换对话后保留（对齐「同一工作区同一编辑区」体感）。
+ * 超出 NAV_SCOPE_CAP 时逐出最旧的实例（Map 插入序近似 LRU）。
+ * @author ddj 2026年09月09号
+ * @param scope 作用域键（scopeStore.workspaceScopeOf 产物）
+ * @param cap 后退栈容量上限（透传 createNavHistory）
+ * @returns 导航历史实例
+ */
+export function navHistoryFor(scope: string, cap = NAV_HISTORY_CAP): NavHistory {
+  const existing = scopeHistories.get(scope)
+  if (existing) return existing
+  const created = createNavHistory(cap)
+  scopeHistories.set(scope, created)
+  if (scopeHistories.size > NAV_SCOPE_CAP) {
+    const oldest = scopeHistories.keys().next().value
+    if (typeof oldest === 'string') scopeHistories.delete(oldest)
+  }
+  return created
 }

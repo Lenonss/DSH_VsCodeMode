@@ -12,6 +12,8 @@ export interface SidebarCtx {
   sessionId?: string
   /** 当前会话工作区 cwd（来自 sessions 快照；规则面板项目 Tab 自动匹配用）。 */
   cwd?: string | null
+  /** 状态作用域键（工作区优先，无 cwd 回退会话；面板持久化统一走它，scopeStore 产出）。 */
+  scope?: string
   openFile: (path: string) => void
   /** 打开文件并跳转到指定行/列（搜索面板命中跳转；缺省仅打开）。 */
   openFileAt?: (path: string, line?: number, column?: number) => void

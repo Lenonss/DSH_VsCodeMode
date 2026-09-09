@@ -2,15 +2,18 @@
  * client officialSidebar 纯函数与装配测试（不触 DOM/窗口事件，mock ctx/slots）。
  * 作者 ddj 2026-09-09
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, beforeEach } from 'vitest'
 import {
   detectOfficial,
   installOfficial,
+  markEditorActive,
+  isEditorTabActive,
   parseOfficialFileAddress,
   officialFileTitle,
   buildFileAddress,
   registerOfficialFileClaim,
   resolveNavOpen,
+  restoreEditorTab,
   OFFICIAL_FILE_TAB_ID,
   OFFICIAL_SERVICE,
   OFFICIAL_SLOT_NAME,
@@ -234,5 +237,86 @@ describe('registerOfficialFileClaim', () => {
       renderTab: () => null,
     })
     expect(dispose).toBeNull()
+  })
+})
+
+describe('markEditorActive / isEditorTabActive', () => {
+  beforeEach(() => { markEditorActive(false) })
+  it('标记翻转生效', () => {
+    expect(isEditorTabActive()).toBe(false)
+    markEditorActive(true)
+    expect(isEditorTabActive()).toBe(true)
+    markEditorActive(false)
+    expect(isEditorTabActive()).toBe(false)
+  })
+})
+
+describe('restoreEditorTab', () => {
+  beforeEach(() => { markEditorActive(false) })
+
+  /** 收集重试任务的调度器（返回 flush 手动触发）。 */
+  function collector(): { schedule: (fn: () => void, ms: number) => void; flush: () => void; delays: number[] } {
+    const queue: Array<() => void> = []
+    const delays: number[] = []
+    return {
+      schedule: (fn, ms) => { queue.push(fn); delays.push(ms) },
+      flush: () => { const next = queue.shift(); if (next) next() },
+      delays,
+    }
+  }
+
+  it('未标记激活/缺服务/缺 openTab 时直接返回', () => {
+    const openCalls: string[] = []
+    restoreEditorTab(undefined, () => {})
+    restoreEditorTab({ openTab: (kind) => openCalls.push(kind) }, () => {})
+    markEditorActive(true)
+    restoreEditorTab({ active: () => undefined } as never, () => {})
+    expect(openCalls).toEqual([])
+  })
+
+  it('编辑 Tab 已激活（kind 命中）时跳过', () => {
+    markEditorActive(true)
+    const openCalls: string[] = []
+    restoreEditorTab({ active: () => ({ kind: OFFICIAL_TAB_KIND }), openTab: (kind) => openCalls.push(kind) }, () => {})
+    expect(openCalls).toEqual([])
+  })
+
+  it('未激活时调用 openTab(kind, {})', () => {
+    markEditorActive(true)
+    const openCalls: Array<[string, unknown]> = []
+    restoreEditorTab({ active: () => ({ kind: 'other' }), openTab: (kind, options) => openCalls.push([kind, options]) }, () => {})
+    expect(openCalls).toEqual([[OFFICIAL_TAB_KIND, {}]])
+  })
+
+  it('openTab 抛错时有界重试，恢复后停止', () => {
+    markEditorActive(true)
+    const timer = collector()
+    let calls = 0
+    const service = {
+      active: () => undefined,
+      openTab: () => {
+        calls += 1
+        if (calls < 3) throw new Error('no seat mounted')
+      },
+    }
+    restoreEditorTab(service, timer.schedule, 5)
+    expect(calls).toBe(1)
+    timer.flush()
+    expect(calls).toBe(2)
+    timer.flush()
+    expect(calls).toBe(3)
+    timer.flush()
+    expect(calls).toBe(3) // 已恢复，不再重试
+    expect(timer.delays).toEqual([150, 150])
+  })
+
+  it('重试次数耗尽后放弃（不无限循环）', () => {
+    markEditorActive(true)
+    const timer = collector()
+    let calls = 0
+    restoreEditorTab({ active: () => undefined, openTab: () => { calls += 1; throw new Error('still no seat') } }, timer.schedule, 3)
+    timer.flush(); timer.flush(); timer.flush(); timer.flush()
+    expect(calls).toBe(3)
+    expect(timer.delays).toEqual([150, 150])
   })
 })

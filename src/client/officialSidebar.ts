@@ -44,10 +44,14 @@ export interface SidebarRightTabsLike {
   register: (definition: unknown) => () => void
 }
 
-/** sidebarRight 服务的最小结构面（openTab 页路由 + openResource 资源路由）。 */
+/** sidebarRight 服务的最小结构面（openTab 页路由 + openResource 资源路由 + 可选查询/定向打开）。 */
 export interface SidebarRightServiceLike {
   openTab: (kind: string, options?: { params?: unknown }) => void
   openResource?: (address: string, options?: { params?: unknown }) => void
+  /** 挂载会话的激活 Tab（判读编辑 Tab 是否已激活；无 seat 时 undefined）。 */
+  active?: () => { kind?: string } | undefined
+  /** 向指定会话的停靠面打开页类型（store 未 adopt 时 no-op）。 */
+  openTabIn?: (sessionId: string, kind: string, options?: { params?: unknown }) => void
 }
 
 /** slots 服务的最小结构面（等待声明 + 注册）。 */
@@ -279,3 +283,70 @@ export function registerOfficialFileClaim(options: {
     if (typeof bodyDisposer === 'function') bodyDisposer()
   }
 }
+
+// --region 编辑 Tab 跨会话自动恢复
+
+/** 编辑 Tab 是否处于激活态（正文挂载 = 激活；模块级，跨会话存活）。 */
+let editorTabActive = false
+/** 正文挂载纪元（每次挂载自增；延迟判定期间有新挂载则放弃清除）。 */
+let mountEpoch = 0
+
+/**
+ * 标记编辑 Tab 激活并推进挂载纪元（正文挂载时调用）。
+ * @author ddj 2026年09月09号
+ */
+export function markEditorMounted(): void {
+  mountEpoch += 1
+  markEditorActive(true)
+}
+
+/**
+ * 直接设置激活标记（正文卸载延迟判定用；测试 also 用作状态编排入口）。
+ * @author ddj 2026年09月09号
+ * @param active 是否激活
+ */
+export function markEditorActive(active: boolean): void {
+  editorTabActive = active
+}
+
+/**
+ * 读编辑 Tab 激活标记（会话切换时决定是否自动恢复编辑栏）。
+ * @author ddj 2026年09月09号
+ * @returns 上次标记的激活状态
+ */
+export function isEditorTabActive(): boolean {
+  return editorTabActive
+}
+
+/**
+ * 读当前挂载纪元（卸载延迟判定用：纪元已推进 = 有新正文接管，不清标记）。
+ * @author ddj 2026年09月09号
+ * @returns 当前纪元
+ */
+export function editorMountEpoch(): number {
+  return mountEpoch
+}
+
+/**
+ * 在挂载会话恢复编辑 Tab：已激活跳过（官方幂等）；seat 未就绪抛错时有界重试。
+ * openTab 官方语义「打开即展开侧栏」，一次调用同时完成展开 + 激活。
+ * @author ddj 2026年09月09号
+ * @param service 官方 sidebarRight 服务（缺失/未装配直接返回）
+ * @param schedule 延时调度（ctx.timeout；重试节拍）
+ * @param attempts 剩余尝试次数（默认 10 次 × 150ms ≈ 1.5s 窗口）
+ */
+export function restoreEditorTab(
+  service: SidebarRightServiceLike | undefined | null,
+  schedule: (fn: () => void, ms: number) => void,
+  attempts = 10,
+): void {
+  if (!service || typeof service.openTab !== 'function' || !editorTabActive) return
+  try {
+    if (service.active?.()?.kind === OFFICIAL_TAB_KIND) return
+    service.openTab(OFFICIAL_TAB_KIND, {})
+  } catch {
+    // seat 未挂载/未绑定（会话面尚未渲染）：等一拍再试，放弃后保持现状不阻塞
+    if (attempts > 1) schedule(() => restoreEditorTab(service, schedule, attempts - 1), 150)
+  }
+}
+// --endregion

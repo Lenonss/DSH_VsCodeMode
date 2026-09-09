@@ -14,6 +14,7 @@ import { ContextMenu } from '../../ui/ContextMenu.js'
 import { buildTreeMenu } from '../contextMenu.js'
 import { explorerLoad, explorerSave } from '../../state/explorerCache.js'
 import { entriesCacheGet, entriesCacheIsFresh, entriesCachePut } from '../../state/explorerEntriesCache.js'
+import { workspaceScopeOf } from '../../state/scopeStore.js'
 import type { SidebarCtx } from '../types.js'
 
 const DIR_CAP = 4000
@@ -29,6 +30,8 @@ const PREFETCH_EXCLUDED = new Set(['node_modules', '.git', '.hg', '.svn', '.pnpm
 export function FileExplorer(props) {
   const ctx = props?.ctx
   const sessionId = ctx?.sessionId
+  // 状态作用域：展开树/条目缓存按工作区隔离（同工作区切对话恢复同一份），无 cwd 回退会话
+  const scope = ctx?.scope ?? workspaceScopeOf(null, sessionId)
   const openFile = ctx?.openFile
   const activePath = ctx?.activePath ?? null
   const pendingByPath = ctx?.pendingByPath ?? {}
@@ -51,7 +54,7 @@ export function FileExplorer(props) {
   const refreshRef = React.useRef(null)
 
   /** 渲染取数：内存态 → 本地条目缓存 → null（显示加载态）。 */
-  const entriesOf = (rel) => dirsRef.current[rel] ?? entriesCacheGet(sessionId, rel) ?? null
+  const entriesOf = (rel) => dirsRef.current[rel] ?? entriesCacheGet(scope, rel) ?? null
 
   /** 预取子目录：≤4 个、排除重型目录、缓存新鲜跳过、已加载跳过、不级联。 */
   const prefetchDirs = (rel, entries) => {
@@ -59,7 +62,7 @@ export function FileExplorer(props) {
     for (const e of entries) {
       if (e.type !== 'directory') continue
       if (PREFETCH_EXCLUDED.has(e.name)) continue
-      if (entriesCacheIsFresh(sessionId, e.path)) continue
+      if (entriesCacheIsFresh(scope, e.path)) continue
       if (dirsRef.current[e.path] !== undefined) continue
       want.push(e.path)
       if (want.length >= PREFETCH_MAX) break
@@ -90,7 +93,7 @@ export function FileExplorer(props) {
       if (res && res.ok && Array.isArray(res.entries)) {
         setDirs((prev) => Object.assign({}, prev, { [rel]: res.entries }))
         if (res.root) setRoot((prev) => prev || res.root)
-        entriesCachePut(sessionId, rel, res.entries)
+        entriesCachePut(scope, rel, res.entries)
         if (doPrefetch) prefetchDirs(rel, res.entries)
       } else {
         // 有可渲染数据时静默（旧数据可能过期但可用）；全无数据才报错
@@ -151,7 +154,7 @@ export function FileExplorer(props) {
     setMenu(null)
     setRoot(null)
     // 恢复上次展开状态（对齐 VSCode：持久化展开路径，条目缓存即时渲染、后台刷新）
-    const cached = sessionId ? explorerLoad(sessionId) : null
+    const cached = scope ? explorerLoad(scope) : null
     const restored = cached?.expanded ?? []
     if (cached?.root) setRoot(cached.root)
     if (restored.length) {
@@ -164,21 +167,21 @@ export function FileExplorer(props) {
       if (rel) void loadDir(rel, { prefetch: true })
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId])
+  }, [scope])
 
-  // 展开状态防抖写回 localStorage（重启后恢复展开结构）
+  // 展开状态防抖写回 localStorage（重启后恢复展开结构；按工作区作用域隔离）
   React.useEffect(() => {
     if (saveTimerRef.current) { clearTimeout(saveTimerRef.current); saveTimerRef.current = null }
-    if (!sessionId) return
+    if (!scope) return
     saveTimerRef.current = setTimeout(() => {
       saveTimerRef.current = null
       const expandedList = Object.keys(expanded).filter((k) => expanded[k] === true)
-      explorerSave(sessionId, { root, expanded: expandedList })
+      explorerSave(scope, { root, expanded: expandedList })
     }, SAVE_DEBOUNCE_MS)
     return () => {
       if (saveTimerRef.current) { clearTimeout(saveTimerRef.current); saveTimerRef.current = null }
     }
-  }, [expanded, root, sessionId])
+  }, [expanded, root, scope])
 
   // edrv:refresh（差异决策/回滚后）：保留旧条目，强制后台重列
   React.useEffect(() => {
@@ -190,7 +193,7 @@ export function FileExplorer(props) {
 
   // 10s 轻量跟随：已展开目录后台刷新（命中 host 索引，近零成本），树跟随 agent 写入
   React.useEffect(() => {
-    if (!sessionId) return
+    if (!scope) return
     const timer = setInterval(() => {
       const open = Object.keys(expandedRef.current).filter((k) => expandedRef.current[k] === true)
       if (!open.length) return
@@ -198,7 +201,7 @@ export function FileExplorer(props) {
     }, FOLLOW_INTERVAL_MS)
     return () => clearInterval(timer)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId])
+  }, [scope])
 
   const rootName = root ? String(root).split(/[\\/]/).pop() || root : ''
 

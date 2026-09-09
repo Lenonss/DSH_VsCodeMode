@@ -30,7 +30,7 @@ import { setupExtOpen } from './externalOpen.js'
 import { SettingsContext } from './settingsContext.js'
 import { SIDEBAR_PLUGIN, pickSettingsBinder, registerSlotSafely } from './compat.js'
 import { detectSidebarService, installSideEditor, setEnsureSideEditor, SIDEBAR_INSTALL_CMD } from './sidebarBridge.js'
-import { detectOfficial, installOfficial, registerOfficialFileClaim, OFFICIAL_TAB_TITLE } from './officialSidebar.js'
+import { detectOfficial, installOfficial, registerOfficialFileClaim, OFFICIAL_TAB_KIND, OFFICIAL_TAB_TITLE, isEditorTabActive, restoreEditorTab } from './officialSidebar.js'
 import { SideEditorTab } from './ui/SideEditorTab.js'
 import { OfficialSideTab } from './ui/OfficialSideTab.js'
 import { createAddToConversation } from './addToConversation.js'
@@ -97,6 +97,24 @@ export function apply(ctx: any): void {
     ctx.effect(() => list.subscribe(() => {
       setSession(list.getSnapshot()?.current)
     }), 'vscode-mode: lsp session sync')
+  }
+  // 会话切换 → 编辑 Tab 跨会话自动恢复：上一会话编辑区激活时，新会话自动展开并激活
+  //（官方停靠面按会话隔离，新会话默认收起；先试 openTabIn 直写新会话面，未 adopt 走有界重试）。
+  // 注意：首次打开某会话时通知早于 current 字段落定，故通知只调度延迟任务，执行时再读最新快照
+  if (monacoList && typeof monacoList.subscribe === 'function') {
+    const list = monacoList as { getSnapshot: () => { current?: string }; subscribe: (listener: () => void) => () => void }
+    ctx.effect(() => {
+      let lastCurrent = list.getSnapshot?.()?.current
+      const check = () => {
+        const current = list.getSnapshot?.()?.current
+        if (!current || current === lastCurrent) return
+        lastCurrent = current
+        if (!isEditorTabActive() || officialService === undefined) return
+        try { officialService.service.openTabIn?.(current, OFFICIAL_TAB_KIND, {}) } catch { /* 未 adopt 等 seat 就绪走重试 */ }
+        restoreEditorTab(officialService.service, schedule)
+      }
+      return list.subscribe(() => schedule(check, 0))
+    }, 'vscode-mode: editor tab restore')
   }
   const originalOpenPath = workspaces?.openPath
   const binder = pickSettingsBinder(ctx)

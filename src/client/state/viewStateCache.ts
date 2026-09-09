@@ -7,7 +7,7 @@
  */
 import { CACHE_KEY } from '../paths.js'
 
-/** localStorage 键前缀（按会话隔离）。 */
+/** localStorage 键前缀（按工作区作用域隔离，无 cwd 会话回退会话键）。 */
 const KEY_PREFIX = CACHE_KEY.viewstate
 
 /** 视图状态条目容量上限。 */
@@ -95,27 +95,27 @@ export function upsertViewState(
 }
 
 /**
- * 读取某会话的视图状态缓存（localStorage 不可用 → 空映射）。
+ * 读取某作用域的视图状态缓存（localStorage 不可用 → 空映射）。
  * @author ddj 2026年08月28号
- * @param sessionId 会话 id
+ * @param scope 作用域键（scopeStore.workspaceScopeOf 产物）
  * @returns path → viewState 映射
  */
-export function viewStatesLoad(sessionId: string): Record<string, unknown> {
+export function viewStatesLoad(scope: string): Record<string, unknown> {
   try {
-    return parseViewStates(window.localStorage.getItem(KEY_PREFIX + String(sessionId))) ?? {}
+    return parseViewStates(window.localStorage.getItem(KEY_PREFIX + String(scope))) ?? {}
   } catch (error) {
     return {}
   }
 }
 
 /**
- * 写入某会话的视图状态缓存（损坏/配额满 → 忽略）。
+ * 写入某作用域的视图状态缓存（损坏/配额满 → 忽略）。
  * @author ddj 2026年08月28号
- * @param sessionId 会话 id
+ * @param scope 作用域键（scopeStore.workspaceScopeOf 产物）
  * @param states path → viewState 映射
  */
-export function viewStatesSave(sessionId: string, states: Record<string, unknown>): void {
+export function viewStatesSave(scope: string, states: Record<string, unknown>): void {
   try {
-    window.localStorage.setItem(KEY_PREFIX + String(sessionId), serializeViewStates(states))
+    window.localStorage.setItem(KEY_PREFIX + String(scope), serializeViewStates(states))
   } catch (error) { /* 配额满/隐私模式忽略 */ }
 }

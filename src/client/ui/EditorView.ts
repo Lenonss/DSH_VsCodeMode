@@ -3,6 +3,8 @@
  * dsh-vscode-mode client — EditorView：中央 VSCode 式文件编辑器（编排层）。
  * 迁移自原 src/client/index.ts 的 EditorView，语义不改；差异自绘已抽到 monaco/diffRender。
  * 职责：页签/QuickOpen/Monaco 编辑器/差异审查（DiffBox/Launcher/Badge 事件装配）/状态栏/自动保存。
+ * 状态作用域：页签/视图状态/侧边栏/展开树等 UI 状态按工作区作用域（cwd）隔离，
+ * 同一工作区切换对话恢复同一份状态；无 cwd 会话回退按会话隔离（scopeStore）。
  * 作者 ddj 2026-08-20
  */
 import React from 'react'
@@ -25,9 +27,11 @@ import { editorHeight } from '../editorLayout.js'
 import { revealInExplorer as revealPathInExplorer } from '../fileReveal.js'
 import { setSidePending, SIDEBAR_INSTALL_CMD } from '../sidebarBridge.js'
 import { upsertViewState, viewStatesLoad, viewStatesSave } from '../state/viewStateCache.js'
+import { migrateScopedKeys, workspaceScopeOf } from '../state/scopeStore.js'
+import { modelsForScope, rememberModel } from '../state/modelCache.js'
 import { bindingsOf, chordOf, matchEvent, useKeybindingsVersion } from '../keybindings.js'
 import { getSidebarMinWidth } from '../sidebarMin.js'
-import { createNavHistory } from '../navHistory.js'
+import { navHistoryFor } from '../navHistory.js'
 import { statusOfAdd } from '../addToConversation.js'
 import { CACHE_KEY } from '../paths.js'
 import { bindLspEditor, runGoToDefinition, runFindReferences, hideReferencesOverlay } from '../monaco/lsp/providers.js'
@@ -49,6 +53,22 @@ export function EditorView(props) {
   const addToConversation = props.addToConversation
   const layout = props?.layout === 'side' ? 'side' : 'tab'
   const sideHint = props?.sideHint
+  // 当前会话工作区 cwd（sessions 快照反应式读取；cwd 变化时作用域跟随刷新）
+  const sessionsList = props?.sessions?.list
+  const cwd = React.useSyncExternalStore(
+    React.useCallback((onStoreChange) => (
+      typeof sessionsList?.subscribe === 'function' ? sessionsList.subscribe(onStoreChange) : () => {}
+    ), [sessionsList]),
+    () => sessionsList?.getSnapshot?.()?.byId?.[sessionId]?.cwd ?? null,
+    () => null,
+  )
+  // 状态作用域（scopeStore）：同工作区共享一份编辑区状态，无 cwd 回退会话隔离；
+  // 迁移放渲染期（useMemo）——子面板恢复 effect 先于父 effect 执行，须先补齐工作区键
+  const scope = React.useMemo(() => {
+    const s = workspaceScopeOf(cwd, sessionId)
+    migrateScopedKeys(s, sessionId)
+    return s
+  }, [cwd, sessionId])
   const [monaco, setMonaco] = React.useState(null)
   const [monacoErr, setMonacoErr] = React.useState(null)
   const [records, setRecords] = React.useState({})
@@ -93,17 +113,19 @@ export function EditorView(props) {
   const editorRef = React.useRef(null)
   const viewRootRef = React.useRef(null)
   const monacoRef = React.useRef(null)
-  const modelsRef = React.useRef(new Map())
+  const modelsRef = React.useRef(null)
+  // model 跨挂载缓存（按工作区作用域）：重挂载秒显内容，消除切换对话闪烁
+  if (!modelsRef.current) modelsRef.current = modelsForScope(scope)
   // 视图状态缓存（path → Monaco viewState；重启后恢复光标/滚动/折叠位置）
   const viewStatesRef = React.useRef({})
   const saveTimerRef = React.useRef(null)
   const loadSeqRef = React.useRef(0)
   const programmaticRef = React.useRef(false)
-  const bootRef = React.useRef(false)
+  const restoredScopeRef = React.useRef(null) // 已恢复状态的作用域（cwd 晚到 sid→ws 时允许重恢复）
   const pendingFocusRef = React.useRef(null) // { path, region } 内容加载后跳转
   // 导航历史（后退/前进）：跨文件焦点位置；按会话隔离，会话切换重置
   const navRef = React.useRef(null)
-  if (!navRef.current) navRef.current = createNavHistory()
+  if (!navRef.current) navRef.current = navHistoryFor(scope)
   const navPendingRef = React.useRef(null) // { path,line,column,viewState } 待恢复条目（内容就绪后消费）
   const navCursorTimerRef = React.useRef(null) // 光标位置防抖记录计时器
   const navBackRef = React.useRef(null) // 后退动作最新闭包（窗口级键盘监听读取）
@@ -120,6 +142,7 @@ export function EditorView(props) {
   const batchBusyRef = React.useRef(false) // 批量 Keep All/Undo All 防重入
   const menuHandlersRef = React.useRef(null) // 右键菜单动作的最新闭包（Monaco addAction 空依赖回调读取）
   const doSaveRef = React.useRef(null) // 保存动作的最新闭包（窗口级保存监听读取）
+  const saveViewStateRef = React.useRef(null) // 视图状态保存的最新闭包（卸载清理读取，避免过期 active）
   const diffRendererRef = React.useRef(null)
   const layoutRef = React.useRef(layout) // ensureEditor 空依赖闭包读取的稳定布局
   layoutRef.current = layout
@@ -163,7 +186,7 @@ export function EditorView(props) {
   }
 
   /**
-   * 保存当前活动文件的视图状态（光标/滚动/折叠）到会话缓存。
+   * 保存当前活动文件的视图状态（光标/滚动/折叠）到工作区作用域缓存。
    * @author ddj 2026年08月28号
    * @param path 要保存的文件路径（缺省 = 当前 active）
    */
@@ -175,9 +198,10 @@ export function EditorView(props) {
       const state = ed.saveViewState()
       if (!state) return
       viewStatesRef.current = upsertViewState(viewStatesRef.current, target, state)
-      viewStatesSave(sessionId, viewStatesRef.current)
+      viewStatesSave(scope, viewStatesRef.current)
     } catch (e) { /* 视图状态保存失败忽略 */ }
   }
+  saveViewStateRef.current = saveViewState
 
   /**
    * 恢复指定文件的视图状态（内容就绪、setModel 后调用；恢复后即消费删除）。
@@ -618,13 +642,15 @@ export function EditorView(props) {
     }
   }, [sessionId, layout])
 
-  // localStorage v2 恢复页签
+  // localStorage v2 恢复页签（按工作区作用域；cwd 晚到 sid→ws 切换时重恢复一次）
   React.useEffect(() => {
-    if (bootRef.current || !sessionId) return
-    bootRef.current = true
-    viewStatesRef.current = viewStatesLoad(sessionId)
+    if (!sessionId || restoredScopeRef.current === scope) return
+    restoredScopeRef.current = scope
+    // model 缓存跟随作用域（切工作区释放旧作用域模型；同工作区跨挂载复用）
+    modelsRef.current = modelsForScope(scope)
+    viewStatesRef.current = viewStatesLoad(scope)
     try {
-      const raw = localStorage.getItem(CACHE_KEY.editor + String(sessionId))
+      const raw = localStorage.getItem(CACHE_KEY.editor + String(scope))
       if (raw) {
         const saved = JSON.parse(raw)
         if (Array.isArray(saved.tabs) && saved.tabs.length) {
@@ -633,25 +659,25 @@ export function EditorView(props) {
         }
       }
     } catch (e) { /* 损坏忽略 */ }
-  }, [sessionId])
+  }, [sessionId, scope])
 
-  // 导航历史会话隔离：切换会话时重置（历史仅会话内存，不跨会话串扰）
+  // 导航历史按工作区作用域隔离：同工作区切换对话保留历史，跨工作区换实例
   React.useEffect(() => {
-    navRef.current = createNavHistory()
+    navRef.current = navHistoryFor(scope)
     navPendingRef.current = null
     if (navCursorTimerRef.current) { clearTimeout(navCursorTimerRef.current); navCursorTimerRef.current = null }
     setNavTick((v) => v + 1)
-  }, [sessionId])
+  }, [scope])
 
   React.useEffect(() => {
     if (!sessionId) return
-    try { localStorage.setItem(CACHE_KEY.editor + String(sessionId), JSON.stringify({ tabs: tabs.map((t) => t.path), active })) }
+    try { localStorage.setItem(CACHE_KEY.editor + String(scope), JSON.stringify({ tabs: tabs.map((t) => t.path), active })) }
     catch (e) { /* 忽略 */ }
-  }, [tabs, active, sessionId])
+  }, [tabs, active, sessionId, scope])
 
   // 侧边栏状态：恢复（显隐/宽度/激活面板）；侧栏形态独立键（默认收起，不共享页签形态偏好）
   // 宽度下限来自通用设置 sidebarMinWidth（默认 300），恢复值按其重夹
-  const sidebarKey = CACHE_KEY.sidebar + (layout === 'side' ? 'side.' : '') + String(sessionId)
+  const sidebarKey = CACHE_KEY.sidebar + (layout === 'side' ? 'side.' : '') + String(scope)
   React.useEffect(() => {
     if (!sessionId) return
     try {
@@ -682,7 +708,6 @@ export function EditorView(props) {
     try { localStorage.setItem(sidebarKey, JSON.stringify({ on: sidebarOn, width: sidebarW, panel: activePanel })) }
     catch (e) { /* 忽略 */ }
   }, [sidebarOn, sidebarW, activePanel, sessionId, sidebarKey])
-
   // 切换侧边栏（capture 抢占，避免与 DSH 全局冲突；键位随快捷键配置）
   React.useEffect(() => {
     const onKey = (e) => {
@@ -836,8 +861,10 @@ export function EditorView(props) {
     const cache = modelsRef.current
     let model = cache.get(path)
     if (!model) {
-      model = window.monaco.editor.createModel(text ?? '', langOf(path), window.monaco.Uri.parse('edrv:///' + encodeURI(path)))
-      cache.set(path, model)
+      // 注册表守卫：同 URI 已存在的 model 直接复用（HMR 换 bundle 后防重复创建抛错）
+      const uri = window.monaco.Uri.parse('edrv:///' + encodeURI(path))
+      model = window.monaco.editor.getModel(uri) || window.monaco.editor.createModel(text ?? '', langOf(path), uri)
+      rememberModel(cache, path, model)
     } else if (text !== undefined && model.getValue() !== text) {
       programmaticRef.current = true
       model.setValue(text)
@@ -930,12 +957,14 @@ export function EditorView(props) {
 
   React.useEffect(() => () => {
     flushSave()
-    saveViewState(active)
+    // 卸载即切作用域/重挂载：先把待记录光标落进历史，再存当前文件视图状态
+    //（经 ref 取最新闭包，修正旧实现捕获挂载时 active 的问题）
+    flushNavCursor()
+    saveViewStateRef.current?.()
     diffRendererRef.current?.dispose?.()
     hideReferencesOverlay()
     if (editorRef.current) { editorRef.current.dispose(); editorRef.current = null }
-    for (const m of modelsRef.current.values()) m.dispose()
-    modelsRef.current.clear()
+    // model 不在此销毁：跨挂载缓存按作用域存活（modelCache 切作用域时统一释放）
     for (const ctl of pdfCtlRef.current.values()) ctl.destroy()
     pdfCtlRef.current.clear()
     const root = editorRef.current && editorRef.current.getDomNode ? editorRef.current.getDomNode() : null
@@ -1683,8 +1712,10 @@ export function EditorView(props) {
   const sidebarPanels = props.sidebarPanels
   const sidebarCtx = {
     sessionId,
-    // 当前会话工作区（sessions 快照 byId[sessionId].cwd；规则面板项目 Tab 自动匹配）
-    cwd: props.sessions?.list?.getSnapshot?.()?.byId?.[sessionId]?.cwd ?? null,
+    // 当前会话工作区（反应式 cwd；规则面板项目 Tab 自动匹配）
+    cwd: cwd ?? null,
+    // 状态作用域键（工作区优先，无 cwd 回退会话；面板持久化统一走它）
+    scope,
     openFile: (p) => openFile(p, false),
     openFileAt,
     activePath: active,

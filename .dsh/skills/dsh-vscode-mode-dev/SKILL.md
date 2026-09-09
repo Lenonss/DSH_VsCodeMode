@@ -5,7 +5,7 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
 
 # dsh-vscode-mode 开发/发布经验集（自我更新型技能）
 
-> updated: 2026-09-08 · 维护者：ddj（AI 会话按文末协议追加，保持精炼、去重）
+> updated: 2026-09-09 · 维护者：ddj（AI 会话按文末协议追加，保持精炼、去重）
 
 ## 何时使用
 
@@ -32,6 +32,8 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
   三门，release commit 只 add package.json，tag 推送后 `git stash pop` 还原（v0.1.57 实测）。
 - 2026-09-08 事实：awesome 收录条目（PR #2532，category git）的 `tarball:` 钉在 v0.1.36，发版即过期；
   npm 映射自动、该字段冗余 → 改自己条目时删 tarball 行，勿再钉版本号。
+- 2026-09-09 事实：pnpm 在本环境跑 run 脚本会先做 deps-status check 触发 store SQLite 报错
+  （`unable to open database file`）→ 三门直接调 node_modules/.bin（tsc.cmd/vitest.cmd/tsdown.cmd）绕过。
 
 ## 开发/部署形态切换（profile 安装形态）
 

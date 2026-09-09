@@ -6,7 +6,7 @@
  */
 import { CACHE_KEY } from '../paths.js'
 
-/** localStorage 键前缀（按会话隔离）。 */
+/** localStorage 键前缀（按工作区作用域隔离，无 cwd 会话回退会话键）。 */
 const KEY_PREFIX = CACHE_KEY.expanded
 
 /** 展开路径容量上限：超出丢弃最旧（按写入顺序近似 LRU）。 */
@@ -88,27 +88,27 @@ export function parseExplorer(text: string | null): ExplorerCacheData | null {
 }
 
 /**
- * 读取某会话的展开状态缓存（localStorage 不可用 → null）。
+ * 读取某作用域的展开状态缓存（localStorage 不可用 → null）。
  * @author ddj 2026年08月28号
- * @param sessionId 会话 id
+ * @param scope 作用域键（scopeStore.workspaceScopeOf 产物）
  * @returns 缓存数据或 null
  */
-export function explorerLoad(sessionId: string): ExplorerCacheData | null {
+export function explorerLoad(scope: string): ExplorerCacheData | null {
   try {
-    return parseExplorer(window.localStorage.getItem(KEY_PREFIX + String(sessionId)))
+    return parseExplorer(window.localStorage.getItem(KEY_PREFIX + String(scope)))
   } catch (error) {
     return null
   }
 }
 
 /**
- * 写入某会话的展开状态缓存（损坏/配额满 → 忽略）。
+ * 写入某作用域的展开状态缓存（损坏/配额满 → 忽略）。
  * @author ddj 2026年08月28号
- * @param sessionId 会话 id
+ * @param scope 作用域键（scopeStore.workspaceScopeOf 产物）
  * @param data 缓存数据
  */
-export function explorerSave(sessionId: string, data: ExplorerCacheData): void {
+export function explorerSave(scope: string, data: ExplorerCacheData): void {
   try {
-    window.localStorage.setItem(KEY_PREFIX + String(sessionId), serializeExplorer(data))
+    window.localStorage.setItem(KEY_PREFIX + String(scope), serializeExplorer(data))
   } catch (error) { /* 配额满/隐私模式忽略 */ }
 }
