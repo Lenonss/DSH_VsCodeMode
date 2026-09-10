@@ -142,6 +142,7 @@ export function EditorView(props) {
   const batchBusyRef = React.useRef(false) // 批量 Keep All/Undo All 防重入
   const menuHandlersRef = React.useRef(null) // 右键菜单动作的最新闭包（Monaco addAction 空依赖回调读取）
   const doSaveRef = React.useRef(null) // 保存动作的最新闭包（窗口级保存监听读取）
+  const onEditRef = React.useRef(null) // 编辑置脏的最新闭包（Monaco 内容变化监听经 ref 调用，防首帧 active=null 陈旧闭包）
   const saveViewStateRef = React.useRef(null) // 视图状态保存的最新闭包（卸载清理读取，避免过期 active）
   const diffRendererRef = React.useRef(null)
   const layoutRef = React.useRef(layout) // ensureEditor 空依赖闭包读取的稳定布局
@@ -913,6 +914,8 @@ export function EditorView(props) {
     if (saveTimerRef.current) saveTimerRef.current()
     saveTimerRef.current = schedule(() => doSave(true), 700)
   }
+  // @author ddj 2026年09月09号 空依赖监听只持有首帧 onEdit（active 恒 null→提前返回，星号与自动保存从未生效）：每次渲染同步最新闭包
+  onEditRef.current = onEdit
 
   // model 同步（当前内容）
   React.useEffect(() => {
@@ -1007,7 +1010,7 @@ export function EditorView(props) {
     // 保存改由窗口级快捷键监听执行（键位可配置；见上方 edrv.save 监听）
     ed.onDidChangeModelContent(() => {
       if (!ed.getModel() || programmaticRef.current) return
-      onEdit()
+      onEditRef.current?.()
     })
     ed.onDidChangeCursorPosition((e) => {
       setCursor('Ln ' + e.position.lineNumber + ', Col ' + e.position.column)
@@ -1480,7 +1483,9 @@ export function EditorView(props) {
       },
     },
       React.createElement('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 180 } }, t.path.split(/[\\/]/).pop() || t.path),
-      (dirtyMap[t.path] ? React.createElement('span', { className: 'edrv-tab-dot' }) : null),
+      // 未保存修改页签显示 * 星号（保存成功消失、失败持续）；替换原圆点脏标记
+      // @author ddj 2026年09月09号
+      (dirtyMap[t.path] ? React.createElement('span', { className: 'edrv-tab-star', title: '未保存修改' }, '*') : null),
       React.createElement('span', { className: 'edrv-tab-x', onClick: (e) => { e.stopPropagation(); closeTab(t.path) } }, '×'))),
     (openInput
       ? React.createElement('input', { className: 'edrv-path-input', autoFocus: true, placeholder: '输入工作区相对/绝对路径，回车打开', value: pathDraft, onChange: (e) => setPathDraft(e.target.value), onKeyDown: (e) => { if (e.key === 'Enter') openPath(); if (e.key === 'Escape') setOpenInput(false) } })
