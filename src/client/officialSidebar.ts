@@ -37,6 +37,8 @@ export const OFFICIAL_FILE_KIND = 'edrvEditorFile'
 export interface OfficialTabParams {
   openPath?: string
   focusDiff?: boolean
+  /** 目标行号（行引用/工具行跳转透传；缺省仅打开文件）。 */
+  line?: number
 }
 
 /** sidebarRightTabs 服务的最小结构面（结构性探测，不 import 官方类型）。 */
@@ -95,6 +97,19 @@ export function resolveNavOpen(params: unknown): { path: string | null; focusDif
   const value = (params ?? {}) as OfficialTabParams
   const path = typeof value?.openPath === 'string' && value.openPath ? value.openPath : null
   return { path, focusDiff: value?.focusDiff === true }
+}
+
+/**
+ * 从官方导航参数安全解析行号（缺字段/坏类型/非正数一律视为未指定）。
+ * @author ddj 2026年09月10号
+ * @param params openTab/openResource 传入的 params（正文经 navigation.params 读回）
+ * @returns 正整数行号，或 undefined
+ */
+export function resolveNavLine(params: unknown): number | undefined {
+  const value = (params ?? {}) as OfficialTabParams
+  const line = value?.line
+  if (typeof line !== 'number' || !Number.isFinite(line) || line <= 0) return undefined
+  return Math.floor(line)
 }
 
 /** 逐段 component 解码（失败返回 null，对齐官方 parseFileAddress 的容错语义）。 */
@@ -178,6 +193,36 @@ export function buildFileAddress(path: string, sessionId?: string): string {
   const relative = posix.replace(/^(?:\.\/)+/, '').replace(/^\/+/, '')
   return OFFICIAL_FILE_PREFIX + 'session/' + encodeSegment(sessionId) + '/' + relative.split('/').map(encodeSegment).join('/')
 }
+
+// --region file 认领转发（文件分页收归编辑器自带页签栏）
+
+/**
+ * 把 file 打开请求转发进单一编辑器页签（文件分页由编辑器自带页签栏接管，
+ * 官方侧栏不再按文件分裂出多套编辑器实例）。
+ * @author ddj 2026年09月10号
+ * @param service 官方 sidebarRight 服务（缺失/缺 openTab 返回 false）
+ * @param path 目标文件路径（空值返回 false）
+ * @param line 可选行号（透传给编辑器页签导航参数）
+ * @returns 转发是否成功（openTab 抛错返回 false，由调用方决定重试或兜底）
+ */
+export function forwardToEditor(
+  service: SidebarRightServiceLike | undefined | null,
+  path: string | null,
+  line?: number,
+): boolean {
+  if (!service || typeof service.openTab !== 'function' || !path) return false
+  const params: OfficialTabParams = { openPath: path }
+  if (line !== undefined) params.line = line
+  try {
+    // 官方语义：页类型恒去重，故转发只会聚焦既有编辑器页签，不产生新实例
+    service.openTab(OFFICIAL_TAB_KIND, { params })
+    return true
+  } catch (error) {
+    log.warn('file 认领转发进编辑器页签失败（' + String(error) + '）')
+    return false
+  }
+}
+// --endregion
 
 /**
  * 注册官方 Tab 正文（keyed slot，key=定义 id；slots.inject 等待 rightbar seat 声明）。

@@ -14,7 +14,7 @@ import { langOf, loadMonaco } from '../monaco/loader.js'
 import { dataUrlOf, isImagePath, isSvgPath } from '../imagePreview.js'
 import { base64ToBytes, isPdfPath } from '../pdfPreview.js'
 import { createPdfPanel } from '../pdf/pdfPanel.js'
-import { applyTheme, registerThemes, themeNameOf } from '../monaco/theme.js'
+import { applyOfficial, registerThemes, themeNameOf } from '../monaco/theme.js'
 import { createDiffRenderer } from '../monaco/diffRender.js'
 import { ST, callIdAttr, noopHunk, summarize } from '../state/records.js'
 import { diffRegions } from '../state/regions.js'
@@ -130,6 +130,8 @@ export function EditorView(props) {
   const navCursorTimerRef = React.useRef(null) // 光标位置防抖记录计时器
   const navBackRef = React.useRef(null) // 后退动作最新闭包（窗口级键盘监听读取）
   const navForwardRef = React.useRef(null) // 前进动作最新闭包（窗口级键盘监听读取）
+  const cycleTabRef = React.useRef(null) // 页签循环动作最新闭包（Ctrl+Alt+←/→、Ctrl+PgUp/PgDn）
+  const tabsHostRef = React.useRef(null) // 页签栏容器（切换后把当前页签滚入可见区）
   const [navTick, setNavTick] = React.useState(0) // 历史可用性版本（按钮 disabled 重渲染）
   const hoverRegionsRef = React.useRef([]) // 当前 pending 区域镜像（稳定回调读取）
   const lineRegionMapRef = React.useRef(new Map()) // 行 → 区域 映射（hover 命中）
@@ -323,6 +325,23 @@ export function EditorView(props) {
       return next
     })
   }
+
+  /**
+   * 在已打开页签间循环切换（文件分页归编辑器自带页签栏）。
+   * @author ddj 2026年09月10号
+   * @param step 步进（+1 下一个 / -1 上一个）
+   */
+  const cycleTab = (step) => {
+    if (tabs.length < 2) return
+    const idx = tabs.findIndex((t) => t.path === active)
+    const next = tabs[(idx + step + tabs.length) % tabs.length]
+    if (!next || next.path === active) return
+    flushSave()
+    saveViewState(active)
+    recordNav()
+    setActive(next.path)
+  }
+  cycleTabRef.current = cycleTab
 
   /**
    * 轮询去重：前后记录内容一致时返回原引用，React 跳过重渲染，
@@ -766,6 +785,33 @@ export function EditorView(props) {
     return () => window.removeEventListener('keydown', onKey, true)
   }, [])
 
+  // 页签循环切换：Ctrl+Alt+←/→（主候选，浏览器不占用）或 Ctrl+PgUp/PgDn（部分宿主可用）
+  React.useEffect(() => {
+    const onKey = (e) => {
+      const step = matchEvent(e, bindingsOf('edrv.nextTab')) ? 1
+        : matchEvent(e, bindingsOf('edrv.prevTab')) ? -1
+          : 0
+      if (step === 0) return
+      e.preventDefault(); e.stopPropagation()
+      if (cycleTabRef.current) cycleTabRef.current(step)
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [])
+
+  // 活动页签滚动可见（页签栏溢出时键盘切换/打开文件后把当前页签带回视野）：
+  // 只调整页签栏自身 scrollLeft，不触发页面滚动。
+  React.useEffect(() => {
+    const host = tabsHostRef.current
+    if (!host) return
+    const el = host.querySelector?.('.edrv-tab-active')
+    if (!el) return
+    const left = el.offsetLeft
+    const right = left + el.offsetWidth
+    if (left < host.scrollLeft) host.scrollLeft = left
+    else if (right > host.scrollLeft + host.clientWidth) host.scrollLeft = right - host.clientWidth
+  }, [active, tabs.length])
+
   // 鼠标侧键后退/前进：Logitech 官方默认「后退/前进」= XButton 鼠标事件（button 3/4），不产生键盘事件。
   // pointerdown 触发导航（preventDefault 后兼容 mousedown 可能不再触发，避免双触发）；
   // mousedown 兜底仅取消浏览器历史导航默认动作（MDN：preventDefault mousedown/pointerdown 可抑制）。
@@ -840,20 +886,25 @@ export function EditorView(props) {
     return () => { alive = false }
   }, [monaco, monacoErr])
 
-  // 分色主题：Monaco 就绪后注册（幂等）+ 应用；DSH 明暗切换时跟随重刷。
+  // 主题：Monaco 就绪后注册现役双套（幂等）+ 应用跟随官方的令牌主题；
+  // 官方主题事件（edrv:theme-change，经 ctx.theme/属性观察广播）与系统明暗切换时跟随重刷。
   React.useEffect(() => {
     if (!monaco) return
     registerThemes(monaco)
-    applyTheme(monaco)
-    if (typeof window.matchMedia !== 'function') return
-    const query = window.matchMedia('(prefers-color-scheme: dark)')
-    const onChange = () => applyTheme(monaco)
-    if (typeof query.addEventListener === 'function') {
-      query.addEventListener('change', onChange)
-      return () => query.removeEventListener('change', onChange)
+    const apply = () => applyOfficial(monaco)
+    apply()
+    window.addEventListener('edrv:theme-change', apply)
+    const query = typeof window.matchMedia === 'function' ? window.matchMedia('(prefers-color-scheme: dark)') : null
+    if (query) {
+      if (typeof query.addEventListener === 'function') query.addEventListener('change', apply)
+      else query.addListener(apply)
     }
-    query.addListener(onChange)
-    return () => query.removeListener(onChange)
+    return () => {
+      window.removeEventListener('edrv:theme-change', apply)
+      if (!query) return
+      if (typeof query.removeEventListener === 'function') query.removeEventListener('change', apply)
+      else query.removeListener(apply)
+    }
   }, [monaco])
 
   monacoRef.current = monaco
@@ -1470,7 +1521,7 @@ export function EditorView(props) {
     }).catch((e) => { setStatus('打开失败'); setError('打开异常:' + String(e)) })
   }
 
-  const tabsEl = React.createElement('div', { className: 'edrv-tabs', style: { flex: '1 1 auto', minWidth: 0 } },
+  const tabsEl = React.createElement('div', { className: 'edrv-tabs', ref: tabsHostRef, style: { flex: '1 1 auto', minWidth: 0 } },
     tabs.map((t) => React.createElement('div', {
       key: t.path,
       className: 'edrv-tab' + (t.path === active ? ' edrv-tab-active' : ''),

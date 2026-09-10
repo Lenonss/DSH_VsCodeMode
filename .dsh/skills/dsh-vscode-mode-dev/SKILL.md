@@ -5,7 +5,7 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
 
 # dsh-vscode-mode 开发/发布经验集（自我更新型技能）
 
-> updated: 2026-09-09 · 维护者：ddj（AI 会话按文末协议追加，保持精炼、去重）
+> updated: 2026-09-10 · 维护者：ddj（AI 会话按文末协议追加，保持精炼、去重）
 
 ## 何时使用
 
@@ -61,6 +61,20 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
   VENDOR_MIME 补扩展名（.mjs 必须 text/javascript，ESM import 严格校验 MIME；.bcmap/.pfb 等标 binary）+
   运行时一条 module-script 按序 import 产物挂 window handoff（打包器会改写源码内 import(URL)）；
   库枚举值跨版本漂移（pdf.js AnnotationEditorType.NONE=0/1），对照官方接线源码核实后再硬编码。
+- 2026-09-10 坑：client bundle 由 host 按内容算 rev 实时读盘（改代码**不需要**重启 host），但浏览器按
+  同一 rev URL 命中 HTTP 缓存 → 普通刷新仍跑旧 bundle；生效/验证必须 ignoreCache 硬刷新，判别 =
+  `__DSH_BOOT__.entries` 里该包 rev 是否变化。
+- 2026-09-10 事实：官方 UI 原语 `@deepseek-ai/dsh-client-ui-primitives` 是 loader 虚拟模块（磁盘无包
+  目录，40+ 官方包 require 消费）→ 插件要用必须（a）加进 tsdown `CLIENT_EXTERNALS`，（b）加 ambient
+  `.d.ts` 垫片，（c）审计脚本从 `dsh-web-frontend/dist/assets` 断言导出面；`Icon*` 组件直接渲染
+  `<svg class=…>`（不是 span 包 svg，探针别用 querySelector('svg') 误判），props = `{size, className}`。
+- 2026-09-10 事实：跟随官方主题（ctx.theme + 令牌）——`--dsw-alias-*` 定义在 **body**（不是 :root），
+  `--shiki-background/-foreground` **不存在**（代码面底色用 `--dsw-alias-markdown-code-block`、前景用
+  label-primary），令牌值可能是 `hsl(0 0% 4.3% / 5%)`（百分比 alpha 要 /100）；Monaco 的 token `''`
+  基础规则会盖住 editor.foreground，必须显式覆盖 `.mtk1`；免挂编辑器的验证手段 = 先
+  `monaco.editor.colorize()` 触发主题样式生成，再读 `<style>` 里 `.mtk*` 的实际颜色。
+- 2026-09-10 坑：`[data-edrv-view]` 作用域内重新定义 `--dsw-alias-*` 会让插件永久不跟随 DSH 主题
+  （v0.1.63 移除）→ 想跟随官方令牌就不要在插件作用域重定义同名变量，回落值写在 `var(..., 值)` 里。
 
 ## CI/测试平台陷阱（写测试前必读）
 

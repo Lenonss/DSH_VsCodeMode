@@ -79,6 +79,35 @@ function statIsDir(p) {
   try { return statSync(p).isDirectory() } catch { return false }
 }
 
+/** 本插件消费的官方 UI 原语成员（dsh-client-ui-primitives 虚拟模块导出）。 */
+const PRIMITIVE_MEMBERS = [
+  'FileTypeIcon',
+  'classifyFileType',
+  'IconFolderClose16',
+  'IconFolderOpen16',
+  'IconFolderOpenOutline16',
+  'IconRefreshOutline16',
+  'IconSearchOutline16',
+  'IconListPenOutline16',
+  'IconCodeOutline16',
+]
+
+/**
+ * 官方 UI 原语虚拟模块的导出面探测（该模块无独立包目录，导出表在 web 前端产物里）。
+ * 判定为启发式：产物中不存在 "<成员>:" 形式的导出键即视为缺失。
+ * @param root DSH 根目录（含 dsh-web-frontend）
+ * @returns 缺失成员名数组；前端产物缺失时返回 null（无法判定）
+ */
+function primitivesMissing(root) {
+  const dir = join(root, 'dsh-web-frontend', 'dist', 'assets')
+  const files = readdirSafe(dir).filter((name) => name.endsWith('.js'))
+  if (files.length === 0) return null
+  const text = files.map((name) => {
+    try { return readFileSync(join(dir, name), 'utf8') } catch { return '' }
+  }).join('\n')
+  return PRIMITIVE_MEMBERS.filter((name) => !new RegExp('\\b' + name + '\\s*:').test(text))
+}
+
 const report = (root) => {
   const settingsExports = exportsOf(root, 'dsh-settings')
   return {
@@ -92,6 +121,7 @@ const report = (root) => {
     deepEqualJson: settingsExports.includes('deepEqualJson'),
     redactSecrets: settingsExports.includes('redactSecrets'),
     settingsProvider: settingsExports.includes('SettingsProvider'),
+    primitivesMissing: primitivesMissing(root),
     services: servicesOf(root),
   }
 }
@@ -129,5 +159,15 @@ if (a.installSettingsSection && !b.installSettingsSection) console.log('\n[已�
 else warnings.push('installSettingsSection 两侧状态与预期不符')
 if (!b.hasRuntime && a.hasRuntime) console.log('[已知] dsh-client-runtime 仅 A 侧存在 → 0.1.2-alpha 线 slots 服务由 dsh-client-ui-renderer 提供（B.hasRenderer=' + b.hasRenderer + '）')
 else if (!(a.hasRuntime && b.hasRenderer)) warnings.push('client runtime/renderer 结构异常')
+
+// UI 原语导出面（文件树/活动栏图标依赖：FileTypeIcon + classifyFileType + Icon* 图标集）
+if (a.primitivesMissing === null || b.primitivesMissing === null) {
+  console.log('?  UI 原语导出面：前端产物缺失，无法判定（A=' + String(a.primitivesMissing) + '，B=' + String(b.primitivesMissing) + '）')
+} else if (a.primitivesMissing.length === 0 && b.primitivesMissing.length === 0) {
+  console.log('=  UI 原语导出面：本插件消费的 ' + PRIMITIVE_MEMBERS.length + ' 个成员两侧齐备')
+} else {
+  warnings.push('UI 原语成员缺失 A=' + JSON.stringify(a.primitivesMissing) + ' B=' + JSON.stringify(b.primitivesMissing))
+}
+
 if (warnings.length) { console.error('\n[告警] 矩阵预期偏差：\n' + warnings.join('\n')); process.exit(1) }
 console.log('\n审计通过：差异符合已实测适配矩阵（rc.2 ↔ 0.1.2-alpha.2）。')

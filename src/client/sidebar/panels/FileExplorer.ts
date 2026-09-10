@@ -5,10 +5,11 @@
  * host 树索引，命中近乎零成本）；挂载/切会话从缓存即时恢复展开树；⟳/edrv:refresh
  * 保留旧条目强制后台重列（force）；每次用户发起加载后预取 ≤4 个子目录（排除重型
  * 目录、缓存新鲜跳过、不级联）；10s 轻量跟随已展开目录（命中索引，RPC 近零成本）。
- * 差异角标/右键菜单/展开状态持久化行为不变。
- * 作者 ddj 2026-08-26 / 2026-08-27 / 2026-08-31
+ * 差异角标/右键菜单/展开状态持久化行为不变；行图标用官方原语（文件夹图标 + 文件类型图标）。
+ * 作者 ddj 2026-08-26 / 2026-08-27 / 2026-08-31 / 2026-09-10
  */
 import React from 'react'
+import { FileTypeIcon, IconFolderClose16, IconFolderOpen16, IconRefreshOutline16, classifyFileType } from '@deepseek-ai/dsh-client-ui-primitives'
 import { rpc } from '../../rpc.js'
 import { ContextMenu } from '../../ui/ContextMenu.js'
 import { buildTreeMenu } from '../contextMenu.js'
@@ -22,6 +23,58 @@ const SAVE_DEBOUNCE_MS = 300
 const FOLLOW_INTERVAL_MS = 10_000
 const PREFETCH_MAX = 4
 const PREFETCH_EXCLUDED = new Set(['node_modules', '.git', '.hg', '.svn', '.pnpm', '.pnpm-store'])
+
+// --region 行图标（官方原语：目录文件夹图标 + 文件类型图标；缺失时回落纯文本）
+
+/**
+ * 目录图标元素（官方 IconFolderOpen16/Close16）。
+ * @author ddj 2026年09月10号
+ * @param isOpen 目录是否展开
+ * @returns 图标元素；原语缺失返回 null
+ */
+function dirIconEl(isOpen) {
+  const Icon = isOpen ? IconFolderOpen16 : IconFolderClose16
+  if (typeof Icon !== 'function') return null
+  return React.createElement(Icon, { size: 16, className: 'edrv-tree-icon' })
+}
+
+/**
+ * 文件图标元素（官方 FileTypeIcon + classifyFileType 分类，未知类型为 other）。
+ * @author ddj 2026年09月10号
+ * @param name 文件名（含扩展名）
+ * @returns 图标元素；原语缺失或分类异常返回 null
+ */
+function fileIconEl(name) {
+  if (typeof FileTypeIcon !== 'function' || typeof classifyFileType !== 'function') return null
+  try {
+    return React.createElement(FileTypeIcon, { kind: classifyFileType(String(name ?? '')), size: 16, className: 'edrv-tree-icon' })
+  } catch (error) {
+    return null
+  }
+}
+
+/**
+ * 行图标分派：目录 → 文件夹图标，文件 → 官方类型图标。
+ * @author ddj 2026年09月10号
+ * @param e 目录条目（name/type）
+ * @param isDir 是否目录
+ * @param isOpen 目录是否展开
+ * @returns 图标元素或 null
+ */
+function rowIconEl(e, isDir, isOpen) {
+  return isDir ? dirIconEl(isOpen) : fileIconEl(e?.name)
+}
+
+/**
+ * 刷新按钮图标（官方 IconRefreshOutline16；原语缺失回落文本 ⟳）。
+ * @author ddj 2026年09月10号
+ * @returns 图标元素或回落文本
+ */
+function refreshIconEl() {
+  if (typeof IconRefreshOutline16 !== 'function') return '⟳'
+  return React.createElement(IconRefreshOutline16, { size: 14 })
+}
+// --endregion
 
 /**
  * 目录树面板主体（SWR：有缓存先渲染，无缓存才显示加载态；加载总在后台）。
@@ -227,8 +280,9 @@ export function FileExplorer(props) {
     },
       React.createElement('span', { className: 'edrv-tree-chev' },
         isDir ? (isOpen ? '▾' : '▸') : ''),
+      rowIconEl(e, isDir, isOpen),
       React.createElement('span', { className: 'edrv-tree-name' + (dim ? ' edrv-tree-dim' : '') },
-        isDir ? (isOpen ? '📂' : '📁') : '📄', ' ', e.name),
+        e.name),
       (pending > 0
         ? React.createElement('span', { className: 'edrv-tree-badge' }, String(pending))
         : null))
@@ -283,7 +337,7 @@ export function FileExplorer(props) {
       React.createElement('span', { className: 'edrv-side-title' }, '资源管理器'),
       React.createElement('span', { className: 'edrv-side-root', title: root || '' }, rootName),
       React.createElement('span', { style: { flex: 1 } }),
-      React.createElement('button', { className: 'edrv-side-btn', title: '刷新目录树', onClick: refresh }, '⟳')),
+      React.createElement('button', { className: 'edrv-side-btn', title: '刷新目录树', onClick: refresh }, refreshIconEl())),
     React.createElement('div', { className: 'edrv-tree' },
       (errorText
         ? React.createElement('div', { className: 'edrv-tree-error' },

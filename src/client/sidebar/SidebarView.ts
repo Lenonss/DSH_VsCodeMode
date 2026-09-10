@@ -19,6 +19,21 @@ const SEAM_W = 5
 const PULL_OUT_THRESHOLD = 12
 
 /**
+ * 活动栏图标内容：面板可给官方图标组件（跟随官方主题），也可给文本/emoji（回落）。
+ * @author ddj 2026年09月10号
+ * @param icon 面板定义的 icon 字段（组件或文本）
+ * @returns 图标元素或文本；组件渲染异常返回 null
+ */
+function railIconEl(icon) {
+  if (typeof icon !== 'function') return icon
+  try {
+    return React.createElement(icon, { size: 16 })
+  } catch (error) {
+    return null
+  }
+}
+
+/**
  * 侧边栏容器。
  * @param props.registry 面板注册表（list() 提供面板顺序）
  * @param props.ctx 面板共享上下文
@@ -112,7 +127,7 @@ export function SidebarView(props) {
             if (!visible && typeof onShow === 'function') onShow()
           },
         },
-          React.createElement('span', { className: 'edrv-rail-icon' }, p.icon),
+          React.createElement('span', { className: 'edrv-rail-icon' }, railIconEl(p.icon)),
           count > 0
             ? React.createElement('span', { className: 'edrv-rail-badge' }, String(count))
             : null)

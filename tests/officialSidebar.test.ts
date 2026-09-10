@@ -11,7 +11,9 @@ import {
   parseOfficialFileAddress,
   officialFileTitle,
   buildFileAddress,
+  forwardToEditor,
   registerOfficialFileClaim,
+  resolveNavLine,
   resolveNavOpen,
   restoreEditorTab,
   OFFICIAL_FILE_TAB_ID,
@@ -64,6 +66,50 @@ describe('resolveNavOpen', () => {
     expect(resolveNavOpen(null)).toEqual({ path: null, focusDiff: false })
     expect(resolveNavOpen({ openPath: 42, focusDiff: 'yes' })).toEqual({ path: null, focusDiff: false })
     expect(resolveNavOpen({ openPath: '' })).toEqual({ path: null, focusDiff: false })
+  })
+})
+
+describe('resolveNavLine', () => {
+  it('正整数行号透传，小数向下取整', () => {
+    expect(resolveNavLine({ line: 12 })).toBe(12)
+    expect(resolveNavLine({ line: 12.7 })).toBe(12)
+  })
+  it('缺参/坏类型/非正数一律视为未指定', () => {
+    expect(resolveNavLine(undefined)).toBeUndefined()
+    expect(resolveNavLine(null)).toBeUndefined()
+    expect(resolveNavLine({})).toBeUndefined()
+    expect(resolveNavLine({ line: '12' })).toBeUndefined()
+    expect(resolveNavLine({ line: 0 })).toBeUndefined()
+    expect(resolveNavLine({ line: -3 })).toBeUndefined()
+    expect(resolveNavLine({ line: Number.NaN })).toBeUndefined()
+    expect(resolveNavLine({ line: Number.POSITIVE_INFINITY })).toBeUndefined()
+  })
+})
+
+describe('forwardToEditor', () => {
+  it('转发进编辑器页类型并透传 openPath/line（不产生新实例）', () => {
+    const calls: Array<{ kind: string; params?: unknown }> = []
+    const service = { openTab: (kind: string, options?: { params?: unknown }) => { calls.push({ kind, params: options?.params }) } }
+    expect(forwardToEditor(service, 'src/a.ts', 7)).toBe(true)
+    expect(calls).toEqual([{ kind: OFFICIAL_TAB_KIND, params: { openPath: 'src/a.ts', line: 7 } }])
+  })
+  it('未指定行号时 params 只带 openPath', () => {
+    const calls: Array<{ params?: unknown }> = []
+    forwardToEditor({ openTab: (_kind: string, options?: { params?: unknown }) => { calls.push({ params: options?.params }) } }, 'src/b.ts')
+    expect(calls).toEqual([{ params: { openPath: 'src/b.ts' } }])
+  })
+  it('缺服务/空路径返回 false 且不触发打开', () => {
+    const calls: string[] = []
+    const service = { openTab: (kind: string) => { calls.push(kind) } }
+    expect(forwardToEditor(undefined, 'a.ts')).toBe(false)
+    expect(forwardToEditor(null, 'a.ts')).toBe(false)
+    expect(forwardToEditor({} as never, 'a.ts')).toBe(false)
+    expect(forwardToEditor(service, null)).toBe(false)
+    expect(forwardToEditor(service, '')).toBe(false)
+    expect(calls).toEqual([])
+  })
+  it('openTab 抛错返回 false（由调用方重试或兜底）', () => {
+    expect(forwardToEditor({ openTab: () => { throw new Error('no seat') } }, 'a.ts', 3)).toBe(false)
   })
 })
 

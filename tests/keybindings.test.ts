@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import {
-  bindingsOf, chordFromEvent, chordOf, formatChord, keybindingsApply,
+  COMMANDS, bindingsOf, chordFromEvent, chordOf, formatChord, keybindingsApply,
   matchEvent, normalizeKey, parseChord, parseChords,
 } from '../src/client/keybindings.js'
 import { draftOf, storeOf, conflictsOf } from '../src/client/ui/KeybindingsPanel.js'
@@ -19,6 +19,8 @@ describe('keybindings shared defaults', () => {
       'edrv.searchInFiles': 'Ctrl+Shift+F',
       'edrv.navigateBack': 'Alt+ArrowLeft|Ctrl+Alt+-',
       'edrv.navigateForward': 'Alt+ArrowRight|Ctrl+Shift+-',
+      'edrv.nextTab': 'Ctrl+Alt+ArrowRight|Ctrl+PageDown',
+      'edrv.prevTab': 'Ctrl+Alt+ArrowLeft|Ctrl+PageUp',
     })
   })
 
@@ -31,6 +33,22 @@ describe('keybindings shared defaults', () => {
   it('drops unknown ids and non-strings when normalizing', () => {
     expect(normalizeKeybindings({ 'edrv.save': 'Ctrl+Alt+S', ghost: 'Ctrl+Z', 'edrv.searchInFiles': 42 }))
       .toEqual({ 'edrv.save': 'Ctrl+Alt+S' })
+  })
+})
+
+describe('页签循环键位（编辑器自带分页）', () => {
+  it('命令目录含下一/上一页签，默认键位可解析并命中', () => {
+    const ids = COMMANDS.map((c) => c.id)
+    expect(ids).toContain('edrv.nextTab')
+    expect(ids).toContain('edrv.prevTab')
+    keybindingsApply({})
+    expect(chordOf('edrv.nextTab')).toBe('Ctrl+Alt+ArrowRight|Ctrl+PageDown')
+    expect(chordOf('edrv.prevTab')).toBe('Ctrl+Alt+ArrowLeft|Ctrl+PageUp')
+    expect(matchEvent({ ctrlKey: true, altKey: true, key: 'ArrowRight' }, bindingsOf('edrv.nextTab'))).toBe(true)
+    expect(matchEvent({ ctrlKey: true, key: 'PageDown' }, bindingsOf('edrv.nextTab'))).toBe(true)
+    expect(matchEvent({ ctrlKey: true, key: 'PageUp' }, bindingsOf('edrv.prevTab'))).toBe(true)
+    // 缺 Alt 的 Ctrl+→ 不应命中（避免与普通光标操作冲突）
+    expect(matchEvent({ ctrlKey: true, key: 'ArrowRight' }, bindingsOf('edrv.nextTab'))).toBe(false)
   })
 })
 

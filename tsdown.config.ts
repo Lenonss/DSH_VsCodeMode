@@ -27,6 +27,9 @@ const CLIENT_EXTERNALS = [
   'react-dom/client',
   'cordis',
   '@deepseek-ai/dsh-client-ui-settings',
+  // 官方 UI 原语虚拟模块（loader 提供，含 FileTypeIcon/classifyFileType 与 Icon* 图标集）：
+  // 必须外置——它不在本地 node_modules，内联会在构建期解析失败。
+  '@deepseek-ai/dsh-client-ui-primitives',
 ]
 
 /** Host-half modules resolved from the profile tree at runtime. */

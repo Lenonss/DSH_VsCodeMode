@@ -40,8 +40,8 @@ export interface SidebarCtx {
 export interface SidebarPanelDef {
   id: string
   title: string
-  /** 活动栏图标（文本/SVG 均可，横向居中显示）。 */
-  icon: string
+  /** 活动栏图标：官方图标组件（跟随官方主题）或文本/emoji（回落），横向居中显示。 */
+  icon: string | ((props: { size?: number }) => unknown)
   order?: number
   /** 活动栏徽标：返回数字/null；缺省不显示。 */
   badge?: (ctx: SidebarCtx) => number | null

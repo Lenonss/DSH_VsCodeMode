@@ -4,7 +4,7 @@
  * 迁移自原 src/client/index.ts 的 MONACO_BASE/LANG_BY_EXT/langOf/loadMonaco，语义不改。
  * 作者 ddj 2026-08-20
  */
-import { applyTheme, registerThemes } from './theme.js'
+import { applyOfficial, registerThemes } from './theme.js'
 
 export const MONACO_BASE = '/edrv/vendor/monaco/vs'
 let monacoPromise = null
@@ -102,10 +102,10 @@ export function loadMonaco(onProgress) {
           publishStage('core', MONACO_STAGES.core.progress, MONACO_STAGES.core.message)
           window.require(['vs/editor/editor.main'], () => {
             publishStage('ready', MONACO_STAGES.ready.progress, MONACO_STAGES.ready.message)
-            // 分色主题注册 + 应用（rich token 配色，替掉内置基础 vs 的少层次着色）
+            // 主题：注册现役双套（幂等）+ 应用跟随官方的令牌主题（令牌缺失时回落现役）
             try {
               registerThemes(window.monaco)
-              applyTheme(window.monaco)
+              applyOfficial(window.monaco)
             } catch (error) { /* 主题失败不阻塞编辑器 */ }
             resolve(window.monaco)
           }, (err) => fail(new Error('Monaco 模块加载失败：' + String(err))))

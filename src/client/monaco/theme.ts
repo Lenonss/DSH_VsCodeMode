@@ -1,10 +1,10 @@
 // @ts-nocheck
 /**
- * dsh-vscode-mode client — Monaco 语法分色主题（rich token 配色）。
- * 编辑器原先硬编码 'vs'（内置基础主题），token 分色层次少；
- * 这里定义 edrv-dark / edrv-light 两套完整 token 配色（对齐 VSCode Dark+ 语义分层），
- * 并随 DSH 明暗主题自动切换（跟随文档根 data 主题属性 / prefers-color-scheme）。
- * 作者 ddj 2026-08-28
+ * dsh-vscode-mode client — Monaco 主题：官方令牌跟随 + 现役双套回落。
+ * 优先级：官方代码/UI 令牌（--shiki-* / --dsw-alias-*，DSH 0.1.5+ 主题体系，
+ * 含第三方皮肤）→ edrv-dark / edrv-light 两套内置配色（旧版 DSH 或令牌缺失）。
+ * 明暗判定：body[data-ds-dark-theme]（官方）→ 根 data-theme（旧皮肤）→ prefers-color-scheme。
+ * 作者 ddj 2026-08-28 / 2026-09-10
  */
 
 export const EDRV_DARK = 'edrv-dark'
@@ -185,12 +185,14 @@ export function registerThemes(monaco) {
 }
 
 /**
- * 探测当前 DSH 明暗（文档根 data 主题属性 → prefers-color-scheme → 暗）。
- * @author ddj 2026年08月28号
+ * 探测当前 DSH 明暗（官方 data-ds-dark-theme → 旧皮肤 data-theme → prefers-color-scheme → 暗）。
+ * @author ddj 2026年08月28号 / 2026年09月10号
  * @returns 'dark' | 'light'
  */
 export function detectColorScheme() {
   try {
+    const official = document.body?.getAttribute?.('data-ds-dark-theme')
+    if (official !== null && official !== undefined && official !== 'false') return 'dark'
     const attr = document.documentElement?.getAttribute?.('data-theme')
       ?? document.body?.getAttribute?.('data-theme')
     const value = String(attr ?? '').toLowerCase()
@@ -227,3 +229,307 @@ export function applyTheme(monaco) {
     /* setTheme 失败忽略 */
   }
 }
+
+// --region 官方主题跟随（--shiki-* / --dsw-alias-* 令牌）
+
+/** 动态官方主题 id 前缀（每次应用带序号重建，保证 Monaco 感知重定义）。 */
+const EDRV_OFFICIAL = 'edrv-official'
+
+/** 官方代码配色令牌 → Monaco 规则 token 前缀（粗粒度；未覆盖的规则保留现役语义分层）。 */
+const RULE_TOKEN_MAP = [
+  ['--shiki-token-comment', ['comment']],
+  ['--shiki-token-keyword', ['keyword']],
+  ['--shiki-token-string', ['string']],
+  ['--shiki-token-string-expression', ['string.escape']],
+  ['--shiki-token-constant', ['number', 'constant']],
+  ['--shiki-token-function', ['function', 'method', 'member']],
+  ['--shiki-token-parameter', ['parameter', 'variable.parameter']],
+  ['--shiki-token-punctuation', ['delimiter', 'operator', 'punctuation']],
+  ['--shiki-token-link', ['annotation', 'metatag']],
+]
+
+/**
+ * 官方 UI 令牌 → Monaco 颜色键（每键给候选令牌，按序取首个可解析值）。
+ * 依据运行态实测：--dsw-alias-* 定义在 body 上；--shiki-background/-foreground 未定义，
+ * 故代码面底色用 markdown-code-block 近似；selection 不覆盖（沿用现役可见选框）。
+ */
+const COLOR_TOKEN_MAP = [
+  [['--dsw-alias-markdown-code-block', '--dsw-alias-bg-layer-2'], ['editor.background', 'editorGutter.background', 'minimap.background']],
+  [['--dsw-alias-label-primary', '--shiki-foreground'], ['editor.foreground']],
+  [['--dsw-alias-bg-layer-1', '--dsw-alias-bg-layer-3'], ['editorWidget.background', 'editorHoverWidget.background']],
+  [['--dsw-alias-label-tertiary'], ['editorLineNumber.foreground']],
+  [['--dsw-alias-label-secondary'], ['editorLineNumber.activeForeground']],
+  [['--dsw-alias-interactive-bg-hover'], ['editor.lineHighlightBackground', 'editor.inactiveSelectionBackground']],
+]
+
+/** 已应用的官方主题序号（模块级计数，保证主题 id 每次唯一）。 */
+let officialSeq = 0
+
+/**
+ * 读官方 CSS 变量（先 body 后文档根；未定义/空值/未解析 var() 返回 undefined）。
+ * 依据运行态实测：DSH 的 --dsw-alias-* 定义在 body 上，仅 --shiki-token-* 在根。
+ * @author ddj 2026年09月10号
+ * @param name CSS 变量名（含 -- 前缀）
+ * @returns 计算样式值，或 undefined
+ */
+export function readCssVar(name) {
+  try {
+    if (typeof window?.getComputedStyle !== 'function') return undefined
+    const hosts = [document?.body, document?.documentElement]
+    for (const host of hosts) {
+      if (!host) continue
+      const raw = window.getComputedStyle(host).getPropertyValue(name)
+      const value = String(raw ?? '').trim()
+      if (value && !value.startsWith('var(')) return value
+    }
+    return undefined
+  } catch (error) {
+    return undefined
+  }
+}
+
+/**
+ * 数值 → 两位十六进制（0-255 夹取）。
+ * @author ddj 2026年09月10号
+ * @param value 通道值
+ * @returns 两位小写十六进制
+ */
+function hex2(value) {
+  const text = Math.max(0, Math.min(255, Math.round(Number(value) || 0))).toString(16)
+  return text.length === 1 ? '0' + text : text
+}
+
+/**
+ * CSS 颜色归一为 Monaco 可用值（#rgb/#rrggbb/#rrggbbaa 原样，rgb()/hsl() 转 hex，其余 undefined）。
+ * @author ddj 2026年09月10号
+ * @param value CSS 计算样式颜色值
+ * @returns Monaco 颜色字符串，或 undefined（不可识别）
+ */
+export function toMonacoColor(value) {
+  const text = String(value ?? '').trim().toLowerCase()
+  if (!text || text.startsWith('var(')) return undefined
+  if (/^#[0-9a-f]{3}$/.test(text)) return '#' + text.slice(1).split('').map((c) => c + c).join('')
+  if (/^#[0-9a-f]{6}$/.test(text) || /^#[0-9a-f]{8}$/.test(text)) return text
+  return channelColor(text)
+}
+
+/**
+ * rgb()/rgba()/hsl()/hsla() → Monaco 颜色（兼容逗号与空格/斜杠两种参数语法）。
+ * @author ddj 2026年09月10号
+ * @param text 小写颜色文本
+ * @returns Monaco 颜色，或 undefined（不可识别）
+ */
+function channelColor(text) {
+  const body = /^(?:rgba?|hsla?)\(([^)]+)\)$/.exec(text)?.[1]
+  if (!body) return undefined
+  const parts = body.split(/[\s,/]+/).filter(Boolean)
+  if (parts.length < 3) return undefined
+  let channels
+  if (text.startsWith('hsl')) {
+    const h = Number(parts[0])
+    const s = percentOf(parts[1])
+    const l = percentOf(parts[2])
+    if (![h, s, l].every(Number.isFinite)) return undefined
+    channels = hslToRgb(h, s, l)
+  } else {
+    channels = parts.slice(0, 3).map(Number)
+  }
+  if (channels.some((n) => !Number.isFinite(n))) return undefined
+  const alpha = parts.length > 3 ? alphaOf(parts[3]) : 1
+  const tail = Number.isFinite(alpha) && alpha < 1 ? hex2(alpha * 255) : ''
+  return '#' + channels.map(hex2).join('') + tail
+}
+
+/**
+ * 百分数文本 → 数值（'5%' → 5，'0.5' → 0.5）。
+ * @author ddj 2026年09月10号
+ * @param value 参数文本
+ * @returns 数值（非数字为 NaN）
+ */
+function percentOf(value) {
+  const text = String(value ?? '')
+  return text.endsWith('%') ? Number(text.slice(0, -1)) : Number(text)
+}
+
+/**
+ * alpha 参数归一（'5%' → 0.05，'0.5' → 0.5）。
+ * @author ddj 2026年09月10号
+ * @param value 参数文本
+ * @returns 0-1 的 alpha（非数字为 NaN）
+ */
+function alphaOf(value) {
+  const text = String(value ?? '')
+  return text.endsWith('%') ? Number(text.slice(0, -1)) / 100 : Number(text)
+}
+
+/**
+ * HSL → RGB 通道（h 度、s/l 为 0-100 百分数）。
+ * @author ddj 2026年09月10号
+ * @param h 色相（度）
+ * @param s 饱和度（0-100）
+ * @param l 亮度（0-100）
+ * @returns [r, g, b]（0-255）
+ */
+function hslToRgb(h, s, l) {
+  const hue = ((h % 360) + 360) % 360
+  const sat = Math.max(0, Math.min(100, s)) / 100
+  const lum = Math.max(0, Math.min(100, l)) / 100
+  const c = (1 - Math.abs(2 * lum - 1)) * sat
+  const x = c * (1 - Math.abs(((hue / 60) % 2) - 1))
+  const m = lum - c / 2
+  const table = [[c, x, 0], [x, c, 0], [0, c, x], [0, x, c], [x, 0, c], [c, 0, x]]
+  return table[Math.min(5, Math.floor(hue / 60))].map((v) => (v + m) * 255)
+}
+
+/**
+ * 官方令牌 → Monaco 颜色键覆盖表（候选令牌按序取首个可解析值；全缺则不写入，保持现役回落）。
+ * @author ddj 2026年09月10号
+ * @returns 颜色键 → 颜色值
+ */
+function tokenColors() {
+  const out = {}
+  for (const entry of COLOR_TOKEN_MAP) {
+    const color = firstColor(entry[0])
+    if (color === undefined) continue
+    for (const key of entry[1]) out[key] = color
+  }
+  return out
+}
+
+/**
+ * 候选令牌中首个可解析为 Monaco 颜色的值。
+ * @author ddj 2026年09月10号
+ * @param names CSS 变量名候选（按优先级）
+ * @returns Monaco 颜色，或 undefined（全部缺失/不可解析）
+ */
+function firstColor(names) {
+  for (const name of names) {
+    const color = toMonacoColor(readCssVar(name))
+    if (color !== undefined) return color
+  }
+  return undefined
+}
+
+/**
+ * 官方令牌 → Monaco 规则前缀覆盖表（值去掉 # 前缀，Monaco rules 约定）。
+ * @author ddj 2026年09月10号
+ * @returns token 前缀 → 十六进制色（无 #）
+ */
+function tokenRules() {
+  const out = {}
+  for (const entry of RULE_TOKEN_MAP) {
+    const color = toMonacoColor(readCssVar(entry[0]))
+    if (color === undefined) continue
+    for (const prefix of entry[1]) out[prefix] = color.replace('#', '')
+  }
+  return out
+}
+
+/**
+ * 现役规则叠加令牌覆盖（前缀命中即换色，未命中保持语义分层）。
+ * @author ddj 2026年09月10号
+ * @param baseRules 现役规则表（edrv-dark / edrv-light）
+ * @param overrides token 前缀 → 颜色
+ * @returns 覆盖后的规则表（无覆盖时原样返回）
+ */
+function withOverrides(baseRules, overrides) {
+  const prefixes = Object.keys(overrides)
+  if (!prefixes.length) return baseRules
+  return baseRules.map((rule) => {
+    const hit = prefixes.find((p) => rule.token === p || rule.token.startsWith(p + '.'))
+    return hit === undefined ? rule : Object.assign({}, rule, { foreground: overrides[hit] })
+  })
+}
+
+/**
+ * 基础规则（token 为空串）前景色跟随官方 editor.foreground。
+ * Monaco 的 '' 规则匹配所有未被更具体规则命中的 token，不改它则内置 #1e1e1e 会盖住
+ * editor.foreground 令牌色（实测 .mtk1 仍为内置值的原因）。
+ * @author ddj 2026年09月10号
+ * @param rules 现役规则表
+ * @param color 已解析的 editor.foreground（含 #，缺省则不覆盖）
+ * @returns 基础规则换色后的规则表
+ */
+export function withBaseForeground(rules, color) {
+  if (!color) return rules
+  const foreground = String(color).replace('#', '')
+  return rules.map((rule) => (rule.token === '' ? Object.assign({}, rule, { foreground }) : rule))
+}
+
+/**
+ * 构建跟随官方的 Monaco 主题（令牌全缺时 hasTokens=false，调用方回落现役双套）。
+ * @author ddj 2026年09月10号
+ * @param scheme 明暗（'light' 之外一律按暗色）
+ * @returns 主题定义（base/rules/colors/hasTokens）
+ */
+export function officialThemeOf(scheme) {
+  const dark = scheme !== 'light'
+  const colors = tokenColors()
+  const rules = tokenRules()
+  const layered = withOverrides(dark ? DARK_RULES : LIGHT_RULES, rules)
+  return {
+    base: dark ? 'vs-dark' : 'vs',
+    rules: withBaseForeground(layered, colors['editor.foreground']),
+    colors: Object.assign({}, dark ? DARK_COLORS : LIGHT_COLORS, colors),
+    hasTokens: Object.keys(colors).length > 0 || Object.keys(rules).length > 0,
+  }
+}
+
+/**
+ * 应用跟随官方的主题；令牌读不到或定义失败时回落现役双套。
+ * @author ddj 2026年09月10号
+ * @param monaco Monaco 实例
+ * @returns 实际应用的 Monaco 主题 id
+ */
+export function applyOfficial(monaco) {
+  if (!monaco?.editor?.setTheme || !monaco?.editor?.defineTheme) return themeNameOf()
+  const theme = officialThemeOf(detectColorScheme())
+  if (!theme.hasTokens) {
+    applyTheme(monaco)
+    return themeNameOf()
+  }
+  officialSeq += 1
+  const id = EDRV_OFFICIAL + '-' + officialSeq
+  try {
+    monaco.editor.defineTheme(id, { base: theme.base, inherit: true, rules: theme.rules, colors: theme.colors })
+    monaco.editor.setTheme(id)
+    return id
+  } catch (error) {
+    applyTheme(monaco)
+    return themeNameOf()
+  }
+}
+
+/**
+ * 观察官方明暗标记变化（body / 根节点的 data-ds-dark-theme 与 data-theme）。
+ * @author ddj 2026年09月10号
+ * @param onChange 标记变化回调
+ * @returns 停止观察函数（非浏览器环境返回空函数）
+ */
+export function observeScheme(onChange) {
+  try {
+    if (typeof MutationObserver !== 'function' || !document?.body) return () => {}
+    const observer = new MutationObserver(() => onChange())
+    const filter = ['data-ds-dark-theme', 'data-theme']
+    observer.observe(document.body, { attributes: true, attributeFilter: filter })
+    if (document.documentElement) {
+      observer.observe(document.documentElement, { attributes: true, attributeFilter: filter })
+    }
+    return () => observer.disconnect()
+  } catch (error) {
+    return () => {}
+  }
+}
+
+/**
+ * 官方主题快照 → 明暗（ThemeRuntime.getTheme() 快照；字段缺失/未知返回 undefined）。
+ * @author ddj 2026年09月10号
+ * @param snapshot 官方主题快照
+ * @returns 'light' | 'dark' | undefined
+ */
+export function schemeOfSnapshot(snapshot) {
+  const value = snapshot ?? {}
+  const scheme = value.active?.colorScheme ?? value.colorScheme
+  return scheme === 'light' || scheme === 'dark' ? scheme : undefined
+}
+// --endregion

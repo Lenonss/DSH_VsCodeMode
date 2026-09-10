@@ -22,6 +22,7 @@ import { ConversationDiffDock } from './ui/ConversationDiffDock.js'
 import { McpSettings } from './ui/McpSettings.js'
 import { rpc } from './rpc.js'
 import { loadMonaco } from './monaco/loader.js'
+import { observeScheme, schemeOfSnapshot } from './monaco/theme.js'
 import { createFileOpenerRegistry, scanSidebar, officialSidebarOpener, shouldClaimFiles, type FileOpenContext } from './fileOpeners.js'
 import type { FileOpenerRegistry } from './fileOpeners.js'
 import { installOpenPathRouter, vscodeOpener, autoValue } from './openPathRouter.js'
@@ -33,6 +34,7 @@ import { detectSidebarService, installSideEditor, setEnsureSideEditor, SIDEBAR_I
 import { detectOfficial, installOfficial, registerOfficialFileClaim, OFFICIAL_TAB_KIND, OFFICIAL_TAB_TITLE, isEditorTabActive, restoreEditorTab } from './officialSidebar.js'
 import { SideEditorTab } from './ui/SideEditorTab.js'
 import { OfficialSideTab } from './ui/OfficialSideTab.js'
+import { createClaimRouter } from './ui/ClaimRouter.js'
 import { createAddToConversation } from './addToConversation.js'
 import { createSidebarPanelRegistry } from './sidebar/registry.js'
 import { createFilePanel } from './sidebar/panels/index.js'
@@ -148,7 +150,7 @@ export function apply(ctx: any): void {
     { name: '侧边栏打开器（' + SIDEBAR_PLUGIN + '）', active: registry.get(SIDEBAR_PLUGIN) !== undefined, note: registry.get(SIDEBAR_PLUGIN) !== undefined ? '已注册（优先级 80）' : '未检测到侧边栏打开能力' },
     { name: '侧边栏编辑区（官方 Sidebar）', active: officialService !== undefined, note: officialService !== undefined ? '编辑区=官方右侧 Sidebar Tab（对话+编辑同屏，DSH 0.1.5+）' : '官方侧边栏服务未探测到（DSH < 0.1.5-alpha.1 时属预期）' },
     { name: '侧边栏编辑区（' + SIDEBAR_PLUGIN + '，归档）', active: sideService !== undefined, note: sideService !== undefined ? '编辑区=侧边栏 Tab（旧版 DSH 回退形态）' : '未检测到；DSH ≥ 0.1.5 优先官方侧边栏，旧版可安装（' + SIDEBAR_INSTALL_CMD + '）' },
-    { name: '文件链接官方认领（dsh-resource://file）', active: claimDisposer !== null, note: claimDisposer !== null ? '聊天文件链接由本插件编辑器接管（官方侧边栏内打开）' : '链接走官方查看器或旧版路由（未认领）' },
+    { name: '文件链接官方认领（dsh-resource://file）', active: claimDisposer !== null, note: claimDisposer !== null ? '聊天文件链接转发进单一编辑器页签（文件分页归编辑器自带页签栏）' : '链接走官方查看器或旧版路由（未认领）' },
   ]
 
   ctx.provide('fileOpeners', registry)
@@ -183,14 +185,16 @@ export function apply(ctx: any): void {
     const sidebar = scanSidebar(ctx)
     return sidebar ? registry.register(sidebar) : undefined
   }, 'vscode-mode: sidebar file opener')
-  // 官方侧边栏正文组件装配（页类型与 file 认领两类 Tab 共用同一 EditorView 形态）
+  // 官方侧边栏正文组件装配（页类型正文；兼作 file 认领转发失败时的兜底正文）
   const officialRenderTab = (props: Record<string, unknown>) => React.createElement(OfficialSideTab, Object.assign({}, props, { schedule, addToConversation, sidebarPanels, outlineSources, fileMenuItems, sessions }))
-  /** 官方 file 地址认领同步：自动/VSCodeMode 档认领（链接进本插件编辑器），其余交官方查看器。 */
+  /** 官方 file 地址认领同步：自动/VSCodeMode 档认领（转发进单一编辑器页签），其余交官方查看器。 */
   const syncFileClaim = (): void => {
     const official = officialService
     const want = official !== undefined && shouldClaimFiles(selected)
     if (want && claimDisposer === null && official) {
-      const disposer = registerOfficialFileClaim({ tabs: official.tabs, slots: ctx.slots, renderTab: officialRenderTab })
+      // 认领正文只做转发：文件分页收归编辑器自带页签栏，官方侧栏不再按文件分裂编辑器实例
+      const renderTab = createClaimRouter({ service: official.service, schedule, fallback: officialRenderTab })
+      const disposer = registerOfficialFileClaim({ tabs: official.tabs, slots: ctx.slots, renderTab })
       if (disposer !== null) claimDisposer = ctx.effect(() => disposer, 'vscode-mode: official file claim')
       return
     }
@@ -264,6 +268,21 @@ export function apply(ctx: any): void {
     }, 2000)
   }
   retryRemoteOpen()
+
+  // 官方主题跟随（DSH 0.1.5+）：ctx.theme 快照事件优先，其次明暗标记观察（observeScheme），
+  // 都不可用时 theme.ts 的 detectColorScheme 兜底；统一广播 edrv:theme-change 触发 Monaco 主题重刷。
+  const themeService = ctx.get('theme') as { getTheme?: () => unknown } | undefined
+  const emitTheme = (): void => {
+    const snapshot = typeof themeService?.getTheme === 'function' ? themeService.getTheme() : undefined
+    window.dispatchEvent(new CustomEvent('edrv:theme-change', { detail: { scheme: schemeOfSnapshot(snapshot) } }))
+  }
+  ctx.effect(() => {
+    if (!themeService || typeof ctx.on !== 'function') return undefined
+    const disposer = ctx.on('theme/change', emitTheme)
+    return typeof disposer === 'function' ? disposer : undefined
+  }, 'vscode-mode: official theme event')
+  ctx.effect(() => observeScheme(emitTheme), 'vscode-mode: theme attribute watch')
+  emitTheme()
 
   // 中央「文件编辑」页签（旧形态回退）：类 VSCode 编辑器；侧边栏形态（官方/better-sidebar）可用时
   // 编辑器住侧边栏 Tab，本页签不注册（避免双实例：Monaco×2 + diff dock 每会话单源抢占）。

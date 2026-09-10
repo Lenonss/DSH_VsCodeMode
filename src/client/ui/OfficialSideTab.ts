@@ -1,17 +1,16 @@
 // @ts-nocheck
 /**
- * dsh-vscode-mode client — OfficialSideTab：DSH 官方右侧 Sidebar「文件编辑」Tab 正文包装。
- * 双用途：页类型 Tab（edrvEditor）经 navigation.params（openPath/focusDiff）打开；
- * file 资源类型 Tab（edrvEditorFile，认领 dsh-resource://file/**）经 navigation.address
- * 解码出真实路径并透传 params.line 行号定位。派发既有 edrv:open-editor 事件复用
- * EditorView 打开流；按会话 key 保证切会话干净重建。
+ * dsh-vscode-mode client — OfficialSideTab：DSH 官方右侧 Sidebar「文件编辑」页签正文包装。
+ * 用途：页类型 Tab（edrvEditor）经 navigation.params（openPath/focusDiff/line）打开；
+ * 兼作 file 认领转发（ClaimRouter）失败时的兜底正文（就地挂编辑器，旧行为）。
+ * 派发既有 edrv:open-editor 事件复用 EditorView 打开流；按会话 key 保证切会话干净重建。
  * Tab 正文切换后重挂载时按最新导航恢复打开（对齐 better-sidebar 形态的种子行为）。
- * 作者 ddj 2026年09月09号
+ * 作者 ddj 2026年09月09号 / 2026年09月10号
  */
 import React from 'react'
 import { EditorView } from './EditorView.js'
 import { setSideEditorMounted } from '../sidebarBridge.js'
-import { editorMountEpoch, markEditorMounted, parseOfficialFileAddress, resolveNavOpen } from '../officialSidebar.js'
+import { editorMountEpoch, markEditorMounted, parseOfficialFileAddress, resolveNavLine, resolveNavOpen } from '../officialSidebar.js'
 
 /**
  * 官方侧边栏 Tab 正文组件（keyed slot sidebar.right.pane.tab 装配）。
@@ -71,10 +70,10 @@ export function OfficialSideTab(props) {
       }))
       return
     }
-    // 页类型 Tab：params 携带打开请求
+    // 页类型 Tab：params 携带打开请求（line = 行引用/工具行跳转的行号定位）
     const request = resolveNavOpen(navigation?.params)
     window.dispatchEvent(new CustomEvent('edrv:open-editor', {
-      detail: { path: request.path, focusDiff: request.focusDiff },
+      detail: { path: request.path, focusDiff: request.focusDiff, line: resolveNavLine(navigation?.params) },
     }))
   })
 

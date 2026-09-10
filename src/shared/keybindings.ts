@@ -14,6 +14,9 @@ export const KEYBINDING_DEFAULTS: Record<string, string> = {
   'edrv.searchInFiles': 'Ctrl+Shift+F',
   'edrv.navigateBack': 'Alt+ArrowLeft|Ctrl+Alt+-',
   'edrv.navigateForward': 'Alt+ArrowRight|Ctrl+Shift+-',
+  // 页签循环：主候选避开浏览器保留键（Ctrl+Tab / Ctrl+PgUp/PgDn 会被浏览器截获）
+  'edrv.nextTab': 'Ctrl+Alt+ArrowRight|Ctrl+PageDown',
+  'edrv.prevTab': 'Ctrl+Alt+ArrowLeft|Ctrl+PageUp',
 }
 
 /**

@@ -25,6 +25,8 @@ export const COMMANDS: Array<{ id: string; label: string }> = [
   { id: 'edrv.searchInFiles', label: '在工作区中搜索' },
   { id: 'edrv.navigateBack', label: '后退（导航历史）' },
   { id: 'edrv.navigateForward', label: '前进（导航历史）' },
+  { id: 'edrv.nextTab', label: '下一个页签' },
+  { id: 'edrv.prevTab', label: '上一个页签' },
 ]
 
 const MODIFIERS: Record<string, 'ctrl' | 'shift' | 'alt' | 'meta'> = {
