@@ -36,8 +36,11 @@
   （片段图标 + `body` 预览，`Tab`/`Enter` 展开，`$1`/`${2:默认值}` 占位符与 `$TM_*` 变量可用）；
   也可 `Ctrl+Shift+P` → 「代码片段：插入代码片段」按语言筛选后插入到光标处。
   文件列表/读取/保存经 RPC `snippets.list/read/save/remove/entries`；保存后自动刷新补全缓存。
-- **快捷引用**（v0.3.0）：编辑器中选中内容后 `Ctrl+U` 把选中行范围加为**引用**（送入对话上下文，
-  等价 VS Code 的「Add Selection to Chat」）。无编辑器/无选中时该键位**不吞键**，正常输入不受影响。
+- **快捷引用**（v0.3.0，v0.3.1 修复可用性判定）：编辑器中选中内容后 `Ctrl+U` 把选中行范围加为**引用**
+  （送入对话上下文，等价 VS Code 的「Add Selection to Chat」）。无编辑器/无选中时该键位**不吞键**，正常输入不受影响。
+  ⚠️ v0.3.0 因编辑器可用性探测选择器 `textarea.inputarea` 被 Monaco 的 **EditContext** 输入通道取代
+  （有该 API 的浏览器下 Monaco 不再创建 textarea），导致本命令与其它 12 条 `needsModel` 命令被静默隐藏、
+  按键被放行；v0.3.1 已改为与输入实现无关的判据（`.edrv-editor-row .monaco-editor`）。
 - **LSP 智能（编辑器内）**：`F12`/右键「转到定义」+ `Shift+F12`「查找所有引用」+ `Ctrl+点击` 引用导航
   （0 条→定义兜底、1 条→直接跳转、多条→原生 References Peek）+ `Ctrl+hover` 可导航标识符下划线提示；
   定义查找带降级链（definition → declaration → 引用推导），参数/局部变量（`this`、`pTarget` 这类）

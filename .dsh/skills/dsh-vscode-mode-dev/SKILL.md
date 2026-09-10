@@ -85,7 +85,19 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
   且认领**禁止写在 render 期**（`useState` 初始化器等）——StrictMode 双调用会让首次认领被判失败。
 - 2026-09-10 坑：排查「快捷键没反应」先判**按键是否已被捕获**——命令桥处理过就会 `preventDefault`，
   故「`defaultPrevented=true` 但 DOM 无浮层」= 命令已派发、无人渲染（宿主认领/挂载问题），
-  与「按键根本没被处理」是两类故障，别混为一起查。
+  与「按键根本没被处理」是两类故障，别混为一起查。第三个判据：**`defaultPrevented=false` 且命令
+  的 `available()` 返回 false** = 可用性探测误判（桥按设计「不可用则不吞键」）→ 见下条。
+- 2026-09-10 坑：**禁止用 `textarea.inputarea` 探测「编辑器是否打开文件」**——Monaco 在支持
+  **EditContext API** 的浏览器（Chrome/Edge）里默认用它取代 textarea（源码
+  `editContext: se(44,"editContext",!0)`），只建 `div.native-edit-context`，于是 `.monaco-editor
+  textarea.inputarea` 恒为 0、`hasEditorModel()` 永假 → 13 条 `needsModel` 命令被静默隐藏且按键被
+  放行（v0.3.0 的 `Ctrl+U`「完全没效果」即此因，v0.3.1 修）。正确判据：插件编辑器行内的 Monaco 实例
+  ——`.edrv-editor-row .monaco-editor`（与输入实现无关；用 `.edrv-editor-row` 限定可避免误命中官方
+  预览的 Monaco，否则无编辑器时快捷键会吞键）。凡是探测第三方库内部 DOM 结构的代码都要按此警惕：
+  升级/换浏览器即可让选择器静默失效，且**不报错**（法一线索是「DOM 有编辑器但探测恒假」）。
+- 2026-09-10 事实：判断「编辑器是否打开文件」的可靠信号是 **Monaco API**
+  （`window.monaco.editor.getEditors().some(e => !!e.getModel())`）或插件自有类名，
+  不要去猜 Monaco 的输入层 DOM（textarea / EditContext / 未来的实现都可能变）。
 
 ## CI/测试平台陷阱（写测试前必读）
 
