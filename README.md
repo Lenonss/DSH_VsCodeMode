@@ -23,9 +23,21 @@
   （需要打开文件的命令在空编辑器时自动隐藏）。命令目录即单一数据源（`ui/commandCatalog`）：命令栏、快捷键设置页、
   全局键位派发、Monaco 右键菜单全部从同一张表读取，**新增一条能力只需追加一条命令定义**。
   注册表经 `window.__edrvCommands__` 对外暴露，第三方/控制台可 `register()` 注册命令、
-  `addRuntimeKeybinding()` 绑运行时键位（不落设置 schema）。开箱 15 条命令：
+  `addRuntimeKeybinding()` 绑运行时键位（不落设置 schema）。开箱 18 条命令：
   保存 / 快速打开 / 在文件浏览器中打开 / 显示所有命令 / 切换侧边栏 / 工作区搜索 /
-  后退·前进 / 上下页签 / 上下编辑行 / 转到定义 / 查找引用 / 触发 AI 补全。
+  后退·前进 / 上下页签 / 上下编辑行 / 转到定义 / 查找引用 / 触发 AI 补全 /
+  配置代码片段 / 插入代码片段 / 选中内容加为引用。
+- **代码片段**（v0.3.0，VS Code 兼容 `.code-snippets`）：`Ctrl+Shift+P` → 「代码片段：配置代码片段」
+  打开**居中浮窗**（现有片段文件列表 + 新建入口），选文件后在 Monaco 编辑器中按普通文件编辑
+  （JSON 高亮 / 保存即生效 / 支持 `scope` 字段）。片段库分**全局**（`~/.dsh/snippets/`，所有项目生效）
+  与**项目**（`<工作区>/.dsh/snippets/`，随仓库共享）两处；文件名即语言
+  （`lua.code-snippets` → 仅 lua 文件生效，`global.code-snippets` → 全语言），
+  新建时可选生效语言。编辑 `.lua` 等文件时，前缀（`prefix`）经 **IntelliSense 补全**列出
+  （片段图标 + `body` 预览，`Tab`/`Enter` 展开，`$1`/`${2:默认值}` 占位符与 `$TM_*` 变量可用）；
+  也可 `Ctrl+Shift+P` → 「代码片段：插入代码片段」按语言筛选后插入到光标处。
+  文件列表/读取/保存经 RPC `snippets.list/read/save/remove/entries`；保存后自动刷新补全缓存。
+- **快捷引用**（v0.3.0）：编辑器中选中内容后 `Ctrl+U` 把选中行范围加为**引用**（送入对话上下文，
+  等价 VS Code 的「Add Selection to Chat」）。无编辑器/无选中时该键位**不吞键**，正常输入不受影响。
 - **LSP 智能（编辑器内）**：`F12`/右键「转到定义」+ `Shift+F12`「查找所有引用」+ `Ctrl+点击` 引用导航
   （0 条→定义兜底、1 条→直接跳转、多条→原生 References Peek）+ `Ctrl+hover` 可导航标识符下划线提示；
   定义查找带降级链（definition → declaration → 引用推导），参数/局部变量（`this`、`pTarget` 这类）

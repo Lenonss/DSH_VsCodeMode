@@ -10,7 +10,7 @@
 import React from 'react'
 import { dbg, rpc } from '../rpc.js'
 import { emitRefresh } from '../events.js'
-import { langOf, loadMonaco } from '../monaco/loader.js'
+import { langOf, loadMonaco, snippetLanguageOf } from '../monaco/loader.js'
 import { dataUrlOf, isImagePath, isSvgPath } from '../imagePreview.js'
 import { base64ToBytes, isPdfPath } from '../pdfPreview.js'
 import { createPdfPanel } from '../pdf/pdfPanel.js'
@@ -20,6 +20,7 @@ import { ST, callIdAttr, noopHunk, summarize } from '../state/records.js'
 import { diffRegions } from '../state/regions.js'
 import { QuickOpen } from './QuickOpen.js'
 import { CommandPalette } from './CommandPalette.js'
+import { closeCommandPalette } from '../commandPaletteStore.js'
 import { DiffLauncher } from './DiffLauncher.js'
 import { SidebarView } from '../sidebar/SidebarView.js'
 import { clearDiffDock, publishDiffDock } from '../diffDockStore.js'
@@ -39,6 +40,27 @@ import { bindLspEditor, runGoToDefinition, runFindReferences, hideReferencesOver
 import { bindLspUnderline } from '../monaco/lsp/underline.js'
 import { onLspProgress, refreshStatus } from '../monaco/lsp/index.js'
 import { setupAiInline, trackAiEditor, aiInlineEnabled } from '../ai/inlineProvider.js'
+import { SnippetsPicker } from './SnippetsPicker.js'
+import { invalidateSnippets, setSnippetsSession, setupSnippets } from '../snippets/provider.js'
+
+/**
+ * 从 Monaco 语言目录取可选语言 id 列表（代码片段新建时的语言下拉来源）。
+ * 旧版 Monaco / 目录不可读时返回 undefined，由调用方回落 shared 的内置常量。
+ * @author ddj 2026年09月10号
+ * @param monaco window.monaco（可能未加载）
+ * @returns 语言 id 数组或 undefined
+ */
+function snippetLanguageIds(monaco) {
+  try {
+    const languages = monaco?.languages?.getLanguages?.()
+    if (!Array.isArray(languages) || !languages.length) return undefined
+    return languages
+      .map((item) => (item && typeof item.id === 'string' ? item.id : ''))
+      .filter(Boolean)
+  } catch (error) {
+    return undefined
+  }
+}
 
 /**
  * 中央编辑区：文件页签（脏点/关闭/打开路径）+ Ctrl+P 搜索 + Monaco 编辑器 +
@@ -148,6 +170,7 @@ export function EditorView(props) {
   const hoverPanelRef = React.useRef(false) // 鼠标是否已进入 Keep/Undo 浮层
   const batchBusyRef = React.useRef(false) // 批量 Keep All/Undo All 防重入
   const menuHandlersRef = React.useRef(null) // 右键菜单动作的最新闭包（Monaco addAction 空依赖回调读取）
+  const [snippetPicker, setSnippetPicker] = React.useState(null) // 'configure' | 'insert' | null（代码片段浮层）
   const doSaveRef = React.useRef(null) // 保存动作的最新闭包（窗口级保存监听读取）
   const onEditRef = React.useRef(null) // 编辑置脏的最新闭包（Monaco 内容变化监听经 ref 调用，防首帧 active=null 陈旧闭包）
   const saveViewStateRef = React.useRef(null) // 视图状态保存的最新闭包（卸载清理读取，避免过期 active）
@@ -569,6 +592,16 @@ export function EditorView(props) {
     }
   }, [])
 
+  // 代码片段：会话切换让补全按当前工作区叠加项目片段；配置文件保存后失效缓存即时生效
+  React.useEffect(() => {
+    setSnippetsSession(sessionId)
+  }, [sessionId])
+  React.useEffect(() => {
+    const onChanged = () => invalidateSnippets()
+    window.addEventListener('edrv:snippets-changed', onChanged)
+    return () => window.removeEventListener('edrv:snippets-changed', onChanged)
+  }, [])
+
   React.useEffect(() => {
     const onOpen = (e) => {
       const p = e?.detail?.path
@@ -851,6 +884,24 @@ export function EditorView(props) {
         if (!path) { setStatus('无活动文件'); return }
         menuHandlersRef.current?.openInExplorer?.(path)
       }],
+      // 代码片段：配置（选择器）与插入（当前语言条目）；选区引用（Ctrl+U）。
+      // 打开前先关命令栏：命令栏是「执行一条命令」的一次性入口，执行完即关，
+      // 否则会残留一个已打开（可能被浮窗遮住）的命令栏，使后续 Ctrl+Shift+P 看似失效。
+      ['edrv.command.configureSnippets', () => { closeCommandPalette(); setSnippetPicker('configure') }],
+      ['edrv.command.insertSnippet', () => { closeCommandPalette(); setSnippetPicker('insert') }],
+      ['edrv.command.addSelectionRef', () => {
+        const ed = editorRef.current
+        const sel = ed?.getSelection?.()
+        const path = activeRef.current
+        if (!path) { setStatus('无活动文件'); return }
+        if (!sel || (sel.startLineNumber === sel.endLineNumber && sel.startColumn === sel.endColumn)) {
+          setStatus('请先选中内容再添加引用')
+          return
+        }
+        const range = { startLine: sel.startLineNumber, endLine: sel.endLineNumber }
+        if (!addToConversation) { setStatus('添加到对话不可用'); return }
+        addToConversation.appendReference(sessionId, path, range).then((o) => setStatus(statusOfAdd(o, '已添加选中内容为引用')))
+      }],
     ]
     const byName = new Map(handlers)
     const onCommand = (event) => {
@@ -942,6 +993,8 @@ export function EditorView(props) {
       setMonaco(m)
       // AI 内联补全 provider 注册 + 开关初始化（幂等）
       setupAiInline(m)
+      // 代码片段补全 provider 注册（幂等；条目按会话工作区懒加载）
+      setupSnippets(m)
     }).catch((e) => {
       if (alive) {
         setMonacoErr(String(e?.message ?? e))
@@ -1017,6 +1070,8 @@ export function EditorView(props) {
         setDirtyMap((d) => Object.assign({}, d, { [active]: false }))
         refreshRecords()
         emitRefresh()
+        // 片段配置文件保存后失效补全缓存（下次补全即读到新片段）
+        if (/\.code-snippets$/i.test(active)) window.dispatchEvent(new CustomEvent('edrv:snippets-changed'))
       } else { setStatus('保存失败'); setError(res?.error ? String(res.error) : '保存失败') }
     }).catch((e) => { setStatus('保存失败'); setError('保存异常:' + String(e)) })
   }
@@ -1563,6 +1618,26 @@ export function EditorView(props) {
   // 供 Monaco 原生右键菜单 addAction 读取的最新动作闭包（空依赖回调不随渲染重建）
   menuHandlersRef.current = { addRefToChat, openInExplorer }
 
+  /**
+   * 在光标处按片段语法展开插入（Monaco 原生 snippet 控制器解析 ${1:占位} 与 $TM_* 变量）。
+   * @author ddj 2026年09月10号
+   * @param entry 片段条目
+   */
+  const insertSnippetAtCursor = (entry) => {
+    const ed = editorRef.current
+    if (!ed || !entry) { setStatus('无活动编辑器'); return }
+    try {
+      ed.focus()
+      const controller = ed.getContribution?.('snippetController2')
+      if (controller?.insert) controller.insert(String(entry.body ?? ''))
+      else ed.executeEdits('edrv-snippet', [{ range: ed.getSelection(), text: String(entry.body ?? '') }])
+      setStatus('已插入代码片段：' + (entry.prefix || entry.key))
+    } catch (error) {
+      setStatus('插入代码片段失败')
+      setError('插入代码片段失败：' + String(error))
+    }
+  }
+
   const openFile = (path, focusDiff) => {
     if (!path) return
     recordNav()
@@ -1847,6 +1922,23 @@ export function EditorView(props) {
         React.createElement('button', { className: 'edrv-ctxmenu-item edrv-ctxmenu-danger', onClick: () => { closeTab(tabMenu.path); dismissMenus() } }, '关闭标签页'))
     : null
 
+  // 代码片段浮层（命令栏「代码片段：配置代码片段」/「插入代码片段」）：portal 到 body，随会话注入 cwd/语言
+  const snippetPickerEl = snippetPicker
+    ? React.createElement(SnippetsPicker, {
+        mode: snippetPicker,
+        sessionId,
+        cwd: cwd ?? null,
+        // 片段文件本身的语言要按 `<语言>.code-snippets` 命名约定推导（不能用 langOf：
+        // 那会把 .code-snippets 当成 json 源文件，默认名会错成 json.code-snippets）
+        language: active ? snippetLanguageOf(active) : '',
+        languages: snippetLanguageIds(monacoRef.current),
+        // 显式给 line=1：走 openFileAt 的直接定位分支（并清掉 pendingFocus，不残留跳转意图）
+        onOpenFile: (absPath) => { openFileAt(absPath, 1); setStatus('已打开代码片段文件') },
+        onInsert: insertSnippetAtCursor,
+        onClose: () => setSnippetPicker(null),
+      })
+    : null
+
   const sidebarPanels = props.sidebarPanels
   const sidebarCtx = {
     sessionId,
@@ -1921,11 +2013,13 @@ export function EditorView(props) {
         editorRow,
         menuBackdrop,
         tabMenuEl,
-        paletteEl)
+        paletteEl,
+        snippetPickerEl)
     : React.createElement('div', { ref: viewRootRef, 'data-edrv-view': '1', style: Object.assign({}, baseStyle, { height: 'var(--edrv-editor-height, 100%)', maxHeight: 'var(--edrv-editor-height, 100%)' }) },
         editorRow,
         menuBackdrop,
         tabMenuEl,
-        paletteEl)
+        paletteEl,
+        snippetPickerEl)
   return rootEl
 }

@@ -24,7 +24,16 @@ describe('keybindings shared defaults', () => {
       'edrv.showCommands': 'Ctrl+Shift+P|F1',
       'edrv.nextEditorRow': 'Ctrl+Alt+ArrowDown',
       'edrv.prevEditorRow': 'Ctrl+Alt+ArrowUp',
+      'edrv.addSelectionRef': 'Ctrl+U',
     })
+  })
+
+  it('添加选中内容为引用（Ctrl+U）可解析命中，Ctrl+Shift+U 不误命中', () => {
+    keybindingsApply({})
+    expect(chordOf('edrv.addSelectionRef')).toBe('Ctrl+U')
+    expect(matchEvent({ ctrlKey: true, key: 'u' }, bindingsOf('edrv.addSelectionRef'))).toBe(true)
+    expect(matchEvent({ ctrlKey: true, shiftKey: true, key: 'U' }, bindingsOf('edrv.addSelectionRef'))).toBe(false)
+    expect(matchEvent({ ctrlKey: true, key: 'S' }, bindingsOf('edrv.addSelectionRef'))).toBe(false)
   })
 
   it('命令栏键位（Ctrl+Shift+P / F1）可解析并命中，且不与既有键位冲突', () => {

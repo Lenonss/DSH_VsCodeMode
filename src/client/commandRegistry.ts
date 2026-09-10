@@ -21,6 +21,8 @@ export interface CommandRegistry {
   list(): CommandDef[]
   /** 可用命令（available 缺省视为可用）。 */
   available(): CommandDef[]
+  /** 命令是否已注册且当前可用（未注册返回 false；判定异常按不可用处理）。 */
+  isAvailable(id: string): boolean
   /** 命令栏过滤（先按可用性过滤，再按相关度排序）。 */
   match(query: string): CommandDef[]
   /** 执行命令；不可用/未注册/抛异常统一返回 false（不抛出）。 */
@@ -127,6 +129,10 @@ export function createCommandRegistry(): CommandRegistry {
     get: (id) => entries.get(id),
     list,
     available,
+    isAvailable: (id) => {
+      const command = entries.get(id)
+      return command !== undefined && isAvailable(command)
+    },
     match: (query) => filterCommands(available(), query),
     run(id: string): boolean {
       const command = entries.get(id)

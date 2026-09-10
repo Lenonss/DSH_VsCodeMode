@@ -31,6 +31,7 @@ import type { ContentSearcher } from './search/content.js'
 import { newContentSearcher } from './search/content.js'
 import { restoreFile, revertCall, revertHunk } from './revert.js'
 import { rulesList, rulesRead, rulesRemove, rulesSave, rulesToggle } from './rules.js'
+import { isSnippetFilePath, snippetsEntries, snippetsList, snippetsRead, snippetsRemove, snippetsSave } from './snippets.js'
 import { listMcp, refreshMcp, removeMcp, saveMcp, toggleMcp } from './mcp.js'
 import { listProjects, projectRefresh, projectRemove, projectSave, projectToggle } from './mcpProject.js'
 import { normalizeFileOpenTool, FILE_OPEN_DEFAULT, FILE_OPEN_SETTINGS_NS } from './fileOpenSettings.js'
@@ -84,6 +85,24 @@ async function requireSession(ctx: Ctx, sessionId: string | undefined): Promise<
   const cwd = cwdOf(session)
   if (!cwd) return { err: '会话无工作区' }
   return { session, cwd }
+}
+
+/** 片段文件保存时的沙箱策略：用户显式 GUI 写操作，放开到 danger-full-access（镜像 rules.fullPolicy）。 */
+function snippetPolicy(ctx: Ctx): unknown {
+  const svc = ctx.get('sandboxPolicy')
+  if (!svc || typeof svc.resolve !== 'function') return undefined
+  return svc.resolve({ mode: 'danger-full-access' })
+}
+
+/**
+ * 片段文件路径解析：命中全局片段目录（~/.dsh/snippets）返回归一化绝对路径，否则 null。
+ * 全局片段位于工作区之外，edrv.read / edrv.save 需绕开 resolveTarget 的 cwd 语义直读直写。
+ * @author ddj 2026年09月10号
+ * @param path 客户端请求路径（绝对路径）
+ * @returns 归一化后的绝对路径或 null
+ */
+function snippetTargetOf(path: string): string | null {
+  return isSnippetFilePath(path) ? path.replace(/\\/g, '/') : null
 }
 
 /**
@@ -258,6 +277,16 @@ export function buildHandlers(
       return { ok: true, results }
     },
     'edrv.read': async (args) => {
+      // 全局片段文件（~/.dsh/snippets/*.code-snippets）在工作区之外：直读，不走会话 cwd 解析
+      const snippetTarget = snippetTargetOf(args.path)
+      if (snippetTarget && args.encoding !== 'base64') {
+        try {
+          const content = await readFile(snippetTarget, 'utf8')
+          return { ok: true, content, size: content.length }
+        } catch (error) {
+          return { ok: false, error: '读取片段文件失败：' + String(error), resolvedPath: snippetTarget }
+        }
+      }
       const sc = await requireSession(ctx, args.sessionId)
       if ('err' in sc) return { ok: false, error: sc.err }
       const fs = ctx.get('fs')
@@ -309,6 +338,16 @@ export function buildHandlers(
       }
     },
     'edrv.save': async (args) => {
+      // 全局片段文件：直写（工作区外），且不进差异审查（片段变更不是 agent 编辑产物）
+      const snippetTarget = snippetTargetOf(args.path)
+      if (snippetTarget) {
+        try {
+          await writeFile(snippetTarget, args.content, 'utf8')
+          return { ok: true }
+        } catch (error) {
+          return { ok: false, error: '保存片段文件失败：' + String(error) }
+        }
+      }
       const sc = await requireSession(ctx, args.sessionId)
       if ('err' in sc) return { ok: false, error: sc.err }
       const fs = ctx.get('fs')
@@ -768,6 +807,45 @@ export function buildHandlers(
         return { ok: true, rule: await rulesToggle(ctx, args, args.enabled === true) }
       } catch (error) {
         return { ok: false, error: '切换规则失败：' + String(error) }
+      }
+    },
+    'snippets.list': async () => {
+      try {
+        return { ok: true, ...(await snippetsList(ctx)) }
+      } catch (error) {
+        return { ok: false, error: '读取代码片段失败：' + String(error) }
+      }
+    },
+    'snippets.read': async (args) => {
+      try {
+        return { ok: true, content: await snippetsRead(ctx, args) }
+      } catch (error) {
+        return { ok: false, error: '读取代码片段失败：' + String(error) }
+      }
+    },
+    'snippets.save': async (args) => {
+      try {
+        return { ok: true, file: await snippetsSave(ctx, args) }
+      } catch (error) {
+        return { ok: false, error: '保存代码片段失败：' + String(error) }
+      }
+    },
+    'snippets.remove': async (args) => {
+      try {
+        await snippetsRemove(ctx, args)
+        return { ok: true }
+      } catch (error) {
+        return { ok: false, error: '删除代码片段失败：' + String(error) }
+      }
+    },
+    'snippets.entries': async (args) => {
+      try {
+        // 当前会话工作区用于叠加项目片段；会话缺失时仅返回全局片段（不报错，补全仍可用）
+        const sc = await requireSession(ctx, args.sessionId)
+        const cwd = 'err' in sc ? undefined : sc.cwd
+        return { ok: true, ...(await snippetsEntries(ctx, cwd)) }
+      } catch (error) {
+        return { ok: false, error: '读取代码片段条目失败：' + String(error) }
       }
     },
   }

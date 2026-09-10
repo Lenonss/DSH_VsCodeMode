@@ -59,6 +59,8 @@ export function createCommandBridge(options: CommandBridgeOptions = {}): Command
   const onKey = (event: KeyboardEvent): void => {
     for (const command of dispatched) {
       if (!matchEvent(event, bindingsOf(command.id))) continue
+      // 可用性前置：命令不可用时既不执行也不吞键（否则无编辑器时 Ctrl+U 会被吃掉）
+      if (!registry.isAvailable(command.id)) continue
       event.preventDefault()
       event.stopPropagation()
       registry.run(command.id)

@@ -23,6 +23,8 @@ export const KEYBINDING_DEFAULTS: Record<string, string> = {
   'edrv.showCommands': 'Ctrl+Shift+P|F1',
   'edrv.nextEditorRow': 'Ctrl+Alt+ArrowDown',
   'edrv.prevEditorRow': 'Ctrl+Alt+ArrowUp',
+  // 添加选中内容为引用：把当前选区追加进对话输入框（Ctrl+U，VS Code 同款）
+  'edrv.addSelectionRef': 'Ctrl+U',
 }
 
 /**

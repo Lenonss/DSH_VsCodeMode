@@ -43,6 +43,13 @@ React 状态**：编辑器未挂载时装配、卸载后依然安全。
   （因此不受「官方右侧 Sidebar / better-sidebar / 中央页签」三种形态的几何限制）；
   宿主由 `commandPaletteStore` 的 `claimPaletteHost()` 单实例认领，
   同时挂载多个宿主时只有一个真正渲染。
+- 宿主认领契约（v0.3.0 修正）：`claimPaletteHost()` **返回令牌本身**，调用方须原样持有并在卸载时
+  传回 `releasePaletteHost(token)`；释放成功后递增 `paletteHostRev` 并通知订阅者，
+  其余实例据此**重试认领**（宿主更替后自愈）。
+  ⚠️ 旧实现在 `useState` 初始化器里 `claimPaletteHost() ? {} : null` 自造令牌，与 store 内部对象
+  身份不同 → 释放校验恒失败 → `hostToken` 永久泄漏 → 之后**任何**实例都渲染 `null`，
+  表现为 `Ctrl+Shift+P`「完全没有反应」且永不恢复（回归测试 `tests/paletteHost.test.ts`）。
+  认领必须写在 effect 中（render 期副作用在 StrictMode 双调用下会误判失败）。
 - 样式：`styles/editor.css` 的 `.edrv-palette*`（走 `--dsw-*` 令牌，自动跟随 DSH 主题）。
   ⚠️ 客户端 CSS 是构建期内联的 `<style data-plugin-css>`，**改样式必须整页刷新**。
 

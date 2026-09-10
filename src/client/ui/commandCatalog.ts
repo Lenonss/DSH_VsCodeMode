@@ -77,6 +77,20 @@ function prevEditorRowDef(): CommandDef {
 }
 
 /**
+ * 添加选中内容为引用（把当前选区追加进对话输入框；无选区则状态栏提示）。
+ * 有活动编辑器模型才可用，保证对话框内按 Ctrl+U 不被本命令吞掉。
+ * @author ddj 2026年09月10号
+ * @returns 命令定义
+ */
+function addSelectionRefDef(): CommandDef {
+  return {
+    id: 'edrv.addSelectionRef', label: '添加选中内容为引用', category: '编辑', order: 10,
+    keybinding: 'Ctrl+U', available: needsModel,
+    run: () => emit('addSelectionRef'),
+  }
+}
+
+/**
  * 编辑器内置指令目录（顺序 = 快捷键设置页展示顺序）。
  * 前置 8 条的键位由 EditorView / QuickOpen 自行 capture 监听（历史实现），
  * 故不进 BRIDGE_COMMANDS，避免同一按键双执行。
@@ -143,6 +157,16 @@ export const EDITOR_COMMANDS: readonly CommandDef[] = [
     available: needsModel,
     run: () => emit('openInExplorer'),
   },
+  {
+    id: 'edrv.configureSnippets', label: '代码片段：配置代码片段', category: '代码片段', order: 10,
+    available: alwaysAvailable,
+    run: () => emit('configureSnippets'),
+  },
+  {
+    id: 'edrv.insertSnippet', label: '插入代码片段', category: '代码片段', order: 20,
+    available: needsModel,
+    run: () => emit('insertSnippet'),
+  },
 ]
 
 /**
@@ -153,6 +177,7 @@ export const EDITOR_COMMANDS: readonly CommandDef[] = [
 export const BRIDGE_COMMANDS: readonly CommandDef[] = [
   nextEditorRowDef(),
   prevEditorRowDef(),
+  addSelectionRefDef(),
 ]
 
 /**

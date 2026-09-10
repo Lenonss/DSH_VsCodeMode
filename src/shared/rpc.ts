@@ -16,6 +16,7 @@ import type { MpcConfig, MpcProject, MpcProjectSaveInput, MpcServer } from './mc
 import type { CompatReport, DevFormInfo } from './compat.js'
 import type { ShellIntegrationStatus, UnityListPayload, UnityProjectEntry } from './integration.js'
 import type { RuleInfo, RuleProject, RuleRefInput, RuleSaveInput } from './rules.js'
+import type { SnippetEntry, SnippetInfo, SnippetProject, SnippetRefInput, SnippetSaveInput } from './snippets.js'
 import type { LspEnvInstallState, LspExtInfo, LspExtUpdate, LspHover, LspLocation, LspMarketItem, LspPosition, LspSemanticTokens, LspServerStatus, LspSymbol } from './lsp.js'
 import type { AiConfigPatch, AiConfigView, AiDirectoryView, AiInlineRequest, AiInlineResult } from './ai.js'
 
@@ -236,6 +237,11 @@ export interface RpcRequestMap {
   'rules.save': RuleSaveInput
   'rules.remove': RuleRefInput
   'rules.toggle': RuleRefInput & { enabled: boolean }
+  'snippets.list': {}
+  'snippets.read': SnippetRefInput
+  'snippets.save': SnippetSaveInput
+  'snippets.remove': SnippetRefInput
+  'snippets.entries': { sessionId?: string }
 }
 
 export type RpcMethod = keyof RpcRequestMap
@@ -324,6 +330,11 @@ export interface RpcOkMap {
   'rules.save': { rule: RuleInfo }
   'rules.remove': object
   'rules.toggle': { rule: RuleInfo }
+  'snippets.list': { user: SnippetInfo[]; projects: SnippetProject[] }
+  'snippets.read': { content: string }
+  'snippets.save': { file: SnippetInfo }
+  'snippets.remove': object
+  'snippets.entries': { entries: SnippetEntry[] }
 }
 
 /** 统一响应：{ok:true, ...payload} 或 {ok:false, error}。 */

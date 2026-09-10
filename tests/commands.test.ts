@@ -41,7 +41,8 @@ class FakeTarget extends EventTarget {
   }
 }
 
-/** 键盘事件替身（node 环境无 KeyboardEvent；桥只读 key/修饰键）。 */
+/** 键盘事件替身（node 环境无 KeyboardEvent；桥只读 key/修饰键）。
+ *  cancelable=true 与真实 keydown 一致——否则 preventDefault() 无效，无法断言「是否吞键」。 */
 class FakeKey extends Event {
   key: string
   ctrlKey: boolean
@@ -50,7 +51,7 @@ class FakeKey extends Event {
   metaKey: boolean
 
   constructor(key: string, mods: { ctrl?: boolean; shift?: boolean; alt?: boolean; meta?: boolean } = {}) {
-    super('keydown')
+    super('keydown', { cancelable: true })
     this.key = key
     this.ctrlKey = mods.ctrl === true
     this.shiftKey = mods.shift === true
@@ -332,10 +333,41 @@ describe('createCommandBridge 装配与键位派发', () => {
     disposer()
     bridge.dispose()
   })
+
+  it('命令不可用时不吞键（回归：无编辑器时 Ctrl+U 须放行给对话输入框）', () => {
+    installWindow()
+    // 未安装 document 替身 → 编辑器态指令（edrv.addSelectionRef）判定为不可用
+    const target = new FakeTarget()
+    const bridge = createCommandBridge({ target })
+    expect(bridge.registry.has('edrv.addSelectionRef')).toBe(true)
+    expect(bridge.registry.isAvailable('edrv.addSelectionRef')).toBe(false)
+    const seen: string[] = []
+    const late = (event: Event) => seen.push(event.type)
+    // 桥走 capture 阶段：非 capture 监听代表下游（浏览器默认/页面其它监听）仍能收到
+    target.addEventListener('keydown', late)
+    const event = new FakeKey('u', { ctrl: true })
+    target.dispatchEvent(event)
+    expect(event.defaultPrevented).toBe(false)
+    expect(seen).toEqual(['keydown'])
+    bridge.dispose()
+  })
+
+  it('命令可用时正常吞键并派发（Ctrl+U → addSelectionRef）', () => {
+    const win = installWindow()
+    installDocument() // 模拟编辑器已挂载
+    const target = new FakeTarget()
+    const bridge = createCommandBridge({ target })
+    expect(bridge.registry.isAvailable('edrv.addSelectionRef')).toBe(true)
+    const event = new FakeKey('u', { ctrl: true })
+    target.dispatchEvent(event)
+    expect(event.defaultPrevented).toBe(true)
+    expect(win.sent.map((item) => item.type)).toEqual(['edrv.command.addSelectionRef'])
+    bridge.dispose()
+  })
 })
 
 describe('commandPaletteStore 开关与宿主认领', () => {
-  it('open/close 切换并通知订阅者（重复 open 不重复通知）', () => {
+  it('open/close 切换并通知订阅者（重复 open 也必须通知：快捷键不得静默失效）', () => {
     closeCommandPalette()
     const listener = vi.fn()
     const unsubscribe = subscribePalette(listener)
@@ -343,14 +375,15 @@ describe('commandPaletteStore 开关与宿主认领', () => {
     openCommandPalette('test')
     expect(isPaletteOpen()).toBe(true)
     expect(listener).toHaveBeenCalledTimes(1)
+    // 回归：已打开时的重复唤起曾直接 return（不通知）→ 命令栏被浮层遮住时按 Ctrl+Shift+P 毫无反应
     openCommandPalette('test-again')
-    expect(listener).toHaveBeenCalledTimes(1)
+    expect(listener).toHaveBeenCalledTimes(2)
     closeCommandPalette()
     expect(isPaletteOpen()).toBe(false)
-    expect(listener).toHaveBeenCalledTimes(2)
+    expect(listener).toHaveBeenCalledTimes(3)
     unsubscribe()
     openCommandPalette('after-unsubscribe')
-    expect(listener).toHaveBeenCalledTimes(2)
+    expect(listener).toHaveBeenCalledTimes(3)
     closeCommandPalette()
   })
 

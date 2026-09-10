@@ -369,9 +369,15 @@
 [data-edrv-view] .edrv-rules-save { height: 24px; padding: 0 14px; border: none; border-radius: 6px; background: var(--dsw-alias-brand-primary, #0f9d58); color: var(--dsw-alias-label-primary-inverted, #fff); font-size: 12px; cursor: pointer; }
 [data-edrv-view] .edrv-rules-save:disabled { opacity: .5; cursor: default; }
 
-/* 命令栏（Ctrl+Shift+P / F1）：body 级 portal 浮层，故不依赖编辑区几何 */
+/* 命令栏（Ctrl+Shift+P / F1）：body 级 portal 浮层，故不依赖编辑区几何。
+   ⚠️ 浮层 z-index 阶梯（自下而上；改动务必保持顺序，tests/overlayZOrder.test.ts 守约）：
+     编辑器内浮层 60(.edrv-search-pop) / 71(.edrv-ctxmenu)
+     < 190 命令栏遮罩 < 200 命令栏
+     < 195 片段浮窗遮罩 < 197 片段二级弹窗遮罩
+   命令栏必须**高于**片段浮窗：曾因片段遮罩(192) 压过命令栏(191)，导致片段浮窗打开时
+   命令栏被整体盖住，按 Ctrl+Shift+P 因「已打开即早退」而毫无反应（表现为快捷键失效）。 */
 [data-edrv-view] .edrv-palette-mask { position: fixed; inset: 0; z-index: 190; background: rgba(0, 0, 0, .28); }
-[data-edrv-view] .edrv-palette { position: fixed; top: 12vh; left: 50%; transform: translateX(-50%); z-index: 191; width: min(580px, calc(100vw - 32px)); max-height: 64vh; display: flex; flex-direction: column; border-radius: 10px; background: var(--dsw-alias-bg-overlay, #ffffff); border: 1px solid var(--dsw-alias-border-l2, #cbd2d9); box-shadow: 0 12px 34px rgba(31, 41, 51, .24); overflow: hidden; }
+[data-edrv-view] .edrv-palette { position: fixed; top: 12vh; left: 50%; transform: translateX(-50%); z-index: 200; width: min(580px, calc(100vw - 32px)); max-height: 64vh; display: flex; flex-direction: column; border-radius: 10px; background: var(--dsw-alias-bg-overlay, #ffffff); border: 1px solid var(--dsw-alias-border-l2, #cbd2d9); box-shadow: 0 12px 34px rgba(31, 41, 51, .24); overflow: hidden; }
 [data-edrv-view] .edrv-palette-input { height: 38px; flex: 0 0 auto; padding: 0 12px; border: none; border-bottom: 1px solid var(--dsw-alias-border-l1, #e0e6e8); background: transparent; color: var(--dsw-alias-label-primary, #1f2933); font-size: 13px; outline: none; }
 [data-edrv-view] .edrv-palette-list { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 4px; }
 [data-edrv-view] .edrv-palette-row { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 6px; font-size: 12px; color: var(--dsw-alias-label-primary, #1f2933); cursor: pointer; }
@@ -381,6 +387,37 @@
 [data-edrv-view] .edrv-palette-key { flex: 0 0 auto; font-family: var(--ds-font-family-code, ui-monospace, monospace); font-size: 10px; padding: 1px 6px; border: 1px solid var(--dsw-alias-border-l1, #e0e6e8); border-radius: 5px; background: var(--dsw-alias-bg-layer-1, #f7f9fa); color: var(--dsw-alias-label-secondary, #52606d); }
 [data-edrv-view] .edrv-palette-empty { padding: 14px 10px; font-size: 12px; color: var(--dsw-alias-label-tertiary, #7b8794); text-align: center; }
 [data-edrv-view] .edrv-palette-notice { flex: 0 0 auto; padding: 6px 10px; border-top: 1px solid var(--dsw-alias-border-l1, #e0e6e8); font-size: 11px; color: var(--dsw-alias-state-warn-primary, #b7791f); }
+
+/* 代码片段选择器（配置 / 插入）：居中浮窗 + 新建二级弹窗。
+   卡片复用 mcp.css 的 .vsm-mcp-dialog（与「添加 MCP」「工作区选择」同一视觉语言），
+   此处只补遮罩、尺寸与列表布局。⚠️ 根节点须带 data-edrv-view，否则这些规则全部失配。 */
+[data-edrv-view] .edrv-snip-mask { position: fixed; inset: 0; z-index: 195; display: flex; align-items: center; justify-content: center; padding: 24px; box-sizing: border-box; background: var(--dsw-alias-bg-mask-drop, rgba(0, 0, 0, .55)); }
+/* 二级弹窗叠在一级浮窗之上（仍在命令栏之下，见上方阶梯说明） */
+[data-edrv-view] .edrv-snip-mask-top { z-index: 197; }
+[data-edrv-view] .edrv-snip-dialog { display: flex; flex-direction: column; overflow: hidden; width: min(620px, calc(100vw - 48px)); }
+[data-edrv-view] .edrv-snip-hint { margin: 0 0 12px; font-size: 12px; line-height: 1.6; color: var(--dsw-alias-label-tertiary, #9aa5b1); }
+[data-edrv-view] .edrv-snip-list { display: flex; flex-direction: column; gap: 1px; min-height: 0; max-height: 46vh; overflow: auto; }
+[data-edrv-view] .edrv-snip-group { padding: 12px 2px 4px; font-size: 11px; font-weight: 600; color: var(--dsw-alias-label-secondary, #aaa); }
+[data-edrv-view] .edrv-snip-row { display: flex; align-items: center; gap: 4px; width: 100%; box-sizing: border-box; padding: 2px; border: none; border-radius: 8px; background: transparent; text-align: left; color: var(--dsw-alias-label-primary, #e6e6e6); font: inherit; }
+[data-edrv-view] .edrv-snip-row:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(255, 255, 255, .06)); }
+[data-edrv-view] button.edrv-snip-row { cursor: pointer; }
+[data-edrv-view] .edrv-snip-row-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; border: none; border-radius: 6px; background: transparent; text-align: left; cursor: pointer; color: inherit; font: inherit; }
+[data-edrv-view] .edrv-snip-label { font-size: 13px; font-weight: 600; color: var(--dsw-alias-label-primary, #e6e6e6); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+[data-edrv-view] .edrv-snip-desc { font-size: 11px; color: var(--dsw-alias-label-tertiary, #9aa5b1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+[data-edrv-view] .edrv-snip-src { flex: 0 0 auto; padding-right: 6px; font-size: 11px; color: var(--dsw-alias-label-tertiary, #9aa5b1); }
+[data-edrv-view] .edrv-snip-warn { flex: 0 0 auto; font-size: 11px; padding: 2px 7px; border-radius: 999px; background: var(--dsw-alias-state-warn-tertiary, rgba(229, 185, 63, .16)); color: var(--dsw-alias-state-warn-primary, #e5b93f); white-space: nowrap; }
+[data-edrv-view] .edrv-snip-act { flex: 0 0 auto; width: 26px; height: 26px; border: none; border-radius: 6px; background: transparent; color: var(--dsw-alias-label-tertiary, #9aa5b1); font-size: 13px; line-height: 1; cursor: pointer; }
+[data-edrv-view] .edrv-snip-act:hover { background: var(--dsw-alias-interactive-bg-hover-danger, rgba(217, 83, 79, .16)); color: var(--dsw-alias-state-error-primary, #f07878); }
+[data-edrv-view] .edrv-snip-empty { padding: 12px 4px; font-size: 12px; color: var(--dsw-alias-label-tertiary, #9aa5b1); line-height: 1.6; }
+/* 当前文件语言提示条（片段按语言绑定，明确告知生效范围） */
+[data-edrv-view] .edrv-snip-langbar { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; margin: 0 0 10px; padding: 8px 10px; border-radius: 6px; background: var(--dsw-alias-bg-layer-1, #2b2b2b); font-size: 12px; color: var(--dsw-alias-label-secondary, #aaa); }
+[data-edrv-view] .edrv-snip-langbar b { color: var(--dsw-alias-label-primary, #e6e6e6); }
+/* 二级弹窗的动作按钮（原生 .vsm-mcp-dialog-actions 已提供排版与按钮样式） */
+[data-edrv-view] .edrv-snip-dialog .vsm-mcp-dialog-actions { flex-wrap: wrap; }
+/* 删除图标按钮：.vsm-danger 的规则全部限定在 .vsm-mcp-actions button 之下，裸用无样式，此处补自有类 */
+[data-edrv-view] .edrv-snip-act.edrv-snip-danger:hover { background: var(--dsw-alias-interactive-bg-hover-danger, rgba(217, 83, 79, .16)); color: var(--dsw-alias-state-error-primary, #f07878); }
+/* 浮窗内的原生空态（.vsm-mcp-empty 默认为整页尺寸）压缩为对话框尺寸 */
+[data-edrv-view] .edrv-snip-dialog .vsm-mcp-empty { padding: 26px 16px; border: 0; }
 
 
 

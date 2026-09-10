@@ -65,6 +65,8 @@ export const LANG_BY_EXT = {
   lua51: 'lua', luac: 'lua',
   gitattributes: 'ini', editorconfig: 'ini', env: 'ini', properties: 'ini',
   json5: 'jsonc', log: 'plaintext', txt: 'plaintext',
+  // 代码片段文件按 JSON 高亮（VS Code 同款：.code-snippets 是带注释的 JSON）
+  'code-snippets': 'json',
 }
 
 /**
@@ -79,6 +81,28 @@ export function langOf(path) {
   const dot = base.lastIndexOf('.')
   if (dot <= 0) return 'plaintext'
   return LANG_BY_EXT[base.slice(dot + 1).toLowerCase()] ?? 'plaintext'
+}
+
+/** 片段文件后缀（判断「文件自身是片段文件」而非普通源码）。 */
+const SNIPPET_FILE_SUFFIX = '.code-snippets'
+
+/**
+ * 片段文件 → 它绑定的语言 id（VS Code 文件名约定 `<language>.code-snippets`）。
+ *
+ * 为什么不能直接用 {@link langOf}：`.code-snippets` 本身在 LANG_BY_EXT 里映射为 json
+ * （编辑片段文件时要按 JSON 高亮），于是 langOf('lua.code-snippets') 会得到 'json' 而不是
+ * 'lua' —— 曾导致「新建」默认文件名被算成 `json.code-snippets`。故这里按片段命名约定
+ * 单独解析：去掉 `.code-snippets` 后缀取语言前缀。
+ *
+ * @author ddj 2026年09月10号
+ * @param path 片段文件路径
+ * @returns 语言 id（`global.code-snippets` / 无法识别 → 空串 = 全语言）
+ */
+export function snippetLanguageOf(path) {
+  const base = String(path || '').split(/[\\/]/).pop() || ''
+  if (!base.toLowerCase().endsWith(SNIPPET_FILE_SUFFIX)) return langOf(path)
+  const lang = base.slice(0, -SNIPPET_FILE_SUFFIX.length).toLowerCase()
+  return lang === 'global' ? '' : lang
 }
 
 /**

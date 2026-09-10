@@ -14,8 +14,8 @@ import { createCommandRegistry } from '../commandRegistry.js'
 import type { CommandRegistry } from '../commandRegistry.js'
 import { chordOf } from '../keybindings.js'
 import {
-  claimPaletteHost, closeCommandPalette, isPaletteOpen, registryRef, releasePaletteHost,
-  runPaletteCommand, subscribePalette,
+  claimPaletteHost, closeCommandPalette, isPaletteOpen, paletteHostRev, paletteOpenSeq, registryRef,
+  releasePaletteHost, runPaletteCommand, subscribePalette,
 } from '../commandPaletteStore.js'
 import type { CommandDef } from './commandCatalog.js'
 
@@ -64,23 +64,59 @@ function rowsOf(registry: CommandRegistry, query: string): PaletteRow[] {
  */
 export function CommandPalette(): React.ReactElement | null {
   const open = React.useSyncExternalStore(subscribePalette, isPaletteOpen)
+  // 唤起序号：已打开时每次快捷键再触发都会递增 → 重新聚焦输入框（否则看似"没反应"）
+  const openSeq = React.useSyncExternalStore(subscribePalette, paletteOpenSeq)
+  // 宿主令牌版本：宿主释放时递增，驱动本实例重试认领（避免宿主更替后无人渲染浮层）
+  const hostRev = React.useSyncExternalStore(subscribePalette, paletteHostRev)
   const registry = useRegistry()
-  const [token] = React.useState(() => (claimPaletteHost() ? {} : null))
+  const [token, setToken] = React.useState<object | null>(null)
   const [query, setQuery] = React.useState('')
   const [selected, setSelected] = React.useState(0)
   const [notice, setNotice] = React.useState('')
   const inputRef = React.useRef<HTMLInputElement | null>(null)
+  const tokenRef = React.useRef<object | null>(null)
   const host = token !== null
 
-  React.useEffect(() => () => releasePaletteHost(token), [token])
+  /**
+   * 认领宿主：放在 effect（不在 render 期做副作用 —— StrictMode 双调用会让首次认领
+   * 被判定失败而永久无人渲染）。hostRev 变化（有实例释放了宿主）时重试认领。
+   *
+   * ⚠️ 此处**不**做 cleanup 释放：releasePaletteHost 会通知订阅者（hostRev 变化），
+   * 若在依赖 hostRev 的 effect 里释放，会「释放→通知→重跑→再释放」自激循环。
+   * 释放统一交给下面的「仅卸载时」effect。
+   */
   React.useEffect(() => {
-    if (!open) return undefined
+    if (tokenRef.current) return
+    const claimed = claimPaletteHost()
+    if (!claimed) return
+    tokenRef.current = claimed
+    setToken(claimed)
+  }, [hostRev])
+
+  /** 仅卸载时释放宿主；释放后 store 通知其余实例接管（自愈）。 */
+  React.useEffect(() => () => {
+    releasePaletteHost(tokenRef.current)
+    tokenRef.current = null
+  }, [])
+  // 新开（open false→true）时重置查询/选择/提示
+  React.useEffect(() => {
+    if (!open) return
     setQuery('')
     setSelected(0)
     setNotice('')
-    const timer = setTimeout(() => inputRef.current?.focus(), 0)
-    return () => clearTimeout(timer)
   }, [open])
+  // 每次唤起（含已打开时的重复唤起 openSeq 变化）重新聚焦输入框 ——
+  // 否则命令栏被其它浮层短暂遮挡后，快捷键再按会「看似没反应」。
+  React.useEffect(() => {
+    if (!open) return undefined
+    const timer = setTimeout(() => {
+      const input = inputRef.current
+      if (!input) return
+      input.focus()
+      input.select?.()
+    }, 0)
+    return () => clearTimeout(timer)
+  }, [open, openSeq])
 
   const rows = React.useMemo(
     () => (open && host ? rowsOf(registry, query) : []),

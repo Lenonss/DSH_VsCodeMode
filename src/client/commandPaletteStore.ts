@@ -19,8 +19,14 @@ let registryTable: CommandRegistry | null = null
 /** 命令栏是否展开。 */
 let opened = false
 
+/** 唤起序号：每次 openCommandPalette 递增（含已打开时的重复唤起），驱动重新聚焦。 */
+let openSeq = 0
+
 /** 当前真正渲染浮层的宿主令牌（null = 无宿主）。 */
 let hostToken: object | null = null
+
+/** 宿主令牌版本：每次释放认领递增，驱动其余实例重试认领（宿主更替后自愈）。 */
+let hostRev = 0
 
 /** 注入的命令执行器（commandBridge 装配时写入）。 */
 let runner: ((id: string) => boolean) | null = null
@@ -107,16 +113,38 @@ function rememberFocus(): void {
 }
 
 /**
- * 打开命令栏（已打开时为空操作；记录当前焦点供关闭后归还）。
+ * 打开命令栏（记录当前焦点供关闭后归还）。
+ *
+ * 已打开时**不是空操作**：递增 openSeq 并通知订阅者，让命令栏重新获得焦点。
+ * 事故驱动：片段浮窗遮罩曾压在命令栏之上，此时命令栏处于「已打开但看不见」状态；
+ * 旧实现 `if (opened) return` 让快捷键毫无反应（用户报「调不出来」）。
+ * 递增 seq 使每次触发都有可观测响应（重聚焦 + 重新置顶）。
  * @author ddj 2026年09月10号
  * @param reason 唤起来源（键盘/命令/外部 API）
  */
 export function openCommandPalette(reason = 'keybinding'): void {
-  if (opened) return
+  if (opened) {
+    // 已打开：仍视为一次「唤起」，驱动订阅者重新聚焦（select 重置 / 重新置顶）
+    openSeq += 1
+    openReason = reason
+    notifyPalette()
+    return
+  }
   rememberFocus()
   openReason = reason
   opened = true
+  openSeq += 1
   notifyPalette()
+}
+
+/**
+ * 命令栏唤起序号（每次 open 调用递增，含「已打开时的重复唤起」）。
+ * useSyncExternalStore 快照用它感知「重复唤起」，从而重新聚焦输入框。
+ * @author ddj 2026年09月10号
+ * @returns 当前序号
+ */
+export function paletteOpenSeq(): number {
+  return openSeq
 }
 
 /**
@@ -144,22 +172,41 @@ export function paletteReason(): string {
 }
 
 /**
- * 认领命令栏宿主（返回 true 表示由本宿主渲染浮层）。
+ * 认领命令栏宿主：成功返回**令牌本身**（调用方须原样持有并在卸载时传回），
+ * 已被他人认领时返回 null。
+ *
+ * ⚠️ 必须返回 internal 存下的同一个对象：旧实现返回 boolean、由调用方自行 `{}` 造令牌，
+ * 导致 `releasePaletteHost` 的身份校验恒不通过 → hostToken 永久泄漏 → 之后**任何**实例
+ * 都认领失败、无人渲染浮层（表现为 Ctrl+Shift+P「完全没有反应」且永不恢复）。
  * @author ddj 2026年09月10号
- * @returns 是否为当前宿主
+ * @returns 认领令牌；null 表示已有宿主
  */
-export function claimPaletteHost(): boolean {
-  if (hostToken !== null) return false
-  hostToken = {}
-  return true
+export function claimPaletteHost(): object | null {
+  if (hostToken !== null) return null
+  const token = {}
+  hostToken = token
+  return token
 }
 
 /**
  * 释放宿主认领（仅持有者可释放，卸载顺序错乱不会顶掉新宿主）。
+ * 释放成功后通知订阅者，让等待中的实例**重新尝试认领**（自愈，避免宿主更替后无人渲染）。
  * @author ddj 2026年09月10号
- * @param token 认领令牌（null 表示本宿主未认领）
+ * @param token 认领令牌（null = 本实例未认领）
  */
 export function releasePaletteHost(token: object | null): void {
   if (token === null || hostToken !== token) return
   hostToken = null
+  hostRev += 1
+  notifyPalette()
+}
+
+/**
+ * 宿主令牌版本（每次释放认领递增）。非宿主实例订阅它，在宿主更替后重试认领 ——
+ * 否则先挂载的实例卸载后无人接管，快捷键会「完全没有反应」且永不恢复。
+ * @author ddj 2026年09月10号
+ * @returns 当前版本号
+ */
+export function paletteHostRev(): number {
+  return hostRev
 }
