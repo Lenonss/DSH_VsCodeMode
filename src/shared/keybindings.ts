@@ -3,7 +3,9 @@
  * 纯数据模块：host（settings schema 默认值）与 client（执行匹配/设置页）共用。
  * 键位格式：修饰符 + 主键，`+` 连接，如 `Ctrl+Shift+F`；空串 = 未绑定；
  * `|` 连接多个候选（任一命中即触发），如 `Alt+ArrowLeft|Ctrl+Alt+-`。
- * 作者 ddj 2026年08月26号
+ * 约束：本模块被 host 与 client 两半共用，**禁止 import client 侧模块**（React/浏览器 API）。
+ * 与 client/ui/commandCatalog 的一致性由 tests/commands.test.ts 断言兜底。
+ * 作者 ddj 2026年08月26号 / 2026年09月10号
  */
 
 /** 命令 id → 默认键位（可为多候选）。命令目录以此为准，新增命令只需加一项。 */
@@ -17,6 +19,10 @@ export const KEYBINDING_DEFAULTS: Record<string, string> = {
   // 页签循环：主候选避开浏览器保留键（Ctrl+Tab / Ctrl+PgUp/PgDn 会被浏览器截获）
   'edrv.nextTab': 'Ctrl+Alt+ArrowRight|Ctrl+PageDown',
   'edrv.prevTab': 'Ctrl+Alt+ArrowLeft|Ctrl+PageUp',
+  // 命令栏（Ctrl+Shift+P 主候选；F1 为 VS Code 同款第二候选）与编辑行导航
+  'edrv.showCommands': 'Ctrl+Shift+P|F1',
+  'edrv.nextEditorRow': 'Ctrl+Alt+ArrowDown',
+  'edrv.prevEditorRow': 'Ctrl+Alt+ArrowUp',
 }
 
 /**

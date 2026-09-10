@@ -6,7 +6,6 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
 # dsh-vscode-mode 开发/发布经验集（自我更新型技能）
 
 > updated: 2026-09-10 · 维护者：ddj（AI 会话按文末协议追加，保持精炼、去重）
-
 ## 何时使用
 
 - 发布新版本（commit/push/tag/npm 相关操作）。
@@ -75,6 +74,10 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
   `monaco.editor.colorize()` 触发主题样式生成，再读 `<style>` 里 `.mtk*` 的实际颜色。
 - 2026-09-10 坑：`[data-edrv-view]` 作用域内重新定义 `--dsw-alias-*` 会让插件永久不跟随 DSH 主题
   （v0.1.63 移除）→ 想跟随官方令牌就不要在插件作用域重定义同名变量，回落值写在 `var(..., 值)` 里。
+- 2026-09-10 坑：DSH **没有** `window.dsh` 命名空间（全仓库无赋值；真实全局仅 `__ModuleLoader__`/
+  `__DSH_BOOT__`/`__edrvExtPoll` 等）→ 插件对外暴露能力**禁止**挂 `window.dsh.*`：条件式
+  `if (window.dsh) …` 是死代码、读取方恒得 undefined。改用 `window.__edrv*__` 风格自有键，
+  且**首选模块内引用直传**（全局只作镜像）——v0.2.0 命令栏空列表即此因（桥装配日志正常但浮层读不到注册表）。
 
 ## CI/测试平台陷阱（写测试前必读）
 

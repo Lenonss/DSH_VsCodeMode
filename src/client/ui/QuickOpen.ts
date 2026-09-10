@@ -49,17 +49,25 @@ export function QuickOpen(props) {
   }
 
   React.useEffect(() => {
+    const openBox = () => {
+      inputRef.current?.focus?.()
+      setOpen(true)
+    }
     const onKey = (e) => {
       if (matchEvent(e, bindingsOf('edrv.quickOpen'))) {
         e.preventDefault(); e.stopPropagation()
-        inputRef.current?.focus?.()
-        setOpen(true)
+        openBox()
       } else if (e.key === 'Escape') {
         setOpen(false); inputRef.current?.blur?.()
       }
     }
     window.addEventListener('keydown', onKey, true)
-    return () => window.removeEventListener('keydown', onKey, true)
+    // 指令系统入口（命令栏「快速打开文件」）：与键位复用同一动作
+    window.addEventListener('edrv.command.quickOpen', openBox)
+    return () => {
+      window.removeEventListener('keydown', onKey, true)
+      window.removeEventListener('edrv.command.quickOpen', openBox)
+    }
   }, [])
 
   const dirText = (p) => {

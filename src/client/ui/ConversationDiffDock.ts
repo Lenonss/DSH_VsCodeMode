@@ -11,6 +11,7 @@ import { summarize } from '../state/records.js'
 import { nextDiffPath } from '../diffDock.js'
 import { readDiffDock, subscribeDiffDock } from '../diffDockStore.js'
 import { DiffBox } from './DiffBox.js'
+import { CommandPalette } from './CommandPalette.js'
 
 const nextIndexBySession = new Map()
 
@@ -60,12 +61,17 @@ export function ConversationDiffDock(props) {
   }, content)
 
   const editorSnapshot = readDiffDock(sessionId)
+  // 命令栏浮层的兜底宿主：本 dock 是每会话常驻 slot（编辑区未挂载时仍能唤起命令栏）；
+  // 与 EditorView 同时挂载时由 commandPaletteStore 的单实例认领保证只渲染一份。
+  const palette = React.createElement(CommandPalette, { key: 'edrv-palette', sessionId })
   if (editorSnapshot) {
-    if (editorSnapshot.mode === 'editor-empty' && !editorSnapshot.fileTotal) return null
-    return renderDock(React.createElement(DiffBox, Object.assign({}, editorSnapshot, { dock: true })), sessionId)
+    if (editorSnapshot.mode === 'editor-empty' && !editorSnapshot.fileTotal) return palette
+    return React.createElement(React.Fragment, null,
+      renderDock(React.createElement(DiffBox, Object.assign({}, editorSnapshot, { dock: true })), sessionId),
+      palette)
   }
 
-  if (!sessionId || !summary?.pendingFiles?.length) return null
+  if (!sessionId || !summary?.pendingFiles?.length) return palette
 
   const paths = summary.pendingFiles.map((file) => file.path)
   const click = () => {
@@ -75,10 +81,12 @@ export function ConversationDiffDock(props) {
     if (next.path) openDiffView(next.path)
   }
 
-  return renderDock(React.createElement(DiffBox, {
-    mode: 'chat',
-    dock: true,
-    fileTotal: paths.length,
-    onOpenNextFile: click,
-  }), sessionId || 'chat')
+  return React.createElement(React.Fragment, null,
+    renderDock(React.createElement(DiffBox, {
+      mode: 'chat',
+      dock: true,
+      fileTotal: paths.length,
+      onOpenNextFile: click,
+    }), sessionId || 'chat'),
+    palette)
 }

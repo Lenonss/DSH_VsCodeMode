@@ -21,7 +21,19 @@ describe('keybindings shared defaults', () => {
       'edrv.navigateForward': 'Alt+ArrowRight|Ctrl+Shift+-',
       'edrv.nextTab': 'Ctrl+Alt+ArrowRight|Ctrl+PageDown',
       'edrv.prevTab': 'Ctrl+Alt+ArrowLeft|Ctrl+PageUp',
+      'edrv.showCommands': 'Ctrl+Shift+P|F1',
+      'edrv.nextEditorRow': 'Ctrl+Alt+ArrowDown',
+      'edrv.prevEditorRow': 'Ctrl+Alt+ArrowUp',
     })
+  })
+
+  it('命令栏键位（Ctrl+Shift+P / F1）可解析并命中，且不与既有键位冲突', () => {
+    keybindingsApply({})
+    expect(chordOf('edrv.showCommands')).toBe('Ctrl+Shift+P|F1')
+    expect(matchEvent({ ctrlKey: true, shiftKey: true, key: 'P' }, bindingsOf('edrv.showCommands'))).toBe(true)
+    expect(matchEvent({ key: 'F1' }, bindingsOf('edrv.showCommands'))).toBe(true)
+    // 缺 Shift 的 Ctrl+P 仍是快速打开，不得命中命令栏
+    expect(matchEvent({ ctrlKey: true, key: 'P' }, bindingsOf('edrv.showCommands'))).toBe(false)
   })
 
   it('returns independent copies', () => {

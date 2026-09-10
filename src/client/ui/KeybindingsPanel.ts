@@ -174,7 +174,7 @@ export function KeybindingsPanel() {
 
   return React.createElement('section', { className: 'vsm-general-page' },
     React.createElement('h2', null, '快捷键'),
-    React.createElement('p', null, '配置编辑器视图的快捷键（保存 / 快速打开 / 侧边栏 / 搜索 / 后退 / 前进）。修改即时写入配置，重新聚焦编辑器后生效。'),
+    React.createElement('p', null, '配置编辑器视图的快捷键（命令栏 / 保存 / 快速打开 / 侧边栏 / 搜索 / 后退前进 / 页签与编辑行导航）。修改即时写入配置，重新聚焦编辑器后生效；命令栏（默认 Ctrl+Shift+P 或 F1）可搜索并执行下列全部命令。'),
     unavailable && React.createElement('div', { className: 'vsm-mcp-error vsm-mcp-banner' }, '设置服务暂不可用，当前使用默认键位。'),
     error && React.createElement('div', { className: 'vsm-mcp-error vsm-mcp-banner' }, error),
     message && React.createElement('div', { className: 'vsm-kb-message' }, message),

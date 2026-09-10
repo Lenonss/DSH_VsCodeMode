@@ -46,6 +46,8 @@ import { createOutlinePanel } from './outline/index.js'
 import { createOutlineSourceRegistry, registerBuiltinOutlineSources } from './outline/sources.js'
 import { createLspOutlineSource } from './outline/lspSource.js'
 import { keybindingsApply } from './keybindings.js'
+import { createCommandBridge } from './commandBridge.js'
+import { REGISTRY_GLOBAL } from './commandGlobals.js'
 import { sidebarMinApply } from './sidebarMin.js'
 import { log } from './log.js'
 import { setupLsp, setSession } from './monaco/lsp/index.js'
@@ -56,6 +58,33 @@ import type { CompatAdapter } from '../shared/compat.js'
 // web boot 直接失败（'1 entry did not activate'）。兼容层用 ctx.get 运行时探测 + 降级，不靠 inject。
 export const inject = ['slots', 'timer', 'locale', 'connection', 'remote', 'workspaces', 'sessions', 'conversation', 'settingsScope']
 
+/** 指令桥装配幂等标记（同一 document 重复 apply 只装配一次，避免重复键位监听）。 */
+let commandsMounted = false
+
+/**
+ * 装配指令注册表（指令桥 + 命令栏）。
+ * 指令桥不依赖已挂载编辑器（run 只派发窗口事件），故可在启动期装配；
+ * 命令栏浮层的宿主由 CommandPalette 自己在编辑区树内认领。
+ * @author ddj 2026年09月10号
+ * @param ctx 客户端根上下文
+ * @returns void
+ */
+function setupCommands(ctx: any): void {
+  if (commandsMounted) return
+  commandsMounted = true
+  const bridge = createCommandBridge()
+  ctx.provide(REGISTRY_GLOBAL, bridge.registry)
+  // 无条件镜像到 window（DSH 不创建 window.dsh，旧条件式赋值是死代码 → 命令栏空表）
+  const host = window as unknown as Record<string, unknown>
+  host[REGISTRY_GLOBAL] = bridge.registry
+  ctx.effect(() => () => {
+    bridge.dispose()
+    commandsMounted = false
+    if (host[REGISTRY_GLOBAL] === bridge.registry) delete host[REGISTRY_GLOBAL]
+  }, 'vscode-mode: command registry')
+  log.info('指令系统已装配：' + bridge.registry.list().length + ' 条指令，Ctrl+Shift+P 打开命令栏')
+}
+
 /**
  * 装配客户端：注册中央编辑区视图与 header 差异角标。
  * @author ddj 2026年08月20号
@@ -64,6 +93,9 @@ export const inject = ['slots', 'timer', 'locale', 'connection', 'remote', 'work
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function apply(ctx: any): void {
   const schedule = (fn: () => void, ms: number) => ctx.timeout(fn, ms)
+
+  // 指令系统（命令栏 + 指令注册表）先装配：命令栏在被任何 React slot 渲染前即可唤起
+  setupCommands(ctx)
 
   const registry: FileOpenerRegistry = createFileOpenerRegistry()
   const workspaces = ctx.get('workspaces')

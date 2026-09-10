@@ -19,6 +19,7 @@ import { createDiffRenderer } from '../monaco/diffRender.js'
 import { ST, callIdAttr, noopHunk, summarize } from '../state/records.js'
 import { diffRegions } from '../state/regions.js'
 import { QuickOpen } from './QuickOpen.js'
+import { CommandPalette } from './CommandPalette.js'
 import { DiffLauncher } from './DiffLauncher.js'
 import { SidebarView } from '../sidebar/SidebarView.js'
 import { clearDiffDock, publishDiffDock } from '../diffDockStore.js'
@@ -131,6 +132,10 @@ export function EditorView(props) {
   const navBackRef = React.useRef(null) // 后退动作最新闭包（窗口级键盘监听读取）
   const navForwardRef = React.useRef(null) // 前进动作最新闭包（窗口级键盘监听读取）
   const cycleTabRef = React.useRef(null) // 页签循环动作最新闭包（Ctrl+Alt+←/→、Ctrl+PgUp/PgDn）
+  const rowNavColRef = React.useRef(null) // 整行上下移动的期望列（连续移动保持列位）
+  const rowNavMoveRef = React.useRef(false) // 本次光标变化是否由整行移动触发（否则清空期望列）
+  const activeRef = React.useRef(null) // 当前活动文件的最新值（空依赖闭包/指令回调读取）
+  activeRef.current = active
   const tabsHostRef = React.useRef(null) // 页签栏容器（切换后把当前页签滚入可见区）
   const [navTick, setNavTick] = React.useState(0) // 历史可用性版本（按钮 disabled 重渲染）
   const hoverRegionsRef = React.useRef([]) // 当前 pending 区域镜像（稳定回调读取）
@@ -799,6 +804,66 @@ export function EditorView(props) {
     return () => window.removeEventListener('keydown', onKey, true)
   }, [])
 
+  // 整行上下移动的实现见下方「指令系统接线」effect（moveRow 单点定义，命令栏与键位共用）。
+
+  /**
+   * 指令系统接线：命令栏/键位/第三方派发的 `edrv.command.*` 事件落到编辑器动作。
+   * 全部动作经最新闭包执行（与窗口级键位监听同源）；事件名逐条字面书写，
+   * 便于与指令目录（ui/commandCatalog）静态对照（tests/commands.test.ts 有断言）。
+   * @author ddj 2026年09月10号
+   */
+  React.useEffect(() => {
+    /** 整行上下移动：Monaco 内置 cursorUp/Down 会丢列位，故按期望列自行定位（连续移动保持同列）。 */
+    const moveRow = (step) => {
+      const ed = editorRef.current
+      const model = ed?.getModel?.()
+      const pos = ed?.getPosition?.()
+      if (!ed || !model || !pos) return
+      const col = rowNavColRef.current ?? pos.column
+      const line = Math.max(1, Math.min(model.getLineCount(), pos.lineNumber + step))
+      if (line === pos.lineNumber) return
+      const maxCol = model.getLineMaxColumn(line)
+      rowNavColRef.current = col
+      rowNavMoveRef.current = true
+      ed.setPosition({ lineNumber: line, column: Math.max(1, Math.min(col, maxCol)) })
+      ed.revealLineInCenterIfOutsideViewport?.(line)
+    }
+    const handlers = [
+      ['edrv.command.save', () => { if (editorRef.current?.getModel?.()) { flushSave(); doSaveRef.current?.(false) } }],
+      // 快速打开由 QuickOpen 自己接该事件（它持有搜索框 ref），此处不重复实现
+      ['edrv.command.toggleSidebar', () => setSidebarOn((v) => !v)],
+      ['edrv.command.searchInFiles', () => {
+        setSidebarOn(true)
+        setActivePanel('search')
+        setTimeout(() => window.dispatchEvent(new CustomEvent('edrv:search-focus')), 0)
+      }],
+      ['edrv.command.navigateBack', () => navBackRef.current?.()],
+      ['edrv.command.navigateForward', () => navForwardRef.current?.()],
+      ['edrv.command.nextTab', () => cycleTabRef.current?.(1)],
+      ['edrv.command.prevTab', () => cycleTabRef.current?.(-1)],
+      ['edrv.command.nextEditorRow', () => moveRow(1)],
+      ['edrv.command.prevEditorRow', () => moveRow(-1)],
+      ['edrv.command.goToDefinition', () => { const ed = editorRef.current; if (ed) void runGoToDefinition(ed) }],
+      ['edrv.command.findReferences', () => { const ed = editorRef.current; if (ed) void runFindReferences(ed) }],
+      ['edrv.command.triggerAi', () => editorRef.current?.trigger?.('edrv-ai', 'editor.action.inlineSuggest.trigger', null)],
+      ['edrv.command.openInExplorer', () => {
+        const path = activeRef.current
+        if (!path) { setStatus('无活动文件'); return }
+        menuHandlersRef.current?.openInExplorer?.(path)
+      }],
+    ]
+    const byName = new Map(handlers)
+    const onCommand = (event) => {
+      const action = byName.get(event.type)
+      if (!action) return
+      try { action() } catch (error) { dbg(sessionId, '指令 ' + event.type + ' 失败：' + String(error)) }
+    }
+    for (const [eventName] of handlers) window.addEventListener(eventName, onCommand)
+    return () => {
+      for (const [eventName] of handlers) window.removeEventListener(eventName, onCommand)
+    }
+  }, [sessionId])
+
   // 活动页签滚动可见（页签栏溢出时键盘切换/打开文件后把当前页签带回视野）：
   // 只调整页签栏自身 scrollLeft，不触发页面滚动。
   React.useEffect(() => {
@@ -1065,6 +1130,9 @@ export function EditorView(props) {
     })
     ed.onDidChangeCursorPosition((e) => {
       setCursor('Ln ' + e.position.lineNumber + ', Col ' + e.position.column)
+      // 整行移动（↓↑）刚定位时保留期望列；其余光标移动（点击/打字/方向键）清空期望列
+      if (rowNavMoveRef.current) rowNavMoveRef.current = false
+      else rowNavColRef.current = null
       // 导航历史：同文件内光标移动防抖记录（程序化恢复触发的位置与栈顶去重，无副作用）
       if (navCursorTimerRef.current) clearTimeout(navCursorTimerRef.current)
       navCursorTimerRef.current = setTimeout(() => {
@@ -1126,6 +1194,20 @@ export function EditorView(props) {
       run: (edx) => { void runFindReferences(edx) },
     })
     ed.addCommand(m.KeyCode.F12, () => { void runGoToDefinition(ed) })
+    // 整行上下移动 + 命令栏：只登记 Monaco 右键菜单入口（不绑键位）。
+    // 键位由指令桥统一 capture 派发 `edrv.command.*`，此处再绑一次会双执行。
+    ed.addAction({
+      id: 'edrv.prevEditorRow', label: '上一编辑行', contextMenuGroupId: '1_edrv',
+      run: () => window.dispatchEvent(new CustomEvent('edrv.command.prevEditorRow')),
+    })
+    ed.addAction({
+      id: 'edrv.nextEditorRow', label: '下一编辑行', contextMenuGroupId: '1_edrv',
+      run: () => window.dispatchEvent(new CustomEvent('edrv.command.nextEditorRow')),
+    })
+    ed.addAction({
+      id: 'edrv.showCommands', label: '显示所有命令', contextMenuGroupId: '1_edrv',
+      run: () => window.dispatchEvent(new CustomEvent('edrv.command.showCommands')),
+    })
     bindLspEditor(ed)
     bindLspUnderline(ed, m)
     // AI 补全：编辑器实例登记（差异静默判定用）+ Alt+\ 手动触发 ghost text
@@ -1652,7 +1734,7 @@ export function EditorView(props) {
   } else if (!active) {
     body = React.createElement('div', { className: 'edrv-empty' },
       React.createElement('div', null, '暂无打开的文件'),
-      React.createElement('div', { style: { fontSize: 12 } }, '使用右上搜索框 (' + (chordOf('edrv.quickOpen') ?? 'Ctrl+P') + ') 打开工作区文件；agent 修改文件后顶部会出现差异角标'))
+      React.createElement('div', { style: { fontSize: 12 } }, '使用右上搜索框 (' + (chordOf('edrv.quickOpen') ?? 'Ctrl+P') + ') 打开工作区文件；' + (chordOf('edrv.showCommands') ?? 'Ctrl+Shift+P') + ' 打开命令栏；agent 修改文件后顶部会出现差异角标'))
   } else if (content === null && loadError) {
     body = loadingBody('文件加载失败：' + loadError, 0, () => {
       setLoadError(null)
@@ -1831,14 +1913,19 @@ export function EditorView(props) {
     mainCol)
 
   const baseStyle = { minHeight: 0, display: 'flex', flexDirection: 'column', background: 'var(--dsw-alias-bg-base,transparent)', overflow: 'hidden' }
+  // 命令栏浮层（Ctrl+Shift+P / F1）：portal 到 body，但需挂在插件自己的 React 树里；
+  // 三种布局形态都渲染 EditorView，故这里挂载即可，多宿主由 store 单实例认领兜底。
+  const paletteEl = React.createElement(CommandPalette, { key: 'edrv-palette', sessionId })
   const rootEl = layout === 'side'
     ? React.createElement('div', { ref: viewRootRef, 'data-edrv-view': '1', 'data-edrv-layout': 'side', className: 'edrv-view-side', style: Object.assign({}, baseStyle, { height: '100%' }) },
         editorRow,
         menuBackdrop,
-        tabMenuEl)
+        tabMenuEl,
+        paletteEl)
     : React.createElement('div', { ref: viewRootRef, 'data-edrv-view': '1', style: Object.assign({}, baseStyle, { height: 'var(--edrv-editor-height, 100%)', maxHeight: 'var(--edrv-editor-height, 100%)' }) },
         editorRow,
         menuBackdrop,
-        tabMenuEl)
+        tabMenuEl,
+        paletteEl)
   return rootEl
 }
