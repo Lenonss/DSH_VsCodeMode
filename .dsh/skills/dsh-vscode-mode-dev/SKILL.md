@@ -31,6 +31,12 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
   三门，release commit 只 add package.json，tag 推送后 `git stash pop` 还原（v0.1.57 实测）。
 - 2026-09-08 事实：awesome 收录条目（PR #2532，category git）的 `tarball:` 钉在 v0.1.36，发版即过期；
   npm 映射自动、该字段冗余 → 改自己条目时删 tarball 行，勿再钉版本号。
+- 2026-09-11 事实：本环境**不必** stash 隔离——当场核对 `git status --porcelain` 全部改动确属本次
+  待发布内容后再 `git add -A` 即可（v0.3.2 实测：26 文件全为本会话产物，直接单提交发布）。
+  关键前置动作是**逐条核对清单**，而不是无脑 stash。
+- 2026-09-11 事实：发布后可用 registry 元数据的 `gitHead` 反证「线上 tarball == 本地提交」
+  （`GET registry.npmjs.org/<pkg>/<ver>` → `gitHead` 应等于 release commit SHA）；
+  配合 `git ls-remote --tags origin` 与 GitHub Release 的 `assets[].digest` 三向对齐即可闭环。
 - 2026-09-09 事实：pnpm 在本环境跑 run 脚本会先做 deps-status check 触发 store SQLite 报错
   （`unable to open database file`）→ 三门直接调 node_modules/.bin（tsc.cmd/vitest.cmd/tsdown.cmd）绕过。
 
