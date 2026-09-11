@@ -26,6 +26,7 @@ import { createLspRpc } from './lsp/rpc.js'
 import { disposeAllServers } from './lsp/transport.js'
 import { createAiRpc } from './ai/rpc.js'
 import { installRulesSection } from './rules.js'
+import { installSkillGroup } from './skills.js'
 import type { RpcHandlerMap } from './shared/rpc.js'
 import type { Registry } from './registry.js'
 import type { Ctx } from './store.js'
@@ -55,6 +56,9 @@ export function apply(ctx: Ctx, config?: unknown): void {
   /** 规则注入 section（~/.dsh/rules 与 <工作区>/.dsh/rules；旧版 DSH 无 systemPrompt 时静默降级）。 */
   const rulesInstalled = installRulesSection(ctx)
   if (!rulesInstalled) log.warn('未检测到 systemPrompt 服务，规则仅可管理不注入')
+  /** 插件自带技能组（<包根>/skills，惰性获取 skills 服务；返回值仅表示"已调度"，实际结果见 skillGroupState）。 */
+  const skillsDispatched = installSkillGroup(ctx)
+  if (!skillsDispatched) log.warn('技能组未调度，插件技能组不可用')
   /** LSP RPC 与会话清理（一次性创建，tracker 状态跨请求保留）。 */
   const lspRpc = createLspRpc({ ctx, pluginConfig: config, manager: lspManager })
   const lspHandlers: Partial<RpcHandlerMap> = lspRpc.handlers
@@ -92,7 +96,7 @@ export function apply(ctx: Ctx, config?: unknown): void {
     disposeAllServers()
   })
 
-  log.info('编辑差异审查已装配（/edrv/rpc 路由就绪，项目 MCP 隔离已启用，语言服务器 LSP 已接入，规则注入' + (rulesInstalled ? '已接入' : '未接入') + '）')
+  log.info('编辑差异审查已装配（/edrv/rpc 路由就绪，项目 MCP 隔离已启用，语言服务器 LSP 已接入，规则注入' + (rulesInstalled ? '已接入' : '未接入') + '，技能组' + (skillsDispatched ? '装配中' : '未装配') + '）')
 }
 
 /**

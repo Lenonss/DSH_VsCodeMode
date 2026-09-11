@@ -29,6 +29,8 @@
 [data-edrv-view] .edrv-search-pop { position: absolute; top: calc(100% + 4px); right: 8px; width: min(460px, calc(100vw - 24px)); max-height: 300px; overflow: auto; background: var(--dsw-alias-bg-overlay, #1c1c1c); border: 1px solid var(--dsw-alias-border-l2, #555); border-radius: 10px; box-shadow: 0 6px 20px rgba(0,0,0,.4); z-index: 60; padding: 4px; }
 [data-edrv-view] .edrv-search-item { display: flex; flex-direction: column; gap: 1px; padding: 5px 8px; border-radius: 6px; cursor: pointer; }
 [data-edrv-view] .edrv-search-item:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(255,255,255,.07)); }
+/* 键盘高亮项（↑↓ 选择）：与 hover 同特异性但声明在后，故选中态稳定可辨 @author ddj 2026年09月11号 */
+[data-edrv-view] .edrv-search-item.edrv-search-sel { background: var(--dsw-alias-interactive-bg-hover, rgba(255,255,255,.14)); }
 [data-edrv-view] .edrv-search-item .n { color: var(--dsw-alias-label-primary, #eee); font-size: 12px; word-break: break-all; }
 [data-edrv-view] .edrv-search-item .d { color: var(--dsw-alias-label-tertiary, #888); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 [data-edrv-view] .edrv-search-empty { padding: 8px; font-size: 12px; color: var(--dsw-alias-label-tertiary, #888); }

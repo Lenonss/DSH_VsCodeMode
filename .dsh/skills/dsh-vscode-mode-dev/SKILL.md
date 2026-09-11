@@ -11,6 +11,7 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
 - 发布新版本（commit/push/tag/npm 相关操作）。
 - 编写或修改测试（尤其涉及路径、文件 URL、平台差异）。
 - 修改 host 集成（subprocess/reg/csc）、launcher（C#/PS）、Unity 包（DshCodeEditor）。
+- 新增/修改插件自带技能（`skills/` 随包 SKILL.md、`src/skills.ts` provider）。
 - CI（GitHub Actions）失败排查。
 
 ## 发布流程（必须照做，禁止偏离）
@@ -37,6 +38,12 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
 - 2026-09-11 事实：发布后可用 registry 元数据的 `gitHead` 反证「线上 tarball == 本地提交」
   （`GET registry.npmjs.org/<pkg>/<ver>` → `gitHead` 应等于 release commit SHA）；
   配合 `git ls-remote --tags origin` 与 GitHub Release 的 `assets[].digest` 三向对齐即可闭环。
+- 2026-09-11 坑：同一仓库可能被**多个会话并行开发**，`git status` 里混着别人的完整特性（v0.3.3 实测：
+  QuickOpen 键盘导航 + 技能组 provider 两份改动同树，且 package.json 的 0.3.3 号码由后者所改）
+  → 判据是 **mtime 分簇 + 谁改了版本号 + 该特性自带测试是否全绿**（都满足=可发，而非 WIP）；
+  但**发不发别人的特性必须当场问用户**，不能默认 `git add -A` 扫进去一起发布。
+- 2026-09-11 事实：发布前确认「线上最新版本」用 registry `dist-tags.latest` + `git ls-remote --tags`
+  对照 HEAD，别只看本地 tag（本地 tag 可能落后或超前）。
 - 2026-09-09 事实：pnpm 在本环境跑 run 脚本会先做 deps-status check 触发 store SQLite 报错
   （`unable to open database file`）→ 三门直接调 node_modules/.bin（tsc.cmd/vitest.cmd/tsdown.cmd）绕过。
 
@@ -176,6 +183,31 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
 - 极简 JSON 提取器偏移：`"key":` 起点 = `key.Length + 3`；`"key":"` 起点 = `key.Length + 4`。
 - 内嵌包更新 = 整目录替换 + Unity 重新聚焦自动生效；版本号驱动设置页「可更新」徽标；
   Unity 生成的 `.meta` 文件要随 git 提交（稳定 GUID）。
+
+## 插件技能组（随包 skills/）
+
+- 2026-09-11 坑：**技能名必须 kebab-case**——`@deepseek-ai/dsh-skill` 的
+  `SKILL_NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/` 是硬校验，**下划线非法**；写 `dsh_vscodemode_mcp`
+  会被 `skill-filesystem` 记 `ignored: invalid skill name` 直接丢弃，`ctx.skills.register()`
+  则**抛错**。本插件技能组因此用连字符前缀 `dsh-vscodemode-`（注意与 MCP 的 `serverName`
+  规则相反：那个 `/^[A-Za-z0-9_-]{1,32}$/` **允许**下划线）。
+- 2026-09-11 事实：本插件的技能分发走**自研 provider**（`src/skills.ts` 注册进 `ctx.skills`），
+  不用官方 `@deepseek-ai/dsh-skill-filesystem`。原因：profile 以 **junction** 安装本插件，
+  Node ESM 按 **realpath** 解析 import，从工作区真实路径出发 walk 不到 profile 的
+  `node_modules` —— `node --input-type=module -e "await import('@deepseek-ai/dsh-skill-filesystem')"`
+  在包目录下恒 `ERR_MODULE_NOT_FOUND`；官方的 `customSkillDirs` 路子（`@openviking/dsh-memory-plugin`
+  那种）需要 dev + peer 依赖 + registry `pnpm install`，且多拉一个 chokidar watcher。
+  自研 provider 零依赖、开发/正式形态一致、可直接单测。
+- 2026-09-11 事实：技能名冲突（registry 抛错）、`skills` 服务缺失、provider 注册失败都必须
+  **降级不致命**——用 `ctx.inject(['skills'], cb)` 惰性获取（**别写进插件 `inject` 数组**，
+  否则 skills 缺失时整个插件装载失败），`cb` 内 `sctx.get('skills') ?? sctx.skills` 双读
+  （同 `fileOpenSettings.runSettingsInstall` 的写法）。
+- 2026-09-11 事实：registry 有**收集缓存**（`collectCache`），provider 自己 parse 不缓存也没用——
+  改 SKILL.md 要即时可见必须 `control.invalidate()`；`fs.watch` 的 watcher 挂 `'error'` 处理器
+  （EventEmitter 无监听者时抛未捕获异常），并按 `control.signal` 关闭。
+- 2026-09-11 事实：`package.json` 的 `files` 必须含 `"skills"`，否则 tarball 漏发 → 技能组恒为空；
+  用「读真实 `skills/` 目录自检」的用例兜底。`skills/` 根目录**别放裸 `.md`**（会被当单文件技能解析，
+  缺 frontmatter 就刷 `缺少合法 frontmatter` 告警）——约定文档放 README。
 
 ## 自我更新协议（技能如何更新自己）
 

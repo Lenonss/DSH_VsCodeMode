@@ -173,6 +173,17 @@ export function vendorDirOf(moduleUrl: string): string {
   return join(assetsDirOf(moduleUrl), 'vendor')
 }
 
+/**
+ * 插件自带技能组根目录（包根 skills/，与 assets/ 同级；随包发布）。
+ * 布局：<根>/<技能名>/SKILL.md（目录式）或 <根>/<技能名>.md（扁平式）。
+ * @author ddj 2026年09月11号
+ * @param moduleUrl 模块 URL（缺省 import.meta.url；测试注入）
+ * @returns 技能组根目录绝对路径
+ */
+export function skillsDirOf(moduleUrl: string): string {
+  return join(dirname(fileURLToPath(moduleUrl)), '..', 'skills')
+}
+
 /** 图标目录：config.imageDir 覆盖优先，否则插件包 assets/。 */
 export function imageDirOf(config: unknown, moduleUrl: string): string {
   const cfg = config as { imageDir?: unknown } | undefined

@@ -14,7 +14,8 @@
   **文件链接（DSH 0.1.5+）**：聊天/文件树的文件链接经官方 `ctx.sidebarRight.openResource` 直达右侧栏——
   「文件链接使用工具」为 自动/VSCodeMode 时本插件以 extension 档认领 `dsh-resource://file/**`（链接在本插件
   Monaco 编辑器打开，含行号定位）；为「官方侧边栏」档时走官方文本查看器（不认领）；畸形地址自动回落官方查看器。
-  文件页签（脏点/关闭/「+」打开/**右键菜单/固定**）+ `Ctrl+P` 快速打开（QuickOpen）+ **Monaco Editor**
+  文件页签（脏点/关闭/「+」打开/**右键菜单/固定**）+ `Ctrl+P` 快速打开（QuickOpen，候选浮窗 `↑↓` 选择 /
+  `Enter` 打开高亮项 / `Esc` 关闭，鼠标悬停与高亮同步）+ **Monaco Editor**
   （语法高亮/行号/`Ctrl+F`/`Ctrl+G`/`Ctrl+S`/700ms 防抖自动保存）+ 顶部工具栏（路径/语言/Ln,Col/保存状态/差异/侧边栏/刷新）
   + **导航历史**（后退/前进：跨文件恢复焦点位置，工具栏 `←`/`→` 按钮、键盘 `Alt+←/→` 与 `Ctrl+Alt+-`/`Ctrl+Shift+-`、
   鼠标侧键 XButton 均可触发；后退后新导航自动清空前进栈）。
@@ -81,6 +82,12 @@
 - **MCP 可视化管理**（设置 → VSCodeMode）：子 Tab「我的 MCP」（profile 全局）+「项目 MCP」（各项目根 `.mcp.json`）。
   项目级 MCP 对齐 Claude Code/Cursor：配置存于项目根目录 `.mcp.json`（`mcpServers`），随仓库共享；
   可查看各项目连接状态/工具、添加（stdio / streamable-http）、刷新、启用/禁用、删除。工具全局生效。
+- **插件自带技能组**（v0.3.3，随包 `skills/`）：插件把一组 SKILL.md 随包分发并注册进 DSH 技能系统
+  （自定义 skill provider，`ctx.skills.registerProvider`），**装了本插件即可用**，无需手工放文件到 `~/.dsh/skills`。
+  技能名统一前缀 `dsh-vscodemode-`，当前收录 **`dsh-vscodemode-mcp`**（MCP 配置与使用指南：
+  两种作用域 / `.mcp.json` 写法 / `mcp.*` RPC / 命名与冲突 / 工作区隔离 / 故障排查表）。
+  用户提出「加个 MCP / MCP 连不上 / 项目 MCP」时，agent 会加载该技能按图索骥。
+  装载状态见设置 → VSCodeMode →「兼容性」的「插件技能组」一行；编辑 SKILL.md 即时生效（fs.watch → invalidate）。
 - **会话性能管理**（设置 → VSCodeMode →「性能优化」）：DSH 启动会回放 `~/.dsh/sessions` 全部会话
   （V8 展开约 10×，会话越多越吃内存，可能 OOM）。该子页提供
   ① 全工作区会话盘点（体积/活跃度/新旧）；② 巨型/旧会话**移出到归档**（`~/.dsh/sessions-archive`，可逆、
@@ -182,6 +189,7 @@ src/
 ├── registry.ts         Host 每工作区记录桶注册表
 ├── tree.ts             Host 目录树纯函数（normalizeRel/toTreeEntries，edrv.listDir 用，可单测）
 ├── rules.ts            Host 规则管理：.mdc 解析/开关改写/注入渲染（纯函数可单测）+ IO + systemPrompt section 装配
+├── skills.ts           Host 插件技能组：随包 skills/ 的 SKILL.md 解析/扫描 + skill provider 注册（可单测）
 ├── rpc.ts              Host RPC 分发表（类型化 handler 表替代巨型 switch，含 compat）
 ├── routes.ts           Host webServer 路由（/edrv/rpc、/edrv/assets/*、/edrv/vendor/*，带冲突护栏）
 └── client/
@@ -209,6 +217,9 @@ src/
                         / DiffBadge / McpSettings（含「兼容性」子 Tab）
 ```
 
+随包目录（`package.json` 的 `files`）：`lib/`（构建产物）、`assets/`（Monaco/pdf.js vendor + 图标 + launcher）、
+`skills/`（插件技能组，见下节）、`src/`（随包发布，便于阅读实现）、`unity/`（内嵌 UPM 包）、`cordis.patch.yml`。
+
 **兼容层（`src/compat.ts` + `src/client/compat.ts`）**：集中处理与其他插件 / DSH 版本的适配——
 运行时探测 `@deepseek-ai/dsh-mcp-client`、设置桥（`webUiSettings` → `settingsScope`）等外部依赖，
 护栏检测 `/edrv` 路由前缀冲突与本插件重复装配（duplicate loader entry），
@@ -234,6 +245,62 @@ curl -s -X POST http://127.0.0.1:3080/edrv/rpc -H 'content-type: application/jso
 **扩展缝（VSCode 化后续迭代）**：新能力 = `shared/rpc.ts` 加方法 + `src/rpc.ts` 加 handler +
 `client/` 加组件，其余模块零改动；`monaco/*` 是可复用的编辑器服务（资源树/对比/诊断面板共用）；
 侧边栏面板系统（`edrvSidebarPanels` 注册表）可承载后续面板（搜索/差异/时间线），`edrv.listDir` 为通用目录树 API。
+
+## 插件技能组（`skills/`）
+
+插件把技能随包分发：安装本插件后，其技能自动出现在 DSH 技能目录里（模型侧 `<available_skills>`），
+由 `skill` 工具按需加载。实现见 `src/skills.ts`，注册进 `ctx.skills`（自定义 provider，名为 `dsh-vscodemode`）。
+
+### 目录约定
+
+```
+skills/
+└── dsh-vscodemode-mcp/        ← 技能名（kebab-case，必须带 dsh-vscodemode- 前缀）
+    └── SKILL.md               ← YAML frontmatter + Markdown 正文
+```
+
+- **两种布局都支持**：目录式 `skills/<名>/SKILL.md`（推荐，可放同目录的 references/ 等附属文件）与扁平式 `skills/<名>.md`。
+- ⚠️ **`skills/` 根目录不要放裸 `.md` 说明文档**（如 `README.md`）：扁平 `.md` 会被当作单文件技能解析，
+  缺 frontmatter 时会在日志里产生 `技能已忽略…缺少合法 frontmatter` 告警。约定文档写在这里或 `docs/`。
+- **新增一个技能 = 新增一个目录**，不需要改任何代码。
+
+### 命名硬约束（DSH 层）
+
+- **技能名必须 kebab-case**：`/^[a-z0-9]+(?:-[a-z0-9]+)*$/`（小写字母/数字，段间连字符）。
+  **下划线非法**——`@deepseek-ai/dsh-skill` 会直接拒绝，`skill-filesystem` 把它记为
+  `ignored: invalid skill name`。所以是 `dsh-vscodemode-mcp`，不是 `dsh_vscodemode_mcp`。
+- 本插件另加一层前缀白名单：名字不以 `dsh-vscodemode-` 开头的技能会被跳过并告警（避免污染全局技能命名空间）。
+
+### frontmatter 字段
+
+```yaml
+---
+name: dsh-vscodemode-mcp          # 必填；kebab-case + 前缀
+description: 一句话路由描述…       # 必填；模型靠它判断何时加载
+whenToUse: 补充的触发条件…         # 可选
+disable-model-invocation: false   # 可选；true = 不进模型目录（仅人工显式调用）
+user-invocable: true              # 可选；false = 禁止人工显式调用
+---
+```
+
+⚠️ 不接受遗留写法 `disableModelInvocation` / `modelInvocable` / `userInvocable`（与官方一致，
+写了会报「不受支持，请改用 …」，而不是静默失效）。
+
+### 装载与降级
+
+- 经 `ctx.inject(['skills'], …)` 惰性获取服务，**不写进插件的 `inject` 数组** → skills 服务缺失时插件其余功能不受影响。
+- 服务缺失 / 版本无 `registerProvider` / provider 名冲突 → 记一条 warn 并跳过，不抛错、不影响装配。
+- 装载状态：设置 → VSCodeMode →「兼容性」→「插件技能组（`dsh-vscodemode-`*）」。
+- 编辑 SKILL.md **即时生效**（`fs.watch` → `control.invalidate()` 清 registry 收集缓存）；
+  监听不可用时降级为「改动需重载插件」，不影响正确性。
+
+### 为什么自研 provider 而不用 `@deepseek-ai/dsh-skill-filesystem`
+
+官方 provider 也能挂自定义目录（`customSkillDirs`，`@openviking/dsh-memory-plugin` 就是这么做的），
+但本插件**开发形态**下不可用它：profile 以 junction 安装本插件，Node ESM 按 **realpath** 解析 import，
+从工作区真实路径出发 walk 不到 profile 的 `node_modules`（实测 `import('@deepseek-ai/dsh-skill-filesystem')`
+→ `ERR_MODULE_NOT_FOUND`）。采用它需新增 dev + peer 依赖并跑 registry `pnpm install`，且每个实例会额外
+拉起 chokidar watcher。自研 provider 零新依赖、开发/正式形态行为一致、节点环境可直接单测。
 
 ## 架构要点
 
