@@ -30,6 +30,10 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
 - 2026-09-08 坑：工作区有未提交 WIP 时，步骤 2 的 `git add -A` 会把未完成代码扫进发布，且 CI 构建
   的是推送树而非本地目录（脏树跑过的三门不代表发布内容）→ 先 `git stash push -u` 隔离，净树跑
   三门，release commit 只 add package.json，tag 推送后 `git stash pop` 还原（v0.1.57 实测）。
+- 2026-09-11 事实：CI 失败时 GitHub API 可能同时 504 不稳定——先等几分钟再取 check-runs；
+  实在拿不到就用 `GET /commits/<sha>/check-runs` 的 `/annotations`（无需凭据）直接读失败用例名与断言差异，
+  别靠猜。v0.3.3 实测：首 tag 的 build/release 双双 failure，annotations 一次就给出 `tests/skills.test.ts:158`
+  的 `'/D:/pkg/skills' !== 'D:/pkg/skills'`。
 - 2026-09-08 事实：awesome 收录条目（PR #2532，category git）的 `tarball:` 钉在 v0.1.36，发版即过期；
   npm 映射自动、该字段冗余 → 改自己条目时删 tarball 行，勿再钉版本号。
 - 2026-09-11 事实：本环境**不必** stash 隔离——当场核对 `git status --porcelain` 全部改动确属本次
@@ -132,6 +136,12 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
 
 - CI 跑 ubuntu：新测试断言**禁止写死 Windows 反斜杠路径**。`path.join` 结果在 Linux 是 `/`
   分隔，断言前先 `.replace(/\\/g, '/')` 归一再比较（或两侧都用同一构造方式）。
+- 2026-09-11 坑（**第二次踩，务必内化**）：`norm()` 归一化只解决反斜杠，**解决了不盘符**。
+  `skillsDirOf('file:///D:/pkg/lib/index.js')` 断言 `'D:/pkg/skills'` 在 ubuntu 上得到
+  `/D:/pkg/skills`（盘符被当成普通路径段）→ 恒失败，而**本地 Windows 是绿的**。
+  规矩：路径类断言**不写死盘符/绝对 URL**——用 `fileURLToPath(new URL('..', import.meta.url))`
+  取真实包根，两侧都由同一平台语义构造（`pathToFileURL` 造 URL、`join` 造期望值），
+  两平台同时成立且更贴近真实调用。
 - `pathToFileURL('C:\\x\\y')` 在 Linux 被当作**相对路径**按 cwd 解析（盘符不会成为路径段）；
   需要 file URL 的测试按 `process.platform` 分支构造合法 URL 并分别断言。
 - .NET Framework 的 csc 是 **C# 5 方言**：无局部函数、无字符串插值、无 is-pattern；
