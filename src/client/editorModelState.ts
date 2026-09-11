@@ -20,6 +20,12 @@ export const EDITOR_ROOT_SELECTOR = '.edrv-editor-row'
 export const EDITOR_MODEL_SELECTOR = EDITOR_ROOT_SELECTOR + ' .monaco-editor'
 
 /**
+ * 已打开文件页签选择器（页签栏在编辑器行内；空态时无此节点）。
+ * 判据同样不依赖 Monaco：图片/PDF 页签没有 Monaco 实例，但仍是「有页签可关」。
+ */
+export const TAB_SELECTOR = EDITOR_ROOT_SELECTOR + ' .edrv-tabs .edrv-tab'
+
+/**
  * 当前文档是否挂载了编辑器视图（无 document 的运行环境返回 false）。
  * @author ddj 2026年09月10号
  * @returns 是否存在编辑器根节点
@@ -39,4 +45,16 @@ export function hasEditorView(): boolean {
 export function hasEditorModel(): boolean {
   if (typeof document === 'undefined') return false
   return document.querySelector(EDITOR_MODEL_SELECTOR) !== null
+}
+
+/**
+ * 当前是否已打开文件页签（「关闭当前页签」等页签级命令的可用性判据）。
+ * 用页签 DOM 而非 Monaco model 判定：图片/PDF 页签没有 Monaco 实例但可以关闭；
+ * 无页签时返回 false，让 Ctrl+F4 之类按键放行给浏览器（与 addSelectionRef「不吞键」同款约定）。
+ * @author ddj 2026年09月11号
+ * @returns 是否存在已打开的文件页签
+ */
+export function hasOpenTabs(): boolean {
+  if (typeof document === 'undefined') return false
+  return document.querySelector(TAB_SELECTOR) !== null
 }

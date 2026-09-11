@@ -45,7 +45,8 @@ export function workspaceScopeOf(cwd: string | undefined | null, sessionId: stri
 
 /** 参与迁移的 localStorage 键前缀（编辑区全部按会话持久化的旧键）。 */
 const MIGRATE_PREFIXES: readonly string[] = [
-  CACHE_KEY.editor,
+  // 页签键已升 v3；v2 键仍按会话持久化过，故迁移对象用 legacy 前缀（v3 无旧会话数据）
+  CACHE_KEY.editorLegacy,
   CACHE_KEY.viewstate,
   CACHE_KEY.sidebar + 'side.',
   CACHE_KEY.sidebar,

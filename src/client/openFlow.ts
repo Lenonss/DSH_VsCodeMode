@@ -312,7 +312,8 @@ function realDeps(ctx: unknown, overrides: Partial<OpenDeps> = {}): OpenDeps {
     openSession: (id) => service('sessions').open(id),
     reference: async (sessionId, path, appearance) => {
       const outcome: AddOutcome = await add.appendReference(sessionId, path, undefined, appearance)
-      return outcome !== 'unavailable'
+      // ok/busy（纯文本降级）都算已落点；unavailable/failed 交给 settleRef 继续重试
+      return outcome === 'ok' || outcome === 'busy'
     },
     choose: (title, folder) => chooseWorkspace(title, folder),
     openEditor: (path, line, column) => {

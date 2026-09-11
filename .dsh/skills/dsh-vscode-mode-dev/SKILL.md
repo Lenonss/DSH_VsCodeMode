@@ -5,7 +5,7 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
 
 # dsh-vscode-mode 开发/发布经验集（自我更新型技能）
 
-> updated: 2026-09-10 · 维护者：ddj（AI 会话按文末协议追加，保持精炼、去重）
+> updated: 2026-09-11 · 维护者：ddj（AI 会话按文末协议追加，保持精炼、去重）
 ## 何时使用
 
 - 发布新版本（commit/push/tag/npm 相关操作）。
@@ -98,6 +98,22 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
 - 2026-09-10 事实：判断「编辑器是否打开文件」的可靠信号是 **Monaco API**
   （`window.monaco.editor.getEditors().some(e => !!e.getModel())`）或插件自有类名，
   不要去猜 Monaco 的输入层 DOM（textarea / EditContext / 未来的实现都可能变）。
+
+## DSH 对话输入框（composer）——写内容前必读
+
+- 2026-09-11 坑：composer 有**两套坐标系**且混用会毁数据。`detect` 投影里 chip 只占 **1 个 U+FFFC**，
+  `clipboard` 投影里占 `clipboardText` 全文（源码 `$composerLayout`：`pushLeaf('chip', kid, '￼', kid.getTextContent())`）。
+  `insertReference/insertText/caretSpan` 全要 **detect 坐标**，而 `state.getSnapshot().draft` 是 **clipboard 投影**。
+  拿 `draft.length` 当 detect 偏移 → 有 chip 时越界 → `selectSpan` 返回 null → 插入被拒。
+- 2026-09-11 坑：`setDraft(text)` 是**整篇重建**且剔除 U+FFFC（`text.replace(REFERENCE_PLACEHOLDER_RE,'')` + `root.clear()`）
+  → 一旦把它当「降级兜底」，就会**销毁用户已插入的全部 chip**并把引用退化成重复纯文本
+  （v0.3.2 修的「连续添加多个引用显示异常」即此因）。规矩：降级用 `insertText`（就地替换、保留 chip）；
+  两条通道都失败就**一个字节都不写**并回报失败，绝不用 setDraft 兜底。
+- 2026-09-11 事实：插入位置用 `caretSpan()`——契约即 detect 坐标、无选区时回落文档末尾的塌缩 span
+  （与插入 API 同坐标系，无需换算）；选区非塌缩取 `end` = 插入而非替换，不删用户选中内容。
+  缺失/抛异常/非法值一律回落末尾。换算 detect↔clipboard：每个位于该点之前的 chip 多占 `length−1`。
+- 2026-09-11 坑：验证 composer 时 **Lexical 不理会合成键盘事件**（`dispatchEvent(new KeyboardEvent(...))`），
+  Ctrl+A/Ctrl+End 等都不会生效；移光标/清草稿要用 Selection + Range API，或 Chrome DevTools MCP 的真实按键。
 
 ## CI/测试平台陷阱（写测试前必读）
 

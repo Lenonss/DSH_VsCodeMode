@@ -16,7 +16,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
-  EDITOR_MODEL_SELECTOR, EDITOR_ROOT_SELECTOR, hasEditorModel, hasEditorView,
+  EDITOR_MODEL_SELECTOR, EDITOR_ROOT_SELECTOR, TAB_SELECTOR, hasEditorModel, hasEditorView, hasOpenTabs,
 } from '../src/client/editorModelState.js'
 
 /** 极简 DOM 节点（只承载类名与子节点，足够验证类名选择器语义）。 */
@@ -128,6 +128,36 @@ describe('hasEditorModel（判据须与 Monaco 输入实现无关）', () => {
   })
 })
 
+describe('hasOpenTabs（关闭当前页签的可用性判据）', () => {
+  it('页签栏内有页签 → true', () => {
+    mount(el('root', [el('edrv-editor-row', [
+      el('edrv-tabs', [el('edrv-tab edrv-tab-active'), el('edrv-tab')]),
+      el('monaco-editor'),
+    ])]))
+    expect(hasOpenTabs()).toBe(true)
+  })
+
+  it('空态（页签栏在、无页签）→ false（Ctrl+F4 须放行给浏览器）', () => {
+    mount(el('root', [el('edrv-editor-row', [el('edrv-tabs'), el('edrv-editor-empty')])]))
+    expect(hasOpenTabs()).toBe(false)
+  })
+
+  it('图片/PDF 页签（无 Monaco 实例）也算有页签 —— 判据不得依赖编辑器模型', () => {
+    mount(el('root', [el('edrv-editor-row', [el('edrv-tabs', [el('edrv-tab')])])]))
+    expect(hasEditorModel(), '无 Monaco 实例').toBe(false)
+    expect(hasOpenTabs(), '但页签存在，仍可关闭').toBe(true)
+  })
+
+  it('页签栏之外的 .edrv-tab（如浮层/其它容器）不得误命中', () => {
+    mount(el('root', [el('other', [el('edrv-tab')]), el('edrv-editor-row', [el('edrv-tabs')])]))
+    expect(hasOpenTabs()).toBe(false)
+  })
+
+  it('无 document 的运行环境（纯 Node）返回 false 且不抛错', () => {
+    expect(hasOpenTabs()).toBe(false)
+  })
+})
+
 describe('hasEditorView', () => {
   it('编辑器行存在 → true', () => {
     mount(el('root', [el('edrv-editor-row')]))
@@ -160,5 +190,9 @@ describe('判据选择器源码契约', () => {
   it('选择器限定在插件编辑器行内（避免误命中官方预览的 Monaco）', () => {
     expect(EDITOR_ROOT_SELECTOR).toBe('.edrv-editor-row')
     expect(EDITOR_MODEL_SELECTOR).toBe('.edrv-editor-row .monaco-editor')
+  })
+
+  it('页签判据限定在编辑器行内的页签栏（避免误命中浮层里的同名类）', () => {
+    expect(TAB_SELECTOR).toBe('.edrv-editor-row .edrv-tabs .edrv-tab')
   })
 })

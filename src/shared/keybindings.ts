@@ -25,6 +25,9 @@ export const KEYBINDING_DEFAULTS: Record<string, string> = {
   'edrv.prevEditorRow': 'Ctrl+Alt+ArrowUp',
   // 添加选中内容为引用：把当前选区追加进对话输入框（Ctrl+U，VS Code 同款）
   'edrv.addSelectionRef': 'Ctrl+U',
+  // 关闭当前页签：VS Code 同款为 Ctrl+W，但浏览器会截获该键（脚本无法 preventDefault），
+  // 故取参考图里的第二候选 Ctrl+F4（Chrome/Edge 默认无行为，可安全拦截）。
+  'edrv.closeTab': 'Ctrl+F4',
 }
 
 /**

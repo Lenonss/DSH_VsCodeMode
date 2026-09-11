@@ -42,6 +42,13 @@ import { onLspProgress, refreshStatus } from '../monaco/lsp/index.js'
 import { setupAiInline, trackAiEditor, aiInlineEnabled } from '../ai/inlineProvider.js'
 import { SnippetsPicker } from './SnippetsPicker.js'
 import { invalidateSnippets, setSnippetsSession, setupSnippets } from '../snippets/provider.js'
+import {
+  absoluteOf, ancestorDirsOf, applyClose, baseNameOf, closeAll, closeOthers, closeRight, closeSaved,
+  insertTab, isTreeRevealable, normalizeTabs, pickActive, relativeOf, togglePin,
+} from '../tabActions.js'
+import { buildTabMenu } from '../tabMenu.js'
+import { createSaveTimer } from '../saveDebounce.js'
+import { ContextMenu } from './ContextMenu.js'
 
 /**
  * 从 Monaco 语言目录取可选语言 id 列表（代码片段新建时的语言下拉来源）。
@@ -141,7 +148,9 @@ export function EditorView(props) {
   if (!modelsRef.current) modelsRef.current = modelsForScope(scope)
   // 视图状态缓存（path → Monaco viewState；重启后恢复光标/滚动/折叠位置）
   const viewStatesRef = React.useRef({})
-  const saveTimerRef = React.useRef(null)
+  // 防抖保存槽（arm/flush/cancel；见 saveDebounce.ts 的缺陷说明，勿退回单一取消句柄）
+  const saveTimerRef = React.useRef(createSaveTimer())
+  const savingRef = React.useRef(new Set()) // 在途保存的路径（关闭前落盘去重，防同内容双发）
   const loadSeqRef = React.useRef(0)
   const programmaticRef = React.useRef(false)
   const restoredScopeRef = React.useRef(null) // 已恢复状态的作用域（cwd 晚到 sid→ws 时允许重恢复）
@@ -158,6 +167,10 @@ export function EditorView(props) {
   const rowNavMoveRef = React.useRef(false) // 本次光标变化是否由整行移动触发（否则清空期望列）
   const activeRef = React.useRef(null) // 当前活动文件的最新值（空依赖闭包/指令回调读取）
   activeRef.current = active
+  const tabsRef = React.useRef([]) // 当前页签表的最新值（菜单动作按 id 分派时读，防陈旧闭包）
+  tabsRef.current = tabs
+  const dirtyRef = React.useRef({}) // 脏标记最新值（菜单禁用判定与关闭时落盘读）
+  dirtyRef.current = dirtyMap
   const tabsHostRef = React.useRef(null) // 页签栏容器（切换后把当前页签滚入可见区）
   const [navTick, setNavTick] = React.useState(0) // 历史可用性版本（按钮 disabled 重渲染）
   const hoverRegionsRef = React.useRef([]) // 当前 pending 区域镜像（稳定回调读取）
@@ -209,10 +222,7 @@ export function EditorView(props) {
   const sum = React.useMemo(() => summarize(Object.values(records)), [records])
 
   const addTab = (path, select) => {
-    setTabs((prev) => {
-      if (prev.some((t) => t.path === path)) return prev
-      return prev.concat([{ path }])
-    })
+    setTabs((prev) => insertTab(prev, path))
     if (select) setActive(path)
   }
 
@@ -338,20 +348,57 @@ export function EditorView(props) {
   navBackRef.current = navBack
   navForwardRef.current = navForward
 
-  const closeTab = (path) => {
-    flushSave()
-    if (path === active) { saveViewState(path); recordNav() }
-    // PDF tab 关闭：销毁面板控制器并清缓存（未保存注释随之丢弃，脏点已提示）
+  /**
+   * 关闭页签的收尾（不动作状态）：活动页签先存视图状态与导航历史；
+   * PDF 页签销毁面板控制器并清 base64 缓存（未保存注释随之丢弃，脏点已提示）。
+   * @author ddj 2026年09月11号
+   * @param path 待关闭页签路径
+   */
+  const releaseTab = (path) => {
+    if (path === activeRef.current) { saveViewState(path); recordNav() }
     const pdfCtl = pdfCtlRef.current.get(path)
     if (pdfCtl) { pdfCtl.destroy(); pdfCtlRef.current.delete(path) }
     pdfB64CacheRef.current.delete(path)
-    setTabs((prev) => {
-      const idx = prev.findIndex((t) => t.path === path)
-      if (idx < 0) return prev
-      const next = prev.filter((t) => t.path !== path)
-      if (active === path) setActive(next[idx] ? next[idx].path : (next[idx - 1] ? next[idx - 1].path : null))
-      return next
-    })
+  }
+
+  /**
+   * 提交关闭结果：一次性更新页签与活动页签（补位规则见 tabActions.applyClose）。
+   * @author ddj 2026年09月11号
+   * @param result tabActions 产出的关闭结果
+   */
+  const commitClose = (result) => {
+    setTabs((prev) => (prev === result.tabs ? prev : result.tabs))
+    if (result.active !== activeRef.current) setActive(result.active)
+  }
+
+  /**
+   * 立即关闭页签（页签 × 按钮与「关闭」菜单项共用；批量关闭走 closeTabs）。
+   * @author ddj 2026年08月25号 / 2026年09月11号
+   * @param path 待关闭页签路径
+   */
+  const closeTab = (path) => {
+    // 先静默落盘再关闭：flushSave 立即提交待执行的防抖保存（不是取消），
+    // persistDirty 再对仍标脏者（保存失败/在途）用 model 当前文本补一次
+    flushSave()
+    persistDirty([path])
+    releaseTab(path)
+    commitClose(applyClose(tabsRef.current, new Set([path]), activeRef.current))
+  }
+
+  /**
+   * 批量关闭：先落盘全部待关闭的脏页签，再逐个收尾并一次性提交。
+   * @author ddj 2026年09月11号
+   * @param result 关闭结果（来自 tabActions 的 closeOthers/closeRight/closeSaved/closeAll）
+   * @param label 状态栏文案前缀（如「已关闭其他」）
+   */
+  const closeTabs = (result, label) => {
+    flushSave()
+    const closing = tabsRef.current.filter((t) => !result.tabs.some((r) => r.path === t.path))
+    if (!closing.length) { setStatus('无可关闭的页签'); return }
+    persistDirty(closing.map((t) => t.path))
+    for (const tab of closing) releaseTab(tab.path)
+    commitClose(result)
+    setStatus(label + '（' + closing.length + ' 个）')
   }
 
   /**
@@ -700,7 +747,7 @@ export function EditorView(props) {
     }
   }, [sessionId, layout])
 
-  // localStorage v2 恢复页签（按工作区作用域；cwd 晚到 sid→ws 切换时重恢复一次）
+  // localStorage 恢复页签（v3：页签带 pinned；按工作区作用域；cwd 晚到 sid→ws 切换时重恢复一次）
   React.useEffect(() => {
     if (!sessionId || restoredScopeRef.current === scope) return
     restoredScopeRef.current = scope
@@ -708,12 +755,15 @@ export function EditorView(props) {
     modelsRef.current = modelsForScope(scope)
     viewStatesRef.current = viewStatesLoad(scope)
     try {
+      // v3 优先；缺失时回读 v2（旧版纯路径数组）——normalizeTabs 兼容两种形状
       const raw = localStorage.getItem(CACHE_KEY.editor + String(scope))
+        ?? localStorage.getItem(CACHE_KEY.editorLegacy + String(scope))
       if (raw) {
         const saved = JSON.parse(raw)
-        if (Array.isArray(saved.tabs) && saved.tabs.length) {
-          setTabs(saved.tabs.map((p) => ({ path: p })))
-          if (typeof saved.active === 'string') setActive(saved.active)
+        const restored = normalizeTabs(saved?.tabs)
+        if (restored.length) {
+          setTabs(restored)
+          setActive(pickActive(restored, saved?.active))
         }
       }
     } catch (e) { /* 损坏忽略 */ }
@@ -729,7 +779,11 @@ export function EditorView(props) {
 
   React.useEffect(() => {
     if (!sessionId) return
-    try { localStorage.setItem(CACHE_KEY.editor + String(scope), JSON.stringify({ tabs: tabs.map((t) => t.path), active })) }
+    try {
+      // v3 写入：页签带 pinned（只写有值字段，减小体积）；固定态随工作区作用域持久化
+      const payload = { tabs: tabs.map((t) => (t.pinned ? { path: t.path, pinned: true } : { path: t.path })), active }
+      localStorage.setItem(CACHE_KEY.editor + String(scope), JSON.stringify(payload))
+    }
     catch (e) { /* 忽略 */ }
   }, [tabs, active, sessionId, scope])
 
@@ -874,6 +928,7 @@ export function EditorView(props) {
       ['edrv.command.navigateForward', () => navForwardRef.current?.()],
       ['edrv.command.nextTab', () => cycleTabRef.current?.(1)],
       ['edrv.command.prevTab', () => cycleTabRef.current?.(-1)],
+      ['edrv.command.closeTab', () => closeActiveTab()],
       ['edrv.command.nextEditorRow', () => moveRow(1)],
       ['edrv.command.prevEditorRow', () => moveRow(-1)],
       ['edrv.command.goToDefinition', () => { const ed = editorRef.current; if (ed) void runGoToDefinition(ed) }],
@@ -972,13 +1027,7 @@ export function EditorView(props) {
     loadContent(active, sessionId)
   }, [active, sessionId])
 
-  // Tab 右键菜单打开时 Esc 关闭
-  React.useEffect(() => {
-    if (!tabMenu) return
-    const onKey = (e) => { if (e.key === 'Escape') dismissMenus() }
-    window.addEventListener('keydown', onKey, true)
-    return () => window.removeEventListener('keydown', onKey, true)
-  }, [tabMenu])
+  // 页签右键菜单的 Esc 关闭由 ContextMenu 组件自己处理（capture 监听），此处不再重复挂监听
 
   React.useEffect(() => {
     if (monaco || monacoErr) return
@@ -1043,8 +1092,14 @@ export function EditorView(props) {
     return model
   }
 
+  /**
+   * 提交待执行的防抖保存（**真正执行保存**，不是取消）。
+   * 语义与缺陷背景见 saveDebounce.ts：`schedule` 的返回值是只 clearTimeout 的 disposer，
+   * 旧实现把它当「立即保存」调用 → 防抖窗口内切页签/关闭文件会静默丢改动。
+   * @author ddj 2026年09月11号
+   */
   const flushSave = () => {
-    if (saveTimerRef.current) { saveTimerRef.current(); saveTimerRef.current = null }
+    saveTimerRef.current?.flush()
   }
 
   const doSave = (silent) => {
@@ -1062,6 +1117,8 @@ export function EditorView(props) {
     if (isImageActive) { setStatus('图片只读预览'); return }
     const text = ed.getValue()
     if (!silent) setStatus('保存中…')
+    // 在途登记：关闭路径的 persistDirty 据此跳过重复提交（内容在同一 tick 内取，必然相同）
+    savingRef.current.add(active)
     rpc('edrv.save', { sessionId, path: active, content: text }).then((res) => {
       if (res && res.ok) {
         setStatus('已保存 ' + new Date().toTimeString().slice(0, 8))
@@ -1074,16 +1131,45 @@ export function EditorView(props) {
         if (/\.code-snippets$/i.test(active)) window.dispatchEvent(new CustomEvent('edrv:snippets-changed'))
       } else { setStatus('保存失败'); setError(res?.error ? String(res.error) : '保存失败') }
     }).catch((e) => { setStatus('保存失败'); setError('保存异常:' + String(e)) })
+      .finally(() => { savingRef.current.delete(active) })
   }
   doSaveRef.current = doSave
+
+  /**
+   * 关闭前落盘：把「待关闭且仍标脏」的页签静默保存。
+   *
+   * 调用方须先 `flushSave()`：它已把活动页签的待执行保存真正提交（见 saveDebounce 的缺陷说明）。
+   * 这里再处理**仍标脏**的页签 —— 包括活动页签（其保存可能在途或失败），
+   * 用 model 里的当前文本补一次，保证关闭前内容一定写到磁盘。
+   * 保存失败只保留脏标记（不丢用户编辑），并在状态栏给出提示。
+   * @author ddj 2026年09月11号
+   * @param paths 即将关闭的页签路径
+   */
+  const persistDirty = (paths) => {
+    for (const path of paths) {
+      if (!dirtyRef.current[path]) continue
+      // 已有在途保存（flushSave 刚提交的防抖保存）：同一 tick 内容必然一致，跳过重复提交
+      if (savingRef.current.has(path)) continue
+      const pdfCtl = pdfCtlRef.current.get(path)
+      if (pdfCtl) { if (pdfCtl.isDirty()) void pdfCtl.savePdf(); continue }
+      const model = modelsRef.current.get(path)
+      if (!model) { setStatus('未保存的修改无法落盘：' + baseNameOf(path)); continue }
+      const content = model.getValue()
+      savingRef.current.add(path)
+      rpc('edrv.save', { sessionId, path, content })
+        .then((res) => { if (res && res.ok) setDirtyMap((d) => Object.assign({}, d, { [path]: false })) })
+        .catch((e) => dbg(sessionId, '关闭前落盘失败：' + path + ' · ' + String(e)))
+        .finally(() => { savingRef.current.delete(path) })
+    }
+  }
 
   const onEdit = () => {
     const ed = editorRef.current
     if (!ed || !active) return
     setDirtyMap((d) => Object.assign({}, d, { [active]: true }))
     setStatus('编辑中…')
-    if (saveTimerRef.current) saveTimerRef.current()
-    saveTimerRef.current = schedule(() => doSave(true), 700)
+    // 重新计时（arm 内部先取消上一轮）；到点自动保存，切页签/关闭前由 flushSave 立即提交
+    saveTimerRef.current?.arm(schedule, 700, () => doSave(true))
   }
   // @author ddj 2026年09月09号 空依赖监听只持有首帧 onEdit（active 恒 null→提前返回，星号与自动保存从未生效）：每次渲染同步最新闭包
   onEditRef.current = onEdit
@@ -1619,6 +1705,94 @@ export function EditorView(props) {
   menuHandlersRef.current = { addRefToChat, openInExplorer }
 
   /**
+   * 复制文本到剪贴板（状态栏反馈；浏览器拒绝时提示，不抛异常）。
+   * @author ddj 2026年09月11号
+   * @param text 待复制文本
+   * @param okText 成功文案
+   */
+  const copyText = (text, okText) => {
+    const value = String(text ?? '')
+    if (!value) { setStatus('无可复制内容'); return }
+    if (!navigator.clipboard?.writeText) { setStatus('剪贴板不可用'); return }
+    navigator.clipboard.writeText(value)
+      .then(() => setStatus(okText + '：' + value))
+      .catch(() => setStatus('复制失败（浏览器拒绝剪贴板写入）'))
+  }
+
+  /**
+   * 在资源管理器视图中显示：展开侧栏文件树到目标文件并高亮。
+   * 工作区外文件（片段/全局规则）无树节点，判定为不可定位并给出提示。
+   * @author ddj 2026年09月11号
+   * @param path 工作区相对路径
+   */
+  const revealTabInView = (path) => {
+    if (!isTreeRevealable(path)) { setStatus('该文件不在工作区内，无法在资源管理器中定位'); return }
+    setSidebarOn(true)
+    setActivePanel('explorer')
+    // 面板可能刚展开（FileExplorer 尚未挂载），故用窗口事件而非直接调用
+    window.dispatchEvent(new CustomEvent('edrv:reveal-path', { detail: { path } }))
+    setStatus('已在资源管理器中定位：' + baseNameOf(path))
+  }
+
+  /**
+   * 切换页签固定态（固定页签整体前移；固定后隐藏 ×，仅可经菜单取消固定）。
+   * @author ddj 2026年09月11号
+   * @param path 目标页签路径
+   */
+  const toggleTabPin = (path) => {
+    const target = tabsRef.current.find((t) => t.path === path)
+    if (!target) return
+    setTabs((prev) => togglePin(prev, path))
+    setStatus(target.pinned ? '已取消固定：' + baseNameOf(path) : '已固定：' + baseNameOf(path))
+  }
+
+  /** 关闭当前活动页签（Ctrl+F4 与菜单动作共用；无页签时提示）。 */
+  const closeActiveTab = () => {
+    if (!activeRef.current) { setStatus('无打开的文件'); return }
+    closeTab(activeRef.current)
+  }
+
+  /**
+   * 页签右键菜单动作表（按菜单条目 id 分派；全部读 ref 取最新状态，防陈旧闭包）。
+   * @author ddj 2026年09月11号
+   * @param path 右键目标页签路径
+   * @returns id → 动作
+   */
+  const tabMenuActions = (path) => ({
+    'add-to-conversation': () => addRefToChat(path),
+    close: () => closeTab(path),
+    'close-others': () => closeTabs(closeOthers(tabsRef.current, path, activeRef.current), '已关闭其他页签'),
+    'close-right': () => closeTabs(closeRight(tabsRef.current, path, activeRef.current), '已关闭右侧页签'),
+    'close-saved': () => closeTabs(closeSaved(tabsRef.current, dirtyRef.current, activeRef.current), '已关闭已保存页签'),
+    'close-all': () => closeTabs(closeAll(tabsRef.current, activeRef.current), '已关闭全部页签'),
+    'copy-path': () => copyText(absoluteOf(path, cwd), '已复制路径'),
+    'copy-relative-path': () => copyText(relativeOf(path, cwd), '已复制相对路径'),
+    'reveal-in-os': () => openInExplorer(path),
+    'reveal-in-view': () => revealTabInView(path),
+    'toggle-pinned': () => toggleTabPin(path),
+  })
+
+  /**
+   * 构建页签右键菜单条目（数据来自 tabMenu 纯函数；此处只注入键位与可用性快照）。
+   * @author ddj 2026年09月11号
+   * @returns ContextMenu 的 entries
+   */
+  const tabMenuEntries = () => {
+    if (!tabMenu) return []
+    const actions = tabMenuActions(tabMenu.path)
+    return buildTabMenu({
+      path: tabMenu.path,
+      tabs: tabsRef.current,
+      active: activeRef.current,
+      dirty: dirtyRef.current,
+      cwd,
+      hasSession: Boolean(sessionId),
+      canAddToConversation: Boolean(addToConversation),
+      closeChord: chordOf('edrv.closeTab'),
+    }).map((entry) => Object.assign({}, entry, { onClick: actions[entry.id] }))
+  }
+
+  /**
    * 在光标处按片段语法展开插入（Monaco 原生 snippet 控制器解析 ${1:占位} 与 $TM_* 变量）。
    * @author ddj 2026年09月10号
    * @param entry 片段条目
@@ -1681,8 +1855,8 @@ export function EditorView(props) {
   const tabsEl = React.createElement('div', { className: 'edrv-tabs', ref: tabsHostRef, style: { flex: '1 1 auto', minWidth: 0 } },
     tabs.map((t) => React.createElement('div', {
       key: t.path,
-      className: 'edrv-tab' + (t.path === active ? ' edrv-tab-active' : ''),
-      title: t.path,
+      className: 'edrv-tab' + (t.path === active ? ' edrv-tab-active' : '') + (t.pinned ? ' edrv-tab-pinned' : ''),
+      title: t.pinned ? t.path + '（已固定）' : t.path,
       onClick: () => { if (t.path !== active) { flushSave(); saveViewState(active); recordNav(); setActive(t.path) } },
       onContextMenu: (e) => {
         e.preventDefault()
@@ -1690,11 +1864,14 @@ export function EditorView(props) {
         setTabMenu({ x: e.clientX, y: e.clientY, path: t.path })
       },
     },
+      // 固定页签在文件名前显示 📌 标记，且不渲染 × （与参考图一致：固定页签不显示关闭按钮）
+      // @author ddj 2026年09月11号
+      (t.pinned ? React.createElement('span', { className: 'edrv-tab-pin', title: '已固定', 'aria-label': '已固定' }, '📌') : null),
       React.createElement('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 180 } }, t.path.split(/[\\/]/).pop() || t.path),
       // 未保存修改页签显示 * 星号（保存成功消失、失败持续）；替换原圆点脏标记
       // @author ddj 2026年09月09号
       (dirtyMap[t.path] ? React.createElement('span', { className: 'edrv-tab-star', title: '未保存修改' }, '*') : null),
-      React.createElement('span', { className: 'edrv-tab-x', onClick: (e) => { e.stopPropagation(); closeTab(t.path) } }, '×'))),
+      (t.pinned ? null : React.createElement('span', { className: 'edrv-tab-x', title: '关闭', onClick: (e) => { e.stopPropagation(); closeTab(t.path) } }, '×')))),
     (openInput
       ? React.createElement('input', { className: 'edrv-path-input', autoFocus: true, placeholder: '输入工作区相对/绝对路径，回车打开', value: pathDraft, onChange: (e) => setPathDraft(e.target.value), onKeyDown: (e) => { if (e.key === 'Enter') openPath(); if (e.key === 'Escape') setOpenInput(false) } })
       : React.createElement('button', { className: 'edrv-tab-add', title: '打开文件（输入路径）', onClick: () => setOpenInput(true) }, '+')))
@@ -1898,28 +2075,17 @@ export function EditorView(props) {
         React.createElement(DiffLauncher, { sessionId, sum, tab: launcherTab, onClose: () => setLauncherOpen(false), onOpenFile: (p) => { openFile(p, true); setLauncherOpen(false) } }))
     : null
 
-  // Tab 右键菜单浮层：全屏遮罩（点击/右键关闭）+ 菜单（固定定位，clamp 防越界）。
-  // 编辑区右键走 Monaco 原生 context menu（editor.addAction），不在此渲染浮层。
-  /**
-   * 计算右键菜单固定定位（clamp 防越出视口）。
-   * @author ddj 2026年08月25号
-   */
-  const menuPos = (x, y) => ({
-    left: Math.max(4, Math.min(x, (window.innerWidth || 800) - 224)),
-    top: Math.max(4, Math.min(y, (window.innerHeight || 600) - 176)),
-  })
-  const menuBackdrop = tabMenu
-    ? React.createElement('div', {
-        style: { position: 'fixed', inset: 0, zIndex: 70 },
-        onClick: dismissMenus,
-        onContextMenu: (e) => { e.preventDefault(); dismissMenus() },
-      })
-    : null
+  // 页签右键菜单：改用通用 ContextMenu 浮层（portal + data-edrv-view + 实测尺寸 clamp +
+  // Esc/外部点击关闭），与侧栏文件树同一套原语。编辑区右键仍走 Monaco 原生菜单。
+  // @author ddj 2026年09月11号
   const tabMenuEl = tabMenu
-    ? React.createElement('div', { className: 'edrv-ctxmenu', style: menuPos(tabMenu.x, tabMenu.y) },
-        React.createElement('button', { className: 'edrv-ctxmenu-item', onClick: () => { addRefToChat(tabMenu.path); dismissMenus() } }, '添加文件到对话'),
-        React.createElement('div', { className: 'edrv-ctxmenu-sep' }),
-        React.createElement('button', { className: 'edrv-ctxmenu-item edrv-ctxmenu-danger', onClick: () => { closeTab(tabMenu.path); dismissMenus() } }, '关闭标签页'))
+    ? React.createElement(ContextMenu, {
+        key: 'edrv-tab-menu',
+        x: tabMenu.x,
+        y: tabMenu.y,
+        entries: tabMenuEntries(),
+        onClose: dismissMenus,
+      })
     : null
 
   // 代码片段浮层（命令栏「代码片段：配置代码片段」/「插入代码片段」）：portal 到 body，随会话注入 cwd/语言
@@ -2011,13 +2177,11 @@ export function EditorView(props) {
   const rootEl = layout === 'side'
     ? React.createElement('div', { ref: viewRootRef, 'data-edrv-view': '1', 'data-edrv-layout': 'side', className: 'edrv-view-side', style: Object.assign({}, baseStyle, { height: '100%' }) },
         editorRow,
-        menuBackdrop,
         tabMenuEl,
         paletteEl,
         snippetPickerEl)
     : React.createElement('div', { ref: viewRootRef, 'data-edrv-view': '1', style: Object.assign({}, baseStyle, { height: 'var(--edrv-editor-height, 100%)', maxHeight: 'var(--edrv-editor-height, 100%)' }) },
         editorRow,
-        menuBackdrop,
         tabMenuEl,
         paletteEl,
         snippetPickerEl)

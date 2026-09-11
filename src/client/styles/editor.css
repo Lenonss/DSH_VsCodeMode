@@ -12,6 +12,9 @@
 [data-edrv-view] .edrv-tab .edrv-tab-star { color: var(--dsw-alias-brand-primary, #4f8cff); font-size: 13px; font-weight: 700; line-height: 1; flex-shrink: 0; } /* 未保存修改星号 @author ddj 2026年09月09号 */
 [data-edrv-view] .edrv-tab .edrv-tab-x { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; border-radius: 4px; color: var(--dsw-alias-label-tertiary, #888); font-size: 11px; }
 [data-edrv-view] .edrv-tab .edrv-tab-x:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(255,255,255,.12)); color: var(--dsw-alias-label-primary, #eee); }
+/* 固定页签：📌 标记 + 免关闭按钮（固定页签不渲染 ×，仅可经右键菜单取消固定） */
+[data-edrv-view] .edrv-tab .edrv-tab-pin { flex-shrink: 0; font-size: 10px; line-height: 1; opacity: .85; }
+[data-edrv-view] .edrv-tab.edrv-tab-pinned { background: var(--dsw-alias-bg-layer-2, rgba(255,255,255,.04)); }
 [data-edrv-view] .edrv-tab-add { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; margin-left: 2px; border: none; border-radius: 6px; background: transparent; color: var(--dsw-alias-label-secondary, #aaa); font-size: 14px; cursor: pointer; flex-shrink: 0; }
 [data-edrv-view] .edrv-tab-add:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(255,255,255,.06)); }
 [data-edrv-view] .edrv-pathbar { display: flex; align-items: center; gap: 8px; height: 26px; padding: 0 10px; background: var(--dsw-alias-bg-layer-1, #ffffff); border-bottom: 1px solid var(--dsw-alias-border-l1, #e0e6e8); font-size: 12px; flex-shrink: 0; overflow: hidden; }
@@ -94,14 +97,21 @@
 [data-edrv-view] .edrv-diffmenu-item:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(15,157,88,.08)); }
 [data-edrv-view] .edrv-diffmenu-item.danger { color: var(--dsw-alias-state-error-primary, #d9534f); }
 [data-edrv-view] .edrv-diffmenu-sep { height: 1px; margin: 2px 4px; background: var(--dsw-alias-border-l1, #e0e6e8); }
-/* 编辑区 / Tab 右键菜单（添加文件/选中内容到对话） */
-[data-edrv-view] .edrv-ctxmenu { position: fixed; z-index: 71; min-width: 200px; max-width: 320px; border-radius: 10px; background: var(--dsw-alias-bg-overlay, #ffffff); border: 1px solid var(--dsw-alias-border-l2, #cbd2d9); box-shadow: 0 8px 26px rgba(31,41,51,.2); padding: 4px; display: flex; flex-direction: column; gap: 1px; }
+/* 编辑区 / Tab 右键菜单（页签右键菜单 + 文件树右键菜单共用）。
+   页签菜单 11 条 + 键位提示，故限高可滚（ContextMenu 以实测尺寸做 viewport clamp）。
+   ⚠️ z-index 71 在既有浮层阶梯内（见文件末尾命令栏注释），不得上调越过命令栏/片段浮窗。 */
+[data-edrv-view] .edrv-ctxmenu { position: fixed; z-index: 71; min-width: 220px; max-width: 360px; max-height: min(70vh, 520px); overflow-y: auto; border-radius: 10px; background: var(--dsw-alias-bg-overlay, #ffffff); border: 1px solid var(--dsw-alias-border-l2, #cbd2d9); box-shadow: 0 8px 26px rgba(31,41,51,.2); padding: 4px; display: flex; flex-direction: column; gap: 1px; }
 [data-edrv-view] .edrv-ctxmenu-item { display: flex; align-items: center; gap: 8px; font-size: 12px; line-height: 18px; padding: 7px 10px; border: none; border-radius: 6px; background: transparent; color: var(--dsw-alias-label-primary, #1f2933); cursor: pointer; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 [data-edrv-view] .edrv-ctxmenu-item:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(15,157,88,.08)); }
 [data-edrv-view] .edrv-ctxmenu-item.edrv-ctxmenu-danger { color: var(--dsw-alias-state-error-primary, #d9534f); }
 [data-edrv-view] .edrv-ctxmenu-item:disabled,
 [data-edrv-view] .edrv-ctxmenu-item.edrv-ctxmenu-disabled { color: var(--dsw-alias-label-disabled, #b0b7c0); cursor: default; background: transparent; }
 [data-edrv-view] .edrv-ctxmenu-sep { height: 1px; margin: 3px 4px; background: var(--dsw-alias-border-l1, #e0e6e8); }
+/* 菜单项文案（弹性占宽，超出省略）与右侧键位提示（不缩放，等宽字体） */
+[data-edrv-view] .edrv-ctxmenu-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+[data-edrv-view] .edrv-ctxmenu-hint { flex: 0 0 auto; padding-left: 18px; color: var(--dsw-alias-label-tertiary, #9aa5b1); font-family: var(--ds-font-family-code, ui-monospace, monospace); font-size: 11px; }
+[data-edrv-view] .edrv-ctxmenu-item:disabled .edrv-ctxmenu-hint,
+[data-edrv-view] .edrv-ctxmenu-item.edrv-ctxmenu-disabled .edrv-ctxmenu-hint { color: var(--dsw-alias-label-disabled, #b0b7c0); }
 [data-edrv-view] .edrv-diffbar-body { max-height: 130px; max-width: min(560px, calc(100vw - 40px)); overflow: auto; padding: 4px 8px 8px; display: flex; flex-direction: column; gap: 4px; border-top: 1px solid var(--dsw-alias-border-l1, #e0e6e8); }
 [data-edrv-view] .edrv-diffrow { display: flex; align-items: center; gap: 8px; padding: 3px 6px; border: 1px solid var(--dsw-alias-border-l1, #e0e6e8); border-radius: 6px; background: var(--dsw-alias-bg-layer-2, #f0f4f4); cursor: pointer; flex-wrap: wrap; }
 [data-edrv-view] .edrv-diffrow:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(15,157,88,.08)); }
@@ -247,6 +257,9 @@
 [data-edrv-view] .edrv-tree-row:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(15,157,88,.08)); }
 [data-edrv-view] .edrv-tree-row.edrv-tree-active { background: var(--dsw-alias-interactive-bg-hover, rgba(15,157,88,.14)); }
 [data-edrv-view] .edrv-tree-row.edrv-tree-context { box-shadow: inset 0 0 0 1px var(--dsw-alias-brand-primary, #0f9d58); background: var(--dsw-alias-interactive-bg-hover, rgba(15,157,88,.12)); }
+/* 「在资源管理器视图中显示」的定位高亮（短时淡出，区别于常驻的 active 态） */
+[data-edrv-view] .edrv-tree-row.edrv-tree-reveal { box-shadow: inset 0 0 0 1px var(--dsw-alias-brand-primary, #0f9d58); background: var(--dsw-alias-interactive-bg-hover, rgba(15,157,88,.18)); animation: edrv-tree-reveal-fade 2s ease-out; }
+@keyframes edrv-tree-reveal-fade { from { background: var(--dsw-alias-interactive-bg-hover, rgba(15,157,88,.32)); } to { background: var(--dsw-alias-interactive-bg-hover, rgba(15,157,88,.18)); } }
 [data-edrv-view] .edrv-tree-chev { width: 12px; flex-shrink: 0; color: var(--dsw-alias-label-tertiary, #9aa5b1); font-size: 10px; text-align: center; }
 [data-edrv-view] .edrv-tree-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 [data-edrv-view] .edrv-tree-name.edrv-tree-dim { color: var(--dsw-alias-label-tertiary, #9aa5b1); }

@@ -77,6 +77,22 @@ React 状态**：编辑器未挂载时装配、卸载后依然安全。
 
 设置页命令列表（`client/keybindings.ts` 的 `COMMANDS`）由目录派生，无需手动登记。
 
+### 4.1 实例：`edrv.closeTab`（关闭当前页签）
+
+| 步骤 | 落点 | 内容 |
+| --- | --- | --- |
+| 写定义 | `ui/commandCatalog.ts` 的 `BRIDGE_COMMANDS` | `closeTabDef()`：`keybinding 'Ctrl+F4'`、`available: hasOpenTabs`、`run: () => emit('closeTab')` |
+| 写默认键位 | `shared/keybindings.ts` | `'edrv.closeTab': 'Ctrl+F4'` |
+| 接住事件 | `ui/EditorView.ts` 接线表 | `['edrv.command.closeTab', () => closeActiveTab()]` |
+
+两点取舍（有回归测试守约）：
+
+- **可用性用页面 DOM 判据** `hasOpenTabs()`（`.edrv-editor-row .edrv-tabs .edrv-tab`），
+  不用 Monaco 模型：图片/PDF 页签没有 Monaco 实例但可以关闭；无页签时判定不可用 →
+  指令桥**放行**按键，不吞掉浏览器/系统对 Ctrl+F4 的默认行为（同 `Ctrl+U` 的不吞键约定）。
+- **不绑 `Ctrl+W`**：浏览器会截获该键且脚本无法 `preventDefault`，故取参考图（VS Code 页签右键菜单）
+  里的第二候选 `Ctrl+F4`；`tests/keybindings.test.ts` 断言默认表中不含 `Ctrl+W`。
+
 ## 5. 第三方扩展
 
 ```js

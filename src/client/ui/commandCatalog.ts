@@ -6,7 +6,7 @@
  * 与既有 `edrv:` 刷新/主题事件分属不同命名空间，互不干扰）。
  * 作者 ddj 2026年09月10号
  */
-import { hasEditorModel } from '../editorModelState.js'
+import { hasEditorModel, hasOpenTabs } from '../editorModelState.js'
 
 /** 一条编辑器指令（展示 + 执行 + 可用性）。 */
 export interface CommandDef {
@@ -87,6 +87,21 @@ function addSelectionRefDef(): CommandDef {
     id: 'edrv.addSelectionRef', label: '添加选中内容为引用', category: '编辑', order: 10,
     keybinding: 'Ctrl+U', available: needsModel,
     run: () => emit('addSelectionRef'),
+  }
+}
+
+/**
+ * 关闭当前页签（参考图 Ctrl+F4）。
+ * 可用性按「是否已打开页签」判定而非编辑器模型：图片/PDF 页签无 Monaco 实例但可关闭；
+ * 无页签时判定不可用 → 指令桥放行按键，不吞掉浏览器/系统对 Ctrl+F4 的默认行为。
+ * @author ddj 2026年09月11号
+ * @returns 命令定义
+ */
+function closeTabDef(): CommandDef {
+  return {
+    id: 'edrv.closeTab', label: '关闭当前页签', category: '文件', order: 40,
+    keybinding: 'Ctrl+F4', available: hasOpenTabs,
+    run: () => emit('closeTab'),
   }
 }
 
@@ -178,6 +193,7 @@ export const BRIDGE_COMMANDS: readonly CommandDef[] = [
   nextEditorRowDef(),
   prevEditorRowDef(),
   addSelectionRefDef(),
+  closeTabDef(),
 ]
 
 /**

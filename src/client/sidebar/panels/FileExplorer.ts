@@ -16,6 +16,7 @@ import { buildTreeMenu } from '../contextMenu.js'
 import { explorerLoad, explorerSave } from '../../state/explorerCache.js'
 import { entriesCacheGet, entriesCacheIsFresh, entriesCachePut } from '../../state/explorerEntriesCache.js'
 import { workspaceScopeOf } from '../../state/scopeStore.js'
+import { ancestorDirsOf } from '../../tabActions.js'
 import type { SidebarCtx } from '../types.js'
 
 const DIR_CAP = 4000
@@ -23,6 +24,10 @@ const SAVE_DEBOUNCE_MS = 300
 const FOLLOW_INTERVAL_MS = 10_000
 const PREFETCH_MAX = 4
 const PREFETCH_EXCLUDED = new Set(['node_modules', '.git', '.hg', '.svn', '.pnpm', '.pnpm-store'])
+/** 「在资源管理器视图中显示」高亮时长与定位重试上限（目录懒加载需等待行渲染）。 */
+const REVEAL_HIGHLIGHT_MS = 2000
+const REVEAL_RETRY_MAX = 6
+const REVEAL_RETRY_MS = 120
 
 // --region 行图标（官方原语：目录文件夹图标 + 文件类型图标；缺失时回落纯文本）
 
@@ -77,6 +82,16 @@ function refreshIconEl() {
 // --endregion
 
 /**
+ * 转义 CSS 属性选择器的值（路径含引号/反斜杠时避免选择器语法错误）。
+ * @author ddj 2026年09月11号
+ * @param value 原始值
+ * @returns 可安全嵌入 `[attr="…"]` 的字符串
+ */
+function cssEscape(value) {
+  return String(value ?? '').replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+}
+
+/**
  * 目录树面板主体（SWR：有缓存先渲染，无缓存才显示加载态；加载总在后台）。
  * @param props.ctx 面板共享上下文（sessionId/openFile/activePath/pendingByPath/fileMenuItems/notify）
  */
@@ -94,6 +109,7 @@ export function FileExplorer(props) {
   const [loading, setLoading] = React.useState({})
   const [errors, setErrors] = React.useState({}) // rel → 错误文案（仅无任何数据时展示）
   const [menu, setMenu] = React.useState(null) // 右键菜单 { x, y, target }
+  const [revealPath, setRevealPath] = React.useState(null) // 高亮的相对路径（「在资源管理器视图中显示」）
   // 各状态 ref 镜像：定时器/监听用最新闭包
   const tokensRef = React.useRef({})
   const expandedRef = React.useRef({})
@@ -105,6 +121,10 @@ export function FileExplorer(props) {
   const saveTimerRef = React.useRef(null)
   const loadDirRef = React.useRef(null)
   const refreshRef = React.useRef(null)
+  const revealTimerRef = React.useRef(null) // 高亮清除计时器
+  const revealTryRef = React.useRef(0) // 当前定位的重试计数（行渲染需等目录加载）
+  const revealInTreeRef = React.useRef(null) // 定位动作最新闭包（窗口监听读取）
+  const treeRef = React.useRef(null) // 目录树容器（定位时按 data-edrv-path 查行）
 
   /** 渲染取数：内存态 → 本地条目缓存 → null（显示加载态）。 */
   const entriesOf = (rel) => dirsRef.current[rel] ?? entriesCacheGet(scope, rel) ?? null
@@ -179,6 +199,50 @@ export function FileExplorer(props) {
     void loadDir(rel, { prefetch: true })
   }
 
+  /**
+   * 尝试把目标行滚入可见并高亮；行尚未渲染（祖先目录仍在加载）时按上限重试。
+   * @author ddj 2026年09月11号
+   * @param path 目标相对路径
+   */
+  const tryReveal = (path) => {
+    const host = treeRef.current
+    const row = host?.querySelector?.('[data-edrv-path="' + cssEscape(path) + '"]')
+    if (!row) {
+      revealTryRef.current += 1
+      if (revealTryRef.current < REVEAL_RETRY_MAX) {
+        window.setTimeout(() => tryReveal(path), REVEAL_RETRY_MS)
+      }
+      return
+    }
+    row.scrollIntoView?.({ block: 'center' })
+    setRevealPath(path)
+    if (revealTimerRef.current) clearTimeout(revealTimerRef.current)
+    revealTimerRef.current = window.setTimeout(() => {
+      revealTimerRef.current = null
+      setRevealPath(null)
+    }, REVEAL_HIGHLIGHT_MS)
+  }
+
+  /**
+   * 在资源管理器视图中显示：展开全部祖先目录并定位高亮目标文件。
+   * 目录条目懒加载，故先展开祖先并触发加载，再由 tryReveal 轮询等行渲染。
+   * @author ddj 2026年09月11号
+   * @param path 目标相对路径
+   */
+  const revealInTree = (path) => {
+    if (!path) return
+    const ancestors = ancestorDirsOf(path)
+    revealTryRef.current = 0
+    setExpanded((prev) => {
+      const next = Object.assign({}, prev)
+      for (const dir of ancestors) next[dir] = true
+      return next
+    })
+    for (const dir of ancestors) void loadDir(dir, { prefetch: false })
+    tryReveal(path)
+  }
+  revealInTreeRef.current = revealInTree
+
   const refresh = () => {
     const keep = Object.keys(expandedRef.current).filter((k) => expandedRef.current[k] === true)
     tokensRef.current = {}
@@ -206,6 +270,7 @@ export function FileExplorer(props) {
     setErrors({})
     setMenu(null)
     setRoot(null)
+    setRevealPath(null)
     // 恢复上次展开状态（对齐 VSCode：持久化展开路径，条目缓存即时渲染、后台刷新）
     const cached = scope ? explorerLoad(scope) : null
     const restored = cached?.expanded ?? []
@@ -244,6 +309,20 @@ export function FileExplorer(props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // 在资源管理器视图中显示（页签右键菜单）：展开祖先目录并定位高亮
+  React.useEffect(() => {
+    const onReveal = (event) => {
+      const path = event?.detail?.path
+      if (typeof path === 'string' && path) revealInTreeRef.current?.(path)
+    }
+    window.addEventListener('edrv:reveal-path', onReveal)
+    return () => {
+      window.removeEventListener('edrv:reveal-path', onReveal)
+      if (revealTimerRef.current) { clearTimeout(revealTimerRef.current); revealTimerRef.current = null }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   // 10s 轻量跟随：已展开目录后台刷新（命中 host 索引，近零成本），树跟随 agent 写入
   React.useEffect(() => {
     if (!scope) return
@@ -267,8 +346,10 @@ export function FileExplorer(props) {
       key: e.path,
       className: 'edrv-tree-row'
         + (active ? ' edrv-tree-active' : '')
-        + (contextTarget ? ' edrv-tree-context' : ''),
+        + (contextTarget ? ' edrv-tree-context' : '')
+        + (revealPath === e.path ? ' edrv-tree-reveal' : ''),
       title: e.path,
+      'data-edrv-path': e.path,
       style: { paddingLeft: 6 + depth * 14 },
       onClick: () => { if (isDir) toggle(e.path); else openFile(e.path) },
       onContextMenu: (ev) => {
@@ -338,7 +419,7 @@ export function FileExplorer(props) {
       React.createElement('span', { className: 'edrv-side-root', title: root || '' }, rootName),
       React.createElement('span', { style: { flex: 1 } }),
       React.createElement('button', { className: 'edrv-side-btn', title: '刷新目录树', onClick: refresh }, refreshIconEl())),
-    React.createElement('div', { className: 'edrv-tree' },
+    React.createElement('div', { className: 'edrv-tree', ref: treeRef },
       (errorText
         ? React.createElement('div', { className: 'edrv-tree-error' },
             React.createElement('span', null, String(errorText)),

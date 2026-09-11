@@ -57,7 +57,15 @@ describe('createDefaultFileMenuItems', () => {
     const ctx = makeCtx(makeAdd('busy'), { notify })
     byId()['add-to-conversation'].run({ path: 'src/index.ts', type: 'file' }, ctx)
     await Promise.resolve()
-    expect(notify).toHaveBeenCalledWith('已添加文件引用（输入框忙，已降级纯文本）')
+    expect(notify).toHaveBeenCalledWith('已添加文件引用（已降级纯文本）')
+  })
+
+  it('两条通道都失败：提示重试（内容未被改动）', async () => {
+    const notify = vi.fn()
+    const ctx = makeCtx(makeAdd('failed'), { notify })
+    byId()['add-to-conversation'].run({ path: 'src/index.ts', type: 'file' }, ctx)
+    await Promise.resolve()
+    expect(notify).toHaveBeenCalledWith('添加引用失败（输入框忙或未就绪，请重试）')
   })
 
   it('不可用：提示无法添加到对话', async () => {

@@ -9,7 +9,7 @@ import React from 'react'
 import { createPortal } from 'react-dom'
 import { clampMenuPosition } from './menuPosition.js'
 
-/** 单条菜单项（展示层形状；业务侧由 buildTreeMenu 映射而来）。 */
+/** 单条菜单项（展示层形状；业务侧由 buildTreeMenu / buildTabMenu 映射而来）。 */
 export interface ContextMenuEntry {
   id: string
   label: string
@@ -17,6 +17,8 @@ export interface ContextMenuEntry {
   disabled?: boolean
   /** 前置分隔线。 */
   separator?: boolean
+  /** 右侧提示文案（键位弦等；仅在真实绑定时传入，缺省不渲染）。 */
+  hint?: string
   onClick?: () => void
 }
 
@@ -27,9 +29,35 @@ export interface ContextMenuProps {
   onClose: () => void
 }
 
-/** 菜单估算宽高（clamp 防越出视口，与 EditorView menuPos 常量对齐）。 */
+/** 估算宽高（实测前的回退值；条目数变化大时以实测为准，见 useLayoutEffect）。 */
 const MENU_W = 224
 const MENU_H = 176
+
+/** 渲染行：分隔线或菜单项。 */
+export interface MenuRow {
+  kind: 'sep' | 'item'
+  entry: ContextMenuEntry
+}
+
+/**
+ * 把条目表展开为渲染行：`separator` 是**前置分隔线**，条目本身仍然渲染。
+ *
+ * ⚠️ 旧实现把 `separator` 当成「本条是分隔线」而 `continue` 跳过条目本身 ——
+ * 因历史调用方都没用过该字段，缺陷一直潜伏；页签菜单首次使用后表现为
+ * 「关闭 / 复制路径 / 在文件资源管理器中显示 / 固定」四条主条目整条消失。
+ * 首条带 separator 时不渲染分隔线（菜单顶部不应有横线，与参考图一致）。
+ * @author ddj 2026年09月11号
+ * @param entries 菜单项列表
+ * @returns 渲染行列表
+ */
+export function menuRows(entries: readonly ContextMenuEntry[]): MenuRow[] {
+  const rows: MenuRow[] = []
+  for (const entry of entries) {
+    if (entry.separator && rows.length) rows.push({ kind: 'sep', entry })
+    rows.push({ kind: 'item', entry })
+  }
+  return rows
+}
 
 /**
  * 浮动右键菜单。
@@ -41,6 +69,8 @@ const MENU_H = 176
 export function ContextMenu(props: ContextMenuProps): React.ReactElement {
   const { x, y, entries, onClose } = props
   const menuRef = React.useRef<HTMLDivElement | null>(null)
+  // 实测菜单尺寸：页签菜单有 11 条 + 键位提示，估算常量会偏低导致底部条目越界不可达
+  const [size, setSize] = React.useState<{ w: number; h: number } | null>(null)
 
   React.useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
@@ -67,6 +97,16 @@ export function ContextMenu(props: ContextMenuProps): React.ReactElement {
     }
   }, [onClose])
 
+  // 首帧后量一次真实尺寸并据此定位：条目数/文案长度变化都不会越出视口下边界
+  React.useLayoutEffect(() => {
+    const el = menuRef.current
+    if (!el) return
+    const w = el.offsetWidth
+    const h = el.offsetHeight
+    if (!w || !h) return
+    setSize((prev) => (prev && prev.w === w && prev.h === h ? prev : { w, h }))
+  }, [entries])
+
   const safeX = Number.isFinite(x) ? x : 4
   const safeY = Number.isFinite(y) ? y : 4
   const position = clampMenuPosition(
@@ -74,16 +114,17 @@ export function ContextMenu(props: ContextMenuProps): React.ReactElement {
     safeY,
     window.innerWidth || 800,
     window.innerHeight || 600,
-    MENU_W,
-    MENU_H,
+    size?.w ?? MENU_W,
+    size?.h ?? MENU_H,
   )
 
   const children: React.ReactNode[] = []
-  for (const entry of entries) {
-    if (entry.separator) {
-      children.push(React.createElement('div', { key: 'sep-' + entry.id, className: 'edrv-ctxmenu-sep' }))
+  for (const row of menuRows(entries)) {
+    if (row.kind === 'sep') {
+      children.push(React.createElement('div', { key: 'sep-' + row.entry.id, className: 'edrv-ctxmenu-sep' }))
       continue
     }
+    const entry = row.entry
     const cls = 'edrv-ctxmenu-item'
       + (entry.danger ? ' edrv-ctxmenu-danger' : '')
       + (entry.disabled ? ' edrv-ctxmenu-disabled' : '')
@@ -91,13 +132,16 @@ export function ContextMenu(props: ContextMenuProps): React.ReactElement {
       key: entry.id,
       className: cls,
       disabled: entry.disabled,
+      title: entry.hint ? entry.label + ' (' + entry.hint + ')' : entry.label,
       onClick: () => {
         if (!entry.disabled) {
           entry.onClick?.()
           onClose()
         }
       },
-    }, entry.label))
+    },
+      React.createElement('span', { className: 'edrv-ctxmenu-label' }, entry.label),
+      entry.hint ? React.createElement('span', { className: 'edrv-ctxmenu-hint' }, entry.hint) : null))
   }
 
   const overlay = React.createElement('div', { 'data-edrv-view': '1' },

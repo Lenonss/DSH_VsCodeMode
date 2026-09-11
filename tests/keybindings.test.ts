@@ -25,7 +25,17 @@ describe('keybindings shared defaults', () => {
       'edrv.nextEditorRow': 'Ctrl+Alt+ArrowDown',
       'edrv.prevEditorRow': 'Ctrl+Alt+ArrowUp',
       'edrv.addSelectionRef': 'Ctrl+U',
+      'edrv.closeTab': 'Ctrl+F4',
     })
+  })
+
+  it('关闭当前页签键位（Ctrl+F4）可解析命中；不绑 Ctrl+W（浏览器会截获）', () => {
+    keybindingsApply({})
+    expect(chordOf('edrv.closeTab')).toBe('Ctrl+F4')
+    expect(matchEvent({ ctrlKey: true, key: 'F4' }, bindingsOf('edrv.closeTab'))).toBe(true)
+    // Ctrl+F4 缺 Ctrl（裸 F4）不命中；Ctrl+W 不在目录里
+    expect(matchEvent({ key: 'F4' }, bindingsOf('edrv.closeTab'))).toBe(false)
+    expect(Object.values(KEYBINDING_DEFAULTS)).not.toContain('Ctrl+W')
   })
 
   it('添加选中内容为引用（Ctrl+U）可解析命中，Ctrl+Shift+U 不误命中', () => {

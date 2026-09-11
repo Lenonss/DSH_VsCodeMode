@@ -14,8 +14,10 @@ export const CACHE_KEY = {
   entries: 'edrv.cache.entries.v2.',
   /** 编辑区视图状态（viewStateCache v1）。 */
   viewstate: 'edrv.cache.viewstate.v1.',
-  /** 编辑器页签/活动文件（EditorView v2）。 */
-  editor: 'edrv.editor.v2.',
+  /** 编辑器页签/活动文件（EditorView v3：页签带 pinned 固定标记）。 */
+  editor: 'edrv.editor.v3.',
+  /** 旧编辑器页签键（v2：页签为纯路径数组）——仅用于一次性回读迁移，不再写入。 */
+  editorLegacy: 'edrv.editor.v2.',
   /** 侧边栏状态（EditorView；按布局 side/central 追加段）。 */
   sidebar: 'edrv.sidebar.',
   /** 搜索面板条件（SearchPanel v1）。 */
