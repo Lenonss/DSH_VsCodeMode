@@ -7,6 +7,7 @@ import { describe, expect, it, afterAll } from 'vitest'
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import {
   SKILL_PROVIDER_NAME,
   SKILL_PREFIXES,
@@ -154,8 +155,12 @@ describe('hasGroupPrefix', () => {
 // --region 路径解析
 describe('skillsDirOf', () => {
   it('由 lib/index.js 派生到包根 skills/', () => {
-    const dir = skillsDirOf('file:///D:/pkg/lib/index.js')
-    expect(norm(dir)).toBe('D:/pkg/skills')
+    // CI 跑 ubuntu：禁止硬编码 Windows 盘符 file URL——`file:///D:/x` 在 Linux 会把盘符
+    // 当成普通路径段解析成 `/D:/x`，断言必然失败（本地 Windows 全绿骗人）。
+    // 改为用「真实包根」构造 URL，两平台都成立且更贴近真实调用（lib/index.js 的同级 ../skills）。
+    const root = fileURLToPath(new URL('..', import.meta.url))
+    const dir = skillsDirOf(pathToFileURL(join(root, 'lib', 'index.js')).href)
+    expect(norm(dir)).toBe(norm(join(root, 'skills')))
   })
 
   it('随包 skills/ 目录与 provider 常量可用', () => {
