@@ -6,7 +6,7 @@
  */
 import { spawnServer, type Transport } from './transport.js'
 import { createLspClient, type LspClient } from './client.js'
-import { pathToFileUri } from './uri.js'
+import { pathToFileUri, toWorkspacePath, isAbsolutePath } from './uri.js'
 import { deriveDefinitionFromLocations } from './derive.js'
 import type { LspProviderSpec } from './providers.js'
 import { LSP_SEMANTIC_TOKEN_MODIFIERS, LSP_SEMANTIC_TOKEN_TYPES } from '../shared/lsp.js'
@@ -60,6 +60,21 @@ const RESTARTABLE = true
 export function createLspServer(spec: LspProviderSpec, root: string, languageId: string, logger?: (line: string) => void): LspServer {
   const rootUri = pathToFileUri(root)
   const docs = new Map<string, OpenDoc>()
+
+  /**
+   * 文档键 → file:// URI（防御性第二道：绝不把绝对路径拼成畸形 URI）。
+   *
+   * 正常路径下 rpc 入口已归一为工作区相对，此处走 `root + '/' + path`；
+   * 但若将来有调用方绕过入口直接传绝对路径，旧写法会拼出 `<root>/<root>/Assets/...`
+   * 这种不存在的文档，didOpen 静默落空 → 引用/定义全空且无报错。这里显式兜底。
+   * @author ddj 2026年09月11号
+   * @param path 工作区相对路径（或绝对路径）
+   * @returns file:// URI
+   */
+  const docUriOf = (path: string): string => {
+    const rel = toWorkspacePath(root, path)
+    return isAbsolutePath(rel) ? pathToFileUri(rel) : pathToFileUri(root + '/' + rel.split('/').join('/'))
+  }
   let phase: LspServerPhase = 'idle'
   let transport: Transport | null = null
   let client: LspClient | null = null
@@ -208,7 +223,7 @@ export function createLspServer(spec: LspProviderSpec, root: string, languageId:
 
     sync(path: string, text: string, version: number): void {
       const existing = docs.get(path)
-      const uri = existing?.uri ?? pathToFileUri(root + '/' + path.split('/').join('/'))
+      const uri = existing?.uri ?? docUriOf(path)
       if (existing) {
         existing.version = version
         existing.text = text

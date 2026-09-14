@@ -23,7 +23,7 @@ import { buildReport } from './compat.js'
 import { bindHostLog, log } from './log.js'
 import { createLspManager } from './lsp/manager.js'
 import { createLspRpc } from './lsp/rpc.js'
-import { disposeAllServers } from './lsp/transport.js'
+import { disposeAllServers, hookExitReclaim } from './lsp/transport.js'
 import { createAiRpc } from './ai/rpc.js'
 import { installRulesSection } from './rules.js'
 import { installSkillGroup } from './skills.js'
@@ -95,6 +95,8 @@ export function apply(ctx: Ctx, config?: unknown): void {
     void lspManager.disposeAll().catch(() => {})
     disposeAllServers()
   })
+  // 宿主进程退出回收：ctx.effect 清理不覆盖进程退出，缺此注册会留下跨重启的孤儿服务器
+  hookExitReclaim()
 
   log.info('编辑差异审查已装配（/edrv/rpc 路由就绪，项目 MCP 隔离已启用，语言服务器 LSP 已接入，规则注入' + (rulesInstalled ? '已接入' : '未接入') + '，技能组' + (skillsDispatched ? '装配中' : '未装配') + '）')
 }

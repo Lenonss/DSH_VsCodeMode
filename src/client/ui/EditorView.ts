@@ -36,9 +36,9 @@ import { getSidebarMinWidth } from '../sidebarMin.js'
 import { navHistoryFor } from '../navHistory.js'
 import { statusOfAdd } from '../addToConversation.js'
 import { CACHE_KEY } from '../paths.js'
-import { bindLspEditor, runGoToDefinition, runFindReferences, hideReferencesOverlay } from '../monaco/lsp/providers.js'
+import { runGoToDefinition, runFindReferences, hideReferencesOverlay } from '../monaco/lsp/providers.js'
 import { bindLspUnderline } from '../monaco/lsp/underline.js'
-import { onLspProgress, refreshStatus } from '../monaco/lsp/index.js'
+import { onLspProgress, refreshStatus, setSession as setLspSession } from '../monaco/lsp/index.js'
 import { setupAiInline, trackAiEditor, aiInlineEnabled } from '../ai/inlineProvider.js'
 import { SnippetsPicker } from './SnippetsPicker.js'
 import { invalidateSnippets, setSnippetsSession, setupSnippets } from '../snippets/provider.js'
@@ -99,6 +99,22 @@ export function EditorView(props) {
     migrateScopedKeys(s, sessionId)
     return s
   }, [cwd, sessionId])
+
+  /**
+   * 两个路径是否指向同一文件（归一化后比较）。
+   *
+   * 为什么需要：差异记录的 path 取自工具参数 `file_path`（多为**绝对路径**），而 `active`
+   * 来自页签（多为**工作区相对路径**）；直接 `===` 会恒不相等，导致行内差异标记全部消失、
+   * 「差异 N 文件」指示与实际文件对不上。统一经 relativeOf 归一再比即可消除形态差异。
+   * @author ddj 2026年09月11号
+   * @param a 路径（相对或绝对）
+   * @param b 路径（相对或绝对）
+   * @returns 是否同一文件
+   */
+  const sameFile = React.useCallback((a, b) => {
+    if (!a || !b) return false
+    return relativeOf(a, cwd).toLowerCase() === relativeOf(b, cwd).toLowerCase()
+  }, [cwd])
   const [monaco, setMonaco] = React.useState(null)
   const [monacoErr, setMonacoErr] = React.useState(null)
   const [records, setRecords] = React.useState({})
@@ -194,9 +210,12 @@ export function EditorView(props) {
 
   const currentRecords = React.useMemo(() => {
     const list = []
-    for (const rec of Object.values(records)) if (rec.path === active && rec.archived !== true) list.push(rec)
+    for (const rec of Object.values(records)) {
+      if (rec.archived === true) continue
+      if (sameFile(rec.path, active)) list.push(rec)
+    }
     return list
-  }, [records, active])
+  }, [records, active, cwd])
 
   const contentReady = content !== null && contentPath === active
   // 当前 tab 是否处于图片预览模式（与 loadContent 的分派条件同源；SVG 文本模式时为 false）
@@ -617,6 +636,15 @@ export function EditorView(props) {
     void refreshStatus(true).then(publishLsp)
     const timer = setInterval(() => { void refreshStatus(true).then(publishLsp) }, 1500)
     return () => { unsubscribe(); clearInterval(timer) }
+  }, [sessionId])
+
+  // LSP 会话：EditorView 持有权威 sessionId，直接写入 lspClient 并广播。
+  // 直接调用不依赖事件时序（订阅可能晚于首次派发），广播供其它消费方复用。
+  // @author ddj 2026年09月11号
+  React.useEffect(() => {
+    if (!sessionId) return
+    setLspSession(sessionId)
+    window.dispatchEvent(new CustomEvent('edrv:lsp-session', { detail: { sessionId } }))
   }, [sessionId])
 
   // AI 补全状态事件：busy/ok/error/idle 即时上栏；ok 3s、error 10s 后回落就绪
@@ -1349,7 +1377,6 @@ export function EditorView(props) {
       id: 'edrv.showCommands', label: '显示所有命令', contextMenuGroupId: '1_edrv',
       run: () => window.dispatchEvent(new CustomEvent('edrv.command.showCommands')),
     })
-    bindLspEditor(ed)
     bindLspUnderline(ed, m)
     // AI 补全：编辑器实例登记（差异静默判定用）+ Alt+\ 手动触发 ghost text
     trackAiEditor(ed)
@@ -1443,9 +1470,9 @@ export function EditorView(props) {
     else if (pendingRegions.length === 0) setDiffIdx(0)
   }, [pendingRegions.length])
   React.useEffect(() => {
-    const i = sum.pendingFiles.findIndex((f) => f.path === active)
+    const i = sum.pendingFiles.findIndex((f) => sameFile(f.path, active))
     if (i >= 0) { if (i !== fileIdx) setFileIdx(i) }
-  }, [sum.pendingFiles, active])
+  }, [sum.pendingFiles, active, sameFile])
 
   // 上下箭头：当前文件内差异切换（x/x）
   const gotoDiff = (delta) => {
@@ -1464,7 +1491,7 @@ export function EditorView(props) {
 
   const openNextFile = () => {
     if (!sum.pendingFiles.length) return
-    if (sum.pendingFiles.some((file) => file.path === active)) gotoFile(1)
+    if (sum.pendingFiles.some((file) => sameFile(file.path, active))) gotoFile(1)
     else openFile(sum.pendingFiles[0].path, true)
   }
 
@@ -2051,7 +2078,7 @@ export function EditorView(props) {
     onRefresh: reloadFile,
     activePath: active,
     diffIdx: contentReady ? diffIdx : 0,
-    diffTotal: displayDiffTotal(contentReady, pendingRegions.length, sum.files.find((file) => file.path === active)?.pending ?? 0),
+    diffTotal: displayDiffTotal(contentReady, pendingRegions.length, sum.files.find((file) => sameFile(file.path, active))?.pending ?? 0),
     fileIdx,
     fileTotal: sum.pendingFiles.length,
     onPrevDiff: () => gotoDiff(-1),

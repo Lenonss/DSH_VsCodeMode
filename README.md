@@ -51,14 +51,56 @@
   （有该 API 的浏览器下 Monaco 不再创建 textarea），导致本命令与其它 12 条 `needsModel` 命令被静默隐藏、
   按键被放行；v0.3.1 已改为与输入实现无关的判据（`.edrv-editor-row .monaco-editor`）。
 - **LSP 智能（编辑器内）**：`F12`/右键「转到定义」+ `Shift+F12`「查找所有引用」+ `Ctrl+点击` 引用导航
-  （0 条→定义兜底、1 条→直接跳转、多条→原生 References Peek）+ `Ctrl+hover` 可导航标识符下划线提示；
+  （v0.4.2 起统一委托完整 Monaco 原生命令：**多结果弹 Peek 让用户选**，单结果直跳，
+  取不到定义时自动降级到「转到引用」）+ `Ctrl+hover` 可导航标识符下划线提示；
   定义查找带降级链（definition → declaration → 引用推导），参数/局部变量（`this`、`pTarget` 这类）
   同样能跳到声明，不再只有方法可用。
+  ⚠️ v0.3.4 修复「LSP 一直显示未启动 / 重启后定义与引用失效」：根因是 host 侧**文档跟踪（tracker）与
+  服务器注册表（manager）是两套独立结构**——「重新检测 / 保存配置 / 运行时重装」只摘除 manager 条目、
+  保留 tracker 计数，此后 `tracker.open()` 对已打开文档恒返回 `false`（不再触发 acquire），
+  `sync` 直接以「语言服务器未注册」失败且客户端反复重试也不收敛，该语言**永久不可用直到重启宿主**。
+  修复三处：①`sync` 在 manager 缺条目时**自愈补建**（计数不重复增，见 `resolveServer`）；
+  ②重置类操作**同时清 tracker**（新增 `tracker.reset(root,lang)` 与 manager 同范围成对调用）；
+  ③设置页状态改为**反映真实运行相位**（原先 `edrv.lsp.detect` 硬编码 `idle`，卡片恒显「未启动」）。
+  另修客户端：定义/引用查询失败不再静默吞成空结果（改为上抛可见状态），会话 id 由 EditorView 直写并广播，
+  不依赖服务订阅形状。附带回收宿主退出时残留的 LSP 子进程（原先 `ctx.effect` 清理不覆盖进程退出）。
+  ⚠️ v0.4.0 修复「引用查找完全没反应」：该症状与上面的 tracker/manager 失步**无关**，根因在编辑器侧——
+  离线 Monaco 被裁剪掉 `gotoSymbol`/`peekView` 贡献，原生 References Peek 动作不存在。详见下方
+  「Monaco 离线分发」。现「多条引用 → 原生 Peek」已恢复可用。
+  ⚠️ v0.4.1 修复「差异文件里引用/定义全空」：根因是**路径形态不一致**。差异记录 `rec.path` 取自工具参数
+  `file_path`（**绝对路径**），而 LSP 文档键与 `server.sync()` 拼 `file://` URI 的口径都是**工作区相对路径**——
+  不归一化时绝对路径会被拼成 `<root>/<root>/Assets/...` 这种畸形 URI，服务器视其为不存在的文档，
+  `didOpen` 静默落空，于是**引用/定义/hover/符号全部返回空且没有任何报错**。
+  实测同一文件：相对路径 `references=3 / symbols=37`，绝对路径 `0 / 0`——这正是「差异里点开的文件查引用没反应」的原因
+  （差异入口传的就是绝对路径）。修复：新增 `toWorkspacePath()`（`src/lsp/uri.ts`）并在 `edrv.lsp.*` **入口统一归一化**
+  （放入口而非 server 内，否则同一文件会因形态不同产生两条 tracker 记录、引用计数翻倍），
+  `server.sync` 另加防御性兜底，杜绝畸形 URI。
+  同一根因还导致**行内差异标记不显示**（`EditorView` 用 `rec.path === active` 比较，绝对 vs 相对恒不相等），
+  已改为经 `relativeOf` 归一后比较，连同「差异 N 文件」导航一起去修复。
+  ⚠️ v0.4.2 修复「Ctrl+点击多结果直接跳走、不给选择」：根因是**插件自研的 Ctrl+点击路径本身**——
+  它在「0 条其它引用」时降级为「查定义 → 跳 `defs[0]`」，于是遇到**有多个定义但无其它引用**的标识符
+  （实测 `IsReady` 有 2 个定义）就硬跳第一个，用户没有选择余地；换用完整 Monaco 后原生 Ctrl+点击
+  （`gotoDefinitionAtPosition`）同时激活，两套路径还互相竞争。
+  现**统一委托原生**：Ctrl+点击 / `F12` / `Shift+F12` 全部走 Monaco 原生命令
+  （`editor.action.revealDefinition` / `editor.action.referenceSearch.trigger`），
+  多结果弹 Peek 让用户选（原生 `gotoLocation.multipleDefinitions` 默认 `peek`），
+  取不到定义时按 `alternativeDefinitionCommand` 自动降级为「转到引用」。
+  自研鼠标监听（`bindLspEditor`）与相关死代码已删除。实测：Ctrl+点击 2 定义 → `Definitions (2)`、
+  0 定义 3 引用 → `References (3)`、10 引用 → `References (10)`，均弹 Peek 可选。
 - **差异审查**：Host 捕获 agent 的 `edit`/`write`（`tools/result`），客户端统一使用**唯一一个挂在 DSH `conversation.input.dock` 的 DiffBox 实例**：
   编辑器未打开时显示紧凑「差异 N 个文件 · 查看下一个」按钮（点击自动打开侧栏编辑器并聚焦差异）；编辑器打开后 dock 切换为
   完整操作条（Keep / Undo / 跳转 / 回滚 / 归档对比），不会再出现第二个差异栏。header 差异角标 +
   DiffLauncher 全局总览 + 归档/批次回滚；状态持久化到工作区旁车（`.dsh-edit-review.json`，重启不丢）。
 - **Monaco 离线分发**：`assets/vendor/monaco` AMD 构建随包发布，经 `/edrv/vendor/*` 前缀路由提供，全离线可用。
+  版本锁定 `monaco-editor@0.42.0-dev-20230906`（commit `e7d7a5b0`），由 `node scripts/vendor-monaco.mjs [--force]`
+  从 npm registry 复现铺入（内含版本+commit 双重断言，防静默换错构建）。
+  ⚠️ v0.4.0 修复「查找引用完全没反应」：旧 vendor 是**被裁剪的**构建，缺 `gotoSymbol` / `peekView` 贡献模块，
+  于是 `editor.action.referenceSearch.trigger` 等动作在运行时根本不存在，`Ctrl+点击`（多条引用）与
+  `Shift+F12` 走原生 Peek 的路径静默失败（`triggerReferencePeek` 取不到动作即 `return false`，无任何提示）。
+  现已换为**官方完整构建**（`referencesController` / `peekView` / `gotoSymbol` 齐备），并同步把该静默失败
+  改为状态栏明确提示。本地化按白名单只保留英文基线 + 简体中文（`KEEP_NLS`），其余 16 个语言包不随包分发；
+  `sourceMappingURL` 在铺入时剥离（官方指向未分发的 `min-maps/`，不剥会持续 404）。
+  构建后 vendor 约 10.3MB（替换前 21.5MB）。
 - **PDF 浏览与编辑**（v0.1.55，借鉴开源 [pdf.js](https://github.com/mozilla/pdf.js)，Apache-2.0）：
   打开 `.pdf` 文件在编辑区页签内直接浏览（连续滚动/翻页/缩放/文本选择，cmaps 支持中文渲染）；
   工具条进入注释编辑：✎ 文本框 / 🖌 画笔 / 🖍 高亮，`Ctrl+S` 或 💾 保存把批注写回原文件

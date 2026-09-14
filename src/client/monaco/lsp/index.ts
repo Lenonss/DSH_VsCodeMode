@@ -6,14 +6,20 @@
  * 作者 ddj 2026-08-27
  */
 import { registerLspProviders, hideReferencesOverlay } from './providers.js'
-import { setLspSession, refreshStatus, lspStatusFor, onLspProgress } from './lspClient.js'
+import { setLspSession, refreshStatus, lspStatusFor, onLspProgress, bindLspSession } from './lspClient.js'
 
 let monacoRef = null
+let sessionBound = false
 
 /** Monaco 加载后装配（幂等；重复调用仅刷新会话）。 */
 export function setupLsp(monaco) {
   monacoRef = monaco
   registerLspProviders(monaco)
+  // 会话广播订阅只装一次（与 Monaco 是否已加载无关）
+  if (!sessionBound) {
+    sessionBound = true
+    bindLspSession()
+  }
 }
 
 /** 会话切换：更新 host 侧文档归属 + 刷新状态。 */

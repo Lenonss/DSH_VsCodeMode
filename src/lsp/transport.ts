@@ -141,3 +141,40 @@ export function disposeAllServers(): void {
   }
   running.clear()
 }
+
+/** 进程退出回收是否已注册（防重复挂监听）。 */
+let exitHooked = false
+
+/**
+ * 宿主进程退出时回收 LSP 子进程（幂等）。
+ *
+ * 为什么需要：插件的 ctx.effect 清理只在卸载/重载时触发，宿主进程退出不触发，
+ * 于是 emmylua_ls / dotnet 等服务器会成为跨重启的孤儿常驻（实测孤儿启动时间早于宿主，
+ * 长期占用内存与工作区文件句柄）。
+ *
+ * ⚠️ 只回收、不退出：宿主自身已注册 SIGINT/SIGTERM 处理（DSH profile-boot 走
+ * shutdown.interrupt → 优雅关闭 + 状态落盘），这里若调 process.exit 会打断该流程。
+ * 因此仅在信号到达时顺带回收子进程，退出时机与退出码仍由宿主决定。
+ *
+ * ⚠️ 信号监听只在宿主已有监听时才挂：Node 的默认信号语义（终止进程）会被首个监听器
+ * 取代，若本插件是唯一监听者，挂上去反而让 Ctrl+C 不再退出宿主。无既有监听即跳过，
+ * 交由 'exit' 事件兜底。
+ *
+ * exit 事件下只能同步执行，Windows 的 child.kill 不走进程树，故复用
+ * disposeAllServers 的 taskkill /T /F 强杀路径；best-effort，失败不阻塞退出。
+ * @author ddj 2026年09月11号
+ */
+export function hookExitReclaim(): void {
+  if (exitHooked) return
+  exitHooked = true
+  const reclaim = (): void => {
+    try {
+      disposeAllServers()
+    } catch (error) { /* 退出路径静默 */ }
+  }
+  process.on('exit', reclaim)
+  for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+    if (process.listenerCount(signal) === 0) continue
+    process.on(signal, reclaim)
+  }
+}

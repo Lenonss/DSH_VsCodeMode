@@ -30,11 +30,41 @@ let statusCache = { servers: [], at: 0 }
 let progressListeners = new Set()
 let ready = false
 
-/** 设置当前会话（切换会话时清理旧文档跟踪由 host 端 session/disposed 兜底）。 */
+/** 会话 id 变更通知（EditorView 持有权威 sessionId，经窗口事件回填）。 */
+const SESSION_EVENT = 'edrv:lsp-session'
+
+/** 上报可见状态（复用 EditorView 的状态通道；失败不再静默）。 */
+function reportStatus(text) {
+  try {
+    window.dispatchEvent(new CustomEvent('edrv:status', { detail: { text } }))
+  } catch (error) { /* 无 window/派发失败忽略 */ }
+}
+
+/**
+ * 设置当前会话（切换会话时清理旧文档跟踪由 host 端 session/disposed 兜底）。
+ * @author ddj 2026年08月27号
+ * @param id 会话 id
+ */
 export function setLspSession(id) {
   if (sessionId === id) return
   sessionId = id
   void refreshStatus()
+}
+
+/**
+ * 订阅窗口会话广播（幂等）：EditorView 是 sessionId 的权威来源，挂载与会话切换时广播。
+ * 独立于服务订阅，避免服务形状变化时 LSP 整体失联。
+ * @author ddj 2026年09月11号
+ * @returns 取消订阅函数
+ */
+export function bindLspSession() {
+  if (typeof window === 'undefined') return () => {}
+  const onSession = (event) => {
+    const next = event && event.detail ? event.detail.sessionId : undefined
+    if (typeof next === 'string' && next) setLspSession(next)
+  }
+  window.addEventListener(SESSION_EVENT, onSession)
+  return () => window.removeEventListener(SESSION_EVENT, onSession)
 }
 
 export function lspSessionId() {
@@ -55,7 +85,14 @@ function publishProgress() {
   }
 }
 
-/** 立即同步某文档到 host（首次打开/查询前保证服务器已认识该文档）。 */
+/**
+ * 立即同步某文档到 host（首次打开/查询前保证服务器已认识该文档）。
+ * sessionId 缺失时仍发起请求：host 对唯一活跃会话有兜底解析，弃发会白白丢失文档归属。
+ * @author ddj 2026年08月27号 / 2026年09月11号
+ * @param path 工作区相对路径
+ * @param text 文档全文
+ * @param immediate true 立即发送，false 去抖
+ */
 export async function syncDoc(path, text, immediate = false) {
   if (!path || typeof text !== 'string') return
   if (immediate) {
@@ -81,43 +118,62 @@ export function closeDoc(path) {
   void rpc('edrv.lsp.close', { sessionId, path }).catch(() => {})
 }
 
+/**
+ * 统一查询封装：失败可见。
+ * host 返回 ok:false（会话失效/服务器不可用等）时上报状态，避免被吞成"无结果"——
+ * 旧实现在此处一律返回空数组，功能失效时用户看不到任何反馈。
+ * @author ddj 2026年09月11号
+ * @param action 动作名（错误提示用）
+ * @param method RPC 方法
+ * @param args 载荷（sessionId 由本函数补齐）
+ * @returns 成功响应；失败返回 null
+ */
+async function queryLsp(action, method, args) {
+  const res = await rpc(method, { ...args, sessionId }).catch(() => null)
+  if (!res || !res.ok) {
+    reportStatus('LSP ' + action + '失败：' + ((res && res.error) ? res.error : '请求异常'))
+    return null
+  }
+  return res
+}
+
 /** 立即推送 + 查询定义；返回 [{ uri, range }]（uri 已转 edrv://）。 */
 export async function findDefinition(path, text, position) {
   await syncDoc(path, text, true)
-  const res = await rpc('edrv.lsp.definition', { sessionId, path, position: monoToLsp(position.lineNumber, position.column) }).catch(() => null)
-  if (!res || !res.ok || !Array.isArray(res.locations)) return []
+  const res = await queryLsp('转到定义', 'edrv.lsp.definition', { path, position: monoToLsp(position.lineNumber, position.column) })
+  if (!res || !Array.isArray(res.locations)) return []
   return res.locations.map(toClientLocation)
 }
 
 /** 立即推送 + 查询引用。 */
 export async function findReferences(path, text, position, includeDeclaration = false) {
   await syncDoc(path, text, true)
-  const res = await rpc('edrv.lsp.references', { sessionId, path, position: monoToLsp(position.lineNumber, position.column), includeDeclaration }).catch(() => null)
-  if (!res || !res.ok || !Array.isArray(res.locations)) return []
+  const res = await queryLsp('查找引用', 'edrv.lsp.references', { path, position: monoToLsp(position.lineNumber, position.column), includeDeclaration })
+  if (!res || !Array.isArray(res.locations)) return []
   return res.locations.map(toClientLocation)
 }
 
 /** 查询大纲符号（documentSymbol）。 */
 export async function fetchDocumentSymbols(path, text) {
   await syncDoc(path, text, true)
-  const res = await rpc('edrv.lsp.documentSymbol', { sessionId, path }).catch(() => null)
-  if (!res || !res.ok || !Array.isArray(res.symbols)) return []
+  const res = await queryLsp('查询大纲', 'edrv.lsp.documentSymbol', { path })
+  if (!res || !Array.isArray(res.symbols)) return []
   return res.symbols
 }
 
 /** 查询 hover 内容。 */
 export async function fetchHover(path, text, position) {
   await syncDoc(path, text, true)
-  const res = await rpc('edrv.lsp.hover', { sessionId, path, position: monoToLsp(position.lineNumber, position.column) }).catch(() => null)
-  if (!res || !res.ok) return null
+  const res = await queryLsp('查询悬停', 'edrv.lsp.hover', { path, position: monoToLsp(position.lineNumber, position.column) })
+  if (!res) return null
   return res.hover || null
 }
 
 /** 查询当前文档的 semantic tokens（host 已归一化 legend 与 delta data）。 */
 export async function fetchSemanticTokens(path, text) {
   await syncDoc(path, text, true)
-  const res = await rpc('edrv.lsp.semanticTokens', { sessionId, path }).catch(() => null)
-  if (!res || !res.ok || !res.tokens || !Array.isArray(res.tokens.data)) return null
+  const res = await queryLsp('查询语义分色', 'edrv.lsp.semanticTokens', { path })
+  if (!res || !res.tokens || !Array.isArray(res.tokens.data)) return null
   return res.tokens
 }
 

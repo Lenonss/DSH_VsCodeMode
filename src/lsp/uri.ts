@@ -60,3 +60,49 @@ export function isInside(root: string, target: string): boolean {
   const t = target.replace(/\\/g, '/')
   return t === r.slice(0, -1) || t.startsWith(r)
 }
+
+/**
+ * 是否绝对路径（**平台无关**判定）。
+ *
+ * ⚠️ 不能用 `node:path` 的 `isAbsolute`：它按**运行平台**解释路径——`isAbsolute('D:/ws/x')`
+ * 在 Windows 是 `true`，在 Linux 是 **`false`**（盘符被当成普通路径段）。本插件的路径来自
+ * DSH 工具参数（Windows 形态 `D:\...`），而 CI 跑 ubuntu → 依赖 `isAbsolute` 的判定会在
+ * 门槛平台上静默失效（本地全绿、CI 恒红）。
+ * 这里显式识别三种绝对形态：盘符（`D:/`、`D:\`）、UNC（`//`）、POSIX 根（`/`）。
+ * @author ddj 2026年09月11号
+ * @param path 待判定路径
+ * @returns 是否绝对路径
+ */
+export function isAbsolutePath(path: string): boolean {
+  const text = String(path ?? '')
+  return /^[A-Za-z]:[\\/]/.test(text) || text.startsWith('//') || text.startsWith('/')
+}
+
+/**
+ * 任意路径 → 工作区相对路径（LSP 文档键与 file:// URI 的唯一口径）。
+ *
+ * 为什么必须有这一步：`server.sync()` 用 `root + '/' + path` 拼 file:// URI，隐含假设 path 是
+ * 工作区相对路径。但差异记录 `rec.path` 来自工具参数 `file_path`（绝对路径），于是绝对路径会被
+ * 拼成 `<root>/<root>/Assets/...` 这种畸形 URI —— 服务器把它当成不存在的文档，didOpen 落空，
+ * 引用/定义/hover/符号全部返回空。统一在入口归一化即可消除该形态差异。
+ *
+ * 约定：相对路径原样返回；root 内的绝对路径剥前缀；root 外（如 DSH 自身文件）原样返回，
+ * 保持既有对工作区外文件的宽容行为。
+ * @author ddj 2026年09月11号
+ * @param root 工作区根目录（绝对路径）
+ * @param path 相对或绝对路径
+ * @returns 工作区相对路径（正斜杠）；无法归一时返回归一化后的原路径
+ */
+export function toWorkspacePath(root: string, path: string): string {
+  const target = String(path ?? '').replace(/\\/g, '/')
+  if (!target) return target
+  // 已是相对路径：直接返回（快路径，也是绝大多数调用）
+  if (!isAbsolutePath(target)) return target
+  const base = String(root ?? '').replace(/\\/g, '/').replace(/\/+$/, '')
+  if (!base) return target
+  // 大小写不敏感比较：Windows 盘符/目录名大小写常不一致，isInside 的精确匹配会漏判
+  const lower = target.toLowerCase()
+  const baseLower = base.toLowerCase()
+  if (lower !== baseLower && !lower.startsWith(baseLower + '/')) return target
+  return target.slice(base.length).replace(/^\/+/, '')
+}
