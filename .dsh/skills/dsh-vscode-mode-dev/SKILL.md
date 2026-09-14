@@ -5,7 +5,7 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
 
 # dsh-vscode-mode 开发/发布经验集（自我更新型技能）
 
-> updated: 2026-09-11 · 维护者：ddj（AI 会话按文末协议追加，保持精炼、去重）
+> updated: 2026-09-14 · 维护者：ddj（AI 会话按文末协议追加，保持精炼、去重）
 ## 何时使用
 
 - 发布新版本（commit/push/tag/npm 相关操作）。
@@ -34,6 +34,18 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
   实在拿不到就用 `GET /commits/<sha>/check-runs` 的 `/annotations`（无需凭据）直接读失败用例名与断言差异，
   别靠猜。v0.3.3 实测：首 tag 的 build/release 双双 failure，annotations 一次就给出 `tests/skills.test.ts:158`
   的 `'/D:/pkg/skills' !== 'D:/pkg/skills'`。
+- 2026-09-14 坑（**新机制，发版前必读**）：npm 已上线 **staged publishing（暂存发布）**——`npm publish`
+  可能不再直接上架，而是进入 stage 队列，**需维护者在 npmjs.com 或 `npm stage approve <id>` 用 2FA 人工批准**
+  才对外可装（[docs](https://docs.npmjs.com/staged-publishing/)、[changelog](https://github.blog/changelog/2026-05-22-staged-publishing-and-new-install-time-controls-for-npm/)）。
+  症状链（v0.4.2 实测）：CI 里 `npm publish` 打印 `+ dsh-vscode-mode@X` **看似成功**，但
+  `Verify published tarball` 步骤 15×30s 全部拿不到 → `::error::published tarball ... not retrievable after retries` → job failure；
+  重跑则报决定性线索 `409 Conflict - Cannot publish over previously staged version "X"`。
+  判别：`npm view <pkg> time` 有该版本时间戳，但 `npm view <pkg>@<ver>` 404、`dist-tags.latest` 未变
+  （staged 与已发布共享同一 semver 唯一索引，故不能重复 publish）。
+  处置：**这一步只能人工做**——到 npmjs.com 包页面的 stage 队列，或用 npm CLI ≥11.15.0
+  （本机 11.6.1 无 `stage` 命令、亦无凭据，`npm whoami` 401）执行 `npm stage approve`。
+  **CI 判断成功不能只看 `npm publish` 那一步**：要看最后一个 `Verify published tarball` 步骤；
+  该步骤失败 = 版本未真正上线（此时 GitHub Release 与 tgz 通常已正常产出，可先用 Release 分发）。
 - 2026-09-08 事实：awesome 收录条目（PR #2532，category git）的 `tarball:` 钉在 v0.1.36，发版即过期；
   npm 映射自动、该字段冗余 → 改自己条目时删 tarball 行，勿再钉版本号。
 - 2026-09-11 事实：本环境**不必** stash 隔离——当场核对 `git status --porcelain` 全部改动确属本次
