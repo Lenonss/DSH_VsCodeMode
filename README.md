@@ -141,6 +141,20 @@
   `compaction-basic`/`tool-result-pruner` 阈值写入 profile `cordis.patch.yml`（带备份与撤销，重启生效）；
   ④ 侧车摘要接口指引。对话 header 另有**会话体积指示器**（`edrv-perf-size`，≥1MB 显示、超 2MB 琥珀、超 8MB 红），
   引导"一次任务一个短会话"。
+- **外部改动自动同步**（未发布，待随下个版本发布）：编辑器不再是「只信自己的缓冲」——磁盘文件被外部改动
+  （其他编辑器 / Unity / 脚本 / agent 工具 / 同步盘）后自动跟进，不必再手点 ⟳。
+  **观测**：客户端每 **1.5s** 把已打开页签路径批量交给 host `edrv.versions`（一次请求多条 `fs.stat`，
+  标签页隐藏时整轮跳过），与本地的磁盘版本基线比对；文件树对应目录同时在 host 侧失效、
+  客户端按 `edrv:file-changed` 事件去抖强制重列（外部新增/删除/改名都能看到）。
+  **判定**：版本变化后**必须再比一次内容**——host 版本令牌含 `ctime`，格式化工具/同步盘的
+  「同字节重写」也会让它变化，只看版本会把没变的内容反复重载（打断光标与滚动）。
+  内容一致 → 只推进基线（不重载）；内容不同且缓冲**干净** → 自动刷入并提示「已同步外部修改」；
+  内容不同且缓冲**有未保存编辑** → 绝不覆盖，编辑区上方出现提示条（重新加载 / 覆盖磁盘 / 保留本地），
+  状态栏同时出现「⚠ 外部已修改」；文件被外部删除 → 提示「已被外部删除」，缓冲保留。
+  **保存护栏**：保存带回上次读取的版本令牌，host 用 `replaceIfVersion` 守卫写入——
+  磁盘被外部改过时**拒绝保存**并提示「文件已被外部修改」，由用户显式选择重新加载或用编辑器内容覆盖；
+  冲突未处理期间自动保存被抑制（避免用陈旧缓冲反复盖掉外部改动）。
+  老 host（无该 RPC）自动降级为无同步、无护栏，不报错。
 - **系统集成**（v0.1.53，设置 → VSCodeMode → 通用「系统集成」卡片）：
   ① **文件管理器右键菜单**——一键把「在 DSH 文件编辑中打开」注册进系统（Windows 资源管理器三类入口 / Linux
   Nautilus+Dolphin / macOS Automator 配方），插件卸载自动清理、更新自动恢复；点击经 launcher 打开默认浏览器深链
@@ -236,6 +250,7 @@ src/
 ├── tree.ts             Host 目录树纯函数（normalizeRel/toTreeEntries，edrv.listDir 用，可单测）
 ├── rules.ts            Host 规则管理：.mdc 解析/开关改写/注入渲染（纯函数可单测）+ IO + systemPrompt section 装配
 ├── skills.ts           Host 插件技能组：随包 skills/ 的 SKILL.md 解析/扫描 + skill provider 注册（可单测）
+├── fileVersions.ts     Host 文件新鲜度观察：批查 ctx.fs 版本令牌（edrv.versions）+ 变化时失效目录树索引（可单测）
 ├── rpc.ts              Host RPC 分发表（类型化 handler 表替代巨型 switch，含 compat）
 ├── routes.ts           Host webServer 路由（/edrv/rpc、/edrv/assets/*、/edrv/vendor/*，带冲突护栏）
 └── client/
@@ -245,7 +260,8 @@ src/
     ├── officialSidebar.ts ★ 官方右侧 Sidebar 桥（DSH 0.1.5+，唯一维护面）：探测 sidebarRightTabs/sidebarRight、
     │                   两段式注册（类型定义 + keyed slot 正文）、openTab 路由（纯函数可单测）
     ├── rpc.ts          Client 类型化 fetch 包装 + 诊断日志
-    ├── events.ts       窗口事件助手（edrv:refresh/open-editor/show-launcher；侧栏路由优先、旧页签回退）
+    ├── events.ts       窗口事件助手（edrv:refresh/open-editor/show-launcher/file-changed；侧栏路由优先、旧页签回退）
+    ├── watchDecision.ts 外部改动同步纯逻辑（基线/已读版本台账/判定表，可单测）
     ├── state/          records.ts（摘要/计数/空差异）+ regions.ts（差异区域/行裁剪）纯函数
     ├── monaco/         loader.ts（AMD 加载/语言映射）+ diffRender.ts（差异自绘渲染器）
     ├── pdf/            pdfLoader.ts（pdf.js vendor 产物 module-script 加载）+ pdfPanel.ts（PDF 面板控制器：
@@ -258,6 +274,7 @@ src/
     │                   + panels/SearchPanel.ts（搜索面板）+ panels/RulesPanel.ts（规则面板：用户/项目规则 + 开关）
     ├── styles/editor.css  编辑区样式（tsdown CSS-inline 注入；含侧栏形态/引导条）
     └── ui/             EditorView（编排，tab/side 双形态）/ OfficialSideTab（官方 Sidebar Tab 包装）
+                        / useFileWatch（外部改动轮询：批量版本比对 → 同步动作回调）
                         / SideEditorTab（betterSidebar Tab 包装，归档）/ QuickOpen
                         / DiffBox（chat/editor 双模式）/ ConversationDiffDock / DiffBarEmpty / DiffLauncher
                         / DiffBadge / McpSettings（含「兼容性」子 Tab）

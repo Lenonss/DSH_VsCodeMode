@@ -20,7 +20,7 @@ import {
   resolveTarget,
   saveBucket,
 } from './store.js'
-import { mkdir, readFile, rm, writeFile, readdir } from 'node:fs/promises'
+import { mkdir, readFile, rm, stat, writeFile, readdir } from 'node:fs/promises'
 import { basename, join } from 'node:path'
 import { archiveEntryFor, markDecision, recordResolved, reconstructOriginal } from './model.js'
 import type { Registry } from './registry.js'
@@ -48,6 +48,7 @@ import { dshHome } from './paths.js'
 import { debugRecord } from './debugLog.js'
 import { markActiveSessions, moveOutSessions, planMoveOut, purgeArchive, restoreSession, scanSessionInventory, sessionsArchiveRoot, sessionSizeOf, sidecarSummaryOf } from './perf.js'
 import { patchHasPerfConfig, patchInsertPerfConfig, patchRemovePerfConfig, perfConfigBlock } from './perfPatch.js'
+import type { FileVersions } from './fileVersions.js'
 
 /** cwd → 上次 stale 自动清理时间：全量轮询（EditorView/DiffBadge/Dock 各自 5s）节流，避免每轮都读文件算指纹。 */
 const staleCheckedAt = new Map<string, number>()
@@ -103,6 +104,32 @@ function snippetPolicy(ctx: Ctx): unknown {
  */
 function snippetTargetOf(path: string): string | null {
   return isSnippetFilePath(path) ? path.replace(/\\/g, '/') : null
+}
+
+/**
+ * 本地文件系统版本令牌（mtime+size）：与 ctx.fs 的不透明版本串用途相同，
+ * 仅供全局片段文件（走 node:fs 直读、不经 ctx.fs）在 edrv.read 时回带。
+ * @author ddj 2026年09月15号
+ * @param info node fs.Stats（stat 失败传 null）
+ * @returns 版本令牌；取不到 → 空串（不启用护栏）
+ */
+function fileVersionOf(info: { mtimeMs?: number; size?: number } | null): string {
+  if (!info || typeof info.mtimeMs !== 'number' || typeof info.size !== 'number') return ''
+  return info.mtimeMs + ':' + info.size
+}
+
+/**
+ * 判定错误是否为「读取后文件已被外部修改」（版本守卫拒绝写入）。
+ * 不依赖 host fs 的 FsError 类（外置模块，instanceof 不可靠），按错误码与文案双重判定。
+ * @author ddj 2026年09月15号
+ * @param error 捕获到的异常
+ * @returns 是否为版本冲突
+ */
+function isStaleVersion(error: unknown): boolean {
+  const err = error as { code?: unknown; message?: unknown } | null
+  if (err && err.code === 'FS_STALE_VERSION') return true
+  const message = err && typeof err.message === 'string' ? err.message : String(error)
+  return message.includes('changed since it was read')
 }
 
 /**
@@ -227,6 +254,7 @@ export function buildHandlers(
   contentSearcher = newContentSearcher(ctx),
   lspHandlers?: Partial<RpcHandlerMap>,
   aiHandlers?: Partial<RpcHandlerMap>,
+  fileVersions?: FileVersions,
 ): RpcHandlerMap {
   return {
     // edrv.lsp.* 由 createLspRpc 一次性提供（tracker 跨请求保留），这里并入。
@@ -289,7 +317,9 @@ export function buildHandlers(
       if (snippetTarget && args.encoding !== 'base64') {
         try {
           const content = await readFile(snippetTarget, 'utf8')
-          return { ok: true, content, size: content.length }
+          // 版本令牌随读带回：客户端据此判断「读后是否被外部改过」（片段文件同理）
+          const info = await stat(snippetTarget).catch(() => null)
+          return { ok: true, content, size: content.length, version: fileVersionOf(info) }
         } catch (error) {
           return { ok: false, error: '读取片段文件失败：' + String(error), resolvedPath: snippetTarget }
         }
@@ -310,14 +340,19 @@ export function buildHandlers(
           // 图片/PDF 等二进制预览：readBytes 无解码、无二进制拒绝；超上限已由上方 stat 拦截
           const bytes = await fs.readBytes(target, undefined, BINARY_READ_CAP)
           const content = Buffer.from(bytes).toString('base64')
-          return { ok: true, content, size: bytes.byteLength, encoding: 'base64', mime: binaryMimeOf(args.path) }
+          return { ok: true, content, size: bytes.byteLength, encoding: 'base64', mime: binaryMimeOf(args.path), version: String(info.version ?? '') }
         }
         if ((info.size ?? 0) > READ_CAP) return { ok: false, error: '文件过大（>8MB），不支持整文件预览' }
         const content = await fs.readText(target)
-        return { ok: true, content, size: content.length }
+        return { ok: true, content, size: content.length, version: String(info.version ?? '') }
       } catch (error) {
         return { ok: false, error: '读取失败：' + String(error) }
       }
+    },
+    'edrv.versions': async (args) => {
+      // 外部改动检测：批量返回已打开文件的磁盘版本（观察器同时失效变化的目录树）
+      if (!fileVersions) return { ok: false, error: '文件版本观察器未装配' }
+      return fileVersions.versions(args)
     },
     'edrv.original': async (args) => {
       // 重建"本批次修改前"内容：DiffEditor 原始侧。仅反解 pending 块；
@@ -361,10 +396,17 @@ export function buildHandlers(
       if (!fs) return { ok: false, error: '缺少 fs' }
       try {
         const target = await resolveTarget(ctx, sc.session, args.path)
-        await fs.writeText(target, args.content, void 0, void 0, policyOf(ctx, sc.session))
+        // 版本守卫（客户端带回上次读取的版本）：文件在读取后被外部改过则拒绝写入，
+        // 避免用陈旧缓冲静默覆盖外部改动；客户端未带 rev（旧版/无版本后端）时行为不变。
+        const rev = typeof args.rev === 'string' && args.rev ? args.rev : null
+        const intent = rev ? { kind: 'replaceIfVersion', version: rev } : undefined
+        const outcome = await fs.writeText(target, args.content, intent, void 0, policyOf(ctx, sc.session))
         await afterManualSave(ctx, registry, sc, args.path)
-        return { ok: true }
+        return { ok: true, rev: outcome?.version ? String(outcome.version) : rev ?? undefined }
       } catch (error) {
+        if (isStaleVersion(error)) {
+          return { ok: false, conflict: true, error: '文件已被外部修改，请先重新加载（或用编辑器内容覆盖）' }
+        }
         return { ok: false, error: '保存失败：' + String(error) }
       }
     },
@@ -871,8 +913,9 @@ export async function handleRpc<M extends RpcMethod>(
   contentSearcher = newContentSearcher(ctx),
   lspHandlers?: Partial<RpcHandlerMap>,
   aiHandlers?: Partial<RpcHandlerMap>,
+  fileVersions?: FileVersions,
 ): Promise<RpcResult<M>> {
-  const handlers = buildHandlers(ctx, registry, searcher, contentSearcher, lspHandlers, aiHandlers)
+  const handlers = buildHandlers(ctx, registry, searcher, contentSearcher, lspHandlers, aiHandlers, fileVersions)
   const handler = handlers[method]
   if (!handler) return { ok: false, error: '未知方法: ' + String(method) } as RpcResult<M>
   return handler(args)

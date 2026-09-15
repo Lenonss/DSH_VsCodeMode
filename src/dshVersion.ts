@@ -86,6 +86,8 @@ export function inDshRange(version: DshVersion | null | undefined, range: DshRan
 export function familyLabel(input: string): string {
   const version = parseDshVersion(input)
   if (!version) return '未知'
+  if (inDshRange(version, { from: '0.1.6-alpha.1' })) return '0.1.6-alpha 及更新（MCP SDK v2 + Web 侧边栏终端 + 文件链接默认侧栏预览）'
+  if (inDshRange(version, { from: '0.1.5-alpha.1' })) return '0.1.5-alpha 及更新（官方右侧 Sidebar 编辑区 + sidebar.panellist）'
   if (inDshRange(version, { from: '0.1.3-alpha.1' })) return '0.1.3-alpha 及更新（对话文件链接=remote.session.openWorkspacePath）'
   if (inDshRange(version, { from: '0.1.2-alpha.1' })) return '0.1.2-alpha 及更新（设置 API=settings.installSection）'
   return '0.1.0/0.1.1 rc 线（设置 API=installSettingsSection）'
@@ -101,21 +103,51 @@ const VERSION_CANDIDATES = [
 
 let detectedVersion: string | undefined
 
+/**
+ * 宿主入口 require 锚点：process.argv[1] 指向运行中 DSH 的启动脚本
+ * （安装树 node_modules/@deepseek-ai/dsh/... 或 profile 树），从其所在目录
+ * 向上解析能命中宿主的 @deepseek-ai 包——避开本插件自身 node_modules 里的
+ * dev 依赖副本（dev-link 安装下 import.meta.url 锚点会先命中 rc 线副本，
+ * 曾致版本探测与 deps 加载错位到 0.1.0-rc.8，见 fileOpenSettings 的 hostImport）。
+ * @author ddj 2026年09月15号
+ * @returns 宿主锚点 require；argv[1] 缺失或不可用时 undefined
+ */
+function hostRequire(): NodeRequire | undefined {
+  const entry = process.argv[1]
+  if (!entry) return undefined
+  try {
+    return createRequire(entry)
+  } catch {
+    return undefined
+  }
+}
+
+/** 用指定 resolver 解析一个候选包版本（解析/读取失败返回 null）。 */
+function resolveVersionOf(specifier: string, resolver: NodeRequire): string | null {
+  try {
+    const file = resolver.resolve(specifier)
+    const pkg = JSON.parse(readFileSync(file, 'utf8')) as { version?: unknown }
+    if (typeof pkg.version === 'string' && parseDshVersion(pkg.version) !== null) return pkg.version
+  } catch {
+    /* exports 未放行或包缺失：尝试下一个候选 */
+  }
+  return null
+}
+
 /** 探测运行中 DSH 核心版本（模块级缓存；失败空串，不抛错）。 */
 export function detectDshVersion(): string {
   if (detectedVersion !== undefined) return detectedVersion
   detectedVersion = ''
-  const require = createRequire(import.meta.url)
-  for (const specifier of VERSION_CANDIDATES) {
-    try {
-      const file = require.resolve(specifier)
-      const pkg = JSON.parse(readFileSync(file, 'utf8')) as { version?: unknown }
-      if (typeof pkg.version === 'string' && parseDshVersion(pkg.version) !== null) {
-        detectedVersion = pkg.version
-        break
+  // 宿主锚点优先（运行中 DSH 的 @deepseek-ai 树），失败回退本插件位置（测试/独立运行）。
+  const resolvers: Array<NodeRequire | undefined> = [hostRequire(), createRequire(import.meta.url)]
+  for (const resolver of resolvers) {
+    if (!resolver) continue
+    for (const specifier of VERSION_CANDIDATES) {
+      const version = resolveVersionOf(specifier, resolver)
+      if (version !== null) {
+        detectedVersion = version
+        return detectedVersion
       }
-    } catch {
-      /* exports 未放行或包缺失：尝试下一个候选 */
     }
   }
   return detectedVersion

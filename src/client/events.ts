@@ -54,6 +54,17 @@ export function emitRefresh(): void {
   window.dispatchEvent(new CustomEvent('edrv:refresh'))
 }
 
+/**
+ * 磁盘文件变化（外部写入/删除）：文件树按路径失效对应目录并强制重列。
+ * 与 edrv:refresh 分开：这里不触发差异记录重算与 stale 清理，只动目录缓存。
+ * @author ddj 2026年09月15号
+ * @param path 发生变化的文件路径
+ */
+export function emitFileChanged(path: string): void {
+  if (!path) return
+  window.dispatchEvent(new CustomEvent('edrv:file-changed', { detail: { path } }))
+}
+
 /** 打开指定路径到编辑区页签。 */
 export function emitOpenEditor(path: string): void {
   window.dispatchEvent(new CustomEvent('edrv:open-editor', { detail: { path } }))

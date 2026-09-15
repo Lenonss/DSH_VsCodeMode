@@ -28,6 +28,8 @@ const PREFETCH_EXCLUDED = new Set(['node_modules', '.git', '.hg', '.svn', '.pnpm
 const REVEAL_HIGHLIGHT_MS = 2000
 const REVEAL_RETRY_MAX = 6
 const REVEAL_RETRY_MS = 120
+/** 外部文件变化重列去抖：一轮外部批量写入（如 agent 连写多文件）合并为一次重列。 */
+const FILE_CHANGE_DEBOUNCE_MS = 400
 
 // --region 行图标（官方原语：目录文件夹图标 + 文件类型图标；缺失时回落纯文本）
 
@@ -125,6 +127,11 @@ export function FileExplorer(props) {
   const revealTryRef = React.useRef(0) // 当前定位的重试计数（行渲染需等目录加载）
   const revealInTreeRef = React.useRef(null) // 定位动作最新闭包（窗口监听读取）
   const treeRef = React.useRef(null) // 目录树容器（定位时按 data-edrv-path 查行）
+  const reloadDirRef = React.useRef(null) // loadDir 最新闭包（文件变化监听读取，防陈旧闭包）
+  const changedTimerRef = React.useRef(null) // 文件变化合并去抖计时器
+  const changedRelRef = React.useRef(new Set()) // 待重列的相对目录集合（去抖窗口内合并）
+  const dirsMapRef = React.useRef(null) // loadDir 最新闭包（文件变化监听读取，防陈旧闭包）
+  dirsMapRef.current = loadDir
 
   /** 渲染取数：内存态 → 本地条目缓存 → null（显示加载态）。 */
   const entriesOf = (rel) => dirsRef.current[rel] ?? entriesCacheGet(scope, rel) ?? null
@@ -261,6 +268,46 @@ export function FileExplorer(props) {
     void loadDir('', { force: true, prefetch: true })
   }
   refreshRef.current = refresh
+  reloadDirRef.current = loadDir
+
+  /**
+   * 磁盘文件变化（外部写入/删除/改名）：把变化路径的父目录并入待重列集合，
+   * 去抖合并后对「已展开且存在」的目录强制重列（force 跳过 host 索引命中）。
+   * host 侧 fileVersions 已顺手失效目录树缓存，这里补上「已渲染行」的即时刷新。
+   * @author ddj 2026年09月15号
+   * @param path 发生变化的文件路径（工作区相对；绝对路径按最长已展开祖先匹配）
+   */
+  const onFileChanged = (path) => {
+    if (typeof path !== 'string' || !path) return
+    const rel = path.replace(/\\/g, '/').replace(/^\.\//, '')
+    const parts = rel.split('/').filter(Boolean)
+    if (parts.length > 1) changedRelRef.current.add(parts.slice(0, -1).join('/'))
+    // 绝对路径（或已在更深层目录）：补上所有已展开的祖先目录
+    for (const dir of ancestorDirsOf(rel)) {
+      if (expandedRef.current[dir] === true) changedRelRef.current.add(dir)
+    }
+    if (changedTimerRef.current) return
+    changedTimerRef.current = window.setTimeout(() => {
+      changedTimerRef.current = null
+      const targets = [...changedRelRef.current]
+      changedRelRef.current.clear()
+      for (const dir of targets) {
+        if (dir !== '' && expandedRef.current[dir] !== true) continue
+        void reloadDirRef.current?.(dir, { force: true, prefetch: false })
+      }
+    }, FILE_CHANGE_DEBOUNCE_MS)
+  }
+
+  // edrv:file-changed（外部改动同步）：按变化路径强制重列对应目录（去抖合并）
+  React.useEffect(() => {
+    const handler = (event) => onFileChanged(event?.detail?.path)
+    window.addEventListener('edrv:file-changed', handler)
+    return () => {
+      window.removeEventListener('edrv:file-changed', handler)
+      if (changedTimerRef.current) { clearTimeout(changedTimerRef.current); changedTimerRef.current = null }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   React.useEffect(() => {
     tokensRef.current = {}

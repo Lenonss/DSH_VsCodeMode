@@ -137,6 +137,24 @@ export interface SidecarPerfSummary {
 }
 // --endregion
 
+/**
+ * 单个路径的磁盘新鲜度（edrv.versions 逐条结果）。
+ * version 为 host fs 的不透明新鲜度令牌（本地后端 = dev:ino:size:mtimeNs:ctimeNs）：
+ * 客户端只做字符串相等比较判「是否变化」，不解析其内部结构。
+ */
+export interface FileVersionItem {
+  /** 请求时的原始路径（原样回带，客户端按此对齐基线）。 */
+  path: string
+  /** 当前磁盘版本令牌；空串 = 该后端不提供版本，调用方应停用护栏。 */
+  version: string
+  /** 文件字节数（后端可报时）。 */
+  size?: number
+  /** 目标类型；'missing' = 已不存在（外部删除或路径解析失败）。 */
+  type?: 'file' | 'directory' | 'other' | 'missing'
+  /** 单条失败原因（仅诊断用；解析失败/缺失也可能只体现在 type='missing'）。 */
+  error?: string
+}
+
 /** 一条批量决策项（decideBatch 的 items 元素，与 accept/reject 单条参数同构）。 */
 export interface DecideItem {
   callId: string
@@ -162,8 +180,9 @@ export interface RpcRequestMap {
   'edrv.reject': { sessionId?: string; callId: string; scope?: RpcScope; hunkIndex?: number }
   'edrv.decideBatch': { sessionId?: string; items: DecideItem[] }
   'edrv.read': { sessionId?: string; path: string; encoding?: 'base64' }
+  'edrv.versions': { sessionId?: string; paths: string[] }
   'edrv.original': { sessionId?: string; path: string }
-  'edrv.save': { sessionId?: string; path: string; content: string }
+  'edrv.save': { sessionId?: string; path: string; content: string; rev?: string }
   'edrv.saveBinary': { sessionId?: string; path: string; content: string; encoding: 'base64' }
   'edrv.archiveList': { sessionId?: string }
   'edrv.archiveRead': { sessionId?: string; path?: string }
@@ -254,9 +273,10 @@ export interface RpcOkMap {
   'edrv.accept': { record: RecordView }
   'edrv.reject': { record: RecordView }
   'edrv.decideBatch': { results: DecideResult[] }
-  'edrv.read': { content: string; size: number; encoding?: 'base64'; mime?: string }
+  'edrv.read': { content: string; size: number; encoding?: 'base64'; mime?: string; version?: string }
+  'edrv.versions': { items: FileVersionItem[] }
   'edrv.original': { content: string; size: number; stale: StaleHunk[]; fallback: boolean }
-  'edrv.save': object
+  'edrv.save': { rev?: string; conflict?: boolean }
   'edrv.saveBinary': object
   'edrv.archiveList': { entries: ArchiveEntry[] }
   'edrv.archiveRead': { batches: ArchiveBatch[] }

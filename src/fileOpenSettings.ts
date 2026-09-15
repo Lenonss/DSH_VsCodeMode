@@ -7,6 +7,8 @@
  * 全程 try/catch，不产生未捕获 rejection。
  * 作者 ddj 2026年08月24号 / 2026年08月26号 / 2026年09月02号
  */
+import { createRequire } from 'node:module'
+import { pathToFileURL } from 'node:url'
 import type { Ctx } from './store.js'
 import { KEYBINDING_DEFAULTS } from './shared/keybindings.js'
 import { INTEGRATION_BASE_DEFAULT } from './shared/integration.js'
@@ -48,15 +50,37 @@ export type SettingsDepsLoader = () => Promise<SettingsDeps | null>
 let depsPromise: Promise<SettingsDeps | null> | undefined
 
 /**
+ * 宿主锚点动态导入：先经 process.argv[1]（DSH 启动脚本所在树）解析并加载目标包，
+ * 避开本插件自身 node_modules 的 dev 依赖副本（dev-link 下 import() 相对插件位置
+ * 解析，会命中 rc 线旧包 dsh-settings@0.1.0-rc.8）；argv[1] 缺失或解析失败回退
+ * 普通 specifier import。
+ * @author ddj 2026年09月15号
+ * @param specifier 包名
+ * @returns 加载的模块命名空间
+ */
+async function hostImport(specifier: string): Promise<unknown> {
+  const entry = process.argv[1]
+  if (entry) {
+    try {
+      const resolved = createRequire(entry).resolve(specifier)
+      return await import(pathToFileURL(resolved).href)
+    } catch {
+      /* 锚点不可用：回退普通 import */
+    }
+  }
+  return import(specifier)
+}
+
+/**
  * 动态加载设置依赖（模块级缓存；任一缺失/失败返回 null 而非抛错）。
  * installSettingsSection 仅在 rc 线 dsh-settings 中存在时提供（alpha 起移除，
  * 属性探测得到 undefined，不抛错）。
- * @author ddj 2026年08月24号
+ * @author ddj 2026年08月24号 / 2026年09月15号
  * @returns 设置依赖或 null
  */
 export function loadSettingsDeps(): Promise<SettingsDeps | null> {
   if (!depsPromise) {
-    depsPromise = Promise.all([import('@deepseek-ai/dsh-settings'), import('schemastery')])
+    depsPromise = Promise.all([hostImport('@deepseek-ai/dsh-settings'), hostImport('schemastery')])
       .then(([dshSettings, schemastery]) => ({
         // dsh-settings 类型声明随版本变化（rc.8 有 d.ts、alpha 已移除导出），统一经 unknown 松绑
         installSettingsSection: (dshSettings as unknown as { installSettingsSection?: SettingsDeps['installSettingsSection'] }).installSettingsSection,

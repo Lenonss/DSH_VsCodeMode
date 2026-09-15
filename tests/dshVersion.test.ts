@@ -72,4 +72,15 @@ describe('familyLabel', () => {
     expect(familyLabel('not-a-version')).toBe('未知')
     expect(familyLabel('')).toBe('未知')
   })
+
+  it('0.1.5 / 0.1.6 版本线', () => {
+    expect(familyLabel('0.1.6-alpha.1')).toContain('0.1.6-alpha')
+    expect(familyLabel('0.1.5-alpha.1')).toContain('0.1.5-alpha')
+    expect(familyLabel('0.1.5-rc.1')).toContain('0.1.5-alpha')
+  })
+
+  it('中间线仍归 0.1.3 版本线', () => {
+    expect(familyLabel('0.1.4-rc.1')).toContain('0.1.3-alpha')
+    expect(familyLabel('0.1.3-alpha.2')).toContain('0.1.3-alpha')
+  })
 })

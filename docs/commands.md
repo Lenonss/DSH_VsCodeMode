@@ -4,6 +4,9 @@
 > 相关代码：`src/client/ui/commandCatalog.ts`、`src/client/commandRegistry.ts`、
 > `src/client/commandBridge.ts`、`src/client/commandPaletteStore.ts`、
 > `src/client/ui/CommandPalette.ts`、`src/client/commandSearch.ts`。
+>
+> 本文档只讲指令系统；文件被外部改动后的自动同步（自动刷入 / 冲突提示 / 保存护栏）
+> 见 README「外部改动自动同步」一节（`edrv.versions` 轮询、`edrv.save` 版本守卫）。
 
 ## 1. 一句话模型
 

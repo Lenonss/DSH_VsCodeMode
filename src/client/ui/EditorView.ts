@@ -9,10 +9,20 @@
  */
 import React from 'react'
 import { dbg, rpc } from '../rpc.js'
-import { emitRefresh } from '../events.js'
+import { emitFileChanged, emitRefresh } from '../events.js'
 import { langOf, loadMonaco, snippetLanguageOf } from '../monaco/loader.js'
 import { dataUrlOf, isImagePath, isSvgPath } from '../imagePreview.js'
 import { base64ToBytes, isPdfPath } from '../pdfPreview.js'
+import {
+  clearBaseline,
+  clearReadVersion,
+  clearSync,
+  markReadVersion,
+  readSync,
+  recordBaseline,
+  type SyncFlag,
+} from '../watchDecision.js'
+import { useFileWatch } from './useFileWatch.js'
 import { createPdfPanel } from '../pdf/pdfPanel.js'
 import { applyOfficial, registerThemes, themeNameOf } from '../monaco/theme.js'
 import { createDiffRenderer } from '../monaco/diffRender.js'
@@ -185,6 +195,8 @@ export function EditorView(props) {
   activeRef.current = active
   const tabsRef = React.useRef([]) // 当前页签表的最新值（菜单动作按 id 分派时读，防陈旧闭包）
   tabsRef.current = tabs
+  const tabPathsRef = React.useRef([]) // 页签路径镜像（外部改动轮询读取）
+  tabPathsRef.current = tabs.map((t) => t.path)
   const dirtyRef = React.useRef({}) // 脏标记最新值（菜单禁用判定与关闭时落盘读）
   dirtyRef.current = dirtyMap
   const tabsHostRef = React.useRef(null) // 页签栏容器（切换后把当前页签滚入可见区）
@@ -203,6 +215,12 @@ export function EditorView(props) {
   const doSaveRef = React.useRef(null) // 保存动作的最新闭包（窗口级保存监听读取）
   const onEditRef = React.useRef(null) // 编辑置脏的最新闭包（Monaco 内容变化监听经 ref 调用，防首帧 active=null 陈旧闭包）
   const saveViewStateRef = React.useRef(null) // 视图状态保存的最新闭包（卸载清理读取，避免过期 active）
+  // 磁盘版本基线（path → 最后一次从磁盘读到的版本令牌）：外部改动检测与保存护栏共用
+  const revRef = React.useRef({})
+  // 外部改动回调的最新闭包（轮询 hook 经 ref 调用，避免把轮询写进 React 依赖数组）
+  const diskChangeRef = React.useRef(null)
+  // 当前展示的外部同步提示（冲突/文件被删除；随 active 切换派生显示）
+  const [diskFlag, setDiskFlag] = React.useState(null)
   const diffRendererRef = React.useRef(null)
   const layoutRef = React.useRef(layout) // ensureEditor 空依赖闭包读取的稳定布局
   layoutRef.current = layout
@@ -380,6 +398,11 @@ export function EditorView(props) {
     const pdfCtl = pdfCtlRef.current.get(path)
     if (pdfCtl) { pdfCtl.destroy(); pdfCtlRef.current.delete(path) }
     pdfB64CacheRef.current.delete(path)
+    // 关闭即失去跟踪：清磁盘版本基线/已读台账/同步标记（重开时按最新内容重建）
+    clearBaseline(scope, path)
+    clearReadVersion(scope, path)
+    clearSync(scope, path)
+    delete revRef.current[path]
   }
 
   /**
@@ -474,21 +497,35 @@ export function EditorView(props) {
   /**
    * 加载文件内容（对齐 VSCode model 复用：会话内已打开的 model 直接秒显，
    * 后台静默 RPC 校验防陈旧；首次打开走原读取流程）。
-   * @author ddj 2026年08月28号
+   * 每条成功分支都记下磁盘版本基线：外部改动轮询据此判断缓冲是否已陈旧，
+   * 保存时作为版本守卫令牌随 edrv.save 回传（读后被外部改过则拒绝写入）。
+   * @author ddj 2026年08月28号 / 2026年09月15号
    * @param path 文件路径
    * @param sid 会话 id
    * @param force 强制走 RPC（reloadFile 用，跳过 model 复用）
+   * @param version 已知磁盘版本（缺省走 RPC 返回值）
    */
-  const loadContent = (path, sid, force) => {
+  const loadContent = (path, sid, force, version) => {
     const seq = ++loadSeqRef.current
+    /**
+     * 记下磁盘版本基线；markRead=true 表示本次真的从磁盘读了内容
+     * （已读版本台账随之失效，下一轮轮询按新版本重新比对）。
+     */
+    const mark = (ver, markRead) => {
+      if (typeof ver !== 'string' || !ver) return
+      revRef.current[path] = ver
+      recordBaseline(scope, path, ver)
+      clearSync(scope, path)
+      if (markRead === true) clearReadVersion(scope, path)
+    }
     // 图片文件走专用通道：base64 → data URL 预览，不建 Monaco model、不进文本/差异流程
     if (isImagePath(path) && !svgTextRef.current.has(path)) {
-      loadImage(path, sid, seq)
+      loadImage(path, sid, seq, version)
       return
     }
     // PDF 文件走专用通道：base64 → PDF 面板（浏览 + 注释编辑），不建 Monaco model
     if (isPdfPath(path)) {
-      loadPdf(path, sid, seq, force === true)
+      loadPdf(path, sid, seq, force === true, version)
       return
     }
     const cachedModel = force ? null : modelsRef.current.get(path)
@@ -500,6 +537,7 @@ export function EditorView(props) {
       setStatus('已加载')
       rpc('edrv.read', { sessionId: sid, path }).then((res) => {
         if (seq !== loadSeqRef.current || path !== active) return
+        if (res && res.ok) mark(res.version)
         if (res && res.ok && res.content !== cachedModel.getValue()) {
           saveViewState(path) // 内容更新前保留当前视图位置
           setContent(res.content)
@@ -513,6 +551,7 @@ export function EditorView(props) {
     rpc('edrv.read', { sessionId: sid, path }).then((res) => {
       if (seq !== loadSeqRef.current || path !== active) return
       if (res && res.ok) {
+        mark(res.version, true)
         setContent(res.content)
         setContentPath(path)
         setLoadStage((prev) => ({ progress: Math.max(84, prev.progress), message: '文件已读取，准备创建编辑器…' }))
@@ -536,12 +575,13 @@ export function EditorView(props) {
 
   /**
    * 加载图片文件为 data URL（编辑区只读预览）；失败走 loadError 面板（重试经 loadContent 分派回此）。
-   * @author ddj 2026年09月08号
+   * @author ddj 2026年09月08号 / 2026年09月15号
    * @param path 图片文件路径
    * @param sid 会话 id
    * @param seq 加载序号（过期响应丢弃）
+   * @param version 已知磁盘版本（图片同走外部改动轮询，读到新版本即重取）
    */
-  const loadImage = (path, sid, seq) => {
+  const loadImage = (path, sid, seq, version) => {
     setImageSrc(null)
     setImgSize(null)
     setImgBroken(false)
@@ -555,6 +595,9 @@ export function EditorView(props) {
           setStatus('读取失败')
           return
         }
+        const imgVersion = res.version ?? version
+        recordBaseline(scope, path, imgVersion)
+        clearReadVersion(scope, path) // 刚读过内容：已读版本台账失效，下一轮按新版本比对
         setImageSrc(dataUrlOf(res.content, res.mime))
         setLoadStage({ progress: 100, message: '图片已就绪' })
         setStatus('已加载')
@@ -583,8 +626,9 @@ export function EditorView(props) {
    * @param sid 会话 id
    * @param seq 加载序号（过期响应丢弃）
    * @param force true=绕过缓存强制 RPC 重读（刷新按钮）
+   * @param version 已知磁盘版本（外部改动轮询触发时带入）
    */
-  const loadPdf = (path, sid, seq, force) => {
+  const loadPdf = (path, sid, seq, force, version) => {
     setPdfBytes(null)
     setLoadStage({ progress: monaco ? 72 : 12, message: '读取 PDF…' })
     const cache = pdfB64CacheRef.current
@@ -601,6 +645,9 @@ export function EditorView(props) {
     rpc('edrv.read', { sessionId: sid, path, encoding: 'base64' }).then((res) => {
       if (seq !== loadSeqRef.current || path !== active) return
       if (res && res.ok && res.encoding === 'base64') {
+        const pdfVersion = res.version ?? version
+        recordBaseline(scope, path, pdfVersion)
+        clearReadVersion(scope, path) // 刚读过内容：已读版本台账失效，下一轮按新版本比对
         cache.set(path, res.content)
         while (cache.size > 6) cache.delete(cache.keys().next().value)
         setPdfBytes(base64ToBytes(res.content))
@@ -631,6 +678,66 @@ export function EditorView(props) {
     window.addEventListener('edrv:refresh', onRefresh)
     return () => { clearInterval(t); window.removeEventListener('edrv:refresh', onRefresh) }
   }, [sessionId])
+
+  /**
+   * 展示外部同步提示（按路径+类型去重：同一文件重复回调不重置已关闭的提示）。
+   * @author ddj 2026年09月15号
+   * @param flag 同步标记
+   */
+  const markDiskFlag = (flag) => {
+    setDiskFlag((prev) => (prev && prev.path === flag.path && prev.kind === flag.kind ? prev : flag))
+  }
+
+  /**
+   * 外部改动落地：干净缓冲直接刷入（含差异标记重算），脏缓冲只提示不覆盖。
+   * 经 ref 暴露给轮询 hook（hook 只负责观测，IO/UI 全在这里）。
+   * @author ddj 2026年09月15号
+   * @param change 轮询判定出的外部变更
+   */
+  const onDiskChange = (change) => {
+    if (!change || !change.path) return
+    // 文件树同步：目录缓存按该路径失效并强制重列（外部新增/删除/改名都能看到）
+    emitFileChanged(change.path)
+    if (change.kind === 'modified') {
+      // 干净缓冲：强制从磁盘重读（跳过 model 复用），差异标记随之重算
+      loadContent(change.path, sessionId, true)
+      clearSync(scope, change.path)
+      setDiskFlag((prev) => (prev && prev.path === change.path ? null : prev))
+      setStatus('已同步外部修改 ' + new Date().toTimeString().slice(0, 8))
+      emitRefresh()
+      return
+    }
+    const kind = change.kind === 'deleted' ? 'deleted' : 'conflict'
+    markDiskFlag(readSync(scope, change.path) ?? { path: change.path, kind, at: Date.now() })
+    setStatus(kind === 'deleted' ? '文件已被外部删除' : '外部已修改（未保存的编辑保留）')
+  }
+  diskChangeRef.current = onDiskChange
+
+  /**
+   * 版本变化时读磁盘并与缓冲比对：内容相同 → 只推进基线（不做无意义重载）；
+   * 内容不同 → 由判定表决定自动刷入还是冲突提示。
+   * @author ddj 2026年09月15号
+   * @param path 文件路径
+   * @returns 比对结果；模型不可用/读失败 → null（按「需要重载」处理）
+   */
+  const readDiskCompare = (path) => {
+    const model = modelsRef.current?.get(path)
+    if (!model || typeof model.getValue !== 'function') return Promise.resolve(null)
+    return rpc('edrv.read', { sessionId, path }).then((res) => {
+      if (!res || !res.ok) return null
+      return { equal: res.content === model.getValue() }
+    }).catch(() => null)
+  }
+
+  // 外部改动轮询：观测交给 hook，动作落 onDiskChange（干净自动刷入 / 脏缓冲提示）
+  useFileWatch({
+    sessionId,
+    scope,
+    tabsRef: tabPathsRef,
+    dirtyRef,
+    onReadDisk: readDiskCompare,
+    onDiskChange: (change) => diskChangeRef.current?.(change),
+  })
 
   React.useEffect(() => {
     const publishLsp = (servers) => setLspServers(Array.isArray(servers) ? servers : [])
@@ -1126,14 +1233,24 @@ export function EditorView(props) {
    * 提交待执行的防抖保存（**真正执行保存**，不是取消）。
    * 语义与缺陷背景见 saveDebounce.ts：`schedule` 的返回值是只 clearTimeout 的 disposer，
    * 旧实现把它当「立即保存」调用 → 防抖窗口内切页签/关闭文件会静默丢改动。
-   * @author ddj 2026年09月11号
+   * 外部改动待处理（冲突/文件被删）时跳过：切页签/卸载不得用陈旧缓冲覆盖磁盘，
+   * 缓冲内容仍在 model 里，用户处理完冲突后再保存。
+   * @author ddj 2026年09月11号 / 2026年09月15号
+   * @param path 目标路径（缺省 = 当前活动文件）
+   * @returns 是否执行了保存
    */
-  const flushSave = () => {
+  const flushSave = (path) => {
+    const target = path ?? active
+    if (target && readSync(scope, target)) return false
     saveTimerRef.current?.flush()
+    return true
   }
 
   const doSave = (silent) => {
     if (!active) return
+    // 外部改动待处理：自动保存（silent）直接放弃，避免陈旧缓冲覆盖磁盘；
+    // 手工保存（Ctrl+S / 命令栏）继续走版本守卫，由 host 判定并给冲突提示。
+    if (silent && readSync(scope, active)) { setStatus('外部已修改（未保存的编辑保留）'); return }
     // PDF tab：保存委托给面板控制器（saveDocument → base64 → edrv.saveBinary）
     if (isPdfPath(active)) {
       const ctl = pdfCtlRef.current.get(active)
@@ -1146,22 +1263,41 @@ export function EditorView(props) {
     if (!ed) return
     if (isImageActive) { setStatus('图片只读预览'); return }
     const text = ed.getValue()
+    const path = active
     if (!silent) setStatus('保存中…')
     // 在途登记：关闭路径的 persistDirty 据此跳过重复提交（内容在同一 tick 内取，必然相同）
-    savingRef.current.add(active)
-    rpc('edrv.save', { sessionId, path: active, content: text }).then((res) => {
+    savingRef.current.add(path)
+    // 版本守卫令牌：上次读取/写入时的磁盘版本；与磁盘当前版本不符时 host 拒绝写入
+    const rev = revRef.current[path]
+    rpc('edrv.save', { sessionId, path, content: text, rev: typeof rev === 'string' && rev ? rev : undefined }).then((res) => {
       if (res && res.ok) {
-        setStatus('已保存 ' + new Date().toTimeString().slice(0, 8))
+        if (res.rev) revRef.current[path] = res.rev
+        recordBaseline(scope, path, res.rev)
+        markReadVersion(scope, path, res.rev, true) // 缓冲即磁盘内容：同版本无需再读盘
+        clearSync(scope, path)
         setContent(text)
-        setContentPath(active)
-        setDirtyMap((d) => Object.assign({}, d, { [active]: false }))
+        setContentPath(path)
+        setDirtyMap((d) => Object.assign({}, d, { [path]: false }))
+        if (path === active) {
+          setStatus('已保存 ' + new Date().toTimeString().slice(0, 8))
+          setDiskFlag((prev) => (prev && prev.path === path ? null : prev))
+        }
         refreshRecords()
         emitRefresh()
         // 片段配置文件保存后失效补全缓存（下次补全即读到新片段）
-        if (/\.code-snippets$/i.test(active)) window.dispatchEvent(new CustomEvent('edrv:snippets-changed'))
-      } else { setStatus('保存失败'); setError(res?.error ? String(res.error) : '保存失败') }
+        if (/\.code-snippets$/i.test(path)) window.dispatchEvent(new CustomEvent('edrv:snippets-changed'))
+        return
+      }
+      if (res && res.conflict) {
+        // 磁盘已被外部改过：保留缓冲内容与脏标记，交给用户显式选择
+        markDiskFlag({ path, kind: 'conflict', at: Date.now() })
+        setStatus('保存被拒：文件已被外部修改')
+        return
+      }
+      setStatus('保存失败')
+      setError(res?.error ? String(res.error) : '保存失败')
     }).catch((e) => { setStatus('保存失败'); setError('保存异常:' + String(e)) })
-      .finally(() => { savingRef.current.delete(active) })
+      .finally(() => { savingRef.current.delete(path) })
   }
   doSaveRef.current = doSave
 
@@ -1172,12 +1308,15 @@ export function EditorView(props) {
    * 这里再处理**仍标脏**的页签 —— 包括活动页签（其保存可能在途或失败），
    * 用 model 里的当前文本补一次，保证关闭前内容一定写到磁盘。
    * 保存失败只保留脏标记（不丢用户编辑），并在状态栏给出提示。
-   * @author ddj 2026年09月11号
+   * 外部改动待处理的页签跳过（版本守卫下必被拒绝；缓冲仍在 model 里，不丢内容）。
+   * @author ddj 2026年09月11号 / 2026年09月15号
    * @param paths 即将关闭的页签路径
    */
   const persistDirty = (paths) => {
     for (const path of paths) {
       if (!dirtyRef.current[path]) continue
+      // 外部改动未处理：不落盘（避免覆盖），脏内容仍保留在 model 中
+      if (readSync(scope, path)) { setStatus('未落盘（外部已修改）：' + baseNameOf(path)); continue }
       // 已有在途保存（flushSave 刚提交的防抖保存）：同一 tick 内容必然一致，跳过重复提交
       if (savingRef.current.has(path)) continue
       const pdfCtl = pdfCtlRef.current.get(path)
@@ -1186,8 +1325,16 @@ export function EditorView(props) {
       if (!model) { setStatus('未保存的修改无法落盘：' + baseNameOf(path)); continue }
       const content = model.getValue()
       savingRef.current.add(path)
-      rpc('edrv.save', { sessionId, path, content })
-        .then((res) => { if (res && res.ok) setDirtyMap((d) => Object.assign({}, d, { [path]: false })) })
+      const rev = revRef.current[path]
+      rpc('edrv.save', { sessionId, path, content, rev: typeof rev === 'string' && rev ? rev : undefined })
+        .then((res) => {
+          if (res && res.ok) {
+            if (res.rev) revRef.current[path] = res.rev
+            recordBaseline(scope, path, res.rev)
+            markReadVersion(scope, path, res.rev, true) // 缓冲即磁盘内容：同版本无需再读盘
+            setDirtyMap((d) => Object.assign({}, d, { [path]: false }))
+          }
+        })
         .catch((e) => dbg(sessionId, '关闭前落盘失败：' + path + ' · ' + String(e)))
         .finally(() => { savingRef.current.delete(path) })
     }
@@ -1198,6 +1345,9 @@ export function EditorView(props) {
     if (!ed || !active) return
     setDirtyMap((d) => Object.assign({}, d, { [active]: true }))
     setStatus('编辑中…')
+    // 外部改动尚未处理（冲突/文件被删）：抑制自动保存，避免用陈旧缓冲反复覆盖磁盘；
+    // 手工 Ctrl+S 不受抑制（doSave 会走版本守卫并给冲突提示）。
+    if (readSync(scope, active)) { setStatus('外部已修改（未保存的编辑保留）'); return }
     // 重新计时（arm 内部先取消上一轮）；到点自动保存，切页签/关闭前由 flushSave 立即提交
     saveTimerRef.current?.arm(schedule, 700, () => doSave(true))
   }
@@ -1497,10 +1647,71 @@ export function EditorView(props) {
     else openFile(sum.pendingFiles[0].path, true)
   }
 
+  /**
+   * 重新从磁盘加载当前文件（工具栏 ⟳ / 冲突提示「重新加载」/ 差异决策后刷新）。
+   * 一律强制重读（跳过 model 复用）：这才是「用户要看到磁盘真实内容」的语义。
+   * @author ddj 2026年09月15号
+   * @param skipStale 差异记录刷新是否跳过 stale 清理
+   */
   const reloadFile = (skipStale) => {
     if (!active) return
-    loadContent(active, sessionId, true)
+    const path = active
+    loadContent(path, sessionId, true)
+    clearSync(scope, path)
+    setDiskFlag((prev) => (prev && prev.path === path ? null : prev))
     refreshRecords(skipStale === true)
+  }
+
+  /**
+   * 冲突处理：用编辑器内容覆盖磁盘（在缓冲内容为权威时用户显式选择）。
+   * 覆盖不带版本令牌（host 无条件写入），成功后以返回的新版本重记基线。
+   * @author ddj 2026年09月15号
+   */
+  const overwriteDisk = () => {
+    const path = diskFlag?.path
+    const model = path ? modelsRef.current.get(path) : null
+    if (!path || !model) { setStatus('无法覆盖：文件未打开'); return }
+    rpc('edrv.save', { sessionId, path, content: model.getValue() }).then((res) => {
+      if (res && res.ok) {
+        if (res.rev) revRef.current[path] = res.rev
+        recordBaseline(scope, path, res.rev)
+        markReadVersion(scope, path, res.rev, true) // 缓冲即磁盘内容：同版本无需再读盘
+        clearSync(scope, path)
+        setDirtyMap((d) => Object.assign({}, d, { [path]: false }))
+        setDiskFlag((prev) => (prev && prev.path === path ? null : prev))
+        setStatus('已覆盖磁盘')
+        emitRefresh()
+        return
+      }
+      setStatus('覆盖失败')
+      setError(res?.error ? String(res.error) : '覆盖失败')
+    }).catch((e) => setError('覆盖异常:' + String(e)))
+  }
+
+  /**
+   * 冲突处理：保留本地编辑（关掉提示），磁盘内容不取用。
+   * 基线推进到磁盘当前版本，避免同一外部改动被反复提示；缓冲仍标脏，
+   * 之后的手工保存会被版本守卫拒绝并再次给出选择。
+   * @author ddj 2026年09月15号
+   */
+  const keepLocal = () => {
+    const path = diskFlag?.path
+    if (!path) return
+    rpc('edrv.versions', { sessionId, paths: [path] }).then((res) => {
+      const item = res && res.ok && Array.isArray(res.items) ? res.items[0] : null
+      if (item && item.version) {
+        recordBaseline(scope, path, item.version)
+        // 该版本已判定为「与缓冲不同」：记入已读台账，避免下一轮轮询再读一次并重复弹提示
+        markReadVersion(scope, path, item.version, false)
+        revRef.current[path] = item.version
+      }
+      clearSync(scope, path)
+      setDiskFlag((prev) => (prev && prev.path === path ? null : prev))
+      setStatus('已保留本地编辑（磁盘内容未取用）')
+    }).catch(() => {
+      clearSync(scope, path)
+      setDiskFlag(null)
+    })
   }
 
   /**
@@ -1963,9 +2174,19 @@ export function EditorView(props) {
         React.createElement('span', { className: 'edrv-sp-lsp' }, aiLabel))
     : null
 
-  // 底部状态栏：单行多段——LSP 段居左（弹性吸收空闲宽度），AI 段固定右对齐
-  const statusBar = (lspSeg || aiSeg)
-    ? React.createElement('div', { className: 'edrv-statusbar' }, lspSeg, aiSeg)
+  // 外部改动段：仅当前文件有未处理的外部变更时出现（点「重新加载」即消解）
+  const diskSeg = (active && diskFlag && sameFile(diskFlag.path, active))
+    ? React.createElement('span', {
+        className: 'edrv-status-seg',
+        style: { display: 'inline-flex', alignItems: 'center', gap: '6px', minWidth: 0, flex: '0 0 auto', cursor: 'pointer' },
+        title: '磁盘内容已被外部修改：重新加载 = 取磁盘版本；保留本地 = 继续编辑（保存时会被版本守卫拒绝）',
+        onClick: () => reloadFile(),
+      }, React.createElement('span', { className: 'edrv-sp-lsp' }, diskFlag.kind === 'deleted' ? '⚠ 外部已删除' : '⚠ 外部已修改'))
+    : null
+
+  // 底部状态栏：单行多段——LSP 段居左（弹性吸收空闲宽度），外部改动段与 AI 段固定右对齐
+  const statusBar = (lspSeg || aiSeg || diskSeg)
+    ? React.createElement('div', { className: 'edrv-statusbar' }, lspSeg, diskSeg, aiSeg)
     : null
 
   // 导航历史按钮：目标条目名（tooltip 提示下一步会回到哪个文件）
@@ -1994,6 +2215,44 @@ export function EditorView(props) {
     React.createElement('button', { className: 'edrv-chip-btn' + (sidebarOn ? ' edrv-chip-on' : ''), title: '切换面板区 (' + (chordOf('edrv.toggleSidebar') ?? 'Ctrl+B') + ')，图标列常显', onClick: () => setSidebarOn((v) => !v) }, '☰'),
     React.createElement('button', { className: 'edrv-chip-btn', title: '刷新', onClick: reloadFile }, '⟳'),
     React.createElement(QuickOpen, { sessionId, onOpen: (p) => openFile(p, false) }))
+
+  /**
+   * 外部同步提示条（冲突 / 文件被删）：仅在提示对象就是当前活动文件时显示。
+   * 不复用 error 面板：内容照常可编辑，提示条只是把「磁盘已变、怎么处理」摆在眼前。
+   * @author ddj 2026年09月15号
+   * @returns 提示条元素或 null
+   */
+  const diskBanner = () => {
+    const flag: SyncFlag | null = diskFlag && sameFile(diskFlag.path, active) ? diskFlag : null
+    if (!flag) return null
+    const deleted = flag.kind === 'deleted'
+    const text = deleted
+      ? '该文件已被外部删除（缓冲内容保留，保存会失败）'
+      : '磁盘内容已被外部修改（当前有未保存编辑，未覆盖）'
+    return React.createElement('div', {
+      className: 'edrv-diskbar',
+      style: {
+        display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0,
+        padding: '4px 8px', fontSize: '12px',
+        background: 'var(--dsw-alias-bg-layer-1, rgba(255,193,7,.12))',
+        borderBottom: '1px solid var(--dsw-alias-border-l1, rgba(255,193,7,.35))',
+      },
+    },
+      React.createElement('span', { title: flag.path }, '⚠ ' + text),
+      React.createElement('span', { style: { flex: 1 } }),
+      React.createElement('button', {
+        className: 'edrv-pill edrv-pill-keep', title: '放弃缓冲内容，重新加载磁盘版本',
+        onClick: () => reloadFile(),
+      }, '重新加载'),
+      (deleted ? null : React.createElement('button', {
+        className: 'edrv-pill edrv-pill-undo', title: '用编辑器内容覆盖磁盘（放弃磁盘上的外部修改）',
+        onClick: overwriteDisk,
+      }, '覆盖磁盘')),
+      (deleted ? null : React.createElement('button', {
+        className: 'edrv-pill edrv-pill-ghost', title: '保留编辑器内容，不取用磁盘版本',
+        onClick: keepLocal,
+      }, '保留本地')))
+  }
 
   const otherFiles = sum.pendingFiles.filter((f) => f.path !== active)
 
@@ -2192,6 +2451,7 @@ export function EditorView(props) {
     pathBar,
     tabRow,
     sideHintEl,
+    diskBanner(),
     editorArea,
     statusBar)
   // 编辑器根节点按 composer 顶部边界动态限高，底部对话区域继续由 DSH 原生渲染。
