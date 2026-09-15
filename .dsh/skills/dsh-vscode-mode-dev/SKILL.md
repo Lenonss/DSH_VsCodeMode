@@ -49,6 +49,9 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
 - 2026-09-15 对照（v0.4.3）：**staged 与 CDN 传播延迟症状相同，别提前判 staged**——`npm publish` 成功后注册表 404、
   `dist-tags.latest` 未变，可能只是传播慢：先等 `Verify published tarball` 走完重试窗口（v0.4.3 实测 **4 分 34 秒**后
   该步骤 success、job 全绿、`dist-tags.latest` 同步 0.4.3）；只有该步骤最终 failure（重跑报 `409 Conflict`）才是真 staged。
+- 2026-09-15 第三结局（v0.4.4 实测）：`Verify published tarball` 最终 failure 但版本**已实际发布**——CDN 传播比
+  15×30s 重试窗口还慢（本次 ~8.5 分钟仍未可拉、随后可达）；判别：`registry.npmjs.org/<pkg>/<ver>` 返回 **200** 且
+  `dist-tags.latest` 已切换 = 已上线，CI 红叉是误报，**勿重跑**（会 `409 Conflict`），用 gitHead 三向对齐闭环即可。
 - 2026-09-08 事实：awesome 收录条目（PR #2532，category git）的 `tarball:` 钉在 v0.1.36，发版即过期；
   npm 映射自动、该字段冗余 → 改自己条目时删 tarball 行，勿再钉版本号。
 - 2026-09-11 事实：本环境**不必** stash 隔离——当场核对 `git status --porcelain` 全部改动确属本次
