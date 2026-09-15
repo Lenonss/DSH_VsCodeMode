@@ -46,6 +46,9 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
   （本机 11.6.1 无 `stage` 命令、亦无凭据，`npm whoami` 401）执行 `npm stage approve`。
   **CI 判断成功不能只看 `npm publish` 那一步**：要看最后一个 `Verify published tarball` 步骤；
   该步骤失败 = 版本未真正上线（此时 GitHub Release 与 tgz 通常已正常产出，可先用 Release 分发）。
+- 2026-09-15 对照（v0.4.3）：**staged 与 CDN 传播延迟症状相同，别提前判 staged**——`npm publish` 成功后注册表 404、
+  `dist-tags.latest` 未变，可能只是传播慢：先等 `Verify published tarball` 走完重试窗口（v0.4.3 实测 **4 分 34 秒**后
+  该步骤 success、job 全绿、`dist-tags.latest` 同步 0.4.3）；只有该步骤最终 failure（重跑报 `409 Conflict`）才是真 staged。
 - 2026-09-08 事实：awesome 收录条目（PR #2532，category git）的 `tarball:` 钉在 v0.1.36，发版即过期；
   npm 映射自动、该字段冗余 → 改自己条目时删 tarball 行，勿再钉版本号。
 - 2026-09-11 事实：本环境**不必** stash 隔离——当场核对 `git status --porcelain` 全部改动确属本次
