@@ -75,6 +75,8 @@ describe('diffRegions', () => {
     const r = rec({ hunks: [{ oldText: 'x', newText: 'ZZZ' }], decisions: { call: 'pending', perHunk: ['pending'] } })
     const regs = diffRegions([r], 'line1\nline2')
     expect(regs[0].stale).toBe(true)
+    // stale 区域仍是 pending：需纳入单文件 Keep/Undo 的作用域，否则永久留在待处理列表
+    expect(regs[0].status).toBe('pending')
   })
   it('重复 newText 的多个 hunk 分别定位', () => {
     const r = rec({ hunks: [{ oldText: 'old1', newText: 'same' }, { oldText: 'old2', newText: 'same' }], decisions: { call: 'pending', perHunk: ['pending', 'pending'] } })

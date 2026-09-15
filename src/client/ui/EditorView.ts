@@ -226,6 +226,8 @@ export function EditorView(props) {
   // useMemo 稳定引用：否则 hover 等重渲染会让 view zone effect 反复重建（- 号闪烁）
   const pendingRegions = React.useMemo(() => regions.filter((r) => r.status === ST.PENDING && !r.stale), [regions])
   const staleRegions = React.useMemo(() => regions.filter((r) => r.status === ST.PENDING && r.stale), [regions])
+  // 单文件 Keep/Undo 的作用域：可定位差异 + 无法定位的冲突差异（后者否则永久留在待处理列表）
+  const decideRegions = React.useMemo(() => [...pendingRegions, ...staleRegions], [pendingRegions, staleRegions])
   hoverRegionsRef.current = pendingRegions
   // 行 → 差异区域 映射（hover O(1) 命中；每行归属其区域）
   const lineRegionMap = React.useMemo(() => {
@@ -1591,21 +1593,23 @@ export function EditorView(props) {
    * 单次 setRecords 合并全部结果，避免逐条往返读写整个 sidecar。
    * @author ddj 2026年08月25号
    * @param items 决策项数组（callId/scope/hunkIndex/decision）
-   * @returns Promise<{ok:number; fail:number}> 成功/失败计数
+   * @returns Promise<{ok:number; fail:number; stale:number}> 成功/失败/已不存在计数
    */
   const actMany = (items) => {
-    if (!items.length) return Promise.resolve({ ok: 0, fail: 0 })
+    if (!items.length) return Promise.resolve({ ok: 0, fail: 0, stale: 0 })
     return rpc('edrv.decideBatch', { sessionId, items }).then((res) => {
       if (!res || !res.ok || !Array.isArray(res.results)) {
         setError(res?.error ? String(res.error) : '批量处理失败')
-        return { ok: 0, fail: items.length }
+        return { ok: 0, fail: items.length, stale: 0 }
       }
       let ok = 0
       let fail = 0
+      let stale = 0
       const next = {}
       for (const item of res.results) {
         if (item && item.ok) {
           ok++
+          if (item.stale === true) stale++
           if (item.record) next[item.callId] = item.record
         } else {
           fail++
@@ -1614,11 +1618,23 @@ export function EditorView(props) {
       // 合并结果无变化（批量全部失败/重复点击）时不 setRecords：避免 records 换引用
       // → pendingRegions 换引用 → diff 全量重渲染（内容相同，纯空转）
       if (Object.keys(next).length) setRecords((prev) => Object.assign({}, prev, next))
-      return { ok, fail }
+      return { ok, fail, stale }
     }).catch((e) => {
       setError('批量处理异常:' + String(e))
-      return { ok: 0, fail: items.length }
+      return { ok: 0, fail: items.length, stale: 0 }
     })
+  }
+
+  /**
+   * 批量决策状态文案（含"差异已不存在于文件"提示）。
+   * @author ddj 2026年09月15号
+   * @param prefix 动作前缀（已采纳/已不采纳）
+   * @param result 批量决策计数
+   * @returns 状态栏文案
+   */
+  const decideStatus = (prefix, result) => {
+    const text = prefix + result.ok + ' 处差异' + (result.fail ? '，' + result.fail + ' 处失败' : '')
+    return result.stale ? text + '（其中 ' + result.stale + ' 处已不存在于文件，未改动）' : text
   }
 
   /**
@@ -1631,25 +1647,25 @@ export function EditorView(props) {
   const itemOf = (r, reject) => ({ callId: r.callId, scope: r.create ? 'call' : 'hunk', hunkIndex: r.idx, decision: reject ? 'rejected' : 'accepted' })
 
   const acceptFile = () => {
-    if (batchBusyRef.current || !pendingRegions.length) return
+    if (batchBusyRef.current || !decideRegions.length) return
     batchBusyRef.current = true
-    actMany(pendingRegions.map((r) => itemOf(r, false))).then(({ ok, fail }) => {
+    actMany(decideRegions.map((r) => itemOf(r, false))).then((result) => {
       batchBusyRef.current = false
       reloadFile(true)
       emitRefresh()
-      setStatus('已采纳 ' + ok + ' 处差异' + (fail ? '，' + fail + ' 处失败' : ''))
-      if (fail) setError(fail + ' 处差异处理失败（可能已被后续修改影响），可刷新后重试')
+      setStatus(decideStatus('已采纳 ', result))
+      if (result.fail) setError(result.fail + ' 处差异处理失败（可能已被后续修改影响），可刷新后重试')
     }).catch(() => { batchBusyRef.current = false })
   }
   const undoFile = () => {
-    if (batchBusyRef.current || !pendingRegions.length) return
+    if (batchBusyRef.current || !decideRegions.length) return
     batchBusyRef.current = true
-    actMany([...pendingRegions].reverse().map((r) => itemOf(r, true))).then(({ ok, fail }) => {
+    actMany([...decideRegions].reverse().map((r) => itemOf(r, true))).then((result) => {
       batchBusyRef.current = false
       reloadFile(true)
       emitRefresh()
-      setStatus('已不采纳 ' + ok + ' 处差异' + (fail ? '，' + fail + ' 处失败' : ''))
-      if (fail) setError(fail + ' 处差异处理失败（可能已被后续修改影响），可刷新后重试')
+      setStatus(decideStatus('已不采纳 ', result))
+      if (result.fail) setError(result.fail + ' 处差异处理失败（可能已被后续修改影响），可刷新后重试')
     }).catch(() => { batchBusyRef.current = false })
   }
 
@@ -1677,12 +1693,12 @@ export function EditorView(props) {
     if (batchBusyRef.current || !allPending.length) return
     batchBusyRef.current = true
     const list = reject ? [...allPending].sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : b.idx - a.idx)) : allPending
-    actMany(list.map((r) => itemOf(r, reject))).then(({ ok, fail }) => {
+    actMany(list.map((r) => itemOf(r, reject))).then((result) => {
       batchBusyRef.current = false
       reloadFile(true)
       emitRefresh()
-      setStatus((reject ? '已不采纳 ' : '已采纳 ') + ok + ' 处差异' + (fail ? '，' + fail + ' 处失败' : ''))
-      if (fail) setError(fail + ' 处差异处理失败（可能已被后续修改影响），可刷新后重试')
+      setStatus(decideStatus(reject ? '已不采纳 ' : '已采纳 ', result))
+      if (result.fail) setError(result.fail + ' 处差异处理失败（可能已被后续修改影响），可刷新后重试')
     }).catch(() => { batchBusyRef.current = false })
   }
   const acceptAllFiles = () => actAllPending(false)

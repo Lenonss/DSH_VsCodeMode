@@ -151,6 +151,8 @@ export interface DecideResult {
   ok: boolean
   error?: string
   record?: RecordView
+  /** 不采纳时该 hunk 的新文本已不在文件中（未改动文件，仅记录决策）。 */
+  stale?: boolean
 }
 
 /** 每个方法的请求参数（sessionId 为公共可选字段）。 */

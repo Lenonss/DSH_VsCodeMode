@@ -137,8 +137,9 @@ async function afterManualSave(
 
 /**
  * 批量决策核心：一次会话/桶解析 + 逐项处理 + 统一落盘（accept/reject 单条与 decideBatch 共用）。
- * rejected 项先做回滚，失败记入该项 error 且不改决策；本批次新增"已解决"记录一次性归档，
- * 有任何成功项则整桶只写盘一次，避免逐条读写整个 sidecar。
+ * rejected 项先做回滚，失败记入该项 error 且不改决策；hunk 的新文本已不在文件中
+ * （被后续修改覆盖/撤销）时不算失败：不写文件，按已回滚记录决策并归档（结果项带 stale）。
+ * 本批次新增"已解决"记录一次性归档，有任何成功项则整桶只写盘一次，避免逐条读写整个 sidecar。
  * @author ddj 2026年08月25号
  * @param items 决策项（按数组顺序处理，rejected 的先后即回滚顺序）
  * @returns 逐项结果（ok 项含更新后的记录视图）
@@ -159,19 +160,25 @@ async function applyDecisions(
       results.push({ callId: item.callId, ok: false, error: '记录不存在' })
       continue
     }
+    let revertedStale = false
     if (item.decision === 'rejected') {
       const scope: RpcScope = item.scope ?? 'call'
       const outcome = scope === 'hunk' ? await revertHunk(ctx, session, record, item.hunkIndex ?? -1) : await revertCall(ctx, session, record)
       if (!outcome.ok) {
-        results.push({ callId: item.callId, ok: false, error: outcome.error })
-        continue
+        if (scope !== 'hunk' || outcome.stale !== true) {
+          results.push({ callId: item.callId, ok: false, error: outcome.error })
+          continue
+        }
+        revertedStale = true
       }
     }
     const wasResolved = recordResolved(record)
     markDecision(record, item.scope ?? 'call', item.hunkIndex, item.decision)
     changed = true
     if (!wasResolved && recordResolved(record)) resolved.push(record)
-    results.push({ callId: item.callId, ok: true, record: recView(record) })
+    const result: DecideResult = { callId: item.callId, ok: true, record: recView(record) }
+    if (revertedStale) result.stale = true
+    results.push(result)
   }
   if (resolved.length) {
     const reason = items.some((item) => item.decision === 'rejected') ? '已处理（回滚）' : '已处理'

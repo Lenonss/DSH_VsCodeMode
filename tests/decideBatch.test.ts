@@ -127,8 +127,8 @@ describe('edrv.decideBatch', () => {
     expect(fs.writeText.mock.calls.length).toBe(3)
   })
 
-  it('rejected 回滚失败：该项报错且不改决策', async () => {
-    // 磁盘内容与 hunk newText 不匹配 → 定位失败 → 回滚失败
+  it('rejected 目标 hunk 已不在文件中：不改文件，按已回滚归档并标记 stale', async () => {
+    // 磁盘内容与 hunk newText 不匹配 → 该差异已被后续修改覆盖，无可回滚内容
     const fs = fakeFs({ [CWD + '/a.ts']: 'xxx' })
     const ctx = fakeCtx(fs)
     const registry = new Map<string, Map<string, DiffRecord>>([
@@ -140,8 +140,28 @@ describe('edrv.decideBatch', () => {
     ] })
     expect(res.ok).toBe(true)
     if (!res.ok) return
+    expect(res.results[0]).toMatchObject({ callId: 'a', ok: true, stale: true })
+    expect(res.results[0].record?.decisions.perHunk).toEqual(['rejected'])
+    // 文件保持原样（未写回滚内容），只落盘归档 + sidecar
+    expect(await fs.readText(CWD + '/a.ts')).toBe('xxx')
+    expect(registry.get(CWD)!.get('a')!.archived).toBe(true)
+    expect(fs.writeText.mock.calls.length).toBe(2)
+  })
+
+  it('rejected 目标文件不存在：仍按失败报错且不改决策', async () => {
+    const fs = fakeFs({})
+    const ctx = fakeCtx(fs)
+    const registry = new Map<string, Map<string, DiffRecord>>([
+      [CWD, bucketOf([rec({ callId: 'a', hunks: [{ oldText: 'a', newText: 'b' }] })])],
+    ])
+    const handlers = buildHandlers(ctx, registry)
+    const res = await handlers['edrv.decideBatch']({ sessionId: 's1', items: [
+      { callId: 'a', scope: 'hunk', hunkIndex: 0, decision: 'rejected' },
+    ] })
+    expect(res.ok).toBe(true)
+    if (!res.ok) return
     expect(res.results[0].ok).toBe(false)
-    expect(String(res.results[0].error)).toContain('回滚失败')
+    expect(String(res.results[0].error)).toContain('文件不存在')
     // 未写任何决策，也未归档
     expect(registry.get(CWD)!.get('a')!.decisions.perHunk).toEqual(['pending'])
     expect(registry.get(CWD)!.get('a')!.archived).toBe(false)

@@ -8,7 +8,8 @@ import type { Ctx, Session } from './store.js'
 import { policyOf, resolveTarget } from './store.js'
 import { applyLocations, locateHunks, preciseHunk } from './shared/diff.js'
 
-export type Result = { ok: true } | { ok: false; error: string }
+/** 回滚结果；stale=true 表示该 hunk 的新文本已不在文件中（无可回滚内容，不算失败）。 */
+export type Result = { ok: true } | { ok: false; error: string; stale?: boolean }
 
 /**
  * 删除新建文件（拒绝创建时）：subprocess 删除，路径先经 fs.contains 校验工作区边界。
@@ -81,7 +82,8 @@ export async function revertHunk(ctx: Ctx, session: Session, record: DiffRecord,
     if ((info.size ?? 0) > 8 * 1024 * 1024) return { ok: false, error: '回滚失败：文件过大，无法安全定位' }
     const content = await fs.readText(target)
     const location = locateHunks(content, [precise])[0]
-    if (!location?.matched) return { ok: false, error: '回滚失败：该区域可能已被后续修改影响' }
+    // 新文本已不在文件中（被后续修改覆盖/撤销）：不采纳的目标已达成，标记 stale 供调用方按"已回滚"记录决策
+    if (!location?.matched) return { ok: false, stale: true, error: '回滚失败：该区域在文件中已不存在（可能已被后续修改覆盖）' }
     const result = applyLocations(content, [location], true)
     await fs.writeText(target, result.content, void 0, void 0, policyOf(ctx, session))
     return { ok: true }

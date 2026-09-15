@@ -6,7 +6,7 @@
  */
 import React from 'react'
 import { callIdAttr } from '../state/records.js'
-import { diffDockText } from '../diffDock.js'
+import { canDecideFile, diffDockText } from '../diffDock.js'
 import { badgeOf } from './shared.js'
 
 /**
@@ -48,6 +48,8 @@ export function DiffBox(props) {
   const [detailsOpen, setDetailsOpen] = React.useState(false)
   const detailsId = React.useId()
   const canAct = pendingRegions.length > 0
+  // Keep/Undo 覆盖无法定位的冲突差异：它们仍占待处理列表，但不在 pendingRegions 内
+  const canDecide = canDecideFile(pendingRegions.length, staleRegions.length)
 
   const base = String(activePath || '').split(/[\\/]/).pop() || ''
 
@@ -114,8 +116,8 @@ export function DiffBox(props) {
           React.createElement('span', { className: 'edrv-diffbar-file edrv-diffbar-summary', title: activePath || '' }, base)),
 
         React.createElement('div', { className: 'edrv-diffbar-actions' },
-          React.createElement('button', { className: 'edrv-pill edrv-pill-keep', title: '采纳当前文件的全部差异', disabled: !canAct, onClick: onAcceptFile }, '✓ Keep'),
-          React.createElement('button', { className: 'edrv-pill edrv-pill-undo', title: '不采纳当前文件的全部差异（回滚）', disabled: !canAct, onClick: onUndoFile }, '↩ Undo'),
+          React.createElement('button', { className: 'edrv-pill edrv-pill-keep', title: '采纳当前文件的全部差异', disabled: !canDecide, onClick: onAcceptFile }, '✓ Keep'),
+          React.createElement('button', { className: 'edrv-pill edrv-pill-undo', title: '不采纳当前文件的全部差异（回滚）', disabled: !canDecide, onClick: onUndoFile }, '↩ Undo'),
           React.createElement('button', {
             className: 'edrv-pill edrv-pill-ghost edrv-diff-details-toggle',
             title: detailsOpen ? '收起差异操作' : '展开差异操作',

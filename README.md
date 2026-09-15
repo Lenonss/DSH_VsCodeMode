@@ -91,6 +91,10 @@
   编辑器未打开时显示紧凑「差异 N 个文件 · 查看下一个」按钮（点击自动打开侧栏编辑器并聚焦差异）；编辑器打开后 dock 切换为
   完整操作条（Keep / Undo / 跳转 / 回滚 / 归档对比），不会再出现第二个差异栏。header 差异角标 +
   DiffLauncher 全局总览 + 归档/批次回滚；状态持久化到工作区旁车（`.dsh-edit-review.json`，重启不丢）。
+  ⚠️ v0.4.3 修复「冲突差异可看不可点」：pending hunk 的 `newText` 已被后续修改覆盖（定位失败）时，host 会标记
+  `conflict` 并保留在待处理列表供复核，但单文件 Keep/Undo 原先只认「可定位」差异 → 这类文件恒留在差异栏且按钮置灰，
+  而全局 Keep All / Undo All 却是亮的。现在单文件 Keep/Undo 覆盖冲突差异：Keep 记账后归档；Undo 对已不在文件中的
+  差异不改动文件、直接按不采纳归档（状态栏提示「其中 N 处已不存在于文件，未改动」）。
 - **Monaco 离线分发**：`assets/vendor/monaco` AMD 构建随包发布，经 `/edrv/vendor/*` 前缀路由提供，全离线可用。
   版本锁定 `monaco-editor@0.42.0-dev-20230906`（commit `e7d7a5b0`），由 `node scripts/vendor-monaco.mjs [--force]`
   从 npm registry 复现铺入（内含版本+commit 双重断言，防静默换错构建）。

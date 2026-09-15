@@ -39,6 +39,18 @@ export function editorDockMode(activePath: string | null | undefined): 'editor' 
 }
 
 /**
+ * 文件是否仍可执行 Keep/Undo：可定位差异与无法定位的冲突差异都算待处理。
+ * 冲突差异的 newText 已不在文件中（被后续修改覆盖），由 host 按"已不存在"记录决策。
+ * @author ddj 2026年09月15号
+ * @param pendingCount 可定位的待处理差异数
+ * @param staleCount 无法定位（冲突）的待处理差异数
+ * @returns 两者任一大于 0 时为 true
+ */
+export function canDecideFile(pendingCount: number, staleCount: number): boolean {
+  return Math.max(0, pendingCount) + Math.max(0, staleCount) > 0
+}
+
+/**
  * 获取切换文件期间稳定展示的文件内差异数量。
  * @author ddj 2026年08月26号
  * @param ready 当前文件内容是否已加载完成

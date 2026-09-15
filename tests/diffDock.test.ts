@@ -3,7 +3,7 @@
  * 作者 ddj 2026-08-26
  */
 import { describe, expect, it } from 'vitest'
-import { diffDockText, displayDiffTotal, editorDockMode, nextDiffPath } from '../src/client/diffDock.js'
+import { canDecideFile, diffDockText, displayDiffTotal, editorDockMode, nextDiffPath } from '../src/client/diffDock.js'
 import { clearDiffDock, publishDiffDock, readDiffDock, subscribeDiffDock } from '../src/client/diffDockStore.js'
 
 describe('nextDiffPath', () => {
@@ -49,6 +49,22 @@ describe('displayDiffTotal', () => {
   it('非法或负数归一为零', () => {
     expect(displayDiffTotal(false, 0, -2)).toBe(0)
     expect(displayDiffTotal(false, 0, Number.NaN)).toBe(0)
+  })
+})
+
+describe('canDecideFile', () => {
+  it('无可定位差异且无冲突差异时不可决策', () => {
+    expect(canDecideFile(0, 0)).toBe(false)
+  })
+  it('仅有可定位差异时可决策', () => {
+    expect(canDecideFile(2, 0)).toBe(true)
+  })
+  it('仅有冲突差异时仍可决策', () => {
+    expect(canDecideFile(0, 3)).toBe(true)
+  })
+  it('负数与非法值按 0 处理', () => {
+    expect(canDecideFile(-1, -1)).toBe(false)
+    expect(canDecideFile(Number.NaN, 0)).toBe(false)
   })
 })
 
