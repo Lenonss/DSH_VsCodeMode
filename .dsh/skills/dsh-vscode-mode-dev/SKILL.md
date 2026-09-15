@@ -5,7 +5,7 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
 
 # dsh-vscode-mode 开发/发布经验集（自我更新型技能）
 
-> updated: 2026-09-14 · 维护者：ddj（AI 会话按文末协议追加，保持精炼、去重）
+> updated: 2026-09-15 · 维护者：ddj（AI 会话按文末协议追加，保持精炼、去重）
 ## 何时使用
 
 - 发布新版本（commit/push/tag/npm 相关操作）。
@@ -62,6 +62,15 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
   对照 HEAD，别只看本地 tag（本地 tag 可能落后或超前）。
 - 2026-09-09 事实：pnpm 在本环境跑 run 脚本会先做 deps-status check 触发 store SQLite 报错
   （`unable to open database file`）→ 三门直接调 node_modules/.bin（tsc.cmd/vitest.cmd/tsdown.cmd）绕过。
+
+## 差异审查（DiffBox / 旁车）设计口径
+
+- 2026-09-15 坑：`recordIsStale` 对「pending hunk 的 newText 已不在文件中」的记录**不归档**（只置 `conflict=true` 留在待处理列表供复核），
+  而单文件 Keep/Undo 原先只认 `pendingRegions`（可定位差异）→ 这类文件恒留在差异栏、按钮置灰，全局 Keep All/Undo All 却是亮的（幽灵条目）。
+  规矩：**给某类差异「可见性」时必须同时给「可操作性」**——`canDecideFile(pending, stale)` 决定按钮可用性、单文件决策作用域 = `pendingRegions + staleRegions`、
+  host `revertHunk` 定位失败返回 `stale:true` 并由 `applyDecisions` 按「已回滚」记账（不写文件、状态栏提示「N 处已不存在于文件」）。
+- 2026-09-15 事实：同一文件被连续/并发 edit 后，先前的 pending 记录会整批变成 conflict（before/after 链断裂、当前内容不等于任一快照）——这是正常现象而非 bug；
+  判别某条记录是否真过时：逐条比对 hunk `newText` 在当前内容里的 `indexOf`（原始 + 归一化两种口径），全为 -1 即确属「已被后续修改覆盖」。
 
 ## 开发/部署形态切换（profile 安装形态）
 
