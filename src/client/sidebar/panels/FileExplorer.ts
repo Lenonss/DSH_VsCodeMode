@@ -130,8 +130,6 @@ export function FileExplorer(props) {
   const reloadDirRef = React.useRef(null) // loadDir 最新闭包（文件变化监听读取，防陈旧闭包）
   const changedTimerRef = React.useRef(null) // 文件变化合并去抖计时器
   const changedRelRef = React.useRef(new Set()) // 待重列的相对目录集合（去抖窗口内合并）
-  const dirsMapRef = React.useRef(null) // loadDir 最新闭包（文件变化监听读取，防陈旧闭包）
-  dirsMapRef.current = loadDir
 
   /** 渲染取数：内存态 → 本地条目缓存 → null（显示加载态）。 */
   const entriesOf = (rel) => dirsRef.current[rel] ?? entriesCacheGet(scope, rel) ?? null
