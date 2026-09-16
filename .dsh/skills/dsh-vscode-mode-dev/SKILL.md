@@ -29,6 +29,13 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
   + 残留分支「require 就绪才 boot，否则移除重注入」；boot 内 require 缺失直接 fail 报真实原因（别再重注入，防死循环）。
 - 2026-09-22 坑（测试）：mock window.require 就绪时，loader 残留分支会走「require 就绪直接 boot」而非「移除重注入」——
   测「残留+require 缺失」场景必须初始 stub `{ require: undefined }`，注入后（onload 前）再换成就绪 require。
+- 2026-09-22 坑（v0.4.4 引入，v0.4.6 修）：渲染期裸赋值 `ref.current = 后置const` 是 TDZ 必炸——FileExplorer 组件体
+  134 行 `dirsMapRef.current = loadDir` 写在 157 行 `const loadDir` 之前 → 「文件编辑」Tab 挂载即 `Cannot access
+  'loadDir' before initialization`，slot 错误边界清空正文全空白（无堆栈指向源码行，全平台）；且该 ref 无消费者（监听实际
+  走 reloadDirRef）= 死代码。规矩：**渲染期 ref 镜像赋值必须放在被引用 const 定义之后**；删 ref 前先 grep 消费方。
+- 2026-09-22 坑：发布前仅跑三门不抓组件渲染期错误（tests 全是纯逻辑，无 DOM 渲染测试）——v0.4.5 带着上述回归过全量
+  1082 用例照发。**客户端 UI 改动发版前必须真实浏览器冒烟核心入口**（官方侧栏「文件编辑」Tab 打开 + 资源管理器挂载）；
+  复现用 chrome-devtools：点侧栏入口卡片 → 看 console 是否 slot entry crashed。
 
 ## 发布流程（必须照做，禁止偏离）
 
