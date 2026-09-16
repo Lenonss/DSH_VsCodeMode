@@ -10,7 +10,7 @@
 import React from 'react'
 import { EditorView } from './EditorView.js'
 import { setSideEditorMounted } from '../sidebarBridge.js'
-import { editorMountEpoch, markEditorMounted, parseOfficialFileAddress, resolveNavLine, resolveNavOpen } from '../officialSidebar.js'
+import { editorMountEpoch, markEditorActive, markEditorMounted, parseOfficialFileAddress, resolveNavLine, resolveNavOpen } from '../officialSidebar.js'
 
 /**
  * 官方侧边栏 Tab 正文组件（keyed slot sidebar.right.pane.tab 装配）。

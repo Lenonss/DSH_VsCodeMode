@@ -224,7 +224,11 @@ export function toEdrvUri(uri, root) {
   if (!uri) return ''
   if (uri.startsWith('edrv://')) return uri
   const path = relativeLspPath(uri, root)
-  return 'edrv:///' + encodeURI(path)
+  // root 不匹配时 relativeLspPath 返回完整绝对路径（/home/x 或 D:/x）：
+  // 直接拼 'edrv:///' 会得 edrv:////home/x（空 authority + // 开头）→ Uri.parse 抛
+  // UriError（issue #5/#6 同源隐患，LSP 定义/引用跳转工作区外文件时触发）；
+  // 剥前导 / 后与编辑器 model URI 的相对路径约定一致（Windows 盘符形态不受影响）
+  return 'edrv:///' + encodeURI(String(path ?? '').replace(/^\/+/, ''))
 }
 
 /** 将 LSP 目标解析为当前工作区相对路径（跨文件跳转与 model URI 对齐）。 */

@@ -1218,7 +1218,10 @@ export function EditorView(props) {
     let model = cache.get(path)
     if (!model) {
       // 注册表守卫：同 URI 已存在的 model 直接复用（HMR 换 bundle 后防重复创建抛错）
-      const uri = window.monaco.Uri.parse('edrv:///' + encodeURI(path))
+      // edrv URI 装「工作区相对路径」（对齐 toEdrvUri 约定）：绝对路径剥前导 /，
+      // 否则 'edrv:///' + '/home/x' 拼出 edrv:////home/x（空 authority + // 开头）→
+      // Monaco Uri.parse 抛 UriError → 官方侧栏/差异入口打开绝对路径文件白屏（issue #5/#6）
+      const uri = window.monaco.Uri.parse('edrv:///' + encodeURI(String(path ?? '').replace(/^\/+/, '')))
       model = window.monaco.editor.getModel(uri) || window.monaco.editor.createModel(text ?? '', langOf(path), uri)
       rememberModel(cache, path, model)
     } else if (text !== undefined && model.getValue() !== text) {

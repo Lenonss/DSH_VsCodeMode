@@ -101,6 +101,16 @@ describe('lsp/uri 转换（Windows 风格）', () => {
     expect(toEdrvUri(uri, root)).toBe('edrv:///Assets/Scripts/TeamModel.lua')
     expect(targetOpenPath({ uri, root })).toBe('Assets/Scripts/TeamModel.lua')
   })
+  it('root 不匹配时绝对路径不再拼出 4 斜杠 edrv URI（issue #5/#6）', () => {
+    // relativeLspPath 在 root 不匹配时返回完整绝对路径：裸 /Users/...（Unix 绝对路径输入
+    // 不经 file:/// 剥前缀，直接触发 4 斜杠）；修复后剥前导 / 保证 URI 合法
+    expect(toEdrvUri('/Users/xieyong/proj/AGENTS.md', 'D:/other')).toBe('edrv:///Users/xieyong/proj/AGENTS.md')
+    expect(toEdrvUri('/Users/xieyong/proj/AGENTS.md', '')).toBe('edrv:///Users/xieyong/proj/AGENTS.md')
+    // file:/// 前缀输入被 lspUriToAbs 剥成无前导 / 相对路径，行为不变
+    expect(toEdrvUri('file:///Users/xieyong/proj/AGENTS.md', 'D:/other')).toBe('edrv:///Users/xieyong/proj/AGENTS.md')
+    // 盘符绝对路径原本合法（path 以 /C 开头），剥前导 / 不影响其形态
+    expect(toEdrvUri('file:///D:/Work/a/b.lua', 'D:/other')).toBe('edrv:///D:/Work/a/b.lua')
+  })
   it('LSP 目标保留原始 root，避免 edrv scheme 泄漏', () => {
     const root = 'D:/Work/PopIsland/IslandSplash_BugFix2'
     const location = {

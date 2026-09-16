@@ -107,7 +107,7 @@ export function snippetLanguageOf(path) {
 
 /**
  * 加载 Monaco Editor（AMD 构建，随插件包离线分发）：注入 loader.js → require.config → editor.main。
- * @author ddj 2026年08月20号
+ * @author ddj 2026年08月20号 / 2026年09月22号
  * @returns Promise<object> window.monaco
  */
 export function loadMonaco(onProgress) {
@@ -115,13 +115,58 @@ export function loadMonaco(onProgress) {
   if (!monacoPromise) {
     publishStage('loader', MONACO_STAGES.loader.progress, MONACO_STAGES.loader.message)
     monacoPromise = new Promise((resolve, reject) => {
+      // 注入期间临时屏蔽全局 module/exports：Monaco loader.js 的 Environment._detect 用
+      // `typeof module < 'u' && !!module.exports` 判运行环境，其他插件（如 dsh-backup）注入的
+      // 全局 module 会让它误判为 Node 环境 → 只写 module.exports、不挂 window.require →
+      // 后续 window.require.config 抛 TypeError（issue #3 根因之一）。onload/onerror 后还原。
+      const hasModule = Object.prototype.hasOwnProperty.call(globalThis, 'module')
+      const hasExports = Object.prototype.hasOwnProperty.call(globalThis, 'exports')
+      const savedModule = globalThis.module
+      const savedExports = globalThis.exports
+      const hideNodeGlobals = () => {
+        try { delete globalThis.module } catch (error) { /* 只读/不可删忽略 */ }
+        try { delete globalThis.exports } catch (error) { /* 只读/不可删忽略 */ }
+      }
+      const restoreNodeGlobals = () => {
+        if (hasModule) globalThis.module = savedModule
+        else { try { delete globalThis.module } catch (error) { /* 只读/不可删忽略 */ } }
+        if (hasExports) globalThis.exports = savedExports
+        else { try { delete globalThis.exports } catch (error) { /* 只读/不可删忽略 */ } }
+      }
+      // 移除已注入的 loader 标签：失败/残留时防止下次命中残留分支同步 boot()（require 未就绪）
+      const removeLoaderTag = () => {
+        const existing = document.querySelector('script[data-edrv-monaco-loader]')
+        if (existing?.parentNode) existing.parentNode.removeChild(existing)
+      }
       const fail = (error) => {
         monacoPromise = null
+        removeLoaderTag()
+        restoreNodeGlobals()
         publishStage('error', MONACO_STAGES.error.progress, MONACO_STAGES.error.message)
         reject(error)
       }
+      const inject = () => {
+        const s = document.createElement('script')
+        s.src = MONACO_BASE + '/loader.js'
+        s.dataset.edrvMonacoLoader = '1'
+        s.onload = boot
+        s.onerror = (event) => {
+          // 保留首次失败真实原因（网络/HTTP 层事件），不让后续 TypeError 覆盖
+          const hint = event && event.type ? '（' + event.type + '）' : ''
+          fail(new Error('Monaco loader 加载失败' + hint))
+        }
+        hideNodeGlobals()
+        document.head.appendChild(s)
+      }
       const boot = () => {
+        restoreNodeGlobals()
         try {
+          // loader 已执行但未挂载 require（全局 module 污染残留/文件异常）：报真实原因，
+          // 不再重注入——残留标签场景已在注入前分支处理，此处重试只会无限循环
+          if (typeof window.require !== 'function' || typeof window.require.config !== 'function') {
+            fail(new Error('Monaco loader 未挂载 window.require（可能被其他脚本注入的全局 module 干扰）'))
+            return
+          }
           window.require.config({ paths: { vs: MONACO_BASE } })
           publishStage('core', MONACO_STAGES.core.progress, MONACO_STAGES.core.message)
           window.require(['vs/editor/editor.main'], () => {
@@ -138,14 +183,15 @@ export function loadMonaco(onProgress) {
         }
       }
       const existing = document.querySelector('script[data-edrv-monaco-loader]')
-      if (existing) boot()
-      else {
-        const s = document.createElement('script')
-        s.src = MONACO_BASE + '/loader.js'
-        s.dataset.edrvMonacoLoader = '1'
-        s.onload = boot
-        s.onerror = () => fail(new Error('Monaco loader 加载失败'))
-        document.head.appendChild(s)
+      if (existing && typeof window.require === 'function' && typeof window.require.config === 'function') {
+        // 残留标签但 require 已就绪（上次注入已生效）：直接 boot，不重复注入
+        boot()
+      } else if (existing) {
+        // 残留标签但 require 缺失（上次失败未清掉）：移除后重新注入，避免同步 boot() 二次踩坑
+        removeLoaderTag()
+        inject()
+      } else {
+        inject()
       }
     })
   }
