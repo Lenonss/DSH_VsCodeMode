@@ -5,7 +5,7 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
 
 # dsh-vscode-mode 开发/发布经验集（自我更新型技能）
 
-> updated: 2026-09-15 · 维护者：ddj（AI 会话按文末协议追加，保持精炼、去重）
+> updated: 2026-09-22 · 维护者：ddj（AI 会话按文末协议追加，保持精炼、去重）
 ## 何时使用
 
 - 发布新版本（commit/push/tag/npm 相关操作）。
@@ -13,6 +13,22 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
 - 修改 host 集成（subprocess/reg/csc）、launcher（C#/PS）、Unity 包（DshCodeEditor）。
 - 新增/修改插件自带技能（`skills/` 随包 SKILL.md、`src/skills.ts` provider）。
 - CI（GitHub Actions）失败排查。
+
+## 仓库布局与 issue 修复
+
+- 2026-09-22 事实：**本仓库真实开发 checkout 就是 `DeepSeekHarnessPlugin/packages/dsh-edit-review`**（remote 指向 Lenonss/DSH_VsCodeMode.git）；
+  `packages/dsh-vscode-mode` 是停更的 v0.1.28 旧副本，缺官方侧栏文件（OfficialSideTab.ts/officialSidebar.ts），别在那里改。
+- 2026-09-22 坑：edrv URI 拼绝对路径必崩——`'edrv:///' + encodeURI(path)` 遇 `/home/x` 拼出 `edrv:////`（4 斜杠），
+  Monaco Uri.parse 抛 UriError 白屏（issue #5/#6，Linux/macOS 必现）；修法 = 先 `String(path ?? '').replace(/^\/+/, '')` 再拼，
+  Windows 盘符形态不变；同源隐患在 lspClient.toEdrvUri（root 不匹配时 relativeLspPath 返回绝对路径）要一并修。
+- 2026-09-22 坑：`@ts-nocheck` 文件里「调用未导入的标识符」typecheck 抓不到（OfficialSideTab 漏 import markEditorActive →
+  卸载 ReferenceError）；排查运行时 ReferenceError 时优先核对 import 列表与调用点，别只看类型检查。
+- 2026-09-22 坑：Monaco loader 失败永久卡死 = fail() 不清 `<script data-edrv-monaco-loader>` + 残留分支同步 boot()；
+  且其他插件注入全局 `module`（loader.js 用 `typeof module < 'u' && !!module.exports` 判环境）会让 loader 误判 Node
+  不挂 window.require → 注入前临时删全局 module/exports（onload/onerror 后还原）+ boot 前校验 require + 失败清标签
+  + 残留分支「require 就绪才 boot，否则移除重注入」；boot 内 require 缺失直接 fail 报真实原因（别再重注入，防死循环）。
+- 2026-09-22 坑（测试）：mock window.require 就绪时，loader 残留分支会走「require 就绪直接 boot」而非「移除重注入」——
+  测「残留+require 缺失」场景必须初始 stub `{ require: undefined }`，注入后（onload 前）再换成就绪 require。
 
 ## 发布流程（必须照做，禁止偏离）
 
