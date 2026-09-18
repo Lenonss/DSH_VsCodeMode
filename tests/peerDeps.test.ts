@@ -40,7 +40,8 @@ describe('peerDependencies', () => {
   })
 
   it('每条 @deepseek-ai peer 区间都显式放行各 alpha 版本线', () => {
-    const dshPeers = Object.entries(peers).filter(([name]) => name.startsWith('@deepseek-ai/'))
+    // @deepseek-ai/schemastery 是第三方 vendor 包（版本线 3.18.x，与 DSH 核心版本线无关），单独断言
+    const dshPeers = Object.entries(peers).filter(([name]) => name.startsWith('@deepseek-ai/') && name !== '@deepseek-ai/schemastery')
     expect(dshPeers.length).toBeGreaterThan(0)
     for (const [name, range] of dshPeers) {
       // 低频版本线（0.1.2+）必须带 `-0` 预发布比较器，否则 alpha 一个都匹配不上
@@ -51,6 +52,13 @@ describe('peerDependencies', () => {
       // 上界仍须排除 0.2.0（避免误放行到未适配的次版本）
       expect(range, name + ' 缺少 <0.2.0-0 上界').toContain('<0.2.0-0')
     }
+  })
+
+  it('schema 库 peer 同时放行新旧包名（安装树只有 @deepseek-ai/schemastery）', () => {
+    // DSH 自 0.1.5 起把 vendored schemastery 改名为 @deepseek-ai/schemastery；
+    // 新名必须声明（否则 module-fallback 图不含它），旧名保留兼容 rc 线。
+    expect(peers['@deepseek-ai/schemastery']).toBe('>=3.18.0 <4')
+    expect(peers.schemastery).toBeTruthy()
   })
 
   it('slots / llm / tools 仍兼容 0.0.x 早期线', () => {

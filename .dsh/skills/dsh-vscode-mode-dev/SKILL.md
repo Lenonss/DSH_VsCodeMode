@@ -6,6 +6,24 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
 # dsh-vscode-mode 开发/发布经验集（自我更新型技能）
 
 > updated: 2026-09-18 · 维护者：ddj（AI 会话按文末协议追加，保持精炼、去重）
+- 2026-09-18 坑（v0.5.2 实测，**用户端 vs 开发形态差异**）：**开发形态（`link:` + junction）会掩盖
+  npm 安装缺陷**——本仓 `node_modules` 有 devDependency 副本，`import('schemastery')` 能命中
+  `.pnpm/schemastery@3.18.0`，而**用户 npm 安装（profile `nodeLinker: hoisted` + `autoInstallPeers: false`）
+  下插件包只有 `dependencies`，解析不到**。判据：改依赖解析/包名相关代码后，别只在本机（dev-link）
+  验证——用 `createRequire(anchor).resolve(spec)` 对**安装树入口**（`process.argv[1]` 锚点）与
+  **插件自身路径**两个锚点分别探测，二者结果不一致即“只在用户端坏”的缺陷。
+  （本轮实例：`fileOpenSettings` 用 `Promise.all([...hostImport('schemastery')])`，安装树里官方已把
+  vendored 包改名为 `@deepseek-ai/schemastery` → 整体 reject → 设置 section 静默不装配，面板显示
+  「设置 section 尚未装配」；修法 = 候选链解析 + 各依赖独立加载 + 命中库名进报告。）
+- 2026-09-18 坑（v0.5.2 实测）：**VSIX 解包必须补 Unix 执行位**——`src/lsp/zip.ts` 的 `zipEntries`
+  原先不读中央目录 `offset+38` 的 external attributes（Unix mode 在**高 16 位**，低 16 位仅 DOS 属性），
+  `writeFileSync` 落盘默认 0o666 → macOS/Linux 上语言服务器 `spawn EACCES`（Windows 不检查执行位故
+  开发机不复现；VS Code 自身解 VSIX 会按该 mode 调 `fs.chmod`）。修法 = 读 mode + 按 `bin/` 等入口名
+  兜底 0o755（`src/lsp/extmgr.ts` 的 `execModeOf/applyExecBit`，best-effort 不阻塞安装）。
+  测试注意：Windows 宿主 `chmod` 改不了执行位 → 真实落盘断言要 `it.skipIf(process.platform === 'win32')`。
+- 2026-09-18 坑（v0.5.2 实测）：**平台专属命令不要“先试错的再回落”**——`revert.deleteCreated` 原先无条件
+  先发 `powershell Remove-Item`，macOS/Linux 每次删除都先失败一次再走 `/bin/rm`（功能可用但有失败噪声与
+  无谓 spawn）。规矩：按 `process.platform` 一次分派（抽纯函数 `removeFileArgv` 便于单测）。
 - 2026-09-18 坑（v0.5.1 实测，**发布前必查**）：**改 `package.json` 的依赖/peer 后必须同步重生成
   `pnpm-lock.yaml`**，否则 CI 的 `Install deps`（`pnpm install --frozen-lockfile`）直接失败 ——
   症状极具迷惑性：CI 两个 job 都在 **~15 秒**内 failure，`Typecheck`/`Test`/`Build` 全部 **skipped**，

@@ -1,5 +1,6 @@
-/** host 兼容层测试：身份常量 / 探测 / 护栏 / 报告。作者 ddj 2026年08月24号 */
+/** host 兼容层测试：身份常量 / 探测 / 护栏 / 报告。作者 ddj 2026年08月24号 / 2026年09月18号 */
 import { describe, expect, it } from 'vitest'
+import { loadSettingsDeps, resetSettingsDeps } from '../src/fileOpenSettings.js'
 import {
   LEGACY_PROJECT_PREFIX,
   MCP_PACKAGE,
@@ -106,6 +107,22 @@ describe('detectExternal', () => {
     const out = detectExternal(bareCtx, false)
     expect(out.every((item) => !item.active)).toBe(true)
     expect(out[1].note).toContain('降级')
+  })
+
+  it('依赖可用时报告实际命中的 schema 库名（macOS 排查用）', async () => {
+    resetSettingsDeps()
+    // 复刻用户安装形态：安装树只有改名后的 @deepseek-ai/schemastery，无 dsh-settings legacy 导出
+    const deps = await loadSettingsDeps(async (specifier: string) => {
+      if (specifier === '@deepseek-ai/schemastery') {
+        return { default: { object: () => ({ default: (v: unknown) => v }), string: () => ({ default: (v: unknown) => v }) } }
+      }
+      throw Object.assign(new Error('not found'), { code: 'ERR_MODULE_NOT_FOUND' })
+    })
+    expect(deps, '只给新名也必须解析成功（本次 Mac 兼容修复的核心）').not.toBeNull()
+    const out = detectExternal(mcpCtx, true)
+    expect(out[1].name).toBe('设置持久化（@deepseek-ai/dsh-settings）')
+    expect(out[1].active).toBe(true)
+    expect(out[1].note).toContain('@deepseek-ai/schemastery')
   })
 })
 

@@ -5,9 +5,9 @@
  * 已装扩展作为 LSP provider 的"扩展源"（kind=extension），见 providers.ts。
  * 作者 ddj 2026-08-27
  */
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
-import { unzip } from './zip.js'
+import { unzip, type ZipEntry } from './zip.js'
 import { dshHome, PLUGIN_ID } from '../paths.js'
 
 /** 单个已装扩展信息（edrv.lsp.ext.list 载荷元素）。 */
@@ -58,8 +58,60 @@ export function vsixManifest(vsix: Buffer): Record<string, unknown> {
 }
 
 /**
+ * 判定解包路径是否为可执行入口（无 mode 时的启发式兜底）。
+ * 只认确定语义：`bin/` 段下的文件、语言服务器/运行时常见可执行名、`.sh` 脚本。
+ * @author ddj 2026年09月18号
+ * @param rel 相对路径（/ 分隔）
+ * @returns 是否应补执行位
+ */
+export function looksExec(rel: string): boolean {
+  const path = String(rel ?? '').replace(/\\/g, '/')
+  if (!path) return false
+  if (path.split('/').includes('bin')) return true
+  if (/\.(sh|bash|zsh)$/i.test(path)) return true
+  const name = path.split('/').pop() ?? ''
+  const base = name.replace(/\.exe$/i, '')
+  return ['lua-language-server', 'emmylua_ls', 'OmniSharp', 'dotnet', 'node'].includes(base)
+}
+
+/**
+ * 计算解包后要施加的权限位（纯函数，可单测）。
+ * 优先信任归档自带的 Unix mode 中的执行位（VS Code 自身解 VSIX 即此口径）；
+ * 归档无 mode（Windows 打包的 VSIX）时按路径启发式补 0o755；
+ * 其余保持 undefined（交给 umask 默认，不越权改动）。
+ * @author ddj 2026年09月18号
+ * @param entry 解压条目
+ * @returns 目标权限位；无需处理返回 undefined
+ */
+export function execModeOf(entry: ZipEntry): number | undefined {
+  if (entry.isDirectory) return undefined
+  const mode = entry.mode
+  if (mode !== undefined && (mode & 0o111) !== 0) return mode
+  return looksExec(entry.path) ? 0o755 : undefined
+}
+
+/**
+ * 落盘后补可执行位（POSIX 专属；Windows 无此概念，直接跳过）。
+ * 必须 best-effort：只读文件系统/无权限时不能拖垮整个扩展安装。
+ * @author ddj 2026年09月18号
+ * @param target 落盘绝对路径
+ * @param entry 解压条目
+ * @param platform 目标平台（测试注入）
+ */
+export function applyExecBit(target: string, entry: ZipEntry, platform: NodeJS.Platform = process.platform): void {
+  if (platform === 'win32') return
+  const mode = execModeOf(entry)
+  if (mode === undefined) return
+  try {
+    chmodSync(target, mode)
+  } catch (error) {
+    /* 权限补不上不阻塞安装（后续 spawn 会给出真实错误） */
+  }
+}
+
+/**
  * 解包 VSIX 到目录（仅取 extension/ 子树，剥前缀；返回清单）。
- * @author ddj 2026年08月27号
+ * @author ddj 2026年08月27号 / 2026年09月18号
  * @param vsix vsix 字节
  * @param dest 目标目录（已存在则先清空）
  * @returns 清单对象
@@ -80,6 +132,7 @@ export function unpackVsix(vsix: Buffer, dest: string): Record<string, unknown> 
     }
     mkdirSync(dirname(target), { recursive: true })
     writeFileSync(target, entry.data)
+    applyExecBit(target, entry)
     if (rel === 'package.json') manifest = JSON.parse(entry.data.toString('utf8')) as Record<string, unknown>
   }
   if (!manifest) throw new Error('VSIX 解包后缺少 package.json')

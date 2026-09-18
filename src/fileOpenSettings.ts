@@ -73,20 +73,96 @@ async function hostImport(specifier: string): Promise<unknown> {
 }
 
 /**
- * 动态加载设置依赖（模块级缓存；任一缺失/失败返回 null 而非抛错）。
- * installSettingsSection 仅在 rc 线 dsh-settings 中存在时提供（alpha 起移除，
- * 属性探测得到 undefined，不抛错）。
- * @author ddj 2026年08月24号 / 2026年09月15号
+ * schema 库候选名（新名在前）。
+ * DSH 官方自 0.1.5 起把 vendored 包改名为 @deepseek-ai/schemastery 并全树改用新名，
+ * 安装树里**没有**裸 schemastery；裸名保留给 rc 线（其 dsh-settings 仍 peers 旧名），
+ * 也让开发形态（插件 node_modules 有 devDependency 副本）继续可用。
+ */
+const SCHEMA_SPECIFIERS = ['@deepseek-ai/schemastery', 'schemastery'] as const
+
+/** 设置持久化包名（installSettingsSection 仅 rc 线提供，alpha 线缺失属正常）。 */
+const SETTINGS_SPECIFIER = '@deepseek-ai/dsh-settings'
+
+/**
+ * 逐个尝试候选名，返回首个加载成功的模块及其包名（全失败返回 null，不抛错）。
+ * @author ddj 2026年09月18号
+ * @param specifiers 候选包名（按优先级）
+ * @param importFn 加载函数（测试注入）
+ * @returns 命中的模块与包名；全失败返回 null
+ */
+async function firstImport(
+  specifiers: readonly string[],
+  importFn: (specifier: string) => Promise<unknown> = hostImport,
+): Promise<{ specifier: string; module: unknown } | null> {
+  for (const specifier of specifiers) {
+    try {
+      return { specifier, module: await importFn(specifier) }
+    } catch {
+      /* 该候选不可解析：尝试下一个 */
+    }
+  }
+  return null
+}
+
+/**
+ * 抹平 schema 库的 ESM/CJS 互操作形态取默认导出。
+ * 三种实测形态：真 ESM（`default` 即 z）、CJS 经 import()（`default` 与
+ * `module.exports` 同为 z）、双层包装（`default.default` 才是 z）。
+ * @author ddj 2026年09月18号
+ * @param module 加载到的模块命名空间（可空）
+ * @returns 具备 object/string 等构造器的 z；取不到返回 null
+ */
+export function pickSchema(module: unknown): SettingsDeps['z'] | null {
+  const layers = [module, (module as { default?: unknown } | null)?.default, (module as Record<string, unknown> | null)?.['module.exports']]
+  for (const layer of layers) {
+    const z = ((layer as { default?: unknown } | null)?.default ?? layer) as SettingsDeps['z'] | undefined
+    if (z && typeof z.object === 'function' && typeof z.string === 'function') return z
+  }
+  return null
+}
+
+/** 实际命中的 schema 库名（供兼容性报告展示；未命中为空串）。 */
+let schemaLib = ''
+
+/**
+ * 读取实际命中的 schema 库名（报告文案用）。
+ * @author ddj 2026年09月18号
+ * @returns 包名；未解析到为空串
+ */
+export function schemaLibName(): string {
+  return schemaLib
+}
+
+/** 复位依赖缓存与命中库名（测试隔离用）。 */
+export function resetSettingsDeps(): void {
+  depsPromise = undefined
+  schemaLib = ''
+}
+
+/**
+ * 动态加载设置依赖（模块级缓存；schema 库缺失返回 null 而非抛错）。
+ * ⚠️ 两个依赖**独立解析**：@deepseek-ai/dsh-settings 仅 rc 线跑 legacy 策略时需要，
+ * alpha 线走 settings 服务 installSection 用不到它；原先 Promise.all 让该包缺失
+ * 拖垮整体 → 用户端（npm 安装）settings section 永不装配。
+ * 同理，schema 库按候选链解析（安装树只有新名 @deepseek-ai/schemastery）。
+ * @author ddj 2026年08月24号 / 2026年09月15号 / 2026年09月18号
+ * @param importFn 加载函数（测试注入；缺省宿主锚点动态导入）
  * @returns 设置依赖或 null
  */
-export function loadSettingsDeps(): Promise<SettingsDeps | null> {
+export function loadSettingsDeps(importFn: (specifier: string) => Promise<unknown> = hostImport): Promise<SettingsDeps | null> {
   if (!depsPromise) {
-    depsPromise = Promise.all([hostImport('@deepseek-ai/dsh-settings'), hostImport('schemastery')])
-      .then(([dshSettings, schemastery]) => ({
+    depsPromise = Promise.all([firstImport([SETTINGS_SPECIFIER], importFn), firstImport(SCHEMA_SPECIFIERS, importFn)])
+      .then(([settingsHit, schemaHit]) => {
+        const z = pickSchema(schemaHit?.module)
+        if (!z) {
+          schemaLib = ''
+          return null
+        }
+        schemaLib = schemaHit?.specifier ?? ''
         // dsh-settings 类型声明随版本变化（rc.8 有 d.ts、alpha 已移除导出），统一经 unknown 松绑
-        installSettingsSection: (dshSettings as unknown as { installSettingsSection?: SettingsDeps['installSettingsSection'] }).installSettingsSection,
-        z: (schemastery as unknown as { default: SettingsDeps['z'] }).default,
-      }))
+        const installSettingsSection = (settingsHit?.module as unknown as { installSettingsSection?: SettingsDeps['installSettingsSection'] } | undefined)?.installSettingsSection
+        return { installSettingsSection, z }
+      })
       .catch(() => null)
   }
   return depsPromise

@@ -23,6 +23,9 @@ importers:
       '@deepseek-ai/dsh-tools':
         specifier: '>=0.0.1-rc.1 <0.1.0 || >=0.1.0-rc.1 <0.2.0-0 || >=0.1.1-0 <0.2.0-0 || >=0.1.2-0 <0.2.0-0 || >=0.1.3-0 <0.2.0-0 || >=0.1.4-0 <0.2.0-0 || >=0.1.5-0 <0.2.0-0 || >=0.1.6-0 <0.2.0-0'
         version: 0.0.1-rc.1(5ac4f3bc410b13a4a117c1029f3233a1)
+      '@deepseek-ai/schemastery':
+        specifier: '>=3.18.0 <4'
+        version: 3.18.1
       '@vscode/ripgrep':
         specifier: ^1.18.0
         version: 1.18.0

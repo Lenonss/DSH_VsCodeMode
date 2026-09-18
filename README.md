@@ -347,13 +347,13 @@ TortoiseSVN（`TortoiseProc.exe`）仅作 Windows 过渡增强：自研能力覆
 
 ```bash
 # ① Git 安装（clone + prepare 构建；推荐打固定 tag）
-dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.5.1
+dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.5.2
 
 # ② npm 注册表（发布到 npm 后）
 dsh plugin --profile web add dsh-vscode-mode
 
 # ③ GitHub Release tgz 直装
-dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.5.1/dsh-vscode-mode-0.5.1.tgz
+dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.5.2/dsh-vscode-mode-0.5.2.tgz
 ```
 
 > `dsh plugin ...` 是 pnpm 转发器：git 安装会克隆仓库、执行该包 `prepare` 脚本
@@ -640,6 +640,13 @@ Keep All / Undo All 却是亮的。修复：单文件 Keep / Undo 覆盖冲突�
 完整变更见 [GitHub Releases](https://github.com/Lenonss/DSH_VsCodeMode/releases)。
 近期关键版本：
 
+- **v0.5.2**：**修复 macOS / npm 安装形态的兼容问题**——① schema 库按候选链解析
+  （官方已把 vendored schemastery 改名为 `@deepseek-ai/schemastery`，安装树里没有裸
+  `schemastery`），且 `@deepseek-ai/dsh-settings` 缺失不再拖垮整体 → 修复从 npm 安装时
+  「设置 section 尚未装配 / 设置持久化未安装」（开发形态因有 devDependency 副本而不复现）；
+  ② VSIX 解包保留归档自带 Unix 执行位并按入口名兜底补 0o755 → 修复 macOS/Linux 上语言
+  服务器 spawn `EACCES` 起不来；③ 删除新建文件按平台分派删除命令（macOS/Linux 不再先试
+  PowerShell 再回落）。
 - **v0.5.1**：**适配 DSH 0.1.6-alpha.2**——会话作用域三级取值链（`uiSession.current`
   优先，兼容旧版 `sessions.list.current`；修复官方移除 `current` 后 Monaco 预热 / LSP
   同步 / 编辑 Tab 恢复 / 文件链接静默失效）；Office 与官方「不可预览」后缀让位官方

@@ -12,8 +12,25 @@ import { applyLocations, locateHunks, preciseHunk } from './shared/diff.js'
 export type Result = { ok: true } | { ok: false; error: string; stale?: boolean }
 
 /**
+ * 删除单文件的 argv（纯函数，platform 可注入便于单测）。
+ * Windows 走 PowerShell Remove-Item；其余平台走 /bin/rm。
+ * 原先无条件先发 powershell：macOS/Linux 上必然 spawn 失败后才回落，
+ * 每删一个文件多一次无谓 spawn 与失败噪声。
+ * @author ddj 2026年09月18号
+ * @param absPath 绝对路径
+ * @param platform 目标平台（缺省当前进程平台）
+ * @returns 删除命令 argv
+ */
+export function removeFileArgv(absPath: string, platform: NodeJS.Platform = process.platform): string[] {
+  if (platform === 'win32') {
+    return ['powershell', '-NoProfile', '-NonInteractive', '-Command', 'Remove-Item -LiteralPath "' + absPath + '" -Force']
+  }
+  return ['/bin/rm', '-f', '--', absPath]
+}
+
+/**
  * 删除新建文件（拒绝创建时）：subprocess 删除，路径先经 fs.contains 校验工作区边界。
- * @author ddj 2026年08月20号
+ * @author ddj 2026年08月20号 / 2026年09月18号
  * @returns 成功或失败原因
  */
 export async function deleteCreated(ctx: Ctx, session: Session, record: DiffRecord): Promise<Result> {
@@ -40,15 +57,10 @@ export async function deleteCreated(ctx: Ctx, session: Session, record: DiffReco
     }
   }
   try {
-    await attempt(['powershell', '-NoProfile', '-NonInteractive', '-Command', 'Remove-Item -LiteralPath "' + p + '" -Force'])
+    await attempt(removeFileArgv(p))
     return { ok: true }
   } catch (error) {
-    try {
-      await attempt(['/bin/rm', '-f', '--', p])
-      return { ok: true }
-    } catch (error2) {
-      return { ok: false, error: '删除失败（文件仍存在）：' + String(error) + ' / ' + String(error2) }
-    }
+    return { ok: false, error: '删除失败（文件仍存在）：' + String(error) }
   }
 }
 
