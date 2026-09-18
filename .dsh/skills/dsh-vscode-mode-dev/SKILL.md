@@ -6,6 +6,12 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
 # dsh-vscode-mode 开发/发布经验集（自我更新型技能）
 
 > updated: 2026-09-18 · 维护者：ddj（AI 会话按文末协议追加，保持精炼、去重）
+- 2026-09-18 实录（v0.5.2 发布，全绿）：`build` job 41s success、`release` job 4m32s success
+  （含 `Verify published tarball`，**无需等满重试窗口**，CDN 本次很快）。三向闭环一次性对齐：
+  registry `dsh-vscode-mode/0.5.2` 的 `gitHead` == `980b7b2`（release commit SHA）、
+  `dist-tags.latest` → `0.5.2`、git tag `v0.5.2` → 同 commit、GitHub Release 挂 tgz asset。
+  事实：本次 **未** stash——改动全部 mtime 集中在同一 5 分钟内（16:30–16:34）且逐条核对确属本次内容，
+  直接 `git add -A` 单提交（沿用 2026-09-11 条目口径）；打 tag 前先确认远端无该 tag 且 npm 该版本 404。
 - 2026-09-18 坑（v0.5.2 实测，**用户端 vs 开发形态差异**）：**开发形态（`link:` + junction）会掩盖
   npm 安装缺陷**——本仓 `node_modules` 有 devDependency 副本，`import('schemastery')` 能命中
   `.pnpm/schemastery@3.18.0`，而**用户 npm 安装（profile `nodeLinker: hoisted` + `autoInstallPeers: false`）
