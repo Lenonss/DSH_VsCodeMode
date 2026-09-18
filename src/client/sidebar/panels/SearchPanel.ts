@@ -12,6 +12,7 @@ import { rpc } from '../../rpc.js'
 import type { SidebarCtx } from '../types.js'
 import { CACHE_KEY } from '../../paths.js'
 import { workspaceScopeOf } from '../../state/scopeStore.js'
+import { takeSearchSeed } from '../../searchSeed.js'
 
 const DEBOUNCE_MS = 250
 const INCLUDE_PLACEHOLDER = '例如 *.ts, src/**/include'
@@ -23,6 +24,23 @@ const INCLUDE_PLACEHOLDER = '例如 *.ts, src/**/include'
  */
 export function splitGlobs(text) {
   return String(text ?? '').split(',').map((item) => item.trim()).filter(Boolean)
+}
+
+/**
+ * 读取按作用域持久化的搜索条件（损坏/缺失返回 null）。
+ * 抽成函数而非内联：恢复 effect 内有两处消费者（填状态、同步 requestRef），
+ * 且解析必须只做一次（JSON.parse 重复调用既慢又可能两次结果不一致）。
+ * @author ddj 2026年09月18号
+ * @param key 作用域缓存键
+ * @returns 已解析的搜索条件对象；无/损坏返回 null
+ */
+export function savedSearchOf(key: string) {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(key) || 'null')
+    return parsed && typeof parsed === 'object' ? parsed : null
+  } catch (e) {
+    return null
+  }
 }
 
 /**
@@ -82,20 +100,31 @@ export function SearchPanel(props) {
   // 按作用域恢复上次查询、选项与过滤模式（VSCode 记忆搜索词）
   React.useEffect(() => {
     if (!scope) return
-    try {
-      const saved = JSON.parse(localStorage.getItem(CACHE_KEY.search + String(scope)) || 'null')
-      if (saved && typeof saved === 'object') {
-        if (typeof saved.query === 'string') setQuery(saved.query)
-        if (typeof saved.matchCase === 'boolean') setMatchCase(saved.matchCase)
-        if (typeof saved.wholeWord === 'boolean') setWholeWord(saved.wholeWord)
-        if (typeof saved.regex === 'boolean') setRegex(saved.regex)
-        if (typeof saved.includeText === 'string') setIncludeText(saved.includeText)
-        if (typeof saved.excludeText === 'string') setExcludeText(saved.excludeText)
-        if (typeof saved.onlyActive === 'boolean') setOnlyActive(saved.onlyActive)
-        if (typeof saved.excludeOn === 'boolean') setExcludeOn(saved.excludeOn)
-        if (typeof saved.sectionOpen === 'boolean') setSectionOpen(saved.sectionOpen)
+    const saved = savedSearchOf(CACHE_KEY.search + String(scope))
+    if (saved) {
+      if (typeof saved.query === 'string') setQuery(saved.query)
+      if (typeof saved.matchCase === 'boolean') setMatchCase(saved.matchCase)
+      if (typeof saved.wholeWord === 'boolean') setWholeWord(saved.wholeWord)
+      if (typeof saved.regex === 'boolean') setRegex(saved.regex)
+      if (typeof saved.includeText === 'string') setIncludeText(saved.includeText)
+      if (typeof saved.excludeText === 'string') setExcludeText(saved.excludeText)
+      if (typeof saved.onlyActive === 'boolean') setOnlyActive(saved.onlyActive)
+      if (typeof saved.excludeOn === 'boolean') setExcludeOn(saved.excludeOn)
+      if (typeof saved.sectionOpen === 'boolean') setSectionOpen(saved.sectionOpen)
+      // 显式把恢复后的选项同步进 requestRef：render 期的同步要等下一次渲染才生效，
+      // 而紧随其后的「选区种子」effect 会在本次 commit 内立即搜索，读到的会是陈旧选项。
+      requestRef.current = {
+        matchCase: saved.matchCase === true,
+        wholeWord: saved.wholeWord === true,
+        regex: saved.regex === true,
+        include: saved.onlyActive === true
+          ? (activePathRef.current ? [activePathRef.current] : [])
+          : splitGlobs(typeof saved.includeText === 'string' ? saved.includeText : ''),
+        exclude: saved.excludeOn === true
+          ? splitGlobs(typeof saved.excludeText === 'string' ? saved.excludeText : '')
+          : [],
       }
-    } catch (e) { /* 损坏忽略 */ }
+    }
   }, [scope])
 
   // 查询/选项/过滤变化 → 持久化
@@ -191,9 +220,35 @@ export function SearchPanel(props) {
     })
   }
 
-  // Ctrl+Shift+F 重复触发时聚焦输入框（EditorView 派发 edrv:search-focus）
+  /**
+   * 取用一次性选区种子（需求 1：Ctrl+Shift+F 时把编辑器选中文本填入搜索框）。
+   * 有种子即填入并立即搜索（不再等 250ms 防抖），同时全选便于直接改写；无种子为 no-op。
+   * @author ddj 2026年09月18号
+   * @returns 是否消费到种子
+   */
+  const applySeed = () => {
+    const seed = takeSearchSeed()
+    if (!seed) return false
+    if (timerRef.current) clearTimeout(timerRef.current)
+    queryRef.current = seed
+    setQuery(seed)
+    runSearch(seed)
+    inputRef.current?.select?.()
+    return true
+  }
+
+  // 挂载时消费种子：侧栏原本收起 → 派发 edrv:search-focus 时本面板尚未挂载，
+  // 事件无人接收，故必须由挂载路径兜底。
+  // ⚠️ 声明在「按作用域恢复」effect 之后：React 按声明序执行 effect，恢复值先落地，
+  // 种子再覆盖，避免被记忆的旧查询词盖掉用户刚选中的内容。
+  React.useEffect(() => { applySeed() }, [])
+
+  // Ctrl+Shift+F 重复触发：消费种子（有则填入）并聚焦输入框（EditorView 派发 edrv:search-focus）
   React.useEffect(() => {
-    const onFocus = () => inputRef.current?.focus?.()
+    const onFocus = () => {
+      applySeed()
+      inputRef.current?.focus?.()
+    }
     window.addEventListener('edrv:search-focus', onFocus)
     return () => window.removeEventListener('edrv:search-focus', onFocus)
   }, [])

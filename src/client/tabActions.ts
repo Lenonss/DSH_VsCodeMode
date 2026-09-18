@@ -255,6 +255,60 @@ export function pickActive(tabs: TabLike[], wanted: unknown): string | null {
 }
 // --endregion
 
+// --region 上限淘汰
+
+/** 淘汰判定输入：活动页签、使用序、额外保留集。 */
+export interface EvictOptions {
+  /** 当前活动页签路径（**绝不被淘汰**）。 */
+  active: string | null
+  /** 路径 → 最近使用序号（单调递增；越大越新）。缺记录按最久未用处理。 */
+  used: Record<string, number>
+  /** 额外保留集（调用方按需保护，如「恢复中刚载入的页签」）。 */
+  keep?: ReadonlySet<string>
+}
+
+/**
+ * 计算超限时应淘汰的页签路径（最久未使用者优先）。
+ *
+ * 保护规则（不满足则允许溢出而非强关，调用方据此保持「溢出态」：
+ * 用户显式固定过、或正在查看的页签，都不该被上限悄悄夺走）：
+ * - `limit <= 0` → 上限关闭，返回空数组；
+ * - 未超限 → 返回空数组；
+ * - 固定页签（`pinned === true`）不是候选；
+ * - 活动页签不是候选；
+ * - `keep` 命中的路径不是候选。
+ *
+ * 脏页签**仍是候选**：其未保存内容的落盘由调用方在关闭前完成（EditorView 走
+ * closeTabs → persistDirty），本函数不感知磁盘，避免把 IO 语义掺进纯判定。
+ *
+ * @author ddj 2026年09月18号
+ * @param tabs 当前页签
+ * @param limit 页签上限（0 = 不限制）
+ * @param options 活动页签、使用序与额外保留集
+ * @returns 待淘汰路径（按最久未用在前）；无需淘汰时为 `[]`
+ */
+export function evictPlan(tabs: TabLike[], limit: number, options: EvictOptions): string[] {
+  if (!Array.isArray(tabs) || !Number.isFinite(limit) || limit <= 0) return []
+  const excess = tabs.length - Math.floor(limit)
+  if (excess <= 0) return []
+  const active = options?.active ?? null
+  const used = options?.used ?? {}
+  const keep = options?.keep
+  const candidates: Array<{ path: string; at: number; at0: number }> = []
+  for (let i = 0; i < tabs.length; i += 1) {
+    const tab = tabs[i]
+    if (tab.pinned === true) continue
+    if (tab.path === active) continue
+    if (keep?.has(tab.path) === true) continue
+    const order = used[tab.path]
+    candidates.push({ path: tab.path, at: Number.isFinite(order) ? order : -1, at0: i })
+  }
+  // 使用序升序 = 最久未用在前；同序（含全部无记录）按页签原下标，保证确定性
+  candidates.sort((a, b) => (a.at === b.at ? a.at0 - b.at0 : a.at - b.at))
+  return candidates.slice(0, excess).map((item) => item.path)
+}
+// --endregion
+
 // --region 路径推导
 
 /** Windows 盘符 / UNC / POSIX 根：视为工作区外的绝对路径。 */

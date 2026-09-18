@@ -31,6 +31,8 @@ describe('file open settings', () => {
     expect(shapes[1].fileOpenTool).toBe('auto')
     expect(shapes[1].keybindings).toEqual({ ...KEYBINDING_DEFAULTS })
     expect(shapes[1].sidebarMinWidth).toBe(300)
+    // 页签数量上限默认 10（0 = 不限制，见 shared/editorLimit.ts）
+    expect(shapes[1].maxOpenEditors).toBe(10)
   })
 
   it('degrades gracefully when deps are missing', async () => {

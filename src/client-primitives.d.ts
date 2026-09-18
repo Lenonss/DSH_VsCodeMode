@@ -34,4 +34,38 @@ declare module '@deepseek-ai/dsh-client-ui-primitives' {
   export const IconListPenOutline16: (props: EdrvIconProps) => unknown
   /** 代码图标（活动栏「大纲」）。 */
   export const IconCodeOutline16: (props: EdrvIconProps) => unknown
+
+  /** 代码块复制按钮文案（MarkdownText 的 labels.code）。 */
+  export interface MarkdownCodeLabels {
+    /** 复制按钮空闲态文案。 */
+    copyLabel: string
+    /** 复制后确认窗口期文案。 */
+    copiedLabel: string
+  }
+
+  /** Markdown 渲染的本地化 chrome（labels 引用须稳定，否则流式渲染缓存失效）。 */
+  export interface MarkdownLabels {
+    code: MarkdownCodeLabels
+    /** 脚注段落标题。 */
+    footnotes: string
+  }
+
+  /**
+   * Markdown 渲染原语（GFM + KaTeX；raw HTML 与不安全协议被禁用）。
+   * `streaming: false` 走一次性完整解析；`variant: 'body'` 为文档级排版。
+   * 旧版 DSH 可能无此导出，调用方须做 typeof 守卫并降级。
+   */
+  export const MarkdownText: (props: {
+    text: string
+    streaming?: boolean
+    labels: MarkdownLabels
+    variant?: 'body' | 'compact'
+  }) => unknown
+
+  /** Markdown 导航作用域：普通外链与本地文件链接的打开能力（不提供则保持原生/纯文本）。 */
+  export function MarkdownDelegateProvider(props: {
+    children?: unknown
+    openExternalLink?: (href: string) => void
+    openFile?: (path: string, options?: { line?: number }) => void
+  }): unknown
 }

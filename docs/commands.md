@@ -96,6 +96,21 @@ React 状态**：编辑器未挂载时装配、卸载后依然安全。
 - **不绑 `Ctrl+W`**：浏览器会截获该键且脚本无法 `preventDefault`，故取参考图（VS Code 页签右键菜单）
   里的第二候选 `Ctrl+F4`；`tests/keybindings.test.ts` 断言默认表中不含 `Ctrl+W`。
 
+### 4.2 实例：`edrv.toggleMarkdownPreview`（切换 Markdown 预览）
+
+与 `closeTab` 不同，本命令走 `EDITOR_COMMANDS`（键位由 EditorView 自己的 capture 监听处理，
+不进 `BRIDGE_COMMANDS`，避免同一按键双执行）：
+
+| 步骤 | 落点 | 内容 |
+| --- | --- | --- |
+| 写定义 | `ui/commandCatalog.ts` 的 `EDITOR_COMMANDS` | `keybinding 'Ctrl+Shift+V'`、`available: alwaysAvailable`、`run: () => emit('toggleMarkdownPreview')` |
+| 写默认键位 | `shared/keybindings.ts` | `'edrv.toggleMarkdownPreview': 'Ctrl+Shift+V'` |
+| 接住事件 | `ui/EditorView.ts` 接线表 + 窗口键位监听 | `['edrv.command.toggleMarkdownPreview', …]` 与 `bindingsOf('edrv.toggleMarkdownPreview')` |
+
+**不吞键约定（有回归考量）**：仅当活动文件是 `.md` / `.markdown` 时才 `preventDefault`；
+其余情况直接放行，保留浏览器与输入框原生的 `Ctrl+Shift+V`「粘贴为纯文本」语义。
+这与 `closeTab`（无页签时放行 `Ctrl+F4`）、`addSelectionRef`（无编辑器时放行 `Ctrl+U`）同款。
+
 ## 5. 第三方扩展
 
 ```js

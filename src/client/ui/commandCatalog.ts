@@ -198,6 +198,11 @@ export const EDITOR_COMMANDS: readonly CommandDef[] = [
     run: () => emit('searchInFiles'),
   },
   {
+    id: 'edrv.toggleMarkdownPreview', label: '切换 Markdown 预览', category: '视图', order: 25,
+    keybinding: 'Ctrl+Shift+V', available: alwaysAvailable,
+    run: () => emit('toggleMarkdownPreview'),
+  },
+  {
     id: 'edrv.showLogs', label: '查看诊断日志', category: '视图', order: 30,
     available: alwaysAvailable,
     run: () => emit('showLogs'),

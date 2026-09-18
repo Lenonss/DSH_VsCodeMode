@@ -11,6 +11,7 @@ import { createRequire } from 'node:module'
 import { pathToFileURL } from 'node:url'
 import type { Ctx } from './store.js'
 import { KEYBINDING_DEFAULTS } from './shared/keybindings.js'
+import { EDITOR_LIMIT_DEFAULT } from './shared/editorLimit.js'
 import { INTEGRATION_BASE_DEFAULT } from './shared/integration.js'
 import { TORTOISE_DIR_DEFAULT } from './shared/svn.js'
 import type { AiConfigPatch, AiConfigView } from './shared/ai.js'
@@ -340,6 +341,8 @@ export async function installOpenSettingsSection(
     fileOpenTool: deps.z.string().default(FILE_OPEN_DEFAULT),
     keybindings: deps.z.object(keybindingsShape(deps.z)).default({ ...KEYBINDING_DEFAULTS }),
     sidebarMinWidth: deps.z.number().default(300),
+    // 页签数量上限（0 = 不限制；超限时淘汰最久未使用的页签，固定页签除外）
+    maxOpenEditors: deps.z.number().default(EDITOR_LIMIT_DEFAULT),
     integrationBaseUrl: deps.z.string().default(INTEGRATION_BASE_DEFAULT),
     // AI 内联补全（默认关；provider/model 空 = 自动路由；effort 空 = 跟随模型默认）
     aiInline: deps.z.boolean().default(AI_CONFIG_DEFAULT.enabled),

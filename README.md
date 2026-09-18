@@ -36,10 +36,21 @@
   官方文本查看器；畸形地址自动回落官方查看器。
 - **文件页签**：脏点 / 关闭 / 「+」打开 / 右键菜单 / 固定（📌 排最前、隐藏 ×、
   随工作区持久化；**固定 = 保护**，批量关闭永不误关固定页签）。
+- **页签数量上限**（通用设置 `maxOpenEditors`，默认 10，**0 = 不限制**）：超限时自动
+  关闭**最久未使用**的页签；固定页签与当前活动页签受保护，脏页签在关闭前静默落盘。
+- **页签栏滚轮横滚**：页签栏溢出（出现水平滚动条）时，鼠标滚轮（含触控板纵向手势）
+  直接横向滚动页签栏；不溢出时不接管，`Shift+滚轮` 沿用浏览器原生横滚。
 - **页签右键菜单**（对齐 VS Code）：添加到对话 / 关闭·关闭其他·关闭右侧·关闭已
   保存·全部关闭（`Ctrl+F4` 关当前）/ 复制路径·复制相对路径 / 在文件资源管理器
   （视图）中显示。关闭前未保存页签静默落盘；浏览器无法实现的条目（向右拆分 /
   新窗口）不提供。
+- **工作区搜索填充**：编辑器有选中时按 `Ctrl+Shift+F`，选中文本自动填入搜索框并
+  立即搜索（多行选区取首行；填入后全选，便于直接改写）。
+- **Markdown 预览**（v0.5.3）：打开 `.md` / `.markdown` 后，工具栏「预览」按钮、
+  `Ctrl+Shift+V` 或命令栏「切换 Markdown 预览」切入 GFM 渲染（标题/列表/表格/代码块/
+  引用/KaTeX），「以源码打开」切回编辑。渲染走官方 `MarkdownText` 原语，零新增依赖、
+  自动跟随 DSH 主题；旧版 DSH 缺该原语时降级为纯文本预览。活动文件不是 Markdown 时
+  不吞 `Ctrl+Shift+V`（保留「粘贴为纯文本」）。
 - **Monaco Editor**：语法高亮 / 行号 / `Ctrl+F` / `Ctrl+G` / `Ctrl+S` /
   700ms 防抖自动保存；顶部工具栏显示 路径 / 语言 / Ln,Col / 保存状态，提供
   差异 / 侧边栏 / 刷新入口。
@@ -57,9 +68,9 @@
   全局键位派发、Monaco 右键菜单——新增能力只需追加一条命令定义。
 - **开放注册表**：`window.__edrvCommands__` 暴露 `register()` 注册命令、
   `addRuntimeKeybinding()` 绑运行时键位（不落设置 schema）。
-- **开箱 19 条命令**：保存 / 快速打开 / 在文件浏览器中打开 / 显示所有命令 /
-  切换侧边栏 / 工作区搜索 / 后退·前进 / 上下页签 / 关闭当前页签 / 上下编辑行 /
-  转到定义 / 查找引用 / 触发 AI 补全 / 配置代码片段 / 插入代码片段 /
+- **开箱 20 条命令**：保存 / 快速打开 / 在文件浏览器中打开 / 显示所有命令 /
+  切换侧边栏 / 工作区搜索 / 切换 Markdown 预览 / 后退·前进 / 上下页签 / 关闭当前页签 /
+  上下编辑行 / 转到定义 / 查找引用 / 触发 AI 补全 / 配置代码片段 / 插入代码片段 /
   选中内容加为引用。
 
 ### 3. 代码片段（v0.3.0，VS Code 兼容）
@@ -347,13 +358,13 @@ TortoiseSVN（`TortoiseProc.exe`）仅作 Windows 过渡增强：自研能力覆
 
 ```bash
 # ① Git 安装（clone + prepare 构建；推荐打固定 tag）
-dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.5.2
+dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.5.3
 
 # ② npm 注册表（发布到 npm 后）
 dsh plugin --profile web add dsh-vscode-mode
 
 # ③ GitHub Release tgz 直装
-dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.5.2/dsh-vscode-mode-0.5.2.tgz
+dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.5.3/dsh-vscode-mode-0.5.3.tgz
 ```
 
 > `dsh plugin ...` 是 pnpm 转发器：git 安装会克隆仓库、执行该包 `prepare` 脚本
@@ -406,6 +417,8 @@ bundles 层后重启 DSH 即自动把插件行挂进 loader 树。**不要**再�
 | `F12` / `Shift+F12` | 转到定义 / 查找所有引用 |
 | `Ctrl+点击` / `Ctrl+hover` | 引用导航 / 可导航标识符提示 |
 | `Ctrl+B` | 切换文件管理侧边栏 |
+| `Ctrl+Shift+F` | 工作区搜索（有选中则把选中文本填入搜索框） |
+| `Ctrl+Shift+V` | 切换 Markdown 预览（仅活动文件为 .md 时生效） |
 | `Ctrl+F4` | 关闭当前页签 |
 | `Alt+←` / `Alt+→` | 后退 / 前进（跨文件恢复焦点位置） |
 | `Ctrl+Alt+-` / `Ctrl+Shift+-` | 后退 / 前进（同导航历史） |
@@ -640,6 +653,13 @@ Keep All / Undo All 却是亮的。修复：单文件 Keep / Undo 覆盖冲突�
 完整变更见 [GitHub Releases](https://github.com/Lenonss/DSH_VsCodeMode/releases)。
 近期关键版本：
 
+- **v0.5.3**：**编辑器四项体验增强**——① `Ctrl+Shift+F` 时编辑器有选中则把选中文本
+  自动填入搜索框并立即搜索（多行选区取首行；侧栏原本收起也生效）；② 页签数量上限
+  （通用设置 `maxOpenEditors`，默认 10，**0 = 不限制**），超限自动关闭**最久未使用**的
+  页签，固定页签与活动页签受保护、脏页签关闭前静默落盘；③ 页签栏溢出时鼠标滚轮即可
+  横向滚动（`Shift+滚轮` 沿用浏览器原生横滚，不溢出时不接管）；④ **Markdown 预览**：
+  `.md` / `.markdown` 经工具栏按钮、`Ctrl+Shift+V` 或命令栏切换 GFM 渲染（标题/列表/
+  表格/代码块/KaTeX），复用官方 `MarkdownText` 原语，零新增依赖、自动跟随 DSH 主题。
 - **v0.5.2**：**修复 macOS / npm 安装形态的兼容问题**——① schema 库按候选链解析
   （官方已把 vendored schemastery 改名为 `@deepseek-ai/schemastery`，安装树里没有裸
   `schemastery`），且 `@deepseek-ai/dsh-settings` 缺失不再拖垮整体 → 修复从 npm 安装时

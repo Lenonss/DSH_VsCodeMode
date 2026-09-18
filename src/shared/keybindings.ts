@@ -14,6 +14,9 @@ export const KEYBINDING_DEFAULTS: Record<string, string> = {
   'edrv.quickOpen': 'Ctrl+P',
   'edrv.toggleSidebar': 'Ctrl+B',
   'edrv.searchInFiles': 'Ctrl+Shift+F',
+  // Markdown 预览切换：VS Code 同款 (Ctrl+K V 为分栏，此处取单键 Ctrl+Shift+V)。
+  // 仅当活动文件是 .md 时才吞键，其余情况放行给浏览器/输入框（保留「粘贴为纯文本」语义）。
+  'edrv.toggleMarkdownPreview': 'Ctrl+Shift+V',
   'edrv.navigateBack': 'Alt+ArrowLeft|Ctrl+Alt+-',
   'edrv.navigateForward': 'Alt+ArrowRight|Ctrl+Shift+-',
   // 页签循环：主候选避开浏览器保留键（Ctrl+Tab / Ctrl+PgUp/PgDn 会被浏览器截获）

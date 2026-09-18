@@ -50,6 +50,7 @@ import { keybindingsApply } from './keybindings.js'
 import { createCommandBridge } from './commandBridge.js'
 import { REGISTRY_GLOBAL } from './commandGlobals.js'
 import { sidebarMinApply } from './sidebarMin.js'
+import { editorLimitApply } from './editorLimit.js'
 import { log } from './log.js'
 import { setupLsp, setSession, disposeLsp } from './monaco/lsp/index.js'
 import { disposeSnippets } from './snippets/provider.js'
@@ -246,6 +247,7 @@ export function apply(ctx: any): void {
   }, 'vscode-mode: file opener setting sync')
   // 快捷键配置同步：设置提交后立即刷新键位匹配（编辑器/QuickOpen 按事件时读取）
   // 同一订阅里顺带同步侧边栏最小宽度（sidebarMinWidth）→ 派发 edrv:sidebar-min-width 通知编辑器重夹
+  // 以及页签上限（maxOpenEditors）→ 派发 edrv:max-open-editors 通知编辑器复算淘汰
   ctx.effect(() => {
     if (!settings) return undefined
     const sync = (): void => {
@@ -254,6 +256,8 @@ export function apply(ctx: any): void {
       keybindingsApply(snapshot.value?.keybindings)
       const minW = sidebarMinApply(snapshot.value?.sidebarMinWidth)
       window.dispatchEvent(new CustomEvent('edrv:sidebar-min-width', { detail: { value: minW } }))
+      const limit = editorLimitApply(snapshot.value?.maxOpenEditors)
+      window.dispatchEvent(new CustomEvent('edrv:max-open-editors', { detail: { value: limit } }))
     }
     sync()
     return settings.subscribe(sync)

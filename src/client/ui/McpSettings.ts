@@ -11,6 +11,7 @@ import '../styles/mcp.css'
 import { availableOpeners, AUTO_OPEN_TOOL } from '../fileOpeners.js'
 import { SettingsContext } from '../settingsContext.js'
 import { normalizeSidebarMinWidth, SIDEBAR_MIN_DEFAULT } from '../sidebarMin.js'
+import { EDITOR_LIMIT_CEIL, EDITOR_LIMIT_DEFAULT, normalizeMaxOpenEditors } from '../../shared/editorLimit.js'
 import { TORTOISE_DIR_DEFAULT } from '../../shared/svn.js'
 import { KeybindingsPanel } from './KeybindingsPanel.js'
 import { LspSettings } from './LspSettings.js'
@@ -136,6 +137,8 @@ function GeneralSettings({ registry }) {
   const [devMessage, setDevMessage] = React.useState('')
   const [minW, setMinW] = React.useState(SIDEBAR_MIN_DEFAULT)
   const [minDraft, setMinDraft] = React.useState(null) // 输入草稿（null=跟随已保存值；blur/Enter 提交）
+  const [limit, setLimit] = React.useState(EDITOR_LIMIT_DEFAULT)
+  const [limitDraft, setLimitDraft] = React.useState(null) // 页签上限草稿（同上提交语义）
   const settings = React.useContext(SettingsContext)
   const snapshot = settings?.getSnapshot?.()
   const loading = !snapshot || snapshot.status === 'loading'
@@ -147,6 +150,7 @@ function GeneralSettings({ registry }) {
       const next = snap?.value?.fileOpenTool
       if (typeof next === 'string') setTool(next)
       setMinW(normalizeSidebarMinWidth(snap?.value?.sidebarMinWidth))
+      setLimit(normalizeMaxOpenEditors(snap?.value?.maxOpenEditors))
     }
     onChange()
     return settings?.subscribe?.(onChange)
@@ -173,6 +177,19 @@ function GeneralSettings({ registry }) {
     if (minDraft === null) return
     setMinDraft(null)
     saveMinW(minDraft)
+  }
+  /** 提交页签数量上限（归一化夹取 0–50 后持久化；0 = 不限制）。 */
+  const saveLimit = (raw) => {
+    const next = normalizeMaxOpenEditors(raw)
+    setLimit(next); setBusy(true); setError('')
+    if (!settings?.set) { setError('设置服务不可用'); setBusy(false); return }
+    settings.set('maxOpenEditors', next).catch((e) => setError(String(e))).finally(() => setBusy(false))
+  }
+  /** 结束输入（blur/Enter）时提交页签上限草稿。 */
+  const commitLimit = () => {
+    if (limitDraft === null) return
+    setLimitDraft(null)
+    saveLimit(limitDraft)
   }
   const closeDevForm = () => {
     if (!window.confirm('关闭开发形态：插件将切换为正式版安装（版本依赖 + 删除工作区链接），pnpm 装配后需重启 DSH 生效。确认关闭？')) return
@@ -220,6 +237,18 @@ function GeneralSettings({ registry }) {
             onKeyDown: (event) => { if (event.key === 'Enter') commitMinW() },
           }),
           React.createElement('small', null, '180–560 px；拖拽低于该宽度自动隐藏')),
+        React.createElement('label', { className: 'vsm-general-row' },
+          React.createElement('span', null, '页签数量上限'),
+          React.createElement('input', {
+            type: 'number', min: 0, max: EDITOR_LIMIT_CEIL, step: 1,
+            value: limitDraft ?? limit,
+            disabled: loading || unavailable || notReady || busy || snapshot?.writable === false,
+            title: '0 = 不限制；超出上限时自动关闭最久未使用的页签（固定页签不受影响）',
+            onChange: (event) => setLimitDraft(event.target.value),
+            onBlur: commitLimit,
+            onKeyDown: (event) => { if (event.key === 'Enter') commitLimit() },
+          }),
+          React.createElement('small', null, '0 = 不限制；超限时关闭最久未使用的页签（固定页签除外）')),
       ),
     ),
     React.createElement(SvnSettingsSection, null),

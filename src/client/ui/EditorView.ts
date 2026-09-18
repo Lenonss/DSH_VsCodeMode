@@ -12,6 +12,8 @@ import { dbg, rpc } from '../rpc.js'
 import { emitFileChanged, emitRefresh } from '../events.js'
 import { langOf, loadMonaco, snippetLanguageOf } from '../monaco/loader.js'
 import { dataUrlOf, isImagePath, isSvgPath } from '../imagePreview.js'
+import { isMarkdownPath } from '../markdownPreview.js'
+import { MarkdownPanel } from '../md/mdPanel.js'
 import { base64ToBytes, isPdfPath } from '../pdfPreview.js'
 import {
   clearBaseline,
@@ -30,6 +32,7 @@ import { createDiffRenderer } from '../monaco/diffRender.js'
 import { ST, callIdAttr, noopHunk, summarize } from '../state/records.js'
 import { diffRegions } from '../state/regions.js'
 import { QuickOpen } from './QuickOpen.js'
+import { attachHorizontalWheel } from './horizontalWheel.js'
 import { CommandPalette } from './CommandPalette.js'
 import { closeCommandPalette } from '../commandPaletteStore.js'
 import { DiffLauncher } from './DiffLauncher.js'
@@ -47,6 +50,7 @@ import { bindingsOf, chordOf, matchEvent, useKeybindingsVersion } from '../keybi
 import { getSidebarMinWidth } from '../sidebarMin.js'
 import { navHistoryFor } from '../navHistory.js'
 import { statusOfAdd } from '../addToConversation.js'
+import { setSearchSeed } from '../searchSeed.js'
 import { CACHE_KEY } from '../paths.js'
 import { runGoToDefinition, runFindReferences, hideReferencesOverlay } from '../monaco/lsp/providers.js'
 import { bindLspUnderline } from '../monaco/lsp/underline.js'
@@ -56,8 +60,9 @@ import { SnippetsPicker } from './SnippetsPicker.js'
 import { invalidateSnippets, setSnippetsSession, setupSnippets } from '../snippets/provider.js'
 import {
   absoluteOf, ancestorDirsOf, applyClose, baseNameOf, closeAll, closeOthers, closeRight, closeSaved,
-  insertTab, isTreeRevealable, normalizeTabs, pickActive, relativeOf, tabPathOf, togglePin,
+  evictPlan, insertTab, isTreeRevealable, normalizeTabs, pickActive, relativeOf, tabPathOf, togglePin,
 } from '../tabActions.js'
+import { getMaxOpenEditors } from '../editorLimit.js'
 import { buildTabMenu } from '../tabMenu.js'
 import { ensureSvnChanges, ensureSvnStatus, getSvnChanges, getSvnStatus, refreshSvnChanges, svnAdd, svnChangeMapOf, svnDiffBase, svnEditorActions, svnRevert, svnTortoise, svnUpdate } from '../svnStatus.js'
 import { ensureSvnLog, getSvnLog, refreshSvnLog, svnDiffPair, svnDiffRev, svnDiffWorking, svnLogKeyOf, svnLogLoadedLimit, svnLogTruncated, svnWcRev, SVN_LOG_SHOW_ALL_LIMIT } from '../svnLog.js'
@@ -165,6 +170,7 @@ export function EditorView(props) {
   const [imgSize, setImgSize] = React.useState(null) // 图片自然尺寸 { w, h }（路径栏 meta）
   const [imgBroken, setImgBroken] = React.useState(false) // 图片解码失败（onError），显示占位与重试
   const svgTextRef = React.useRef(new Set()) // 强制以文本打开的 SVG 路径集合（toggleSvgText 维护）
+  const mdPreviewRef = React.useRef(new Set()) // 处于预览态的 Markdown 路径集合（toggleMdPreview 维护；不持久化）
   const [pdfBytes, setPdfBytes] = React.useState(null) // 当前 PDF tab 的原始字节（null=加载中/非 PDF）
   const pdfB64CacheRef = React.useRef(new Map()) // path → base64（tab 切回免重读；FIFO 上限防内存膨胀）
   const pdfCtlRef = React.useRef(new Map()) // path → PDF 面板控制器（mount 产出，关闭/卸载销毁）
@@ -229,6 +235,7 @@ export function EditorView(props) {
   const navBackRef = React.useRef(null) // 后退动作最新闭包（窗口级键盘监听读取）
   const navForwardRef = React.useRef(null) // 前进动作最新闭包（窗口级键盘监听读取）
   const cycleTabRef = React.useRef(null) // 页签循环动作最新闭包（Ctrl+Alt+←/→、Ctrl+PgUp/PgDn）
+  const toggleMdPreviewRef = React.useRef(null) // Markdown 预览切换动作最新闭包（窗口键位监听读取，防陈旧闭包）
   const rowNavColRef = React.useRef(null) // 整行上下移动的期望列（连续移动保持列位）
   const rowNavMoveRef = React.useRef(false) // 本次光标变化是否由整行移动触发（否则清空期望列）
   const activeRef = React.useRef(null) // 当前活动文件的最新值（空依赖闭包/指令回调读取）
@@ -240,6 +247,9 @@ export function EditorView(props) {
   const dirtyRef = React.useRef({}) // 脏标记最新值（菜单禁用判定与关闭时落盘读）
   dirtyRef.current = dirtyMap
   const tabsHostRef = React.useRef(null) // 页签栏容器（切换后把当前页签滚入可见区）
+  // 页签上限与 LRU 使用序（超限淘汰最久未用者；见下方 tabTouchEffect / tabEvictEffect）
+  const [tabLimit, setTabLimit] = React.useState(() => getMaxOpenEditors())
+  const tabUseRef = React.useRef({ seq: 0, used: {} })
   const [navTick, setNavTick] = React.useState(0) // 历史可用性版本（按钮 disabled 重渲染）
   const hoverRegionsRef = React.useRef([]) // 当前 pending 区域镜像（稳定回调读取）
   const lineRegionMapRef = React.useRef(new Map()) // 行 → 区域 映射（hover 命中）
@@ -282,6 +292,9 @@ export function EditorView(props) {
   const isImageActive = !!active && isImagePath(active) && !svgTextRef.current.has(active)
   // 当前 tab 是否为 PDF 面板（与 loadContent 分派条件同源）
   const isPdfActive = !!active && isPdfPath(active)
+  // 当前 tab 是否为可预览的 Markdown，以及是否正处于预览态（预览态替换 Monaco host，只读）
+  const isMdActive = !!active && isMarkdownPath(active)
+  const mdPreviewing = isMdActive && mdPreviewRef.current.has(active)
   const regions = React.useMemo(() => diffRegions(currentRecords, contentReady ? content : null).filter((r) => !r.superseded), [currentRecords, content, contentPath, active])
   // useMemo 稳定引用：否则 hover 等重渲染会让 view zone effect 反复重建（- 号闪烁）
   const pendingRegions = React.useMemo(() => regions.filter((r) => r.status === ST.PENDING && !r.stale), [regions])
@@ -972,10 +985,18 @@ export function EditorView(props) {
         // G9：迁移历史持久化里的绝对路径页签（旧版差异入口写入），并顺带按新形态去重
         const restored = normalizeTabs(saved?.tabs, cwd)
         if (restored.length) {
-          setTabs(restored)
           // 活动路径同形态归一，否则恢复后匹配不到任何页签（pickActive 回退首个）
           const wanted = typeof saved?.active === 'string' ? tabPathOf(saved.active, cwd) : saved?.active
-          setActive(pickActive(restored, wanted))
+          const activePath = pickActive(restored, wanted)
+          // 上限已下调过（或历史存档超限）：恢复即收敛。此时页签均未编辑、无脏数据，
+          // 故只做纯计算裁剪，不走 closeTabs（避免无谓的落盘探测与状态栏提示）。
+          // evictPlan 已保护活动页签，无需额外 keep。
+          const limit = getMaxOpenEditors()
+          const plan = evictPlan(restored, limit, { active: activePath, used: {} })
+          const dropped = new Set(plan)
+          const kept = plan.length ? restored.filter((tab) => !dropped.has(tab.path)) : restored
+          setTabs(kept)
+          setActive(kept.some((tab) => tab.path === activePath) ? activePath : (kept[0]?.path ?? null))
         }
       }
     } catch (e) { /* 损坏忽略 */ }
@@ -998,6 +1019,45 @@ export function EditorView(props) {
     }
     catch (e) { /* 忽略 */ }
   }, [tabs, active, sessionId, scope])
+
+  /**
+   * 标记页签为「最近使用」（LRU 序号单调递增；编辑动作也算使用，见 onEdit）。
+   * @author ddj 2026年09月18号
+   * @param path 页签路径
+   */
+  const touchTab = (path) => {
+    if (!path) return
+    const state = tabUseRef.current
+    state.seq += 1
+    state.used[path] = state.seq
+  }
+
+  // 页签上限设置变更（edrv:max-open-editors）→ 更新上限态并触发下方淘汰 effect 复算
+  React.useEffect(() => {
+    const onLimit = () => setTabLimit(getMaxOpenEditors())
+    window.addEventListener('edrv:max-open-editors', onLimit)
+    return () => window.removeEventListener('edrv:max-open-editors', onLimit)
+  }, [])
+
+  // LRU 使用序维护：活动页签变化即标记；顺带把 used 表裁剪到当前页签集合，
+  // 否则长会话中已关闭页签的条目会永久堆积（内存无界增长）。
+  // ⚠️ 本 effect 必须声明在淘汰 effect 之前：先标记再淘汰，才能保证「刚打开/刚切到的
+  // 页签」不会在同一次 commit 里被当作最久未用者淘汰。
+  React.useEffect(() => {
+    if (active) touchTab(active)
+    const alive = new Set(tabs.map((t) => t.path))
+    const used = tabUseRef.current.used
+    for (const path of Object.keys(used)) if (!alive.has(path)) delete used[path]
+  }, [tabs, active])
+
+  // 页签超限淘汰：关闭最久未使用的页签（固定页签与活动页签受保护；见 tabActions.evictPlan）。
+  // 复用 closeTabs：它已实现 flushSave + persistDirty（脏页签先静默落盘）+ releaseTab + commitClose，
+  // 故「超限淘汰脏页签」不会丢用户编辑。淘汰后 tabs 变化 → 本 effect 复算 evictPlan 返回空 → 自然收敛。
+  React.useEffect(() => {
+    const plan = evictPlan(tabsRef.current, tabLimit, { active: activeRef.current, used: tabUseRef.current.used })
+    if (!plan.length) return
+    closeTabs(applyClose(tabsRef.current, new Set(plan), activeRef.current), '已关闭最久未使用的页签')
+  }, [tabs, tabLimit, active])
 
   // 侧边栏状态：恢复（显隐/宽度/激活面板）；侧栏形态独立键（默认收起，不共享页签形态偏好）
   // 宽度下限来自通用设置 sidebarMinWidth（默认 300），恢复值按其重夹
@@ -1056,14 +1116,51 @@ export function EditorView(props) {
     return () => window.removeEventListener('keydown', onKey, true)
   }, [])
 
-  // Ctrl+Shift+F 全局搜索：展开侧边栏 + 激活搜索页签，随后聚焦搜索输入框
+  /**
+   * 打开搜索面板（Ctrl+Shift+F 与命令栏「在工作区中搜索」的唯一动作）。
+   *
+   * 若编辑器有选区，把选区文本作为一次性种子交给搜索面板自动填入（需求 1）；
+   * 无选区/无编辑器时种子为空，行为与改动前一致（仅展开并聚焦）。
+   * 种子经 searchSeed 模块交棒而非事件 detail：侧栏原本收起时搜索面板尚未挂载，
+   * 事件 detail 会丢；面板挂载后自行取走槽内种子。
+   * @author ddj 2026年09月18号
+   */
+  const openSearchPanel = () => {
+    const ed = editorRef.current
+    const model = ed?.getModel?.()
+    const sel = ed?.getSelection?.()
+    let selected = ''
+    if (model && sel && (sel.startLineNumber !== sel.endLineNumber || sel.startColumn !== sel.endColumn)) {
+      // 选中区间文本（多行时 seedQueryOf 只取首行）
+      selected = model.getValueInRange?.(sel) ?? ''
+    }
+    setSearchSeed(selected)
+    setSidebarOn(true)
+    setActivePanel('search')
+    setTimeout(() => window.dispatchEvent(new CustomEvent('edrv:search-focus')), 0)
+  }
+
+  // Ctrl+Shift+F 全局搜索：展开侧边栏 + 激活搜索页签，随后聚焦搜索输入框（有选中则填入）
   React.useEffect(() => {
     const onKey = (e) => {
       if (!matchEvent(e, bindingsOf('edrv.searchInFiles'))) return
       e.preventDefault(); e.stopPropagation()
-      setSidebarOn(true)
-      setActivePanel('search')
-      setTimeout(() => window.dispatchEvent(new CustomEvent('edrv:search-focus')), 0)
+      openSearchPanel()
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [])
+
+  // Ctrl+Shift+V 切换 Markdown 预览：仅活动文件是 Markdown 时吞键；
+  // 其余情况直接放行（不 preventDefault），保留浏览器/输入框原生的「无格式粘贴」语义
+  // ——与 closeTab / addSelectionRef「不可用时放行按键」同款约定。
+  React.useEffect(() => {
+    const onKey = (e) => {
+      if (!matchEvent(e, bindingsOf('edrv.toggleMarkdownPreview'))) return
+      const path = activeRef.current
+      if (!isMarkdownPath(path)) return
+      e.preventDefault(); e.stopPropagation()
+      toggleMdPreviewRef.current?.(path)
     }
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
@@ -1181,10 +1278,11 @@ export function EditorView(props) {
       ['edrv.command.save', () => { if (editorRef.current?.getModel?.()) { flushSave(); doSaveRef.current?.(false) } }],
       // 快速打开由 QuickOpen 自己接该事件（它持有搜索框 ref），此处不重复实现
       ['edrv.command.toggleSidebar', () => setSidebarOn((v) => !v)],
-      ['edrv.command.searchInFiles', () => {
-        setSidebarOn(true)
-        setActivePanel('search')
-        setTimeout(() => window.dispatchEvent(new CustomEvent('edrv:search-focus')), 0)
+      ['edrv.command.searchInFiles', () => openSearchPanel()],
+      ['edrv.command.toggleMarkdownPreview', () => {
+        const path = activeRef.current
+        if (!isMarkdownPath(path)) { setStatus('当前文件不是 Markdown'); return }
+        toggleMdPreviewRef.current?.(path)
       }],
       ['edrv.command.navigateBack', () => navBackRef.current?.()],
       ['edrv.command.navigateForward', () => navForwardRef.current?.()],
@@ -1264,6 +1362,10 @@ export function EditorView(props) {
     if (left < host.scrollLeft) host.scrollLeft = left
     else if (right > host.scrollLeft + host.clientWidth) host.scrollLeft = right - host.clientWidth
   }, [active, tabs.length])
+
+  // 页签栏滚轮横向滚动（需求 3）：页签栏溢出时，鼠标滚轮（含触控板纵向手势）横滚页签栏，
+  // 不溢出时不接管（保持页面垂直滚动）；Shift+滚轮交由浏览器原生横滚。详见 horizontalWheel.ts。
+  React.useEffect(() => attachHorizontalWheel(tabsHostRef.current), [])
 
   // 鼠标侧键后退/前进：Logitech 官方默认「后退/前进」= XButton 鼠标事件（button 3/4），不产生键盘事件。
   // pointerdown 触发导航（preventDefault 后兼容 mousedown 可能不再触发，避免双触发）；
@@ -1550,6 +1652,9 @@ export function EditorView(props) {
     const ed = editorRef.current
     if (!ed || !active) return
     setDirtyMap((d) => Object.assign({}, d, { [active]: true }))
+    // 编辑即「使用」：需求 2 的淘汰口径是「最近没有改动」，故有改动时刷新 LRU 序号，
+    // 使长时间只在某文件里编辑的页签不会被其它文件的打开动作挤出。
+    touchTab(active)
     setStatus('编辑中…')
     // 外部改动尚未处理（冲突/文件被删）：抑制自动保存，避免用陈旧缓冲反复覆盖磁盘；
     // 手工 Ctrl+S 不受抑制（doSave 会走版本守卫并给冲突提示）。
@@ -1564,6 +1669,9 @@ export function EditorView(props) {
   // ⚠️ 必须以 contentReady（contentPath === active）为门，不能用 `content !== null`：
   // 切页签的那一帧 content 仍是**上一个文件**的内容，据此建 model 会先塞入陈旧文本，
   // 待真实内容到达再由 getModel→setValue 覆盖，光标随之被重置（见下方跳转 effect 注释）。
+  // ⚠️ 依赖必须含 mdPreviewing：Markdown 预览态不渲染 Monaco host（见 body 分派的 mdPreviewing 分支），
+  // 切回源码时 ensureEditor 会**新建**编辑器实例，而 active/content 都没变；缺此依赖则本 effect
+  // 不重跑 → 空 model、行内差异标记消失。同款原因见下方差异自绘 effect。
   React.useEffect(() => {
     if (!monaco || !editorRef.current || !active || !contentReady) return
     const ed = editorRef.current
@@ -1571,7 +1679,7 @@ export function EditorView(props) {
     if (ed.getModel() !== model) ed.setModel(model)
     restoreViewState(active)
     setLoadStage((prev) => ({ progress: Math.max(96, prev.progress), message: '创建编辑器视图…' }))
-  }, [monaco, active, content, contentReady])
+  }, [monaco, active, content, contentReady, mdPreviewing])
 
   // PDF 面板外壳 ref 回调（div 仅在 PDF 分支渲染，refs 先于 effect 就绪）
   const ensurePdfHost = (node) => { pdfHostRef.current = node }
@@ -1598,11 +1706,13 @@ export function EditorView(props) {
   }, [isPdfActive, pdfBytes, active])
 
   // 行内差异自绘（decorations / view zones / minus overlay）→ diffRenderer
+  // ⚠️ 依赖含 mdPreviewing：切回源码时编辑器实例被重建（见上方 model 同步 effect 的说明），
+  // 不重跑则新实例上没有任何差异装饰，表现为「差异标记全部消失」。
   React.useEffect(() => {
     if (!monaco || !editorRef.current || !active || content === null) return
     diffRendererRef.current.render(monaco, editorRef.current, pendingRegions, sessionId)
     setLoadStage({ progress: 100, message: '编辑器已就绪' })
-  }, [monaco, active, content, pendingRegions])
+  }, [monaco, active, content, pendingRegions, mdPreviewing])
 
   React.useEffect(() => () => {
     flushSave()
@@ -1981,6 +2091,32 @@ export function EditorView(props) {
     setStatus(next.has(path) ? '已切换为文本模式' : '已切换为图片预览')
     loadContent(path, sessionId, true)
   }
+
+  /**
+   * Markdown 在源码编辑与预览之间切换（按路径记忆，不持久化）。
+   *
+   * ⚠️ 进入预览前必须 flushSave()：预览态会替换 Monaco host，切回时编辑器实例是新建的；
+   * 若此刻还有未到期的 700ms 防抖保存，定时器到点时 editorRef.current 已被清空
+   * （见 EditorView 卸载清理），doSave 会静默 return —— 用户改动永不落盘。
+   * 同时保存视图状态，保证切回源码后光标/滚动位置不丢。
+   * @author ddj 2026年09月18号
+   * @param path Markdown 文件路径
+   */
+  const toggleMdPreview = (path) => {
+    if (!path) return
+    const next = new Set(mdPreviewRef.current)
+    const entering = !next.has(path)
+    if (entering) {
+      flushSave()
+      saveViewState(path)
+      next.add(path)
+    } else {
+      next.delete(path)
+    }
+    mdPreviewRef.current = next
+    setStatus(entering ? '已切换为 Markdown 预览' : '已切换为源码编辑')
+  }
+  toggleMdPreviewRef.current = toggleMdPreview
 
   /**
    * 图片预览面板：工具条（尺寸 meta / SVG 文本切换 / 刷新）+ 棋盘底自适应图片。
@@ -2598,6 +2734,13 @@ export function EditorView(props) {
   const pathBar = React.createElement('div', { className: 'edrv-pathbar', title: active || '' },
     React.createElement('span', { className: 'edrv-pb-name' }, active ? String(active).split(/[\\/]/).pop() : '未打开文件'),
     React.createElement('span', { className: 'edrv-pb-full' }, active || '使用右上搜索框 (' + (chordOf('edrv.quickOpen') ?? 'Ctrl+P') + ') 打开文件'),
+    // Markdown 预览/源码切换（需求 4）：仅 .md 文件出现；命令栏与 Ctrl+Shift+V 为同一动作
+    (isMdActive ? React.createElement('button', {
+      className: 'edrv-pill edrv-pill-ghost edrv-pb-mdbtn',
+      title: (mdPreviewing ? '切回源码编辑' : '预览 Markdown') + '（' + (chordOf('edrv.toggleMarkdownPreview') ?? '未绑定') + '）',
+      onClick: () => toggleMdPreview(active),
+    }, mdPreviewing ? '源码' : '预览') : null),
+    (mdPreviewing ? React.createElement('span', { className: 'edrv-pb-meta' }, '预览') : null),
     (active && !isImageActive && langOf(active) ? React.createElement('span', { className: 'edrv-pb-meta' }, langOf(active)) : null),
     (isImageActive && imgSize ? React.createElement('span', { className: 'edrv-pb-meta' }, imgSize.w + '×' + imgSize.h) : null),
     (cursor ? React.createElement('span', { className: 'edrv-pb-meta' }, cursor) : null),
@@ -2786,6 +2929,17 @@ export function EditorView(props) {
     body = React.createElement('div', { className: 'edrv-pdf-host', ref: ensurePdfHost, key: active })
   } else if (isPdfActive) {
     body = loadingBody(loadStage.message || '读取 PDF…', loadStage.progress)
+  } else if (mdPreviewing && contentReady) {
+    // Markdown 预览（需求 4）：复用已加载的文本内容渲染，不额外请求；编辑仍在源码态完成
+    body = React.createElement(MarkdownPanel, {
+      key: 'edrv-md-' + active,
+      text: content,
+      onToggleSource: () => toggleMdPreview(active),
+      onReload: () => reloadFile(),
+      onOpenFile: (path, line) => openFileAt(path, line ?? 1),
+    })
+  } else if (mdPreviewing) {
+    body = loadingBody(loadStage.message || '读取 Markdown…', loadStage.progress)
   } else if (content === null) {
     body = loadingBody(loadStage.message || '读取文件内容…', loadStage.progress)
   } else {

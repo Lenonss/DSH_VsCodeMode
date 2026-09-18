@@ -7,7 +7,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   absoluteOf, ancestorDirsOf, applyClose, baseNameOf, closeAll, closeOthers, closeRight, closeSaved,
-  insertTab, isAbsolutePath, isTreeRevealable, normalizeTabs, pickActive, relativeOf, tabPathOf, togglePin,
+  evictPlan, insertTab, isAbsolutePath, isTreeRevealable, normalizeTabs, pickActive, relativeOf, tabPathOf, togglePin,
 } from '../src/client/tabActions.js'
 import type { TabLike } from '../src/client/tabActions.js'
 
@@ -269,5 +269,69 @@ describe('G9 页签路径形态统一（tabPathOf / normalizeTabs 迁移）', ()
     expect(isTreeRevealable(migrated[0].path)).toBe(true)
     // 对照：未迁移的绝对路径不可定位
     expect(isTreeRevealable('D:/work/app/src/a.ts')).toBe(false)
+  })
+})
+
+describe('evictPlan 页签上限淘汰', () => {
+  /** 使用序表：数值越大越「新」。 */
+  const used = (map: Record<string, number>) => map
+
+  it('未超限：返回空数组（不做任何关闭）', () => {
+    expect(evictPlan(tabs('a', 'b'), 5, { active: 'a', used: used({}) })).toEqual([])
+    expect(evictPlan(tabs('a', 'b'), 2, { active: 'a', used: used({}) })).toEqual([])
+  })
+
+  it('limit = 0 表示不限制：永不淘汰', () => {
+    expect(evictPlan(tabs('a', 'b', 'c', 'd'), 0, { active: 'a', used: used({}) })).toEqual([])
+    expect(evictPlan(tabs('a', 'b', 'c', 'd'), -3, { active: 'a', used: used({}) })).toEqual([])
+  })
+
+  it('超限：按使用序淘汰最久未用者，恰好收敛到上限', () => {
+    const list = tabs('a', 'b', 'c', 'd')
+    // 使用序：a 最久(1) < b(2) < c(3) < d 最新(4)；活动 d 受保护
+    const plan = evictPlan(list, 2, { active: 'd', used: used({ a: 1, b: 2, c: 3, d: 4 }) })
+    // 需淘汰 4-2 = 2 个：a、b（最久未用两个）
+    expect(plan).toEqual(['a', 'b'])
+  })
+
+  it('固定页签不是候选（保护规则：用户显式固定过的不被上限夺走）', () => {
+    const list = tabs('!a', 'b', 'c', '!d')
+    // 活动 c；固定项 a/d 受保护，故只可能淘汰 b
+    expect(evictPlan(list, 2, { active: 'c', used: used({ a: 1, b: 2, c: 3, d: 4 }) })).toEqual(['b'])
+  })
+
+  it('活动页签不是候选（绝不关闭正在查看的文件）', () => {
+    const list = tabs('a', 'b', 'c')
+    const plan = evictPlan(list, 1, { active: 'a', used: used({ a: 1, b: 2, c: 3 }) })
+    // a 虽是最久未用，但它是活动页签 → 淘汰 b、c
+    expect(plan).toEqual(['b', 'c'])
+  })
+
+  it('无使用序记录者视为最久未用（历史恢复出来的页签优先被淘汰）', () => {
+    const list = tabs('a', 'b', 'c')
+    // b 有记录，a/c 无记录 → a、c 视为最久
+    const plan = evictPlan(list, 1, { active: 'b', used: used({ b: 9 }) })
+    expect(plan).toEqual(['a', 'c'])
+  })
+
+  it('同序（含全部无记录）按页签原顺序，保证确定性', () => {
+    expect(evictPlan(tabs('a', 'b', 'c', 'd'), 2, { active: 'd', used: used({}) })).toEqual(['a', 'b'])
+  })
+
+  it('候选不足时只返回可淘汰部分（允许溢出，不强关固定/活动页签）', () => {
+    // 3 个固定 + 1 个活动，上限 1 → 无任何候选可淘汰
+    expect(evictPlan(tabs('!a', '!b', '!c', 'd'), 1, { active: 'd', used: used({}) })).toEqual([])
+    // 2 固定 + 2 普通，上限 1，活动 d → 只有 c 可淘汰（虽需淘汰 3 个）
+    expect(evictPlan(tabs('!a', '!b', 'c', 'd'), 1, { active: 'd', used: used({}) })).toEqual(['c'])
+  })
+
+  it('keep 命中者不受淘汰（调用方按需保护）', () => {
+    const plan = evictPlan(tabs('a', 'b', 'c'), 1, { active: 'c', used: used({}), keep: new Set(['a']) })
+    expect(plan).toEqual(['b'])
+  })
+
+  it('非数组/非法 limit 不抛错', () => {
+    expect(evictPlan(null as unknown as TabLike[], 3, { active: 'a', used: {} })).toEqual([])
+    expect(evictPlan(tabs('a', 'b'), Number.NaN, { active: 'a', used: {} })).toEqual([])
   })
 })

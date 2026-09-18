@@ -12,7 +12,7 @@ export const SIDEBAR_PLUGIN = 'dsh-better-sidebar'
 
 /** 设置 scope 的跨组件上下文形状（与官方 settingsScope 绑定的最小面）。 */
 export interface SettingsScopeLike {
-  getSnapshot: () => { status?: string; value?: { fileOpenTool?: unknown; keybindings?: Record<string, string>; sidebarMinWidth?: unknown }; writable?: boolean }
+  getSnapshot: () => { status?: string; value?: { fileOpenTool?: unknown; keybindings?: Record<string, string>; sidebarMinWidth?: unknown; maxOpenEditors?: unknown }; writable?: boolean }
   subscribe: (listener: () => void) => () => void
   set: (field: string, value: unknown) => Promise<void>
 }
