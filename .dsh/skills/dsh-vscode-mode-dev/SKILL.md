@@ -6,6 +6,39 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
 # dsh-vscode-mode 开发/发布经验集（自我更新型技能）
 
 > updated: 2026-09-18 · 维护者：ddj（AI 会话按文末协议追加，保持精炼、去重）
+- 2026-09-18 实录（v0.5.3 发布，全绿）：`build` 41s success、`release` **5m34s** success
+  （`Verify published tarball` 同轮内取到，非 staged）。三向闭环一次对齐：registry
+  `dsh-vscode-mode/0.5.3` 的 `gitHead` == `7f71d8e`（release commit SHA）、`dist-tags.latest`
+  → `0.5.3`、git tag `v0.5.3` → 同 commit、GitHub Release 挂 tgz asset（digest sha256:5027…）。
+  本次改动全为本会话产物（mtime 全在 17:15–17:52 一簇），沿用「逐条核对后单提交、不 stash」口径；
+  发布前三门实测：typecheck 0 err、**全量 1447 passed / 7 skipped（104 文件）**、build 双面绿。
+- 2026-09-18 坑（v0.5.3 实测，**GUI 验证才能抓到的一类缺陷**）：**用 `typeof x === 'function'`
+  判「React 组件是否可用」是错的**——官方 `MarkdownText` 是 `React.memo(...)` 产物
+  （`MemoExoticComponent`），`typeof` 为 **'object'** 而非 'function'，函数判据恒 false →
+  「兼容降级」分支在**所有新版 DSH 上永久生效**（预览只显示降级纯文本）。该缺陷**同时绕过
+  tsc 与全部单测**：手写 ambient 垫片把导出声明得很宽松、纯函数测试不碰该守卫，
+  唯一捕获途径是真实浏览器端到端。修法 = 抽纯函数 `isComponentType(value)`，按 React 自身
+  口径判（`typeof === 'function'` **或** 带 `$$typeof` 的非 null 对象），并补单测固化
+  「memo 替身的 typeof 必须是 object」这一前提（本仓 `src/client/md/componentType.ts`）。
+  **教训：凡与 React 组件类型打交道的判据，必须有独立可单测的纯函数**，否则垫片 + `@ts-nocheck`
+  会让类型系统完全失明；且**客户端 UI 新功能发版前必须真浏览器冒烟**（对齐既有「发布前仅跑三门
+  不抓渲染期错误」条目）。
+- 2026-09-18 坑（v0.5.3 实测，**新建数据损坏，已留证未修**）：**700ms 防抖自动保存会把
+  「当前活动文件的内容」写进「先前文件的路径」**——症状是旧文件被静默覆盖成新文件内容。
+  根因在 `EditorView.ts` 三处叠加：① `doSave` 用 `const path = active` 取路径、`ed.getValue()`
+  取内容（**不同源**）；② `onEdit` 的 `arm(schedule, 700, () => doSave(true))` 闭包**触发时**才读
+  `active`/`editorRef`；③ `edrv:open-editor` → `addTab` 入口**只 setActive、不 flushSave**
+  （页签点击 / 关闭路径都调了 flushSave，唯独这个入口没有）。复现：编辑 A → 700ms 内开 B。
+  判别「是不是本次改动引入」的归因实验：把触发概率的条件（如页签上限）设为 0 禁用掉，
+  **仍复现即与本次无关**。修法方向（留待立项）：`doSave` 改为按 model uri 反解路径
+  （已有 `modelPathOf`，保证 path 与 content 同源）**且**所有改 active 的入口统一先 `flushSave()`。
+  同族教训：**任何会替换 Monaco host / 改变 active 的新入口，都必须先 `flushSave()`**，
+  否则防抖到点时 `editorRef` 已空 → `doSave` 静默 return → 改动永不落盘（v0.5.3 的 Markdown
+  预览切换已按此处理）。
+- 2026-09-18 坑（v0.5.3 实测）：**改 `README.md` 必须顺手更新「安装」段的固定 tag 与
+  「更新日志」**——该段常年停在旧版本号（v0.5.0 时发现还写着 v0.1.23；v0.5.3 时安装示例
+  仍钉 v0.5.2）。发版清单里把它当固定动作：安装示例 3 处 tag（git/Release tgz 的文件名）
+  + 顶部「近期关键版本」追加本条。
 - 2026-09-18 实录（v0.5.2 发布，全绿）：`build` job 41s success、`release` job 4m32s success
   （含 `Verify published tarball`，**无需等满重试窗口**，CDN 本次很快）。三向闭环一次性对齐：
   registry `dsh-vscode-mode/0.5.2` 的 `gitHead` == `980b7b2`（release commit SHA）、
