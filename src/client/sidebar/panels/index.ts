@@ -1,14 +1,16 @@
 // @ts-nocheck
 /**
- * dsh-vscode-mode client — 侧边栏面板定义（文件管理 + 搜索 + 规则）。
+ * dsh-vscode-mode client — 侧边栏面板定义（文件管理 + 搜索 + 规则 + SVN 变更）。
  * 活动栏图标用官方 UI 原语（跟随 DSH 主题与皮肤）；原语缺失时由 SidebarView 回落文本渲染。
- * 作者 ddj 2026-08-26 / 2026-09-03 / 2026-09-10
+ * 「SVN 变更」带 visible 守卫：仅受 SVN 管理的工作区出现（非 SVN 工作区零变化）。
+ * 作者 ddj 2026-08-26 / 2026-09-03 / 2026-09-10 / 2026-09-16
  */
 import React from 'react'
-import { IconFolderOpenOutline16, IconListPenOutline16, IconSearchOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
+import { IconBranchOutline16, IconFolderOpenOutline16, IconListPenOutline16, IconSearchOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
 import { FileExplorer } from './FileExplorer.js'
 import { SearchPanel } from './SearchPanel.js'
 import { RulesPanel } from './RulesPanel.js'
+import { SvnPanel } from './SvnPanel.js'
 import type { SidebarPanelDef, SidebarCtx } from '../types.js'
 
 /**
@@ -55,4 +57,43 @@ export function createRulesPanel(): SidebarPanelDef {
     order: 20,
     render: (ctx: SidebarCtx) => React.createElement(RulesPanel, { ctx }),
   }
+}
+
+/**
+ * 构造「SVN 变更」面板定义。
+ * 徽标 = 过滤后仍显示的变更数（0/未加载不显示）；visible 守卫保证非 SVN 工作区
+ * 既无活动栏图标也无面板（避免出现永远空的入口）。
+ * @author ddj 2026年09月16号
+ * @returns 面板定义（图标 = 官方 IconBranchOutline16；无原语时回落文本）
+ */
+export function createSvnPanel(): SidebarPanelDef {
+  return {
+    id: 'svn',
+    title: 'SVN 变更',
+    icon: typeof IconBranchOutline16 === 'function' ? IconBranchOutline16 : '⎇',
+    order: 25,
+    visible: (ctx: SidebarCtx) => Boolean(ctx?.svn?.managed && ctx?.svn?.svnCli),
+    badge: (ctx: SidebarCtx) => {
+      const entries = ctx?.svnChanges
+      if (!Array.isArray(entries)) return null
+      const count = svnVisibleCount(entries)
+      return count > 0 ? count : null
+    },
+    render: (ctx: SidebarCtx) => React.createElement(SvnPanel, { ctx }),
+  }
+}
+
+/**
+ * 徽标计数：与面板默认过滤口径一致（显示未版本控制、隐藏忽略项）。
+ * @author ddj 2026年09月16号
+ * @param entries 变更清单
+ * @returns 计数
+ */
+function svnVisibleCount(entries) {
+  let count = 0
+  for (const entry of entries) {
+    if (entry?.status === 'ignored' || entry?.status === 'normal' || entry?.status === 'external') continue
+    count += 1
+  }
+  return count
 }

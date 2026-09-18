@@ -15,8 +15,8 @@
  * 作者 ddj 2026年09月10号
  */
 import React from 'react'
-import { createPortal } from 'react-dom'
 import { rpc } from '../rpc.js'
+import { ModalShell } from './ModalShell.js'
 import { invalidateSnippets, listSnippetsFor } from '../snippets/provider.js'
 import {
   SNIPPET_LANGUAGES, languageLabelOf, normalizeSnippetFileName, snippetFileTemplate, snippetFileNameFor,
@@ -232,65 +232,77 @@ export function SnippetsPicker(props) {
           '（' + currentLanguage + '）')
       : '当前没有打开文件：可新建全语言片段，或先打开文件再新建对应语言的片段')
 
-  const dialog = React.createElement('div', { className: 'edrv-snip-mask', onClick: () => onClose?.() },
-    React.createElement('div', { className: 'vsm-mcp-dialog edrv-snip-dialog', onClick: (event) => event.stopPropagation() },
-      React.createElement('h3', null, isInsert ? '插入代码片段' : '代码片段：配置代码片段'),
-      React.createElement('p', { className: 'edrv-snip-hint' }, isInsert
-        ? '仅列出对当前文件语言生效的片段（选定后在光标处展开，支持 ${1:占位} 与 $TM_FILENAME 等变量）。'
-        : '代码片段按语言绑定：`<语言>.code-snippets` 只对该类文件生效，`global.code-snippets` 对所有文件生效。选中文件即在编辑界面打开。'),
-      isInsert ? null : languageBar,
-      renderBody(),
-      isInsert
-        ? null
-        : React.createElement('div', { className: 'vsm-mcp-dialog-actions' },
-            React.createElement('button', {
-              disabled: busy,
-              onClick: () => openDraft('user', ''),
-            }, '新建全语言片段…'),
-            React.createElement('button', {
-              className: 'vsm-primary',
-              disabled: busy || !currentLanguage,
-              title: currentLanguage ? '' : '请先打开一个文件，或改用「新建全语言片段…」',
-              onClick: () => openDraft('user', currentLanguage),
-            }, currentLanguage ? '新建 ' + languageLabelOf(currentLanguage) + ' 片段文件…' : '新建当前语言片段…'),
-            React.createElement('button', {
-              disabled: busy || !cwd,
-              title: cwd ? '' : '当前会话没有工作区',
-              onClick: () => openDraft('project', currentLanguage),
-            }, '新建项目片段文件…'))))
+  // 一级弹窗：走通用 ModalShell（遮罩/portal 单点保证）；
+  // maskClass/dialogClass 保持既有类名，故 editor.css 的 .edrv-snip-* 样式与既有测试契约不变。
+  // Esc 关掉 closeOnEsc：本组件已注册「二级优先 → 一级」的 Esc 处理，
+  // 若外壳再注册一个会同时触发两级关闭（一次按键直接退出整个流程）。
+  const dialog = React.createElement(ModalShell, {
+    maskClass: 'edrv-snip-mask',
+    dialogClass: 'edrv-snip-dialog',
+    closeOnEsc: false,
+    onClose: () => onClose?.(),
+  },
+    React.createElement('h3', null, isInsert ? '插入代码片段' : '代码片段：配置代码片段'),
+    React.createElement('p', { className: 'edrv-snip-hint' }, isInsert
+      ? '仅列出对当前文件语言生效的片段（选定后在光标处展开，支持 ${1:占位} 与 $TM_FILENAME 等变量）。'
+      : '代码片段按语言绑定：`<语言>.code-snippets` 只对该类文件生效，`global.code-snippets` 对所有文件生效。选中文件即在编辑界面打开。'),
+    isInsert ? null : languageBar,
+    renderBody(),
+    isInsert
+      ? null
+      : React.createElement('div', { className: 'vsm-mcp-dialog-actions' },
+          React.createElement('button', {
+            disabled: busy,
+            onClick: () => openDraft('user', ''),
+          }, '新建全语言片段…'),
+          React.createElement('button', {
+            className: 'vsm-primary',
+            disabled: busy || !currentLanguage,
+            title: currentLanguage ? '' : '请先打开一个文件，或改用「新建全语言片段…」',
+            onClick: () => openDraft('user', currentLanguage),
+          }, currentLanguage ? '新建 ' + languageLabelOf(currentLanguage) + ' 片段文件…' : '新建当前语言片段…'),
+          React.createElement('button', {
+            disabled: busy || !cwd,
+            title: cwd ? '' : '当前会话没有工作区',
+            onClick: () => openDraft('project', currentLanguage),
+          }, '新建项目片段文件…')))
 
-  // 二级弹窗：新建片段文件（语言 + 文件名；叠在一级浮窗之上的独立遮罩）
+  // 二级弹窗：新建片段文件（语言 + 文件名；更高遮罩层，叠在一级之上）
   const createDialog = draft
-    ? React.createElement('div', { className: 'edrv-snip-mask edrv-snip-mask-top', onClick: closeDraft },
-        React.createElement('div', { className: 'vsm-mcp-dialog edrv-snip-dialog', onClick: (event) => event.stopPropagation() },
-          React.createElement('h3', null, draft.scope === 'project' ? '新建项目代码片段文件' : '新建全局代码片段文件'),
-          React.createElement('label', null, '生效语言',
-            React.createElement('select', {
-              value: draft.language,
-              disabled: busy,
-              onChange: (event) => { pickLanguage(event.target.value); setError('') },
-            }, options.map((item) => React.createElement('option', { key: 'lang-' + item.id, value: item.id }, item.label)))),
-          React.createElement('label', null, '文件名',
-            React.createElement('input', {
-              autoFocus: true,
-              spellCheck: false,
-              value: draft.fileName,
-              placeholder: snippetFileNameFor(draft.language),
-              onChange: (event) => { editFileName(event.target.value); setError('') },
-              onKeyDown: (event) => { if (event.key === 'Enter') createFile() },
-            })),
-          React.createElement('div', { className: 'edrv-snip-hint' },
-            (draft.scope === 'project' ? '将写入 ' + (cwd ?? '') + '/.dsh/snippets/' : '将写入 ~/.dsh/snippets/')
-            + normalizeSnippetFileName(draft.fileName)
-            + (draft.language
-                ? '（仅对 ' + languageLabelOf(draft.language) + ' 文件生效）'
-                : '（对所有文件生效）')),
-          error ? React.createElement('div', { className: 'vsm-mcp-error vsm-mcp-banner' }, error) : null,
-          React.createElement('div', { className: 'vsm-mcp-dialog-actions' },
-            React.createElement('button', { disabled: busy, onClick: closeDraft }, '取消'),
-            React.createElement('button', { className: 'vsm-primary', disabled: busy, onClick: createFile }, busy ? '创建中…' : '创建并打开'))))
+    ? React.createElement(ModalShell, {
+        maskClass: 'edrv-snip-mask edrv-snip-mask-top',
+        dialogClass: 'edrv-snip-dialog',
+        closeOnEsc: false,
+        onClose: closeDraft,
+      },
+        React.createElement('h3', null, draft.scope === 'project' ? '新建项目代码片段文件' : '新建全局代码片段文件'),
+        React.createElement('label', null, '生效语言',
+          React.createElement('select', {
+            value: draft.language,
+            disabled: busy,
+            onChange: (event) => { pickLanguage(event.target.value); setError('') },
+          }, options.map((item) => React.createElement('option', { key: 'lang-' + item.id, value: item.id }, item.label)))),
+        React.createElement('label', null, '文件名',
+          React.createElement('input', {
+            autoFocus: true,
+            spellCheck: false,
+            value: draft.fileName,
+            placeholder: snippetFileNameFor(draft.language),
+            onChange: (event) => { editFileName(event.target.value); setError('') },
+            onKeyDown: (event) => { if (event.key === 'Enter') createFile() },
+          })),
+        React.createElement('div', { className: 'edrv-snip-hint' },
+          (draft.scope === 'project' ? '将写入 ' + (cwd ?? '') + '/.dsh/snippets/' : '将写入 ~/.dsh/snippets/')
+          + normalizeSnippetFileName(draft.fileName)
+          + (draft.language
+              ? '（仅对 ' + languageLabelOf(draft.language) + ' 文件生效）'
+              : '（对所有文件生效）')),
+        error ? React.createElement('div', { className: 'vsm-mcp-error vsm-mcp-banner' }, error) : null,
+        React.createElement('div', { className: 'vsm-mcp-dialog-actions' },
+          React.createElement('button', { disabled: busy, onClick: closeDraft }, '取消'),
+          React.createElement('button', { className: 'vsm-primary', disabled: busy, onClick: createFile }, busy ? '创建中…' : '创建并打开')))
     : null
 
-  // 根节点必须带 data-edrv-view：editor.css 浮层样式均以此为作用域前缀
-  return createPortal(React.createElement('div', { 'data-edrv-view': '1' }, dialog, createDialog), document.body)
+  // 两个 ModalShell 各自 portal 到 body（根节点带 data-edrv-view 由外壳负责）
+  return React.createElement(React.Fragment, null, dialog, createDialog)
 }

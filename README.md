@@ -314,19 +314,46 @@ RPC：`edrv.unity.list / add / remove / install`。
 安全说明：深链可在编辑器中查看任意绝对路径文件（与用户手动打开等价）；保存仍
 受会话沙箱 `policyOf` 约束，工作区外保存被拒是预期行为。
 
+### 16. SVN 集成（v0.5.0）
+
+底座是 **svn CLI**（跨平台，自动探测 `svn --version` / 工作副本根），
+TortoiseSVN（`TortoiseProc.exe`）仅作 Windows 过渡增强：自研能力覆盖后对应官方项自动隐藏。
+
+- **状态与变更**：侧栏「SVN」面板列出工作副本变更（`svn status --xml --no-ignore`），
+  按状态着色与字母徽标、changelist 分组、未版本控制 / 忽略项开关、行内右键动作；
+  文件树行尾同步显示状态徽标。
+- **动作**：更新、刷新变更、与基线比较、加入版本控制、还原（**破坏性动作均带确认**）、
+  清理工作副本（默认只清锁）；未覆盖的项回落 TortoiseSVN。
+- **日志弹窗**（对标 TortoiseSVN Revision Log Dialog）：过滤语法（空格=AND / `-` 排除 /
+  `+` 纳入 / `!` 取反 / `"短语"` / 正则）、From-To 日期区间、列头排序 + 复位、
+  上中下三段布局（列表 / 提交信息 / 变更路径，边界可拖拽）、Actions 徽标、
+  受影响路径灰显或隐藏、Copy from 列、右键菜单、`F5` / `↑↓` 键盘、
+  多选（Ctrl / Shift）与「比较两个修订」、**Stop on copy**、**Show Range 区间**、
+  **Include merged revisions**（`-g`，合并进来的修订灰字缩进）、
+  Show All（上限 5000 条，超出用区间取）、Statistics 统计窗（期间 / 按作者 / 按日期）、
+  工作副本版号行加粗。
+- **并排差异**：`与上一版本比较`（`cat -r REV` vs `REV-1`）、`比较两个修订`（`-r M:N` 方向按选中顺序）、
+  `与工作副本比较`、`某版本 ↔ 工作区`，均复用同一差异视图。
+- **诊断日志**：统一日志器 + `edrv.dlog.*` RPC + 命令栏「查看诊断日志」，
+  排查白屏 / 加载失败时先看它。
+- **RPC**：`svn.status / changes / diffBase / revert / add / log / diffRev / diffPair /
+  diffWorking / wcRev / cleanup / update / tortoise`。
+
+> 说明：`plans/`（含对标蓝图与实测结论）为本地开发资料，不入库。
+
 ## 安装
 
 官方 `dsh plugin` 方式，三选一：
 
 ```bash
 # ① Git 安装（clone + prepare 构建；推荐打固定 tag）
-dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.1.23
+dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.5.0
 
 # ② npm 注册表（发布到 npm 后）
 dsh plugin --profile web add dsh-vscode-mode
 
 # ③ GitHub Release tgz 直装
-dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.1.23/dsh-vscode-mode-0.1.23.tgz
+dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.5.0/dsh-vscode-mode-0.5.0.tgz
 ```
 
 > `dsh plugin ...` 是 pnpm 转发器：git 安装会克隆仓库、执行该包 `prepare` 脚本
@@ -613,6 +640,9 @@ Keep All / Undo All 却是亮的。修复：单文件 Keep / Undo 覆盖冲突�
 完整变更见 [GitHub Releases](https://github.com/Lenonss/DSH_VsCodeMode/releases)。
 近期关键版本：
 
+- **v0.5.0**：**SVN 集成**——侧栏变更面板与状态徽标、自研日志弹窗（过滤 / 排序 /
+  多选比较 / 区间 / Stop on copy / Include merged revisions / Statistics）、
+  并排差异（基线 / 版本间 / 与工作副本）、诊断日志查看器。
 - **v0.4.x**：LSP 与 Monaco 系列修复（见[常见问题](#常见问题)）；外部改动自动
   同步即将发布。
 - **v0.3.x**：命令栏（v0.2.0）→ 代码片段 / 快捷引用（v0.3.0）→ 插件技能组

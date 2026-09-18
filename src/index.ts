@@ -26,6 +26,7 @@ import { createLspRpc } from './lsp/rpc.js'
 import { disposeAllServers, hookExitReclaim } from './lsp/transport.js'
 import { createAiRpc } from './ai/rpc.js'
 import { createFileVersions } from './fileVersions.js'
+import { createSvnRpc } from './svn.js'
 import { installRulesSection } from './rules.js'
 import { installSkillGroup } from './skills.js'
 import type { RpcHandlerMap } from './shared/rpc.js'
@@ -66,6 +67,9 @@ export function apply(ctx: Ctx, config?: unknown): void {
   /** AI 内联补全 RPC（settings 状态桥接 + llm 惰性获取）。 */
   const aiRpc = createAiRpc({ ctx, settings: openSettings })
   const aiHandlers: Partial<RpcHandlerMap> = aiRpc.handlers
+  /** SVN RPC（检测/更新/Tortoise 发射；settings 提供 svnPath/tortoisePath）。 */
+  const svnRpc = createSvnRpc({ ctx, settings: openSettings })
+  const svnHandlers: Partial<RpcHandlerMap> = svnRpc.handlers as Partial<RpcHandlerMap>
   /** 文件磁盘新鲜度观察器（客户端轮询 edrv.versions；变化时顺带失效目录树缓存）。 */
   const fileVersions = createFileVersions(ctx)
 
@@ -86,7 +90,7 @@ export function apply(ctx: Ctx, config?: unknown): void {
     if (typeof sid === 'string') lspRpc.disposeSession(sid)
   })
 
-  registerRoutes(ctx, config, (method, args) => handleRpc(ctx, registry, method, args, searcher, contentSearcher, lspHandlers, aiHandlers, fileVersions), (warning) => warnings.push(warning))
+  registerRoutes(ctx, config, (method, args) => handleRpc(ctx, registry, method, args, searcher, contentSearcher, lspHandlers, aiHandlers, fileVersions, svnHandlers), (warning) => warnings.push(warning))
   installIsolation(ctx)
   // 系统集成生命周期：启动自动恢复右键菜单注册（marker 存在时）；插件卸载/reload 清理注册痕迹
   ctx.effect(() => shellMenuLifecycle(ctx))

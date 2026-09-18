@@ -40,6 +40,7 @@ import { createSidebarPanelRegistry } from './sidebar/registry.js'
 import { createFilePanel } from './sidebar/panels/index.js'
 import { createSearchPanel } from './sidebar/panels/index.js'
 import { createRulesPanel } from './sidebar/panels/index.js'
+import { createSvnPanel } from './sidebar/panels/index.js'
 import { createTreeMenuRegistry } from './sidebar/contextMenu.js'
 import { createDefaultFileMenuItems } from './sidebar/menuItems.js'
 import { createOutlinePanel } from './outline/index.js'
@@ -196,6 +197,8 @@ export function apply(ctx: any): void {
   ctx.effect(() => sidebarPanels.register(createSearchPanel()), 'vscode-mode: sidebar panel search')
   // 规则面板：活动栏「规则」页签（Codebuddy 规则管理形态：用户/项目规则 + 启用开关，host 注入生效）
   ctx.effect(() => sidebarPanels.register(createRulesPanel()), 'vscode-mode: sidebar panel rules')
+  // SVN 变更面板：活动栏「SVN 变更」页签（工作副本状态列表；visible 守卫使非 SVN 工作区不出现）
+  ctx.effect(() => sidebarPanels.register(createSvnPanel()), 'vscode-mode: sidebar panel svn')
   // 文件右键菜单项注册表（对外 provide，供本插件/第三方注册；内置「在文件浏览器中打开」）
   const fileMenuItems = createTreeMenuRegistry()
   ctx.provide('edrvFileContextMenuItems', fileMenuItems)

@@ -28,6 +28,8 @@ export const CACHE_KEY = {
   workspaceFold: 'edrv.ws-fold.v1.',
   /** 规则面板 UI 状态（RulesPanel v1：Tab 与项目工作区选择，全局不按会话）。 */
   rules: 'edrv.rules.v1.',
+  /** SVN 变更面板 UI 状态（SvnPanel v1：未版本控制/忽略项显示开关，按作用域隔离）。 */
+  svn: 'edrv.svn.v1.',
 } as const
 
 /** 按前缀拼作用域键（scopeStore 产出作用域；侧边栏/编辑器等需要布局段时自行拼接后传入）。 */

@@ -11,6 +11,7 @@ import '../styles/mcp.css'
 import { availableOpeners, AUTO_OPEN_TOOL } from '../fileOpeners.js'
 import { SettingsContext } from '../settingsContext.js'
 import { normalizeSidebarMinWidth, SIDEBAR_MIN_DEFAULT } from '../sidebarMin.js'
+import { TORTOISE_DIR_DEFAULT } from '../../shared/svn.js'
 import { KeybindingsPanel } from './KeybindingsPanel.js'
 import { LspSettings } from './LspSettings.js'
 import { PerfSettings } from './PerfSettings.js'
@@ -221,7 +222,104 @@ function GeneralSettings({ registry }) {
           React.createElement('small', null, '180–560 px；拖拽低于该宽度自动隐藏')),
       ),
     ),
+    React.createElement(SvnSettingsSection, null),
     React.createElement(IntegrationSettings, null),
+  )
+}
+
+/** 检测快照 → 一行状态文案（未检测/未检出/能力可用性）。 */
+function svnStatusText(info) {
+  if (!info) return '未检测（打开编辑器后自动检测）'
+  if (!info.managed) return '当前工作区不受 SVN 管理（SVN 入口隐藏）'
+  const parts = [info.svnCli ? 'svn CLI 可用' : 'svn CLI 不可用（更新不可用）']
+  parts.push(info.tortoise ? 'TortoiseSVN 可用' : 'TortoiseSVN 不可用（仅 Windows）')
+  return '受 SVN 管理 · ' + parts.join(' · ')
+}
+
+/**
+ * SVN 设置节：路径覆盖 + 检测状态行。
+ * 写入经 SettingsContext（namespace dsh-vscode-mode）；状态经 svn.status 直测（force），
+ * 并监听 edrv:svn-status 事件跟随编辑器侧重测结果刷新。
+ * @author ddj 2026年09月16号
+ */
+function SvnSettingsSection() {
+  const settings = React.useContext(SettingsContext)
+  const snapshot = settings?.getSnapshot?.()
+  const loading = !snapshot || snapshot.status === 'loading'
+  const unavailable = snapshot?.status === 'unavailable' || !settings
+  const notReady = snapshot?.status !== 'ready'
+  const [svnPath, setSvnPath] = React.useState('')
+  const [svnDraft, setSvnDraft] = React.useState(null)
+  const [tortoisePath, setTortoisePath] = React.useState('')
+  const [tortoiseDraft, setTortoiseDraft] = React.useState(null)
+  const [svnInfo, setSvnInfo] = React.useState(null)
+  const [busy, setBusy] = React.useState(false)
+  const [error, setError] = React.useState('')
+  React.useEffect(() => {
+    const onChange = () => {
+      const snap = settings?.getSnapshot?.()
+      setSvnPath(typeof snap?.value?.svnPath === 'string' ? snap.value.svnPath : '')
+      setTortoisePath(typeof snap?.value?.tortoisePath === 'string' ? snap.value.tortoisePath : '')
+    }
+    onChange()
+    return settings?.subscribe?.(onChange)
+  }, [settings])
+  const probe = React.useCallback(() => {
+    rpc('svn.status', { force: true }).then((res) => {
+      if (res.ok) { setSvnInfo(res); setError('') }
+      else setSvnInfo(null)
+    }).catch(() => setSvnInfo(null))
+  }, [])
+  React.useEffect(() => { probe() }, [probe])
+  React.useEffect(() => {
+    const onSvnStatus = () => probe()
+    window.addEventListener('edrv:svn-status', onSvnStatus)
+    return () => window.removeEventListener('edrv:svn-status', onSvnStatus)
+  }, [probe])
+  /** 提交路径字段（blur/Enter 共用；成功后强制重测反映新路径）。 */
+  const savePath = (key, value, apply) => {
+    setBusy(true); setError('')
+    if (!settings?.set) { setError('设置服务不可用'); setBusy(false); return }
+    settings.set(key, value).then(() => { apply(); probe() }).catch((e) => setError(String(e))).finally(() => setBusy(false))
+  }
+  const commitSvn = () => {
+    if (svnDraft === null) return
+    const next = svnDraft.trim()
+    setSvnDraft(null)
+    savePath('svnPath', next, () => setSvnPath(next))
+  }
+  const commitTortoise = () => {
+    if (tortoiseDraft === null) return
+    const next = tortoiseDraft.trim()
+    setTortoiseDraft(null)
+    savePath('tortoisePath', next, () => setTortoisePath(next))
+  }
+  const disabled = loading || unavailable || notReady || busy || snapshot?.writable === false
+  return React.createElement('section', { className: 'vsm-panel' },
+    React.createElement('h3', { className: 'vsm-panel-title' }, 'SVN'),
+    React.createElement('div', { className: 'vsm-panel-body' },
+      React.createElement('div', { className: 'vsm-general-row' },
+        React.createElement('span', null, '检测状态'),
+        React.createElement('small', null, svnStatusText(svnInfo)),
+        React.createElement('button', { className: 'vsm-primary vsm-small', disabled: busy, onClick: probe, title: '重新检测' }, '重测')),
+      error && React.createElement('small', { className: 'vsm-mcp-error' }, error),
+      React.createElement('label', { className: 'vsm-general-row' },
+        React.createElement('span', null, 'svn 可执行路径'),
+        React.createElement('input', {
+          value: svnDraft ?? svnPath, placeholder: '空 = 使用 PATH 中的 svn', disabled,
+          onChange: (event) => setSvnDraft(event.target.value),
+          onBlur: commitSvn,
+          onKeyDown: (event) => { if (event.key === 'Enter') commitSvn() },
+        })),
+      React.createElement('label', { className: 'vsm-general-row' },
+        React.createElement('span', null, 'TortoiseSVN 目录'),
+        React.createElement('input', {
+          value: tortoiseDraft ?? tortoisePath, placeholder: TORTOISE_DIR_DEFAULT, disabled,
+          onChange: (event) => setTortoiseDraft(event.target.value),
+          onBlur: commitTortoise,
+          onKeyDown: (event) => { if (event.key === 'Enter') commitTortoise() },
+        })),
+    ),
   )
 }
 

@@ -5,6 +5,7 @@
  */
 import type { OutlineSourceRegistry } from '../outline/types.js'
 import type { AddToConversation } from '../addToConversation.js'
+import type { SvnChangeEntry, SvnStatusPayload } from '../../shared/svn.js'
 import type { TreeMenuRegistry } from './contextMenu.js'
 
 /** 面板可用的共享上下文（由 SidebarView 从 EditorView 注入，面板不直碰其内部）。 */
@@ -32,6 +33,20 @@ export interface SidebarCtx {
   fileMenuItems?: TreeMenuRegistry
   /** 「添加到对话」动作集（文件/文件夹引用注入对话输入框；缺省时菜单项降级提示）。 */
   addToConversation?: AddToConversation
+  /** SVN 能力状态（未加载/未检出为 null；SVN 菜单项显隐判定）。 */
+  svn?: SvnStatusPayload | null
+  /** SVN 变更清单（未加载为 null；文件树徽标与变更类菜单项判定）。 */
+  svnChanges?: SvnChangeEntry[] | null
+  /** 路径 → 变更条目（文件树徽标查表；由 svnStatus.svnChangeMapOf 产出）。 */
+  svnChangeMap?: Record<string, SvnChangeEntry>
+  /** 打开 SVN 基线差异视图（变更面板行内「与基线比较」；缺省时面板降级提示）。 */
+  openSvnDiff?: (path: string) => void
+  /** 重查 SVN 变更清单（CLI 更新/还原/加入版本控制后由菜单动作调用）。 */
+  refreshSvnChanges?: () => void
+  /** 打开 SVN 日志弹窗（P3；菜单/命令栏「查看日志」）。 */
+  openSvnLog?: (path?: string) => void
+  /** 确认对话框（破坏性动作守卫；缺省走 window.confirm，测试可注入）。 */
+  confirm?: (message: string) => boolean
   /** 面板动作反馈（如右键菜单操作结果 → 编辑区路径栏状态）。 */
   notify?: (message: string) => void
 }
@@ -45,6 +60,11 @@ export interface SidebarPanelDef {
   order?: number
   /** 活动栏徽标：返回数字/null；缺省不显示。 */
   badge?: (ctx: SidebarCtx) => number | null
+  /**
+   * 面板可用性守卫：返回 false 时活动栏图标与面板区都不出现（每次渲染求值）。
+   * 用于能力相关面板（如「SVN 变更」仅在受 SVN 管理时出现）；缺省恒可见。
+   */
+  visible?: (ctx: SidebarCtx) => boolean
   /** 面板区渲染（ctx 每次渲染注入最新快照）。 */
   render: (ctx: SidebarCtx) => unknown
 }

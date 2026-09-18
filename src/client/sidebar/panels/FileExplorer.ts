@@ -6,7 +6,8 @@
  * 保留旧条目强制后台重列（force）；每次用户发起加载后预取 ≤4 个子目录（排除重型
  * 目录、缓存新鲜跳过、不级联）；10s 轻量跟随已展开目录（命中索引，RPC 近零成本）。
  * 差异角标/右键菜单/展开状态持久化行为不变；行图标用官方原语（文件夹图标 + 文件类型图标）。
- * 作者 ddj 2026-08-26 / 2026-08-27 / 2026-08-31 / 2026-09-10
+ * SVN 状态徽标（P2）：行尾方形字母，数据来自 ctx.svnChangeMap（客户端合成，不改 listDir 契约）。
+ * 作者 ddj 2026-08-26 / 2026-08-27 / 2026-08-31 / 2026-09-10 / 2026-09-16
  */
 import React from 'react'
 import { FileTypeIcon, IconFolderClose16, IconFolderOpen16, IconRefreshOutline16, classifyFileType } from '@deepseek-ai/dsh-client-ui-primitives'
@@ -17,6 +18,8 @@ import { explorerLoad, explorerSave } from '../../state/explorerCache.js'
 import { entriesCacheGet, entriesCacheIsFresh, entriesCachePut } from '../../state/explorerEntriesCache.js'
 import { workspaceScopeOf } from '../../state/scopeStore.js'
 import { ancestorDirsOf } from '../../tabActions.js'
+import { refreshSvnChanges, refreshSvnStatus } from '../../svnStatus.js'
+import { SVN_STATUS_TONE, svnBadgeOf, svnBadgeTitle } from '../../../shared/svn.js'
 import type { SidebarCtx } from '../types.js'
 
 const DIR_CAP = 4000
@@ -105,6 +108,7 @@ export function FileExplorer(props) {
   const openFile = ctx?.openFile
   const activePath = ctx?.activePath ?? null
   const pendingByPath = ctx?.pendingByPath ?? {}
+  const svnChangeMap = ctx?.svnChangeMap ?? {}
   const [root, setRoot] = React.useState(null)
   const [dirs, setDirs] = React.useState({}) // rel → 最新条目（本会话内存态）
   const [expanded, setExpanded] = React.useState({})
@@ -264,6 +268,10 @@ export function FileExplorer(props) {
       setExpanded({})
     }
     void loadDir('', { force: true, prefetch: true })
+    // SVN 状态一并强制重测（检出 .svn / 卸载 svn 后可恢复菜单显隐）
+    refreshSvnStatus(sessionId, scope)
+    // 变更清单同样重查（目录重列后徽标要跟上；host 侧 TTL 内会被 force 绕过）
+    refreshSvnChanges(sessionId, scope)
   }
   refreshRef.current = refresh
   reloadDirRef.current = loadDir
@@ -387,6 +395,9 @@ export function FileExplorer(props) {
     const active = !isDir && e.path === activePath
     const contextTarget = Boolean(menu && menuEntries.length && menu.target.path === e.path)
     const dim = e.type === 'other'
+    // SVN 状态徽标：客户端由变更清单合成的查表（未加载/干净/未版本控制被过滤时不出徽标）
+    const svnEntry = svnChangeMap[e.path]
+    const svnLetter = svnEntry ? svnBadgeOf(svnEntry) : ''
     return React.createElement('div', {
       key: e.path,
       className: 'edrv-tree-row'
@@ -409,6 +420,12 @@ export function FileExplorer(props) {
       rowIconEl(e, isDir, isOpen),
       React.createElement('span', { className: 'edrv-tree-name' + (dim ? ' edrv-tree-dim' : '') },
         e.name),
+      (svnLetter
+        ? React.createElement('span', {
+            className: 'edrv-tree-svn edrv-svn-ch-' + (SVN_STATUS_TONE[svnEntry.status] ?? 'plain'),
+            title: 'SVN ' + svnBadgeTitle(svnEntry),
+          }, svnLetter)
+        : null),
       (pending > 0
         ? React.createElement('span', { className: 'edrv-tree-badge' }, String(pending))
         : null))

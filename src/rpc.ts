@@ -44,8 +44,8 @@ import { findProfileDir, readDevForm, setDevForm } from './devForm.js'
 import { normalizeRel } from './tree.js'
 import { invalidateIndex, listDirCached } from './treeIndex.js'
 import { revealInExplorer } from './reveal.js'
-import { dshHome } from './paths.js'
-import { debugRecord } from './debugLog.js'
+import { dshHome, debugLogFile, pluginLogRoot } from './paths.js'
+import { clearDebugLog, debugRecord, isDebugLogName, listDebugLogs, readDebugLog } from './debugLog.js'
 import { markActiveSessions, moveOutSessions, planMoveOut, purgeArchive, restoreSession, scanSessionInventory, sessionsArchiveRoot, sessionSizeOf, sidecarSummaryOf } from './perf.js'
 import { patchHasPerfConfig, patchInsertPerfConfig, patchRemovePerfConfig, perfConfigBlock } from './perfPatch.js'
 import type { FileVersions } from './fileVersions.js'
@@ -255,12 +255,15 @@ export function buildHandlers(
   lspHandlers?: Partial<RpcHandlerMap>,
   aiHandlers?: Partial<RpcHandlerMap>,
   fileVersions?: FileVersions,
+  svnHandlers?: Partial<RpcHandlerMap>,
 ): RpcHandlerMap {
   return {
     // edrv.lsp.* 由 createLspRpc 一次性提供（tracker 跨请求保留），这里并入。
     ...((lspHandlers ?? {}) as RpcHandlerMap),
     // edrv.ai.* 由 createAiRpc 提供（AI 内联补全/模型目录/配置读写），这里并入。
     ...((aiHandlers ?? {}) as RpcHandlerMap),
+    // svn.* 由 createSvnRpc 提供（SVN 检测/更新/Tortoise 发射），这里并入。
+    ...((svnHandlers ?? {}) as RpcHandlerMap),
     'edrv.list': async (args) => {
       const sc = await requireSession(ctx, args.sessionId)
       if ('err' in sc) return { ok: false, error: sc.err }
@@ -505,8 +508,41 @@ export function buildHandlers(
       // （console 不一定落盘，文件可靠）。只出现在调试开关开启时（client dbg 默认关）。
       const sc = await requireSession(ctx, args.sessionId)
       if ('err' in sc) return { ok: false, error: sc.err }
-      debugRecord(ctx, sc.cwd, String(args.text ?? ''))
+      debugRecord(ctx, sc.cwd, String(args.text ?? ''), args.level)
       return { ok: true }
+    },
+    'edrv.dlog.list': async (args) => {
+      // 诊断日志清单：日志根下全部 debug.*.log + 当前会话对应文件名（可能尚不存在）
+      const sc = await requireSession(ctx, args.sessionId)
+      if ('err' in sc) return { ok: false, error: sc.err }
+      const files = await listDebugLogs()
+      const current = basename(debugLogFile(sc.cwd))
+      return { ok: true, root: pluginLogRoot(), files, current }
+    },
+    'edrv.dlog.read': async (args) => {
+      // 尾部读取：file 缺省读当前会话那份；maxBytes 夹取 [1KB, 512KB]
+      const sc = await requireSession(ctx, args.sessionId)
+      if ('err' in sc) return { ok: false, error: sc.err }
+      const name = isDebugLogName(args.file) ? args.file : basename(debugLogFile(sc.cwd))
+      const maxBytes = Math.min(Math.max(args.maxBytes ?? 256 * 1024, 1024), 512 * 1024)
+      const read = await readDebugLog(name, maxBytes)
+      if (!read) return { ok: false, error: '日志不存在：' + name + '（开启诊断日志并触发一次操作后生成）' }
+      return { ok: true, ...read }
+    },
+    'edrv.dlog.clear': async (args) => {
+      // 清空：file 缺省清当前会话那份；白名单外直接拒绝
+      const sc = await requireSession(ctx, args.sessionId)
+      if ('err' in sc) return { ok: false, error: sc.err }
+      const name = isDebugLogName(args.file) ? args.file : basename(debugLogFile(sc.cwd))
+      const cleared = await clearDebugLog(name)
+      if (!cleared) return { ok: false, error: '清空失败：日志不存在或名字非法' }
+      return { ok: true, name }
+    },
+    'edrv.dlog.reveal': async () => {
+      // 打开日志根目录（OS 文件管理器；目录形态 → 直接打开）
+      const revealed = await revealInExplorer(ctx, pluginLogRoot(), true)
+      if (!revealed.ok) return { ok: false, error: revealed.error }
+      return { ok: true, opened: true }
     },
     'edrv.searchFiles': async (args) => {
       const sc = await requireSession(ctx, args.sessionId)
@@ -914,8 +950,9 @@ export async function handleRpc<M extends RpcMethod>(
   lspHandlers?: Partial<RpcHandlerMap>,
   aiHandlers?: Partial<RpcHandlerMap>,
   fileVersions?: FileVersions,
+  svnHandlers?: Partial<RpcHandlerMap>,
 ): Promise<RpcResult<M>> {
-  const handlers = buildHandlers(ctx, registry, searcher, contentSearcher, lspHandlers, aiHandlers, fileVersions)
+  const handlers = buildHandlers(ctx, registry, searcher, contentSearcher, lspHandlers, aiHandlers, fileVersions, svnHandlers)
   const handler = handlers[method]
   if (!handler) return { ok: false, error: '未知方法: ' + String(method) } as RpcResult<M>
   return handler(args)

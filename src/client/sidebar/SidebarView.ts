@@ -5,7 +5,8 @@
  * 右侧详情面板区可拖拽调宽/隐藏：visible=false 时仅保留图标列（宽 = 图标列宽），
  * 点击任一图标重新展开面板（onShow），底部按钮在 ◀ 收起 / ▶ 展开间切换。
  * 拖拽调宽下限 = minWidth prop（通用设置 sidebarMinWidth，默认 300），低于下限直接收起面板区。
- * 作者 ddj 2026-08-26 / 2026-09-04
+ * 面板可按 visible(ctx) 声明可用性（如「SVN 变更」仅在受 SVN 管理时出现，非 SVN 工作区零变化）。
+ * 作者 ddj 2026-08-26 / 2026-09-04 / 2026-09-16
  */
 import React from 'react'
 import type { SidebarCtx } from './types.js'
@@ -47,8 +48,11 @@ function railIconEl(icon) {
  * @param props.minWidth 最小宽度（通用设置 sidebarMinWidth；拖拽低于它触发隐藏）
  */
 export function SidebarView(props) {
-  const panels = props.registry?.list?.() ?? []
   const ctx = props.ctx
+  // 按 visible(ctx) 过滤活动栏图标与面板（能力相关面板：SVN 变更仅在受 SVN 管理时出现）
+  const panels = (props.registry?.list?.() ?? []).filter((panel) => (
+    typeof panel.visible !== 'function' || panel.visible(ctx) === true
+  ))
   const activePanel = props.activePanel
   const onActive = props.onActive
   const visible = props.visible !== false

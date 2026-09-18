@@ -49,6 +49,9 @@
 @keyframes edrv-lsp-pulse { 50% { opacity: .45; } }
 /* Ctrl+hover 可导航标识符下划线提示（绑定 Monaco inlineClassName 装饰） */
 [data-edrv-view] .edrv-nav-underline { text-decoration: underline; text-decoration-color: var(--dsw-alias-interactive-primary, #4fc1ff); text-underline-offset: 1px; cursor: pointer; }
+/* 跳转目标区域高亮（LSP 定义/引用、搜索命中落点）：落点一眼可见，约 1.2s 后由 EditorView 自动清除。
+   用官方令牌并带回落值，不在插件作用域重定义 --dsw-* （否则永久脱离官方主题）。 */
+[data-edrv-view] .edrv-nav-target { background: var(--dsw-alias-interactive-bg-hover, rgba(79,193,255,.28)); border-radius: 2px; box-shadow: 0 0 0 1px var(--dsw-alias-interactive-primary, rgba(79,193,255,.55)); }
 [data-edrv-view] .edrv-diffchip { font-size: 11px; padding: 2px 10px; border: 1px solid var(--dsw-alias-border-l1, #333); border-radius: 999px; background: var(--dsw-alias-bg-layer-2, transparent); color: var(--dsw-alias-state-warn-primary, #b7791f); cursor: pointer; white-space: nowrap; flex-shrink: 0; }
 [data-edrv-view] .edrv-chip-btn { font-size: 12px; padding: 2px 6px; border: none; background: transparent; color: var(--dsw-alias-label-secondary, #aaa); cursor: pointer; border-radius: 4px; flex-shrink: 0; }
 [data-edrv-view] .edrv-chip-btn:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(255,255,255,.06)); }
@@ -280,6 +283,180 @@
 [data-edrv-view] .edrv-side-resize { width: 5px; flex-shrink: 0; cursor: col-resize; background: transparent; }
 [data-edrv-view] .edrv-side-resize:hover { background: var(--dsw-alias-brand-primary, #0f9d58); opacity: .35; }
 [data-edrv-view] .edrv-chip-btn.edrv-chip-on { background: var(--dsw-alias-interactive-bg-hover, rgba(15,157,88,.12)); color: var(--dsw-alias-label-primary, #1f2933); }
+
+/* ===== SVN 变更面板（工作副本状态列表；颜色分级对齐 TortoiseSVN 口径） @author ddj 2026-09-16 ===== */
+[data-edrv-view] .edrv-svn-toolbar { display: flex; align-items: center; gap: 12px; padding: 4px 10px 6px 12px; flex-shrink: 0; font-size: 11px; color: var(--dsw-alias-label-secondary, #52606d); }
+[data-edrv-view] .edrv-svn-check { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; white-space: nowrap; }
+[data-edrv-view] .edrv-svn-check input { margin: 0; cursor: pointer; }
+[data-edrv-view] .edrv-svn-bulk { display: flex; align-items: center; gap: 6px; padding: 0 10px 6px 12px; flex-shrink: 0; }
+[data-edrv-view] .edrv-svn-count { font-size: 11px; color: var(--dsw-alias-label-tertiary, #9aa5b1); }
+[data-edrv-view] .edrv-svn-list { flex: 1; min-height: 0; overflow: auto; padding: 2px 6px 12px; font-size: 12px; }
+[data-edrv-view] .edrv-svn-group { display: flex; align-items: center; gap: 6px; height: 22px; padding: 0 6px; margin: 2px 0; border-radius: 5px; background: var(--dsw-alias-bg-layer-2, #f0f4f4); color: var(--dsw-alias-label-secondary, #52606d); font-size: 10px; font-weight: 600; }
+[data-edrv-view] .edrv-svn-group-n { margin-left: auto; color: var(--dsw-alias-label-tertiary, #9aa5b1); font-weight: 400; }
+[data-edrv-view] .edrv-svn-row { display: flex; align-items: center; gap: 6px; height: 22px; padding: 0 6px; border-radius: 5px; cursor: default; white-space: nowrap; }
+[data-edrv-view] .edrv-svn-row:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(15,157,88,.08)); }
+[data-edrv-view] .edrv-svn-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--dsw-alias-label-primary, #1f2933); }
+[data-edrv-view] .edrv-svn-acts { display: none; align-items: center; gap: 4px; flex-shrink: 0; }
+[data-edrv-view] .edrv-svn-row:hover .edrv-svn-acts { display: inline-flex; }
+[data-edrv-view] .edrv-svn-act { border: 1px solid var(--dsw-alias-border-l1, #e0e6e8); border-radius: 5px; padding: 1px 6px; background: var(--dsw-alias-bg-layer-1, #fff); color: var(--dsw-alias-label-secondary, #52606d); font-size: 10px; line-height: 14px; cursor: pointer; white-space: nowrap; }
+[data-edrv-view] .edrv-svn-act:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(15,157,88,.08)); color: var(--dsw-alias-label-primary, #1f2933); }
+[data-edrv-view] .edrv-svn-act:disabled { opacity: .45; cursor: default; }
+[data-edrv-view] .edrv-svn-act-danger { color: var(--dsw-alias-state-error-primary, #d9534f); border-color: var(--dsw-alias-state-error-primary, rgba(217,83,79,.4)); }
+[data-edrv-view] .edrv-svn-ch { display: inline-flex; align-items: center; justify-content: center; width: 14px; flex-shrink: 0; font-family: var(--ds-font-family-code, ui-monospace, monospace); font-size: 11px; font-weight: 700; }
+[data-edrv-view] .edrv-svn-ch-modified { color: var(--dsw-alias-brand-primary, #2563eb); }
+[data-edrv-view] .edrv-svn-ch-added { color: var(--dsw-alias-state-warn-primary, #7c3aed); }
+[data-edrv-view] .edrv-svn-ch-deleted { color: var(--dsw-alias-label-secondary, #b91c1c); }
+[data-edrv-view] .edrv-svn-ch-conflict { color: var(--dsw-alias-state-error-primary, #d9534f); }
+[data-edrv-view] .edrv-svn-ch-plain { color: var(--dsw-alias-label-tertiary, #9aa5b1); }
+/* 文件树行尾 SVN 状态徽标（与差异角标并列；方形字母，区别圆形差异计数） */
+[data-edrv-view] .edrv-tree-svn { min-width: 14px; height: 14px; padding: 0 4px; border-radius: 4px; font-family: var(--ds-font-family-code, ui-monospace, monospace); font-size: 9px; font-weight: 700; line-height: 14px; text-align: center; box-sizing: border-box; flex-shrink: 0; background: var(--dsw-alias-bg-layer-2, #f0f4f4); color: var(--dsw-alias-label-secondary, #52606d); }
+[data-edrv-view] .edrv-tree-svn.edrv-svn-ch-modified { color: var(--dsw-alias-brand-primary, #2563eb); }
+[data-edrv-view] .edrv-tree-svn.edrv-svn-ch-added { color: var(--dsw-alias-state-warn-primary, #7c3aed); }
+[data-edrv-view] .edrv-tree-svn.edrv-svn-ch-deleted { color: var(--dsw-alias-label-secondary, #b91c1c); }
+[data-edrv-view] .edrv-tree-svn.edrv-svn-ch-conflict { color: var(--dsw-alias-state-error-primary, #d9534f); }
+/* ===== SVN 基线差异视图（BASE 左 / 工作区右，只读并排） @author ddj 2026-09-16 ===== */
+[data-edrv-view] .edrv-svndiff { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; overflow: hidden; }
+[data-edrv-view] .edrv-svndiff-bar { display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 10px; flex-shrink: 0; border-bottom: 1px solid var(--dsw-alias-border-l1, #e0e6e8); font-size: 11px; color: var(--dsw-alias-label-secondary, #52606d); }
+[data-edrv-view] .edrv-svndiff-title { font-weight: 600; color: var(--dsw-alias-label-primary, #1f2933); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+[data-edrv-view] .edrv-svndiff-tag { padding: 1px 6px; border-radius: 999px; background: var(--dsw-alias-bg-layer-2, #f0f4f4); color: var(--dsw-alias-label-tertiary, #9aa5b1); }
+[data-edrv-view] .edrv-svndiff-host { flex: 1 1 auto; min-height: 0; }
+[data-edrv-view] .edrv-svndiff-empty { display: flex; flex: 1 1 auto; align-items: center; justify-content: center; padding: 24px; color: var(--dsw-alias-label-tertiary, #9aa5b1); font-size: 12px; text-align: center; }
+
+/* ===== 通用弹窗外壳（ModalShell）+ SVN 日志弹窗 @author ddj 2026-09-16 ===== */
+/* z-index 190：落在既有阶梯内（命令栏 200 > 片段二级 197 > 片段一级 195 > 190），
+   不遮挡命令栏；既有浮层数值不受影响（见 tests/overlayZOrder.test.ts）。 */
+[data-edrv-view] .edrv-modal-mask { position: fixed; inset: 0; z-index: 190; display: flex; align-items: center; justify-content: center; padding: 24px; box-sizing: border-box; background: var(--dsw-alias-bg-mask-drop, #000000aa); }
+[data-edrv-view] .edrv-svnlog-dialog { position: relative; display: flex; flex-direction: column; gap: 8px; }
+[data-edrv-view] .edrv-svnlog-head { display: flex; align-items: center; gap: 8px; flex-wrap: nowrap; }
+[data-edrv-view] .edrv-svnlog-title { margin: 0; font-size: 15px; font-weight: 600; color: var(--dsw-alias-label-primary, #1f2933); white-space: nowrap; }
+[data-edrv-view] .edrv-svnlog-target { font-size: 11px; color: var(--dsw-alias-label-tertiary, #9aa5b1); max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+[data-edrv-view] .edrv-svnlog-filter { display: flex; align-items: center; gap: 8px; flex-wrap: nowrap; }
+[data-edrv-view] .edrv-svnlog-field { flex: 0 0 auto; padding: 4px 6px; border: 1px solid var(--dsw-alias-border-l1, #e0e6e8); border-radius: 6px; background: var(--dsw-alias-bg-layer-1, #fff); color: var(--dsw-alias-label-primary, #1f2933); font-size: 11px; }
+[data-edrv-view] .edrv-svnlog-search { min-width: 160px; flex: 1 1 220px; padding: 4px 8px; border: 1px solid var(--dsw-alias-border-l1, #e0e6e8); border-radius: 6px; background: var(--dsw-alias-bg-layer-1, #fff); color: var(--dsw-alias-label-primary, #1f2933); font-size: 11px; }
+[data-edrv-view] .edrv-svnlog-date { padding: 2px 4px; border: 1px solid var(--dsw-alias-border-l1, #e0e6e8); border-radius: 6px; background: var(--dsw-alias-bg-layer-1, #fff); color: var(--dsw-alias-label-primary, #1f2933); font-size: 11px; }
+[data-edrv-view] .edrv-svnlog-check { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--dsw-alias-label-secondary, #52606d); white-space: nowrap; cursor: pointer; }
+[data-edrv-view] .edrv-svnlog-error { padding: 4px 8px; border: 1px solid var(--dsw-alias-state-error-primary, rgba(217,83,79,.4)); border-radius: 6px; background: var(--dsw-alias-interactive-bg-hover-danger, rgba(217,83,79,.12)); color: var(--dsw-alias-state-error-primary, #d9534f); font-size: 11px; }
+/* P0-14 上中下三段全宽：body 纵向铺满弹窗（外框高度由拖拽受控） */
+[data-edrv-view] .edrv-svnlog-body { display: flex; flex-direction: column; gap: 6px; flex: 1 1 auto; min-height: 0; }
+/* 上段修订列表：列头行 + 单行五列（版本/动作/作者/日期/信息），列宽由 cell 类与 nth-child 对齐（P0-12/D30） */
+[data-edrv-view] .edrv-svnlog-list { flex: 0 0 auto; display: flex; flex-direction: column; overflow: auto; border: 2px solid var(--dsw-alias-border-l1, #e0e6e8); border-radius: 8px; padding: 4px; }
+[data-edrv-view] .edrv-svnlog-cols { display: flex; align-items: center; gap: 6px; padding: 2px 6px; border-bottom: 2px solid var(--dsw-alias-border-l1, #e0e6e8); font-size: 11px; font-weight: 600; color: var(--dsw-alias-label-secondary, #52606d); flex-shrink: 0; }
+[data-edrv-view] .edrv-svnlog-cols .edrv-svnlog-col:nth-child(1) { width: 52px; flex: none; }
+[data-edrv-view] .edrv-svnlog-cols .edrv-svnlog-col:nth-child(2) { width: 52px; flex: none; }
+[data-edrv-view] .edrv-svnlog-cols .edrv-svnlog-col:nth-child(3) { width: 88px; flex: none; overflow: hidden; text-overflow: ellipsis; }
+[data-edrv-view] .edrv-svnlog-cols .edrv-svnlog-col:nth-child(4) { width: 82px; flex: none; }
+[data-edrv-view] .edrv-svnlog-cols .edrv-svnlog-col:nth-child(5) { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; }
+[data-edrv-view] .edrv-svnlog-col-sortable { cursor: pointer; }
+[data-edrv-view] .edrv-svnlog-col-sortable:hover { color: var(--dsw-alias-label-primary, #1f2933); }
+[data-edrv-view] .edrv-svnlog-col-on { color: var(--dsw-alias-brand-primary, #2563eb); }
+[data-edrv-view] .edrv-svnlog-sort-reset { flex: none; }
+[data-edrv-view] .edrv-svnlog-item { display: flex; align-items: center; gap: 6px; padding: 2px 6px; border-radius: 6px; cursor: pointer; white-space: nowrap; }
+[data-edrv-view] .edrv-svnlog-item:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(15,157,88,.08)); }
+[data-edrv-view] .edrv-svnlog-item.edrv-svnlog-item-on { background: var(--dsw-alias-interactive-bg-hover, rgba(15,157,88,.14)); }
+[data-edrv-view] .edrv-svnlog-item-copied .edrv-svnlog-cell-msg,
+[data-edrv-view] .edrv-svnlog-item-copied .edrv-svnlog-rev { color: var(--dsw-alias-brand-primary, #2563eb); }
+[data-edrv-view] .edrv-svnlog-cell { overflow: hidden; text-overflow: ellipsis; font-size: 11px; color: var(--dsw-alias-label-primary, #1f2933); }
+[data-edrv-view] .edrv-svnlog-cell-rev { width: 52px; flex: none; }
+[data-edrv-view] .edrv-svnlog-cell-act { width: 52px; flex: none; display: inline-flex; gap: 3px; }
+[data-edrv-view] .edrv-svnlog-cell-author { width: 88px; flex: none; }
+[data-edrv-view] .edrv-svnlog-cell-date { width: 82px; flex: none; color: var(--dsw-alias-label-tertiary, #9aa5b1); }
+[data-edrv-view] .edrv-svnlog-cell-msg { flex: 1 1 auto; }
+[data-edrv-view] .edrv-svnlog-rev { font-family: var(--ds-font-family-code, ui-monospace, monospace); font-weight: 700; color: var(--dsw-alias-brand-primary, #2563eb); }
+[data-edrv-view] .edrv-svnlog-badge { display: inline-flex; align-items: center; justify-content: center; width: 12px; height: 12px; border-radius: 3px; font-family: var(--ds-font-family-code, ui-monospace, monospace); font-size: 9px; font-weight: 700; }
+[data-edrv-view] .edrv-svnlog-badge-modified { color: var(--dsw-alias-brand-primary, #2563eb); background: rgba(37,99,235,.12); }
+[data-edrv-view] .edrv-svnlog-badge-added { color: var(--dsw-alias-state-warn-primary, #7c3aed); background: rgba(124,58,237,.12); }
+[data-edrv-view] .edrv-svnlog-badge-deleted { color: #b91c1c; background: rgba(185,28,28,.12); }
+[data-edrv-view] .edrv-svnlog-badge-plain { color: var(--dsw-alias-label-tertiary, #9aa5b1); background: var(--dsw-alias-bg-layer-2, #f0f4f4); }
+[data-edrv-view] .edrv-svnlog-more { padding: 6px 4px 2px; text-align: center; }
+/* P0-14 三段 pane 公共外观（上段列表自带 .edrv-svnlog-list 边框） */
+[data-edrv-view] .edrv-svnlog-pane { border: 2px solid var(--dsw-alias-border-l1, #e0e6e8); border-radius: 8px; padding: 8px 10px; overflow: hidden; }
+[data-edrv-view] .edrv-svnlog-msgpane { flex: 0 0 auto; display: flex; flex-direction: column; }
+[data-edrv-view] .edrv-svnlog-pathspane { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+/* P0-13/P0-14：分段横向拖拽分隔条 + 变更路径独立滚动容器 */
+[data-edrv-view] .edrv-svnlog-hsplit { flex: 0 0 6px; cursor: row-resize; margin: 2px 0; border-radius: 3px; touch-action: none; }
+[data-edrv-view] .edrv-svnlog-hsplit:hover, [data-edrv-view] .edrv-svnlog-hsplit:active { background: var(--dsw-alias-interactive-bg-hover, rgba(15,157,88,.28)); }
+[data-edrv-view] .edrv-svnlog-paths-wrap { flex: 1 1 auto; min-height: 0; overflow: auto; display: flex; flex-direction: column; }
+[data-edrv-view] .edrv-svnlog-meta { display: flex; align-items: center; gap: 10px; font-size: 11px; color: var(--dsw-alias-label-secondary, #52606d); flex-wrap: wrap; }
+[data-edrv-view] .edrv-svnlog-date { color: var(--dsw-alias-label-tertiary, #9aa5b1); }
+[data-edrv-view] .edrv-svnlog-msgpane pre.edrv-svnlog-body { margin: 6px 0 0; padding: 6px 8px; border-radius: 6px; background: var(--dsw-alias-bg-layer-2, #f0f4f4); color: var(--dsw-alias-label-primary, #1f2933); font-size: 11px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; overflow: auto; flex: 1 1 auto; min-height: 0; }
+/* P0-14 外框尺寸手柄（右缘调宽 / 底缘调高 / 右下角双向） */
+[data-edrv-view] .edrv-svnlog-grip { position: absolute; z-index: 2; touch-action: none; }
+[data-edrv-view] .edrv-svnlog-grip-r { top: 12px; bottom: 12px; right: 0; width: 8px; cursor: ew-resize; }
+[data-edrv-view] .edrv-svnlog-grip-b { left: 12px; right: 12px; bottom: 0; height: 8px; cursor: ns-resize; }
+[data-edrv-view] .edrv-svnlog-grip-c { right: 0; bottom: 0; width: 14px; height: 14px; cursor: nwse-resize; border-radius: 3px; background: var(--dsw-alias-bg-layer-2, #f0f4f4); }
+[data-edrv-view] .edrv-svnlog-grip:hover, [data-edrv-view] .edrv-svnlog-grip:active { background: var(--dsw-alias-interactive-bg-hover, rgba(15,157,88,.35)); }
+[data-edrv-view] .edrv-svnlog-paths-head { display: flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 600; color: var(--dsw-alias-label-secondary, #52606d); margin-bottom: 4px; }
+[data-edrv-view] .edrv-svnlog-hint { font-weight: 400; color: var(--dsw-alias-label-tertiary, #9aa5b1); }
+[data-edrv-view] .edrv-svnlog-paths { display: flex; flex-direction: column; gap: 1px; }
+[data-edrv-view] .edrv-svnlog-path { display: flex; align-items: center; gap: 6px; height: 22px; padding: 0 6px; border-radius: 5px; cursor: default; white-space: nowrap; }
+[data-edrv-view] .edrv-svnlog-path:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(15,157,88,.08)); }
+[data-edrv-view] .edrv-svnlog-path-dim .edrv-svnlog-pathtext,
+[data-edrv-view] .edrv-svnlog-path-dim .edrv-svnlog-copyfrom { opacity: .45; }
+[data-edrv-view] .edrv-svnlog-pathtext { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: 11px; color: var(--dsw-alias-label-primary, #1f2933); }
+[data-edrv-view] .edrv-svnlog-copyfrom { flex: 0 1 160px; overflow: hidden; text-overflow: ellipsis; font-size: 10px; color: var(--dsw-alias-label-tertiary, #9aa5b1); font-family: var(--ds-font-family-code, ui-monospace, monospace); }
+[data-edrv-view] .edrv-svnlog-kind { font-size: 10px; padding: 0 5px; border-radius: 999px; background: var(--dsw-alias-bg-layer-2, #f0f4f4); color: var(--dsw-alias-label-tertiary, #9aa5b1); }
+[data-edrv-view] .edrv-svnlog-acts { display: none; align-items: center; gap: 4px; flex-shrink: 0; }
+[data-edrv-view] .edrv-svnlog-path:hover .edrv-svnlog-acts { display: inline-flex; }
+[data-edrv-view] .edrv-svnlog-footwrap { display: flex; flex-direction: column; gap: 4px; flex-shrink: 0; }
+[data-edrv-view] .edrv-svnlog-foot { display: flex; align-items: center; gap: 10px; font-size: 11px; color: var(--dsw-alias-label-tertiary, #9aa5b1); }
+[data-edrv-view] .edrv-svnlog-btns { display: flex; align-items: center; gap: 6px; }
+/* ===== SVN 日志统计窗（P1-10）@author ddj 2026-09-17 ===== */
+[data-edrv-view] .edrv-svnlog-stats { display: flex; flex-direction: column; max-height: 82vh; }
+[data-edrv-view] .edrv-svnlog-stats-head { display: flex; align-items: center; gap: 8px; padding: 12px 16px 0; }
+[data-edrv-view] .edrv-svnlog-stats-body { display: flex; flex-direction: column; gap: 14px; padding: 10px 16px 16px; overflow: auto; }
+[data-edrv-view] .edrv-svnlog-stat-line { display: flex; gap: 16px; flex-wrap: wrap; font-size: 12px; color: var(--dsw-alias-label-primary, #1f2933); }
+[data-edrv-view] .edrv-svnlog-stat-block { display: flex; flex-direction: column; gap: 8px; }
+[data-edrv-view] .edrv-svnlog-stat-label { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; font-size: 12px; font-weight: 600; color: var(--dsw-alias-label-primary, #1f2933); }
+[data-edrv-view] .edrv-svnlog-stat-duo { display: flex; gap: 18px; align-items: flex-start; flex-wrap: wrap; }
+[data-edrv-view] .edrv-svnlog-stat-hist { flex: 1 1 260px; display: flex; flex-direction: column; gap: 4px; min-width: 220px; }
+[data-edrv-view] .edrv-svnlog-stat-row { display: flex; align-items: center; gap: 8px; font-size: 11px; }
+[data-edrv-view] .edrv-svnlog-stat-name { width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dsw-alias-label-secondary, #52606d); }
+[data-edrv-view] .edrv-svnlog-stat-barwrap { flex: 1; height: 12px; border-radius: 6px; background: rgba(127,127,127,.15); overflow: hidden; }
+[data-edrv-view] .edrv-svnlog-stat-bar { display: block; height: 100%; border-radius: 6px; }
+[data-edrv-view] .edrv-svnlog-stat-count { width: 36px; text-align: right; color: var(--dsw-alias-label-secondary, #52606d); }
+[data-edrv-view] .edrv-svnlog-stat-pie { width: 120px; height: 120px; flex-shrink: 0; border-radius: 50%; border: 1px solid var(--dsw-alias-border-l1, #e0e6e8); }
+[data-edrv-view] .edrv-svnlog-stat-days { display: flex; align-items: flex-end; gap: 2px; height: 120px; border-bottom: 1px solid var(--dsw-alias-border-l1, #e0e6e8); overflow-x: auto; }
+[data-edrv-view] .edrv-svnlog-stat-day { flex: 1 0 6px; min-width: 6px; height: 100%; display: flex; flex-direction: column; justify-content: flex-end; }
+[data-edrv-view] .edrv-svnlog-stat-seg { display: block; width: 100%; }
+/* ===== SVN 日志区间弹窗（P1-6）@author ddj 2026-09-17 ===== */
+[data-edrv-view] .edrv-svnlog-range-body { display: flex; flex-direction: column; gap: 12px; padding: 14px 16px 16px; }
+[data-edrv-view] .edrv-svnlog-range-row { display: flex; gap: 14px; flex-wrap: wrap; }
+[data-edrv-view] .edrv-svnlog-range-input { width: 110px; padding: 4px 8px; border: 1px solid var(--dsw-alias-border-l1, #e0e6e8); border-radius: 6px; background: var(--dsw-alias-bg-layer-1, #fff); color: var(--dsw-alias-label-primary, #1f2933); font-size: 11px; }
+[data-edrv-view] .edrv-svnlog-range-btns { display: flex; gap: 8px; justify-content: flex-end; }
+/* SVN 日志 WC 版号行加粗（P1-9） */
+[data-edrv-view] .edrv-svnlog-item-wc { font-weight: 700; }
+/* SVN 日志 merged 行（P1-5）：灰字 + 缩进（缩进量按层级内联），前置「↳」标记 */
+[data-edrv-view] .edrv-svnlog-item-merged { color: var(--dsw-alias-label-tertiary, #7b8794); }
+[data-edrv-view] .edrv-svnlog-item-merged .edrv-svnlog-merge-mark { flex: 0 0 auto; color: var(--dsw-alias-label-tertiary, #7b8794); }
+[data-edrv-view] .edrv-svnlog-item-merged .edrv-svnlog-cell-msg { font-style: italic; }
+/* ===== 诊断日志弹窗（LogDialog）@author ddj 2026-09-17 ===== */
+[data-edrv-view] .edrv-dlog-dialog { display: flex; flex-direction: column; gap: 8px; max-height: 88vh; }
+[data-edrv-view] .edrv-dlog-head { display: flex; align-items: center; gap: 8px; flex-wrap: nowrap; }
+[data-edrv-view] .edrv-dlog-title { margin: 0; font-size: 15px; font-weight: 600; color: var(--dsw-alias-label-primary, #1f2933); white-space: nowrap; }
+[data-edrv-view] .edrv-dlog-file { max-width: 200px; padding: 4px 6px; border: 1px solid var(--dsw-alias-border-l1, #e0e6e8); border-radius: 6px; background: var(--dsw-alias-bg-layer-1, #fff); color: var(--dsw-alias-label-primary, #1f2933); font-size: 11px; }
+[data-edrv-view] .edrv-dlog-level { padding: 4px 6px; border: 1px solid var(--dsw-alias-border-l1, #e0e6e8); border-radius: 6px; background: var(--dsw-alias-bg-layer-1, #fff); color: var(--dsw-alias-label-primary, #1f2933); font-size: 11px; }
+[data-edrv-view] .edrv-dlog-search { min-width: 120px; flex: 0 1 200px; padding: 4px 8px; border: 1px solid var(--dsw-alias-border-l1, #e0e6e8); border-radius: 6px; background: var(--dsw-alias-bg-layer-1, #fff); color: var(--dsw-alias-label-primary, #1f2933); font-size: 11px; }
+[data-edrv-view] .edrv-dlog-auto { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--dsw-alias-label-secondary, #52606d); white-space: nowrap; cursor: pointer; }
+[data-edrv-view] .edrv-dlog-error { padding: 4px 8px; border: 1px solid var(--dsw-alias-state-error-primary, rgba(217,83,79,.4)); border-radius: 6px; background: var(--dsw-alias-interactive-bg-hover-danger, rgba(217,83,79,.12)); color: var(--dsw-alias-state-error-primary, #d9534f); font-size: 11px; }
+[data-edrv-view] .edrv-dlog-scroll { flex: 1 1 auto; min-height: 240px; overflow: auto; border: 1px solid var(--dsw-alias-border-l1, #e0e6e8); border-radius: 8px; padding: 4px 0; background: var(--dsw-alias-bg-layer-1, #fff); }
+[data-edrv-view] .edrv-dlog-row { display: flex; align-items: baseline; gap: 8px; padding: 1px 8px; font-family: var(--ds-font-family-code, ui-monospace, monospace); font-size: 11px; line-height: 1.55; }
+[data-edrv-view] .edrv-dlog-row:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(15,157,88,.06)); }
+[data-edrv-view] .edrv-dlog-at { flex-shrink: 0; color: var(--dsw-alias-label-tertiary, #9aa5b1); }
+[data-edrv-view] .edrv-dlog-lvl { flex-shrink: 0; width: 26px; text-align: center; font-size: 10px; color: var(--dsw-alias-label-tertiary, #9aa5b1); }
+[data-edrv-view] .edrv-dlog-text { flex: 1; min-width: 0; white-space: pre-wrap; word-break: break-word; color: var(--dsw-alias-label-primary, #1f2933); }
+[data-edrv-view] .edrv-dlog-row-error .edrv-dlog-text { color: var(--dsw-alias-state-error-primary, #d9534f); }
+[data-edrv-view] .edrv-dlog-row-warn .edrv-dlog-text { color: var(--dsw-alias-state-warning-primary, #b45309); }
+[data-edrv-view] .edrv-dlog-row-debug .edrv-dlog-text { color: var(--dsw-alias-label-secondary, #52606d); }
+[data-edrv-view] .edrv-dlog-foot { display: flex; align-items: center; gap: 10px; font-size: 11px; color: var(--dsw-alias-label-tertiary, #9aa5b1); flex-shrink: 0; }
+[data-edrv-view] .edrv-dlog-path { font-family: var(--ds-font-family-code, ui-monospace, monospace); max-width: 46%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+[data-edrv-view] .edrv-dlog-stat { white-space: nowrap; }
+[data-edrv-view] .edrv-dlog-switch { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--dsw-alias-label-secondary, #52606d); white-space: nowrap; cursor: pointer; flex-shrink: 0; }
+/* SVN 更新结果条（P3：update 条目级明细，可关闭） */
+[data-edrv-view] .edrv-svnres { display: flex; align-items: flex-start; gap: 8px; flex-shrink: 0; padding: 5px 10px; font-size: 11px; border-bottom: 1px solid var(--dsw-alias-border-l1, #e0e6e8); background: var(--dsw-alias-bg-layer-1, rgba(15,157,88,.06)); }
+[data-edrv-view] .edrv-svnres-head { font-weight: 600; color: var(--dsw-alias-label-primary, #1f2933); white-space: nowrap; }
+[data-edrv-view] .edrv-svnres-list { display: flex; flex-wrap: wrap; gap: 4px 10px; min-width: 0; }
+[data-edrv-view] .edrv-svnres-item { display: inline-flex; align-items: center; gap: 3px; font-family: var(--ds-font-family-code, ui-monospace, monospace); color: var(--dsw-alias-label-secondary, #52606d); }
+[data-edrv-view] .edrv-svnres-item.edrv-svnres-conflict { color: var(--dsw-alias-state-error-primary, #d9534f); font-weight: 700; }
 
 /* ===== 侧栏形态（betterSidebar 面板内编辑区） ===== */
 [data-edrv-view][data-edrv-layout='side'] { box-sizing: border-box; height: 100%; }

@@ -24,6 +24,7 @@ import {
 } from '../watchDecision.js'
 import { useFileWatch } from './useFileWatch.js'
 import { createPdfPanel } from '../pdf/pdfPanel.js'
+import { SvnDiffPanel } from './SvnDiffPanel.js'
 import { applyOfficial, registerThemes, themeNameOf } from '../monaco/theme.js'
 import { createDiffRenderer } from '../monaco/diffRender.js'
 import { ST, callIdAttr, noopHunk, summarize } from '../state/records.js'
@@ -41,6 +42,7 @@ import { setSidePending, SIDEBAR_INSTALL_CMD } from '../sidebarBridge.js'
 import { upsertViewState, viewStatesLoad, viewStatesSave } from '../state/viewStateCache.js'
 import { migrateScopedKeys, workspaceScopeOf } from '../state/scopeStore.js'
 import { modelsForScope, rememberModel } from '../state/modelCache.js'
+import { navFlashRangeOf } from '../navHighlight.js'
 import { bindingsOf, chordOf, matchEvent, useKeybindingsVersion } from '../keybindings.js'
 import { getSidebarMinWidth } from '../sidebarMin.js'
 import { navHistoryFor } from '../navHistory.js'
@@ -57,8 +59,34 @@ import {
   insertTab, isTreeRevealable, normalizeTabs, pickActive, relativeOf, togglePin,
 } from '../tabActions.js'
 import { buildTabMenu } from '../tabMenu.js'
+import { ensureSvnChanges, ensureSvnStatus, getSvnChanges, getSvnStatus, refreshSvnChanges, svnAdd, svnChangeMapOf, svnDiffBase, svnEditorActions, svnRevert, svnTortoise, svnUpdate } from '../svnStatus.js'
+import { ensureSvnLog, getSvnLog, refreshSvnLog, svnDiffPair, svnDiffRev, svnDiffWorking, svnLogKeyOf, svnLogLoadedLimit, svnLogTruncated, svnWcRev, SVN_LOG_SHOW_ALL_LIMIT } from '../svnLog.js'
+import { runSvnAction } from '../svnActions.js'
+import { dshTrace } from '../svnStore.js'
+import { SVN_ACTION_BY_ID, svnActionsFor } from '../../shared/svnActions.js'
+import { isSvnDiffable } from '../../shared/svn.js'
+import type { SvnAction } from '../../shared/svn.js'
 import { createSaveTimer } from '../saveDebounce.js'
 import { ContextMenu } from './ContextMenu.js'
+import { SvnLogDialog } from './SvnLogDialog.js'
+import { LogDialog } from './LogDialog.js'
+
+/** 日志弹窗每次加载条数（「加载更多」按此步长递增；上限由 host 的 SVN_LOG_SHOW_ALL_CAP 约束）。 */
+const SVN_LOG_PAGE = 100
+
+/**
+ * 日志弹窗状态 → 取数选项（P1-4/P1-5/P1-6：soc/mrg/range 与状态层键保持同源）。
+ * @author ddj 2026年09月17号 / 2026年09月18号
+ * @param svnLog 日志弹窗状态（null = 关闭）
+ * @returns 状态层取数选项
+ */
+function svnLogOptsOf(svnLog) {
+  if (!svnLog) return {}
+  return { stopOnCopy: svnLog.soc === true, showMerged: svnLog.merged === true, range: svnLog.range ?? null }
+}
+
+/** 跳转目标高亮的保留时长（LSP/搜索跳转落地后给用户的位置提示，到期自动清除）。 */
+const NAV_FLASH_MS = 1200
 
 /**
  * 从 Monaco 语言目录取可选语言 id 列表（代码片段新建时的语言下拉来源）。
@@ -158,6 +186,16 @@ export function EditorView(props) {
   const [diffIdx, setDiffIdx] = React.useState(0) // 当前文件内差异位置（x/x 显示）
   const [fileIdx, setFileIdx] = React.useState(0) // 全局差异文件位置（x/x 文件 显示）
   const [tabMenu, setTabMenu] = React.useState(null) // Tab 右键菜单 { x,y,path }（编辑区右键走 Monaco 原生菜单，无此浮层）
+  const [svnStatus, setSvnStatus] = React.useState(null) // SVN 能力状态（SvnStatusPayload；null=未加载，SVN 入口隐藏）
+  const [svnChanges, setSvnChanges] = React.useState(null) // SVN 变更清单（null=未加载；徽标/菜单判定）
+  const [svnDiff, setSvnDiff] = React.useState(null) // 差异视图 { path, base, working, reason, message, leftLabel, rightLabel, scheme }（null=关闭）
+  const [svnLog, setSvnLog] = React.useState(null) // 日志弹窗 { target, limit, soc?, range? }（null=关闭；P1-4/P1-6 增选项维度）
+  const [svnLogData, setSvnLogData] = React.useState(null) // 日志条目（null=未加载）
+  const [svnLogBusy, setSvnLogBusy] = React.useState(false) // 日志在途
+  const [svnLogError, setSvnLogError] = React.useState('') // 日志错误文案
+  const [svnLogWcRev, setSvnLogWcRev] = React.useState(null) // P1-9：文件目标的工作副本版号（null = 不加粗）
+  const [dlogOpen, setDlogOpen] = React.useState(false) // 诊断日志弹窗（自取数据，null 语义无需状态层）
+  const [svnUpdateResult, setSvnUpdateResult] = React.useState(null) // update 条目级结果条（null=不显示）
   const [sidebarOn, setSidebarOn] = React.useState(layout !== 'side') // 侧边栏显隐（侧栏形态默认收起）
   const [sidebarW, setSidebarW] = React.useState(() => getSidebarMinWidth()) // 侧边栏宽度（初值 = 最小宽度，默认 300）
   const [activePanel, setActivePanel] = React.useState('explorer') // 激活面板 id
@@ -180,7 +218,9 @@ export function EditorView(props) {
   const loadSeqRef = React.useRef(0)
   const programmaticRef = React.useRef(false)
   const restoredScopeRef = React.useRef(null) // 已恢复状态的作用域（cwd 晚到 sid→ws 时允许重恢复）
-  const pendingFocusRef = React.useRef(null) // { path, region } 内容加载后跳转
+  const pendingFocusRef = React.useRef(null) // { path, region, line, column } 内容加载后跳转
+  const navFlashRef = React.useRef([]) // 跳转目标高亮装饰 id（独立于 diff/下划线，随跳转替换）
+  const navFlashTimerRef = React.useRef(null) // 跳转目标高亮自动清除计时器
   // 导航历史（后退/前进）：跨文件焦点位置；按会话隔离，会话切换重置
   const navRef = React.useRef(null)
   if (!navRef.current) navRef.current = navHistoryFor(scope)
@@ -211,6 +251,8 @@ export function EditorView(props) {
   const hoverPanelRef = React.useRef(false) // 鼠标是否已进入 Keep/Undo 浮层
   const batchBusyRef = React.useRef(false) // 批量 Keep All/Undo All 防重入
   const menuHandlersRef = React.useRef(null) // 右键菜单动作的最新闭包（Monaco addAction 空依赖回调读取）
+  const svnMenuDisposersRef = React.useRef([]) // Monaco 右键 SVN 组当前 disposables（同步时先注销旧组）
+  const svnStatusRef = React.useRef(null) // svnStatus 渲染值镜像（ensureEditor 空依赖闭包读取最新状态）
   const [snippetPicker, setSnippetPicker] = React.useState(null) // 'configure' | 'insert' | null（代码片段浮层）
   const doSaveRef = React.useRef(null) // 保存动作的最新闭包（窗口级保存监听读取）
   const onEditRef = React.useRef(null) // 编辑置脏的最新闭包（Monaco 内容变化监听经 ref 调用，防首帧 active=null 陈旧闭包）
@@ -798,8 +840,8 @@ export function EditorView(props) {
         return
       }
       if (e?.detail?.line != null) {
-        // LSP/搜索跳转：打开并定位到行列
-        openFileAt(p, e?.detail?.line, e?.detail?.column)
+        // LSP/搜索跳转：打开并定位到行列（endLine/endColumn 为目标区间，供落地高亮）
+        openFileAt(p, e?.detail?.line, e?.detail?.column, e?.detail?.endLine, e?.detail?.endColumn)
         return
       }
       recordNav()
@@ -1030,6 +1072,56 @@ export function EditorView(props) {
 
   // 整行上下移动的实现见下方「指令系统接线」effect（moveRow 单点定义，命令栏与键位共用）。
 
+  // SVN 能力状态：scope 变化拉取 + `edrv:svn-status` 事件驱动刷新（菜单/页签/命令面板显隐数据源）
+  React.useEffect(() => {
+    ensureSvnStatus(sessionId, scope)
+    const onSvnStatus = (event) => {
+      if (!event?.detail?.scope || event.detail.scope === scope) setSvnStatus(getSvnStatus(scope))
+    }
+    window.addEventListener('edrv:svn-status', onSvnStatus)
+    return () => window.removeEventListener('edrv:svn-status', onSvnStatus)
+  }, [sessionId, scope])
+
+  // SVN 变更清单：状态就绪且受管理时才拉取（非 SVN 工作区零请求）+ `edrv:svn-changes` 驱动刷新
+  // 依赖里放 managed/svnCli：状态后到时会自动补拉（首次渲染时状态尚为 null）
+  React.useEffect(() => {
+    const ready = Boolean(svnStatus?.managed && svnStatus?.svnCli)
+    if (ready) ensureSvnChanges(sessionId, scope)
+    const onSvnChanges = (event) => {
+      if (!event?.detail?.scope || event.detail.scope === scope) setSvnChanges(getSvnChanges(scope))
+    }
+    window.addEventListener('edrv:svn-changes', onSvnChanges)
+    // 状态刚到达（同轮已拉到清单）时也同步一次当前值，避免事件早于监听错过
+    setSvnChanges(getSvnChanges(scope))
+    return () => window.removeEventListener('edrv:svn-changes', onSvnChanges)
+  }, [sessionId, scope, svnStatus?.managed, svnStatus?.svnCli])
+
+  // SVN 日志：弹窗打开期间订阅 `edrv:svn-log`（键经 svnLogKeyOf 统一拼装，含 P1-4/P1-5/P1-6 选项维度）
+  React.useEffect(() => {
+    if (!svnLog) return undefined
+    const target = svnLog.target || ''
+    const opts = svnLogOptsOf(svnLog)
+    const key = svnLogKeyOf(scope, target, opts)
+    const sync = (event) => {
+      dshTrace('svnLog.syncEvent', { got: event?.detail?.key ?? null, expected: key })
+      if (event?.detail?.key && event.detail.key !== key) return
+      setSvnLogData(getSvnLog(scope, target, 0, opts))
+      setSvnLogBusy(false)
+    }
+    window.addEventListener('edrv:svn-log', sync)
+    // 打开时先同步一次（状态层可能已缓存）
+    setSvnLogData(getSvnLog(scope, target, 0, opts))
+    return () => window.removeEventListener('edrv:svn-log', sync)
+  }, [svnLog, scope])
+
+  // P1-9：文件目标拉取工作副本版号（目录/根不拉，官方对目录需 crawl 工作副本，本插件不做）
+  React.useEffect(() => {
+    if (!svnLog || !svnLog.target) { setSvnLogWcRev(null); return undefined }
+    let live = true
+    void svnWcRev(sessionId, svnLog.target).then((rev) => { if (live) setSvnLogWcRev(rev) })
+    return () => { live = false }
+  }, [svnLog?.target, sessionId])
+
   /**
    * 指令系统接线：命令栏/键位/第三方派发的 `edrv.command.*` 事件落到编辑器动作。
    * 全部动作经最新闭包执行（与窗口级键位监听同源）；事件名逐条字面书写，
@@ -1094,6 +1186,26 @@ export function EditorView(props) {
         if (!addToConversation) { setStatus('添加到对话不可用'); return }
         addToConversation.appendReference(sessionId, path, range).then((o) => setStatus(statusOfAdd(o, '已添加选中内容为引用')))
       }],
+      // SVN：命令面板动作（活动文件；无活动文件时 update/commit 用工作区根，其余提示）
+      ['edrv.command.svnUpdate', () => runSvnUpdate(activeRef.current ?? '')],
+      ['edrv.command.svnRefreshChanges', () => runSvnReload()],
+      ['edrv.command.svnDiffBase', () => runSvnDiffBase(activeRef.current)],
+      ['edrv.command.svnAdd', () => runSvnAdd(activeRef.current)],
+      ['edrv.command.svnRevertCli', () => runSvnRevertCli(activeRef.current)],
+      ['edrv.command.svnLog', () => openSvnLog(activeRef.current || undefined)],
+      ['edrv.command.svnCleanup', () => runSvnAction(SVN_ACTION_BY_ID.cleanup, {
+        sessionId,
+        scope,
+        notify: (message) => setStatus(message),
+        refreshChanges: () => refreshSvnChanges(sessionId, scope),
+      })],
+      ['edrv.command.svnTortoiseCommit', () => runSvnTortoise('commit', activeRef.current ?? '')],
+      ['edrv.command.svnTortoiseLog', () => runSvnTortoise('log', activeRef.current)],
+      ['edrv.command.svnTortoiseDiff', () => runSvnTortoise('diff', activeRef.current)],
+      ['edrv.command.svnTortoiseBlame', () => runSvnTortoise('blame', activeRef.current)],
+      ['edrv.command.svnTortoiseRevert', () => runSvnTortoise('revert', activeRef.current)],
+      // 诊断日志弹窗（同片段选择器：执行一条命令即关命令栏，避免残浮层遮挡）
+      ['edrv.command.showLogs', () => { closeCommandPalette(); setDlogOpen(true) }],
     ]
     const byName = new Map(handlers)
     const onCommand = (event) => {
@@ -1212,6 +1324,64 @@ export function EditorView(props) {
   }, [monaco])
 
   monacoRef.current = monaco
+
+  /** 从编辑器实例 model URI 解析活动文件路径（工作区相对；无模型返回 null）。 */
+  const modelPathOf = (edx) => {
+    const uriPath = edx?.getModel?.()?.uri?.path
+    return uriPath ? decodeURIComponent(String(uriPath).replace(/^\//, '')) : null
+  }
+
+  /**
+   * 同步 Monaco 右键菜单 SVN 组：先注销旧组，再按最新 svn 状态注册（空状态 = 全部移除）。
+   * ensureEditor（编辑器创建）与 svn 状态变化两条通道都会调用，幂等。
+   * @author ddj 2026年09月16号
+   * @param ed Monaco 编辑器实例（未创建传 null）
+   */
+  const syncSvnMenuActs = (ed) => {
+    const stale = svnMenuDisposersRef.current
+    svnMenuDisposersRef.current = []
+    for (const dispose of stale) {
+      try { dispose?.() } catch { /* dispose 异常忽略，不阻塞重注册 */ }
+    }
+    if (!ed || typeof ed.addAction !== 'function') return
+    const changeMap = svnChangeMapOf(scope)
+    const activeEntry = activeRef.current ? changeMap[activeRef.current] : undefined
+    for (const item of svnEditorActions(svnStatusRef.current, {
+      versioned: activeEntry ? activeEntry.versioned : true,
+      status: activeEntry?.status,
+      diffable: activeRef.current ? isSvnDiffable(activeRef.current, activeEntry?.status) : true,
+    })) {
+      const handle = ed.addAction({
+        id: item.id,
+        label: item.label,
+        contextMenuGroupId: '2_edrv',
+        precondition: 'editorTextFocus',
+        run: (edx) => {
+          const relPath = modelPathOf(edx)
+          if (item.kind === 'tortoise') { menuHandlersRef.current?.svnTortoise?.(item.tortoiseAction, relPath); return }
+          // 自研动作经动作目录统一执行（与树/页签/命令栏同一执行器）
+          const def = SVN_ACTION_BY_ID[item.actionId]
+          if (!def) return
+          runSvnAction(def, {
+            sessionId,
+            scope,
+            path: def.id === 'update' ? (relPath ?? '') : relPath,
+            notify: (message) => setStatus(message),
+            openSvnDiff: (p) => runSvnDiffBase(p),
+            openSvnLog: (p) => openSvnLog(p ?? relPath),
+            refreshChanges: () => refreshSvnChanges(sessionId, scope),
+          })
+        },
+      })
+      svnMenuDisposersRef.current.push(handle?.dispose ? () => handle.dispose() : null)
+    }
+  }
+
+  // Monaco 右键 SVN 组随 svn 状态与变更清单增减；编辑器尚未创建时 no-op（创建时由 ensureEditor 补注册）
+  React.useEffect(() => {
+    syncSvnMenuActs(editorRef.current)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [monaco, svnStatus, svnChanges])
 
   const getModel = (path, text) => {
     const cache = modelsRef.current
@@ -1358,14 +1528,17 @@ export function EditorView(props) {
   onEditRef.current = onEdit
 
   // model 同步（当前内容）
+  // ⚠️ 必须以 contentReady（contentPath === active）为门，不能用 `content !== null`：
+  // 切页签的那一帧 content 仍是**上一个文件**的内容，据此建 model 会先塞入陈旧文本，
+  // 待真实内容到达再由 getModel→setValue 覆盖，光标随之被重置（见下方跳转 effect 注释）。
   React.useEffect(() => {
-    if (!monaco || !editorRef.current || !active || content === null) return
+    if (!monaco || !editorRef.current || !active || !contentReady) return
     const ed = editorRef.current
     const model = getModel(active, content)
     if (ed.getModel() !== model) ed.setModel(model)
     restoreViewState(active)
     setLoadStage((prev) => ({ progress: Math.max(96, prev.progress), message: '创建编辑器视图…' }))
-  }, [monaco, active, content])
+  }, [monaco, active, content, contentReady])
 
   // PDF 面板外壳 ref 回调（div 仅在 PDF 分支渲染，refs 先于 effect 就绪）
   const ensurePdfHost = (node) => { pdfHostRef.current = node }
@@ -1406,6 +1579,9 @@ export function EditorView(props) {
     saveViewStateRef.current?.()
     diffRendererRef.current?.dispose?.()
     hideReferencesOverlay()
+    // 跳转目标高亮的计时器随卸载清理（装饰随编辑器 dispose 一并消失）
+    if (navFlashTimerRef.current) { clearTimeout(navFlashTimerRef.current); navFlashTimerRef.current = null }
+    navFlashRef.current = []
     if (editorRef.current) { editorRef.current.dispose(); editorRef.current = null }
     // model 不在此销毁：跨挂载缓存按作用域存活（modelCache 切作用域时统一释放）
     for (const ctl of pdfCtlRef.current.values()) ctl.destroy()
@@ -1468,11 +1644,7 @@ export function EditorView(props) {
     // 有选区时额外显示「选中内容」项：context key edrvSelection 由光标选区变化驱动。
     // 路径/选区在点击时从 model/editor 实时读取（不依赖闭包里的过期 active）。
     const menuHandlers = () => menuHandlersRef.current
-    const pathOf = (edx) => {
-      const model = edx?.getModel?.()
-      const uriPath = model?.uri?.path
-      return uriPath ? decodeURIComponent(String(uriPath).replace(/^\//, '')) : null
-    }
+    const pathOf = modelPathOf
     const selectionOf = (edx) => {
       const s = edx?.getSelection?.()
       if (!s) return null
@@ -1532,6 +1704,8 @@ export function EditorView(props) {
       id: 'edrv.showCommands', label: '显示所有命令', contextMenuGroupId: '1_edrv',
       run: () => window.dispatchEvent(new CustomEvent('edrv.command.showCommands')),
     })
+    // SVN 组按创建时的最新状态注册（此后由 [monaco, svnStatus] effect 随状态增减）
+    syncSvnMenuActs(ed)
     bindLspUnderline(ed, m)
     // AI 补全：编辑器实例登记（差异静默判定用）+ Alt+\ 手动触发 ghost text
     trackAiEditor(ed)
@@ -1573,13 +1747,48 @@ export function EditorView(props) {
     editorRef.current = ed
   }, [])
 
-  // 打开文件后的跳转（导航历史恢复/差异聚焦/搜索行列跳转，内容就绪后执行一次）
+  /**
+   * 跳转落地后给目标区域挂临时高亮（默认 1.2s 后自动清除）。
+   *
+   * 为什么自绘：原生 `_openReference` 跳转后会挂 `symbolHighlight` 装饰并在 350ms 后清除，
+   * 但本插件用 registerEditorOpener 接管了打开动作（自行派发 edrv:open-editor），
+   * 原生那段续作不会执行 → 跳转后没有任何目标提示。这里补上同等语义的高亮。
+   * 装饰 id 独立保存，与差异渲染（diffRender）和 Ctrl+hover 下划线（underline）互不干扰；
+   * 连续跳转先替换旧装饰，避免叠加残留。
+   * @author ddj 2026年09月17号
+   * @param ed Monaco 编辑器
+   * @param target 目标位置 { line, column, endLine?, endColumn? }（均 1-based）
+   */
+  const flashNavTarget = (ed, target) => {
+    const model = ed?.getModel?.()
+    if (!model || !target) return
+    const range = navFlashRangeOf(model, target)
+    if (!range) return
+    if (navFlashTimerRef.current) { clearTimeout(navFlashTimerRef.current); navFlashTimerRef.current = null }
+    navFlashRef.current = ed.deltaDecorations(navFlashRef.current, [{
+      range,
+      options: { className: 'edrv-nav-target', isWholeLine: false },
+    }])
+    navFlashTimerRef.current = setTimeout(() => {
+      navFlashTimerRef.current = null
+      const current = editorRef.current
+      navFlashRef.current = current ? current.deltaDecorations(navFlashRef.current, []) : []
+    }, NAV_FLASH_MS)
+  }
+
+  // 打开文件后的跳转（导航历史恢复/差异聚焦/搜索与 LSP 行列跳转，目标内容就绪后执行一次）
+  //
+  // ⚠️ 门控必须用 contentReady（contentPath === active），不能用 `content === null`：
+  // 跨文件跳转时切页签的那一帧 content 仍是**上一个文件**的内容（非 null），据此判定
+  // 「已就绪」会提前定位；随后真实内容到达触发 model 重设/内容写入，Monaco 会重置光标，
+  // 落点丢失且 pendingFocus 已消费，最终停在 {1,1}。实测（v0.4.6，Ctrl+点击枚举成员）：
+  // opener 正确派发 line=349，落地后编辑器实际停在 1:1 且无高亮；同文件跳转不换内容故不复现。
   React.useEffect(() => {
     const ed = editorRef.current
-    if (!ed || content === null) return
+    if (!ed || !contentReady) return
     // 导航历史恢复优先：viewState 快照恢复滚动/折叠，行列补定位
     const nav = navPendingRef.current
-    if (nav && nav.path === active) {
+    if (nav && sameFile(nav.path, active)) {
       navPendingRef.current = null
       if (nav.viewState) {
         try { ed.restoreViewState(nav.viewState) } catch (e) { /* 非法快照忽略（行号越界自动兜底） */ }
@@ -1592,12 +1801,15 @@ export function EditorView(props) {
       return
     }
     const pf = pendingFocusRef.current
-    if (!pf || pf.path !== active) return
+    if (!pf || !sameFile(pf.path, active)) return
     if (pf.line != null) {
-      // 搜索命中跳转：直接定位到行/列（不依赖差异区域）
+      // 搜索命中 / LSP 跳转：直接定位到行/列（不依赖差异区域）并高亮目标区域
       pendingFocusRef.current = null
-      ed.revealLineInCenter(Math.max(1, pf.line))
-      ed.setPosition({ lineNumber: Math.max(1, pf.line), column: Math.max(1, pf.column ?? 1) })
+      const line = Math.max(1, pf.line)
+      const column = Math.max(1, pf.column ?? 1)
+      ed.revealLineInCenter(line)
+      ed.setPosition({ lineNumber: line, column })
+      flashNavTarget(ed, { line, column, endLine: pf.endLine, endColumn: pf.endColumn })
       ed.focus()
       return
     }
@@ -1607,7 +1819,7 @@ export function EditorView(props) {
     ed.revealLineInCenter(Math.max(1, target.start ?? 1))
     ed.setPosition({ lineNumber: Math.max(1, target.start ?? 1), column: 1 })
     ed.focus()
-  }, [active, content, pendingRegions, focusRequest])
+  }, [active, content, contentReady, pendingRegions, focusRequest])
 
   const jumpTo = (region) => {
     if (editorRef.current) {
@@ -1959,7 +2171,186 @@ export function EditorView(props) {
   }
 
   // 供 Monaco 原生右键菜单 addAction 读取的最新动作闭包（空依赖回调不随渲染重建）
-  menuHandlersRef.current = { addRefToChat, openInExplorer }
+  /**
+   * SVN 更新（CLI，全平台）：页签菜单/命令面板/编辑区右键共用；path 缺省 = 工作区根。
+   * P3：结果含条目级明细，成功后展示可关闭的结果条（冲突红字高亮）。
+   */
+  const runSvnUpdate = (relPath) => {
+    void svnUpdate(sessionId, relPath ?? '').then((o) => {
+      setStatus(o.message)
+      // 更新会改工作副本状态：成功后重查变更清单（徽标/面板跟随）
+      if (o.ok) refreshSvnChanges(sessionId, scope)
+      // P3：有条目级明细时展示结果条（无变化则清空，不留旧结果）
+      setSvnUpdateResult(o.ok ? { summary: o.message, entries: o.entries ?? [], conflicts: o.conflicts ?? [] } : null)
+    })
+  }
+  /** 强制重查 SVN 变更清单（命令栏「SVN 刷新变更」）。 */
+  const runSvnReload = () => {
+    refreshSvnChanges(sessionId, scope)
+    setStatus('已刷新 SVN 变更')
+  }
+
+  /**
+   * 打开基线差异视图（BASE 左 / 工作区右，只读）。
+   * 编辑区右上差异视图以活动文件为语义：无活动文件直接提示，不猜目标。
+   * @author ddj 2026年09月16号
+   * @param relPath 目标工作区相对路径
+   */
+  const runSvnDiffBase = (relPath) => {
+    if (!relPath) { setStatus('无活动文件'); return }
+    setStatus('读取基线…')
+    void svnDiffBase(sessionId, relPath).then((outcome) => {
+      if (!outcome.ok) { setStatus(outcome.message); return }
+      setSvnDiff({
+        path: relPath,
+        base: outcome.base,
+        working: outcome.working,
+        reason: outcome.reason,
+        message: outcome.base === null ? '' : outcome.message,
+        leftLabel: 'BASE',
+        rightLabel: '工作区',
+        scheme: 'edrv-svn-base',
+      })
+      setStatus(outcome.message)
+    })
+  }
+
+  /**
+   * 打开某版本的差异视图（REV-1 ↔ REV 只读并排）。
+   * 左侧缺失（该版本尚无此文件 = 新增）属正常语义，不改文案为错误。
+   * @author ddj 2026年09月16号
+   * @param relPath 目标工作区相对路径
+   * @param revision 目标版本
+   */
+  const runSvnDiffRev = (relPath, revision) => {
+    if (!relPath) { setStatus('无目标文件'); return }
+    setStatus('读取 r' + revision + ' 差异…')
+    void svnDiffRev(sessionId, relPath, revision).then((outcome) => {
+      if (!outcome.ok) { setStatus('读取版本差异失败：' + (outcome.error ?? '未知错误')); return }
+      const isAdd = outcome.left === null
+      setSvnDiff({
+        path: relPath,
+        base: outcome.left,
+        working: outcome.right,
+        reason: outcome.reason,
+        message: isAdd ? '该版本新增此文件（无上一版可比）' : '',
+        leftLabel: 'r' + Math.max(1, revision - 1),
+        rightLabel: 'r' + revision,
+        scheme: 'edrv-svn-rev' + revision,
+      })
+      setStatus('已打开 r' + revision + ' 差异')
+    })
+  }
+
+  /**
+   * 打开两个版本的差异视图（P1-2 比较两个修订；左右标签按传入顺序，不自动排序）。
+   * 左右任一侧缺失（新增/删除）属正常语义，渲染为空而非报错。
+   * @author ddj 2026年09月17号
+   * @param relPath 目标工作区相对路径
+   * @param revA 左侧版本（选中顺序在前）
+   * @param revB 右侧版本（选中顺序在后）
+   */
+  const runSvnDiffPair = (relPath, revA, revB) => {
+    if (!relPath) { setStatus('仅文件目标支持比较两个修订'); return }
+    setStatus('读取 r' + revA + ' ↔ r' + revB + ' 差异…')
+    void svnDiffPair(sessionId, relPath, revA, revB).then((outcome) => {
+      if (!outcome.ok) { setStatus('读取版本差异失败：' + (outcome.error ?? '未知错误')); return }
+      const notes = []
+      if (outcome.left === null) notes.push('r' + revA + ' 无此文件')
+      if (outcome.right === null) notes.push('r' + revB + ' 无此文件')
+      setSvnDiff({
+        path: relPath,
+        base: outcome.left,
+        working: outcome.right,
+        reason: outcome.reason,
+        message: notes.join('；'),
+        leftLabel: 'r' + revA,
+        rightLabel: 'r' + revB,
+        scheme: 'edrv-svn-pair-' + revA + '-' + revB,
+      })
+      setStatus('已打开 r' + revA + ' ↔ r' + revB + ' 差异')
+    })
+  }
+
+  /**
+   * 打开「某版本 ↔ 工作副本」差异视图（P1-1 Compare with working copy，只读并排）。
+   * 左侧缺失（该版本尚无此文件）属正常语义，渲染为空而非报错。
+   * @author ddj 2026年09月17号
+   * @param relPath 目标工作区相对路径
+   * @param revision 左侧版本
+   */
+  const runSvnDiffWorking = (relPath, revision) => {
+    if (!relPath) { setStatus('仅文件目标支持与工作副本比较'); return }
+    setStatus('读取 r' + revision + ' ↔ 工作副本 差异…')
+    void svnDiffWorking(sessionId, relPath, revision).then((outcome) => {
+      if (!outcome.ok) { setStatus('读取工作副本差异失败：' + (outcome.error ?? '未知错误')); return }
+      setSvnDiff({
+        path: relPath,
+        base: outcome.left,
+        working: outcome.right,
+        reason: outcome.reason,
+        message: outcome.left === null ? '该版本尚无此文件（右侧为工作副本内容）' : '',
+        leftLabel: 'r' + revision,
+        rightLabel: '工作区',
+        scheme: 'edrv-svn-work-' + revision,
+      })
+      setStatus('已打开 r' + revision + ' ↔ 工作副本 差异')
+    })
+  }
+
+  /**
+   * 打开日志弹窗（P3）：加载该目标的提交历史。
+   * @author ddj 2026年09月16号
+   * @param relPath 目标相对路径（缺省 = 工作区根）
+   */
+  const openSvnLog = (relPath) => {
+    const target = relPath || ''
+    dshTrace('svnLog.open', { target, scope, hasSession: Boolean(sessionId) })
+    setSvnLog({ target, limit: SVN_LOG_PAGE })
+    setSvnLogData(getSvnLog(scope, target, SVN_LOG_PAGE))
+    setSvnLogError('')
+    setSvnLogBusy(true)
+    ensureSvnLog(sessionId, scope, target, SVN_LOG_PAGE)
+  }
+
+  /** 加入版本控制（活动文件；未纳入版本控制的文件才有意义，host 侧会再校验）。 */
+  const runSvnAdd = (relPath) => {
+    if (!relPath) { setStatus('无活动文件'); return }
+    void svnAdd(sessionId, [relPath]).then((o) => {
+      setStatus(o.message)
+      refreshSvnChanges(sessionId, scope)
+    })
+  }
+
+  /** 还原（活动文件，CLI）：confirm 守卫，避免误触丢弃本地改动。 */
+  const runSvnRevertCli = (relPath) => {
+    if (!relPath) { setStatus('无活动文件'); return }
+    if (!window.confirm('确认还原「' + relPath + '」的本地改动？新增（A）文件在磁盘上会保留，仅取消登记。')) return
+    void svnRevert(sessionId, [relPath]).then((o) => {
+      setStatus(o.message)
+      refreshSvnChanges(sessionId, scope)
+      // 当前打开的文件被还原：重载磁盘内容，避免编辑器仍显示已丢弃的改动
+      if (o.ok && activeRef.current === relPath) reloadFile()
+    })
+  }
+
+  /** TortoiseSVN 动作（Windows）：需要文件/目录目标（编辑区右键无活动文件时提示）。 */
+  const runSvnTortoise = (action: SvnAction, relPath) => {
+    if (!relPath) { setStatus('无活动文件'); return }
+    void svnTortoise(sessionId, action, relPath).then((o) => setStatus(o.message))
+  }
+
+  // 渲染期镜像（赋值在被引用 const 定义之后，防 TDZ）：Monaco addAction 空依赖回调读取最新动作与 svn 状态
+  svnStatusRef.current = svnStatus
+  menuHandlersRef.current = {
+    addRefToChat,
+    openInExplorer,
+    svnUpdate: runSvnUpdate,
+    svnDiffBase: runSvnDiffBase,
+    svnAdd: runSvnAdd,
+    svnRevertCli: runSvnRevertCli,
+    svnTortoise: runSvnTortoise,
+  }
 
   /**
    * 复制文本到剪贴板（状态栏反馈；浏览器拒绝时提示，不抛异常）。
@@ -2010,6 +2401,28 @@ export function EditorView(props) {
   }
 
   /**
+   * 页签菜单的 SVN 动作分派（由 shared 动作目录生成，与树菜单/命令栏共用执行器与显隐规则）。
+   * @author ddj 2026年09月16号
+   * @param path 右键目标页签路径
+   * @returns id → 动作
+   */
+  const svnTabActions = (path) => {
+    const out = {}
+    for (const action of svnActionsFor('tab')) {
+      out['svn-' + action.id] = () => runSvnAction(action, {
+        sessionId,
+        scope,
+        path,
+        notify: (message) => setStatus(message),
+        openSvnDiff: (p) => runSvnDiffBase(p),
+        openSvnLog: (p) => openSvnLog(p ?? path),
+        refreshChanges: () => refreshSvnChanges(sessionId, scope),
+      })
+    }
+    return out
+  }
+
+  /**
    * 页签右键菜单动作表（按菜单条目 id 分派；全部读 ref 取最新状态，防陈旧闭包）。
    * @author ddj 2026年09月11号
    * @param path 右键目标页签路径
@@ -2027,6 +2440,7 @@ export function EditorView(props) {
     'reveal-in-os': () => openInExplorer(path),
     'reveal-in-view': () => revealTabInView(path),
     'toggle-pinned': () => toggleTabPin(path),
+    ...svnTabActions(path),
   })
 
   /**
@@ -2037,6 +2451,7 @@ export function EditorView(props) {
   const tabMenuEntries = () => {
     if (!tabMenu) return []
     const actions = tabMenuActions(tabMenu.path)
+    const changeMap = svnChangeMapOf(scope)
     return buildTabMenu({
       path: tabMenu.path,
       tabs: tabsRef.current,
@@ -2045,6 +2460,12 @@ export function EditorView(props) {
       cwd,
       hasSession: Boolean(sessionId),
       canAddToConversation: Boolean(addToConversation),
+      svnReady: Boolean(svnStatus?.managed && svnStatus?.svnCli),
+      tortoiseReady: Boolean(svnStatus?.managed && svnStatus?.tortoise),
+      // 自研替换时间线：自研就绪的能力对应 Tortoise 项不出现
+      svnFeatures: svnStatus?.svnFeatures,
+      // 目标文件的 SVN 状态：CLI 三项（比较/加入/还原）按它显隐
+      svnStatusOfTarget: changeMap[tabMenu.path]?.status,
       closeChord: chordOf('edrv.closeTab'),
     }).map((entry) => Object.assign({}, entry, { onClick: actions[entry.id] }))
   }
@@ -2071,23 +2492,28 @@ export function EditorView(props) {
 
   const openFile = (path, focusDiff) => {
     if (!path) return
+    // 打开文件即离开基线差异审阅态（差异视图是「当前文件」的临时视图）
+    setSvnDiff(null)
     recordNav()
     addTab(path, true)
     if (focusDiff) pendingFocusRef.current = { path, region: null }
   }
 
   /**
-   * 打开文件并跳转到指定行列（搜索面板命中跳转）。
-   * @author ddj 2026年08月26号
+   * 打开文件并跳转到指定行列（搜索面板命中 / LSP 定义与引用跳转）。
+   * 落地后会把目标区域短暂高亮（见 flashNavTarget），便于在长文件中一眼看到落点。
+   * @author ddj 2026年08月26号 / 2026年09月17号
    * @param path 文件路径
    * @param line 目标行（缺省仅打开不跳转）
    * @param column 目标列（缺省 1）
+   * @param endLine 目标区间结束行（LSP 定义选区，可空 = 按单词/整行推定）
+   * @param endColumn 目标区间结束列（可空）
    */
-  const openFileAt = (path, line, column) => {
+  const openFileAt = (path, line, column, endLine, endColumn) => {
     if (!path) return
     recordNav()
     addTab(path, true)
-    pendingFocusRef.current = { path, region: null, line: line ?? null, column: column ?? 1 }
+    pendingFocusRef.current = { path, region: null, line: line ?? null, column: column ?? 1, endLine: endLine ?? null, endColumn: endColumn ?? null }
     setFocusRequest((value) => value + 1)
   }
 
@@ -2281,7 +2707,21 @@ export function EditorView(props) {
     retry ? React.createElement('button', { className: 'edrv-pill edrv-pill-ghost', onClick: retry }, '重试') : null)
 
   let body
-  if (!monaco && !monacoErr) {
+  if (svnDiff) {
+    // 差异视图优先占位（覆盖编辑器主体）：只读审阅态，关闭后回到原编辑器
+    body = React.createElement(SvnDiffPanel, {
+      key: 'edrv-svndiff:' + svnDiff.scheme + ':' + svnDiff.path,
+      monaco,
+      path: svnDiff.path,
+      base: svnDiff.base,
+      working: svnDiff.working,
+      reason: svnDiff.reason,
+      message: svnDiff.message,
+      leftLabel: svnDiff.leftLabel,
+      rightLabel: svnDiff.rightLabel,
+      onClose: () => setSvnDiff(null),
+    })
+  } else if (!monaco && !monacoErr) {
     body = loadingBody(loadStage.message, loadStage.progress)
   } else if (monacoErr) {
     body = React.createElement('div', { className: 'edrv-empty' },
@@ -2427,6 +2867,14 @@ export function EditorView(props) {
     outlineSources: props.outlineSources,
     fileMenuItems: props.fileMenuItems,
     addToConversation,
+    svn: svnStatus,
+    // SVN 变更：面板列表 + 文件树徽标查表（客户端合成，不改 listDir 契约）
+    svnChanges,
+    svnChangeMap: svnChangeMapOf(scope),
+    openSvnDiff: (p) => runSvnDiffBase(p),
+    refreshSvnChanges: () => refreshSvnChanges(sessionId, scope),
+    openSvnLog: (p) => openSvnLog(p),
+    confirm: (message) => (typeof window === 'undefined' ? false : window.confirm(message)),
     notify: (message) => setStatus(message),
   }
 
@@ -2450,11 +2898,49 @@ export function EditorView(props) {
         React.createElement('button', { className: 'edrv-pill edrv-pill-ghost', title: '复制安装命令', onClick: copyInstallCmd }, '复制命令'),
         React.createElement('button', { className: 'edrv-side-hint-close', title: '关闭提示', 'aria-label': '关闭提示', onClick: dismissHint }, '×'))
     : null
+  /**
+   * SVN 更新结果条（P3）：逐条展示 update 的条目级状态，冲突红字高亮，可关闭。
+   * 只在本次 update 有条目明细时渲染（无明细/失败时不占用编辑区高度）。
+   * @author ddj 2026年09月16号
+   * @returns 结果条元素或 null
+   */
+  const svnResultBar = () => {
+    const result = svnUpdateResult
+    if (!result || !result.entries.length) return null
+    const conflicts = new Set(result.conflicts ?? [])
+    return React.createElement('div', { className: 'edrv-svnres' },
+      React.createElement('span', { className: 'edrv-svnres-head' }, 'SVN 更新'),
+      React.createElement('div', { className: 'edrv-svnres-list' },
+        result.entries.map((entry, idx) => React.createElement('span', {
+          key: entry.path + ':' + idx,
+          className: 'edrv-svnres-item' + (conflicts.has(entry.path) ? ' edrv-svnres-conflict' : ''),
+          title: entry.label + ' ' + entry.path,
+        }, entry.action + ' ' + entry.path))),
+      React.createElement('span', { style: { flex: 1 } }),
+      (conflicts.size
+        ? React.createElement('button', {
+            className: 'edrv-svn-act',
+            title: '在工作区中显示第一个冲突文件',
+            onClick: () => {
+              const first = [...conflicts][0]
+              const hit = result.entries.find((entry) => entry.path === first)
+              if (hit?.path) openFile(hit.path, false)
+            },
+          }, '查看冲突文件')
+        : null),
+      React.createElement('button', {
+        className: 'edrv-svn-act',
+        title: '关闭结果条',
+        onClick: () => setSvnUpdateResult(null),
+      }, '✕'))
+  }
+
   const mainCol = React.createElement('div', { className: 'edrv-main-col', style: { flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' } },
     pathBar,
     tabRow,
     sideHintEl,
     diskBanner(),
+    svnResultBar(),
     editorArea,
     statusBar)
   // 编辑器根节点按 composer 顶部边界动态限高，底部对话区域继续由 DSH 原生渲染。
@@ -2480,16 +2966,89 @@ export function EditorView(props) {
   // 命令栏浮层（Ctrl+Shift+P / F1）：portal 到 body，但需挂在插件自己的 React 树里；
   // 三种布局形态都渲染 EditorView，故这里挂载即可，多宿主由 store 单实例认领兜底。
   const paletteEl = React.createElement(CommandPalette, { key: 'edrv-palette', sessionId })
+  // SVN 日志弹窗（P3）：portal 到 body，与命令栏/片段选择器同一挂载方式
+  const svnLogEl = svnLog
+    ? React.createElement(SvnLogDialog, {
+        key: 'edrv-svnlog',
+        target: svnLog.target,
+        entries: svnLogData,
+        wcRev: svnLogWcRev,
+        truncated: svnLogTruncated(scope, svnLog.target || '', svnLog.limit || SVN_LOG_PAGE, svnLogOptsOf(svnLog)),
+        error: svnLogError,
+        busy: svnLogBusy,
+        stopOnCopy: svnLog.soc === true,
+        includeMerged: svnLog.merged === true,
+        rangeActive: Array.isArray(svnLog.range),
+        onShowRange: (start, end) => {
+          const next = { ...svnLog, range: [start, end], limit: SVN_LOG_PAGE }
+          setSvnLog(next)
+          setSvnLogBusy(true)
+          // 换键取数（range 维度隔离缓存）
+          ensureSvnLog(sessionId, scope, next.target || '', SVN_LOG_PAGE, false, svnLogOptsOf(next))
+        },
+        onRangeReset: () => {
+          const next = { ...svnLog, range: null, limit: SVN_LOG_PAGE }
+          setSvnLog(next)
+          setSvnLogBusy(true)
+          ensureSvnLog(sessionId, scope, next.target || '', SVN_LOG_PAGE, false, svnLogOptsOf(next))
+        },
+        onStopCopy: (on) => {
+          const next = { ...svnLog, soc: on }
+          setSvnLog(next)
+          setSvnLogBusy(true)
+          // 换键取数（soc 维度隔离缓存）；已加载过默认窗口时无需 force
+          ensureSvnLog(sessionId, scope, next.target || '', next.limit || SVN_LOG_PAGE, false, svnLogOptsOf(next))
+        },
+        onShowMerged: (on) => {
+          const next = { ...svnLog, merged: on }
+          setSvnLog(next)
+          setSvnLogBusy(true)
+          // 换键取数（mrg 维度隔离缓存，P1-5）；与 soc 同口径
+          ensureSvnLog(sessionId, scope, next.target || '', next.limit || SVN_LOG_PAGE, false, svnLogOptsOf(next))
+        },
+        onRefresh: () => {
+          setSvnLogError('')
+          setSvnLogBusy(true)
+          refreshSvnLog(sessionId, scope, svnLog.target || '', svnLog.limit || SVN_LOG_PAGE, svnLogOptsOf(svnLog))
+        },
+        onLoadMore: () => {
+          // P1-8：按已加载上限递增（防旧 limit 倒退），force 绕过缓存命中后原地替换同键数据
+          const opts = svnLogOptsOf(svnLog)
+          const loaded = svnLogLoadedLimit(scope, svnLog.target || '', opts) || SVN_LOG_PAGE
+          setSvnLogBusy(true)
+          setSvnLog({ ...svnLog, limit: loaded + SVN_LOG_PAGE })
+          ensureSvnLog(sessionId, scope, svnLog.target || '', loaded + SVN_LOG_PAGE, true, opts)
+        },
+        onShowAll: () => {
+          setSvnLogBusy(true)
+          setSvnLog({ ...svnLog, limit: SVN_LOG_SHOW_ALL_LIMIT })
+          ensureSvnLog(sessionId, scope, svnLog.target || '', SVN_LOG_SHOW_ALL_LIMIT, true, svnLogOptsOf(svnLog))
+        },
+        onOpenDiff: (relPath, revision) => { setSvnLog(null); runSvnDiffRev(relPath, revision) },
+        onComparePair: (revA, revB) => { setSvnLog(null); runSvnDiffPair(svnLog.target || '', revA, revB) },
+        onCompareWorking: (revision) => { setSvnLog(null); runSvnDiffWorking(svnLog.target || '', revision) },
+        onOpenFile: (relPath) => { setSvnLog(null); openFile(relPath, false) },
+        onClose: () => { setSvnLog(null); setSvnLogError('') },
+      })
+    : null
+  // 诊断日志弹窗：portal 到 body，与命令栏/SVN 日志弹窗同一挂载方式
+  const dlogEl = dlogOpen
+    ? React.createElement(LogDialog, { key: 'edrv-dlog', sessionId, onClose: () => setDlogOpen(false) })
+    : null
   const rootEl = layout === 'side'
     ? React.createElement('div', { ref: viewRootRef, 'data-edrv-view': '1', 'data-edrv-layout': 'side', className: 'edrv-view-side', style: Object.assign({}, baseStyle, { height: '100%' }) },
         editorRow,
         tabMenuEl,
         paletteEl,
+        svnLogEl,
+        dlogEl,
         snippetPickerEl)
     : React.createElement('div', { ref: viewRootRef, 'data-edrv-view': '1', style: Object.assign({}, baseStyle, { height: 'var(--edrv-editor-height, 100%)', maxHeight: 'var(--edrv-editor-height, 100%)' }) },
         editorRow,
         tabMenuEl,
         paletteEl,
+        svnLogEl,
+        dlogEl,
         snippetPickerEl)
   return rootEl
 }

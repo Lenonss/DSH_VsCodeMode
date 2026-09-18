@@ -24,8 +24,33 @@ let registered = false
 const disposables = []
 
 /** 目标文件打开并定位（复用现有 openFileAt 的 edrv:open-editor 事件通道）。 */
-function openAt(path, line, column) {
-  window.dispatchEvent(new CustomEvent('edrv:open-editor', { detail: { path, line, column } }))
+function openAt(path, target) {
+  window.dispatchEvent(new CustomEvent('edrv:open-editor', { detail: Object.assign({ path }, target) }))
+}
+
+/**
+ * 解析 Monaco opener 第三参（目标位置）为 1-based 区间。
+ *
+ * 为什么要兼容多形态：Monaco 经官方桥 `registerEditorOpener` 传出的是
+ * `options.selection`（Range，含 getStartPosition）或其**降级形态**裸
+ * `{ lineNumber, column }`（官方桥在 Range 缺 endLineNumber/endColumn 时降级），
+ * 另有 `editor.action.goToLocations` 完全不传 options（第三参 undefined）。
+ * 三种形态都出现过，逐形态取值并对缺字段兜底，避免落点退化成第 1 行。
+ * @author ddj 2026年09月17号
+ * @param selectionOrPosition opener 第三参（Range / 裸位置 / undefined）
+ * @returns 1-based 目标区间（end 缺省等于 start，且保证 end >= start）
+ */
+export function navTargetOf(selectionOrPosition) {
+  const src = selectionOrPosition ?? {}
+  const start = typeof src.getStartPosition === 'function' ? src.getStartPosition() : src
+  const end = typeof src.getEndPosition === 'function' ? src.getEndPosition() : null
+  const line = Math.max(1, start?.lineNumber ?? 1)
+  const column = Math.max(1, start?.column ?? 1)
+  const rawEndLine = end?.lineNumber ?? src.endLineNumber
+  const rawEndColumn = end?.column ?? src.endColumn
+  const endLine = Math.max(line, rawEndLine != null ? Math.max(1, rawEndLine) : line)
+  const endColumn = rawEndColumn != null ? Math.max(1, rawEndColumn) : undefined
+  return endColumn === undefined ? { line, column, endLine } : { line, column, endLine, endColumn }
 }
 
 /** 注册全部 Monaco LSP provider 与文档跟踪（幂等）。 */
@@ -74,10 +99,7 @@ export function registerLspProviders(monaco) {
       openCodeEditor: (source, resource, selectionOrPosition) => {
         const path = lspUriToAbs(resource)
         if (!path) return false
-        const start = selectionOrPosition?.getStartPosition?.() ?? selectionOrPosition
-        const line = Math.max(1, start?.lineNumber ?? 1)
-        const column = Math.max(1, start?.column ?? 1)
-        openAt(path, line, column)
+        openAt(path, navTargetOf(selectionOrPosition))
         return true
       },
     }),

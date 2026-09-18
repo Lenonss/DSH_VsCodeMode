@@ -31,5 +31,8 @@ pnpm-lock.yaml.??????
 # 本地临时产物（交换脚本日志、冒烟脚本等）
 tmp/
 
+# 真实仓库数据样本（含内部路径/作者/提交信息，不入库；本地存在时对应用例自动跑）
+tests/fixtures/*.xml
+
 # apply-patches.mjs 备份文件
 *.bak-patch-*

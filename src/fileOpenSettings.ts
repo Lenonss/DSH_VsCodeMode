@@ -12,12 +12,13 @@ import { pathToFileURL } from 'node:url'
 import type { Ctx } from './store.js'
 import { KEYBINDING_DEFAULTS } from './shared/keybindings.js'
 import { INTEGRATION_BASE_DEFAULT } from './shared/integration.js'
+import { TORTOISE_DIR_DEFAULT } from './shared/svn.js'
 import type { AiConfigPatch, AiConfigView } from './shared/ai.js'
 import { log } from './log.js'
 
 export const FILE_OPEN_SETTINGS_NS = 'dsh-vscode-mode'
 export const FILE_OPEN_DEFAULT = 'auto'
-export interface FileOpenSettings { fileOpenTool: string; integrationBaseUrl: string }
+export interface FileOpenSettings { fileOpenTool: string; integrationBaseUrl: string; svnPath: string; tortoisePath: string }
 export interface FileOpenSettingsState { value: string; revision?: number; update: (value: string, expectedRevision?: number) => Promise<void> }
 
 /** AI 内联补全配置默认值（默认关闭；路由空 = 自动；档位空 = 跟随模型默认）。 */
@@ -223,6 +224,18 @@ function baseValueOf(config: unknown): string {
   return typeof raw === 'string' && raw.trim() ? raw.trim() : INTEGRATION_BASE_DEFAULT
 }
 
+/** 配置/设置里的 svn CLI 覆盖（空 = 从 PATH 解析 'svn'）。 */
+function svnPathValueOf(config: unknown): string {
+  const raw = (config as { svnPath?: unknown } | undefined)?.svnPath
+  return typeof raw === 'string' ? raw.trim() : ''
+}
+
+/** 配置/设置里的 TortoiseSVN 目录（空 = 默认安装目录）。 */
+function tortoiseDirValueOf(config: unknown): string {
+  const raw = (config as { tortoisePath?: unknown } | undefined)?.tortoisePath
+  return typeof raw === 'string' && raw.trim() ? raw.trim() : TORTOISE_DIR_DEFAULT
+}
+
 /**
  * 安装设置 section（版本自适应；任一策略不可用返回 false 不抛错）。
  * @author ddj 2026年08月24号 / 2026年09月02号
@@ -257,6 +270,9 @@ export async function installOpenSettingsSection(
     aiProvider: deps.z.string().default(AI_CONFIG_DEFAULT.provider),
     aiModel: deps.z.string().default(AI_CONFIG_DEFAULT.model),
     aiEffort: deps.z.string().default(AI_CONFIG_DEFAULT.effort),
+    // SVN 能力：svn CLI 覆盖（空 = PATH）与 TortoiseSVN 目录（Windows 过渡增强）
+    svnPath: deps.z.string().default(''),
+    tortoisePath: deps.z.string().default(TORTOISE_DIR_DEFAULT),
   })
   const strategy = await runSettingsInstall(ctx, ns, schema, entry, {
     setSource: (source) => hooks.setSource(source as () => FileOpenSettings),
@@ -284,7 +300,7 @@ function aiValueOf(stored: unknown): { enabled: boolean; provider: string; model
  * @param onChange 设置变化回调
  * @returns 设置状态（fileOpenTool 值 + AI 补全配置读写）
  */
-export function setupOpenSettings(ctx: Ctx, config: unknown, onChange: (value: string) => void): FileOpenSettingsState & { ai: () => AiConfigView; aiUpdate: (patch: AiConfigPatch, expectedRevision?: number) => Promise<AiConfigView> } {
+export function setupOpenSettings(ctx: Ctx, config: unknown, onChange: (value: string) => void): FileOpenSettingsState & { ai: () => AiConfigView; aiUpdate: (patch: AiConfigPatch, expectedRevision?: number) => Promise<AiConfigView>; svn: () => { svnPath: string; tortoisePath: string } } {
   let current = configValue(config)
   let revision: number | undefined
   let provider: SettingsProvider | undefined
@@ -304,10 +320,29 @@ export function setupOpenSettings(ctx: Ctx, config: unknown, onChange: (value: s
     aiCurrent = stored !== undefined ? aiValueOf(stored) : aiCurrent
   }
 
-  void installOpenSettingsSection(ctx, FILE_OPEN_SETTINGS_NS, { fileOpenTool: current, integrationBaseUrl: baseValueOf(config) }, {
+  /** SVN 路径当前值（settings 未就绪回退配置值）。 */
+  let svnCurrent: { svnPath: string; tortoisePath: string } = {
+    svnPath: svnPathValueOf(config),
+    tortoisePath: tortoiseDirValueOf(config),
+  }
+  const svnSync = (stored: unknown): void => {
+    svnCurrent = { svnPath: svnPathValueOf(stored), tortoisePath: tortoiseDirValueOf(stored) }
+  }
+  /** 读取 settings 存储值（describe 未就绪返回 undefined）。 */
+  const storedValue = (): unknown => {
+    return provider?.describe?.({ redactSecrets: true })?.find((item: { ns?: string }) => item.ns === FILE_OPEN_SETTINGS_NS)?.value
+  }
+
+  void installOpenSettingsSection(ctx, FILE_OPEN_SETTINGS_NS, {
+    fileOpenTool: current,
+    integrationBaseUrl: baseValueOf(config),
+    svnPath: svnCurrent.svnPath,
+    tortoisePath: svnCurrent.tortoisePath,
+  }, {
     setSource: (source) => {
       notify(source().fileOpenTool)
       aiCurrent = aiValueOf(source())
+      svnSync(source())
       syncRevision()
     },
     onChange: settingsChange,
@@ -315,6 +350,7 @@ export function setupOpenSettings(ctx: Ctx, config: unknown, onChange: (value: s
   ctx.inject?.(['settings'], (settingsCtx: Ctx) => {
     provider = settingsCtx.get('settings')
     aiSync()
+    svnSync(storedValue())
     syncRevision()
   })
 
@@ -331,6 +367,7 @@ export function setupOpenSettings(ctx: Ctx, config: unknown, onChange: (value: s
       syncRevision()
     },
     ai: () => aiCurrent,
+    svn: () => svnCurrent,
     aiUpdate: async (patch: AiConfigPatch, expectedRevision?: number): Promise<AiConfigView> => {
       if (!provider?.update) {
         // settings 不可用：内存态生效（重启回落默认），保持与 fileOpenTool 的降级语义一致

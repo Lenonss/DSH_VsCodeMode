@@ -19,6 +19,8 @@ import type { RuleInfo, RuleProject, RuleRefInput, RuleSaveInput } from './rules
 import type { SnippetEntry, SnippetInfo, SnippetProject, SnippetRefInput, SnippetSaveInput } from './snippets.js'
 import type { LspEnvInstallState, LspExtInfo, LspExtUpdate, LspHover, LspLocation, LspMarketItem, LspPosition, LspSemanticTokens, LspServerStatus, LspSymbol } from './lsp.js'
 import type { AiConfigPatch, AiConfigView, AiDirectoryView, AiInlineRequest, AiInlineResult } from './ai.js'
+import type { SvnAction, SvnChangeEntry, SvnDiffRevResult, SvnLogEntry, SvnStatusPayload, SvnUpdateResult } from './svn.js'
+import type { LoggerLevel } from './logger.js'
 
 /** webServer 精确路由。 */
 export const RPC_PATH = '/edrv/rpc'
@@ -173,6 +175,22 @@ export interface DecideResult {
   stale?: boolean
 }
 
+/** 一份诊断日志文件的清单项（edrv.dlog.list；name 即请求回传用的 file 参数）。 */
+export interface DebugLogFileInfo {
+  name: string
+  bytes: number
+  mtimeMs: number
+}
+
+/** 诊断日志读取结果（edrv.dlog.read；tail 语义，truncated = 已按 maxBytes 截头保尾）。 */
+export interface DebugLogRead {
+  name: string
+  path: string
+  content: string
+  size: number
+  truncated: boolean
+}
+
 /** 每个方法的请求参数（sessionId 为公共可选字段）。 */
 export interface RpcRequestMap {
   'edrv.list': { sessionId?: string; callIds?: string[]; skipStale?: boolean }
@@ -187,7 +205,11 @@ export interface RpcRequestMap {
   'edrv.archiveList': { sessionId?: string }
   'edrv.archiveRead': { sessionId?: string; path?: string }
   'edrv.rollback': { sessionId?: string; path: string; batch?: number }
-  'edrv.debug': { sessionId?: string; text: string }
+  'edrv.debug': { sessionId?: string; text: string; level?: LoggerLevel }
+  'edrv.dlog.list': { sessionId?: string }
+  'edrv.dlog.read': { sessionId?: string; file?: string; maxBytes?: number }
+  'edrv.dlog.clear': { sessionId?: string; file?: string }
+  'edrv.dlog.reveal': { sessionId?: string }
   'edrv.searchFiles': { sessionId?: string; query: string }
   'edrv.searchContent': { sessionId?: string; query: string; matchCase?: boolean; wholeWord?: boolean; regex?: boolean; maxResults?: number; include?: string[]; exclude?: string[] }
   'edrv.listDir': { sessionId?: string; path: string; force?: boolean }
@@ -263,6 +285,19 @@ export interface RpcRequestMap {
   'snippets.save': SnippetSaveInput
   'snippets.remove': SnippetRefInput
   'snippets.entries': { sessionId?: string }
+  'svn.status': { sessionId?: string; force?: boolean }
+  'svn.changes': { sessionId?: string; force?: boolean }
+  'svn.diffBase': { sessionId?: string; path: string }
+  'svn.revert': { sessionId?: string; paths: string[] }
+  'svn.add': { sessionId?: string; paths: string[] }
+  'svn.log': { sessionId?: string; path?: string; limit?: number; stopOnCopy?: boolean; startRev?: number; endRev?: number; showMerged?: boolean }
+  'svn.diffRev': { sessionId?: string; path: string; revision: number }
+  'svn.diffPair': { sessionId?: string; path: string; revA: number; revB: number }
+  'svn.diffWorking': { sessionId?: string; path: string; revision: number }
+  'svn.wcRev': { sessionId?: string; path?: string }
+  'svn.cleanup': { sessionId?: string; removeUnversioned?: boolean; removeIgnored?: boolean }
+  'svn.update': { sessionId?: string; path?: string }
+  'svn.tortoise': { sessionId?: string; action: SvnAction; path?: string }
 }
 
 export type RpcMethod = keyof RpcRequestMap
@@ -282,6 +317,10 @@ export interface RpcOkMap {
   'edrv.archiveRead': { batches: ArchiveBatch[] }
   'edrv.rollback': { path: string; batch: number | null }
   'edrv.debug': object
+  'edrv.dlog.list': { root: string; files: DebugLogFileInfo[]; current: string | null }
+  'edrv.dlog.read': DebugLogRead
+  'edrv.dlog.clear': { name: string }
+  'edrv.dlog.reveal': { opened: boolean }
   'edrv.searchFiles': { files: string[]; truncated: boolean }
   'edrv.searchContent': { matches: SearchContentMatch[]; truncated: boolean; warning?: string }
   'edrv.listDir': { root: string; path: string; entries: TreeEntry[] }
@@ -357,6 +396,19 @@ export interface RpcOkMap {
   'snippets.save': { file: SnippetInfo }
   'snippets.remove': object
   'snippets.entries': { entries: SnippetEntry[] }
+  'svn.status': SvnStatusPayload
+  'svn.changes': { wcRoot: string; entries: SvnChangeEntry[]; truncated: boolean }
+  'svn.diffBase': { base: string | null; working: string; reason?: string; error?: string }
+  'svn.revert': { count: number; summary: string; output: string }
+  'svn.add': { count: number; summary: string; output: string }
+  'svn.log': { entries: SvnLogEntry[]; truncated: boolean; target: string; limit?: number }
+  'svn.diffRev': SvnDiffRevResult
+  'svn.diffPair': SvnDiffRevResult
+  'svn.diffWorking': SvnDiffRevResult
+  'svn.wcRev': { revision: number | null }
+  'svn.cleanup': { summary: string; output: string }
+  'svn.update': SvnUpdateResult
+  'svn.tortoise': { launched: string }
 }
 
 /** 统一响应：{ok:true, ...payload} 或 {ok:false, error}。 */

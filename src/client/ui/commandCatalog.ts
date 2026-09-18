@@ -7,6 +7,9 @@
  * 作者 ddj 2026年09月10号
  */
 import { hasEditorModel, hasOpenTabs } from '../editorModelState.js'
+import { svnCurrentStatus } from '../svnStatus.js'
+import { svnActionOn, svnActionsFor } from '../../shared/svnActions.js'
+import type { SvnActionDef } from '../../shared/svnActions.js'
 
 /** 一条编辑器指令（展示 + 执行 + 可用性）。 */
 export interface CommandDef {
@@ -106,6 +109,68 @@ function closeTabDef(): CommandDef {
 }
 
 /**
+ * 命令栏专用 SVN 动作（从 shared 动作目录生成；F1 收敛后命令栏不再手写动作清单）。
+ *
+ * 为什么这样：P3/P4 每加一个 SVN 动作，命令栏/树菜单/页签菜单三处都要改，
+ * 且显隐条件会在三处各自漂移。现在动作元数据只有一份（shared/svnActions.ts），
+ * 这里只负责「映射成命令定义」，新增动作无需改本文件。
+ *
+ * @author ddj 2026年09月16号
+ * @returns 命令定义数组
+ */
+function svnPaletteDefs(): CommandDef[] {
+  return svnActionsFor('palette').map((action) => ({
+    id: action.commandId ?? ('edrv.svn' + action.id),
+    label: 'SVN ' + action.label,
+    category: 'SVN',
+    order: action.order,
+    available: () => {
+      const status = svnCurrentStatus()
+      const ready = Boolean(status?.managed)
+      const cli = Boolean(status?.svnCli)
+      const tortoise = Boolean(status?.tortoise)
+      // 命令栏作用于「活动文件」：有编辑器模型时按 file 求值（与 svnEditorActions 同口径）。
+      // 若恒用 'editor'，file/directory 类动作（查看日志/加入/还原）会因 targets 不含 editor
+      // 被整体过滤——svnStatus.ts 注释警告过的同款坑（2026-09-18 实测命令栏缺「查看日志」）。
+      const hasModel = hasEditorModel()
+      if (!svnActionOn(action, {
+        managed: ready, svnCli: cli, tortoise, target: hasModel ? 'file' : 'editor',
+        versioned: true, diffable: true,
+      })) return false
+      // 需要活动文件的动作（命令栏语义）额外要求编辑器模型
+      if (action.needsEditorModel && !hasModel) return false
+      return true
+    },
+    run: () => emit(svnEventOf(action)),
+  }))
+}
+
+/**
+ * 动作 → 命令事件后缀（`edrv.command.<后缀>`）。
+ * 与既有事件名保持兼容：update/diff-base/add/revert 沿用历史后缀，新动作按驼峰拼接。
+ * @author ddj 2026年09月16号
+ * @param action 动作定义
+ * @returns 事件后缀
+ */
+function svnEventOf(action: SvnActionDef): string {
+  const legacy: Record<string, string> = {
+    update: 'svnUpdate',
+    'refresh-changes': 'svnRefreshChanges',
+    'diff-base': 'svnDiffBase',
+    add: 'svnAdd',
+    revert: 'svnRevertCli',
+    log: 'svnLog',
+    cleanup: 'svnCleanup',
+    'tortoise-commit': 'svnTortoiseCommit',
+    'tortoise-log': 'svnTortoiseLog',
+    'tortoise-diff': 'svnTortoiseDiff',
+    'tortoise-blame': 'svnTortoiseBlame',
+    'tortoise-revert': 'svnTortoiseRevert',
+  }
+  return legacy[action.id] ?? ('svn' + action.id)
+}
+
+/**
  * 编辑器内置指令目录（顺序 = 快捷键设置页展示顺序）。
  * 前置 8 条的键位由 EditorView / QuickOpen 自行 capture 监听（历史实现），
  * 故不进 BRIDGE_COMMANDS，避免同一按键双执行。
@@ -131,6 +196,11 @@ export const EDITOR_COMMANDS: readonly CommandDef[] = [
     id: 'edrv.searchInFiles', label: '在工作区中搜索', category: '视图', order: 20,
     keybinding: 'Ctrl+Shift+F', available: alwaysAvailable,
     run: () => emit('searchInFiles'),
+  },
+  {
+    id: 'edrv.showLogs', label: '查看诊断日志', category: '视图', order: 30,
+    available: alwaysAvailable,
+    run: () => emit('showLogs'),
   },
   {
     id: 'edrv.navigateBack', label: '后退（导航历史）', category: '导航', order: 10,
@@ -182,6 +252,8 @@ export const EDITOR_COMMANDS: readonly CommandDef[] = [
     available: needsModel,
     run: () => emit('insertSnippet'),
   },
+  // SVN（动作清单来自 shared/svnActions.ts：三入口共用一份显隐规则）
+  ...svnPaletteDefs(),
 ]
 
 /**

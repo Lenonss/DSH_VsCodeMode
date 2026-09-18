@@ -36,6 +36,15 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
 - 2026-09-22 坑：发布前仅跑三门不抓组件渲染期错误（tests 全是纯逻辑，无 DOM 渲染测试）——v0.4.5 带着上述回归过全量
   1082 用例照发。**客户端 UI 改动发版前必须真实浏览器冒烟核心入口**（官方侧栏「文件编辑」Tab 打开 + 资源管理器挂载）；
   复现用 chrome-devtools：点侧栏入口卡片 → 看 console 是否 slot entry crashed。
+- 2026-09-17 坑：Ctrl+点击「只打开文件不跳转行」的真因在 **EditorView 而非 opener**——跳转/model 同步 effect 用
+  `content === null` 当就绪判据，跨文件切换那一帧 content 仍是**上一个文件**的内容（非 null），于是先建 model(A 内容)
+  → reveal/setPosition(目标行) 生效 → B 真实内容到达触发 `setValue` → Monaco 重置光标到 1:1，而 pendingFocus 已消费
+  → 落点永久丢失（同文件跳转不换内容故不复现，看起来「时好时坏」）。修法：门控一律用 `contentReady`（contentPath === active）。
+  诊断法：hook ed 的 onDidChangeModelContent/setValue/setPosition 打时序日志，一条 trace 就能看出顺序错位。
+- 2026-09-17 坑：**Monaco `model.getWordAtPosition()` 只返回 `{ word, startColumn, endColumn }`，不含行号**——
+  直接把它当 range 透传会产出 `startLineNumber: undefined` 的非法装饰：`deltaDecorations` 正常返回 id、装饰也「挂上了」，
+  但 DOM 里查不到该 class（零可见高亮，极易误判为「装饰没生效」）。必须用当前行补齐行号。另：零宽 range
+  （start === end，Monaco 原生跳转 `collapseToStart` 后的常态）同样渲染不出任何高亮，需识别为「无区间」并回落到单词/整行。
 
 ## 发布流程（必须照做，禁止偏离）
 

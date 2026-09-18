@@ -13,6 +13,10 @@
  * 作者 ddj 2026年09月11号
  */
 import { closeAll, closeOthers, closeRight, closeSaved, isTreeRevealable, type TabLike } from './tabActions.js'
+import { isSvnDiffable } from '../shared/svn.js'
+import type { SvnFeature, SvnItemStatus } from '../shared/svn.js'
+import { svnActionOn, svnActionsFor } from '../shared/svnActions.js'
+import type { SvnActionContext } from '../shared/svnActions.js'
 
 /** 菜单构建输入（EditorView 每次打开菜单时按最新状态快照传入）。 */
 export interface TabMenuState {
@@ -30,6 +34,14 @@ export interface TabMenuState {
   hasSession: boolean
   /** 「添加到对话」动作集是否可用。 */
   canAddToConversation: boolean
+  /** SVN 能力可用（受管理且 svn CLI 可用；SVN 更新项显隐）。 */
+  svnReady?: boolean
+  /** TortoiseProc 可用（Windows 过渡增强组显隐）。 */
+  tortoiseReady?: boolean
+  /** 已由自研界面提供等价能力的功能集合（落实「自研替换时间线」；缺省不隐藏任何 Tortoise 项）。 */
+  svnFeatures?: readonly SvnFeature[]
+  /** 右键目标文件的 SVN 状态（未在变更清单里为 undefined；决定 CLI 三项显隐）。 */
+  svnStatusOfTarget?: SvnItemStatus
   /** 「关闭」项的键位提示（缺省无提示；由调用方读 chordOf 注入）。 */
   closeChord?: string | null
 }
@@ -51,6 +63,44 @@ export const CLOSE_MENU_IDS = ['close', 'close-others', 'close-right', 'close-sa
 
 /** 本架构不支持的条目 id（参考图有、浏览器单编辑器实例无法实现）——显式登记以防误加。 */
 export const UNSUPPORTED_MENU_IDS = ['split-right', 'split-move', 'move-new-window', 'copy-new-window'] as const
+
+/**
+ * 构建 SVN 组条目（动作清单来自 shared/svnActions.ts，与树菜单/命令栏同一份规则）。
+ *
+ * 收敛收益：此前 CLI 三项的状态矩阵在本文件与 sidebar/menuItems 各写一份，
+ * 极易漂移（P2 实测两处表述已略有差异）。现在只做「元数据 → 菜单条目」映射。
+ * @author ddj 2026年09月16号
+ * @param state 菜单状态快照
+ * @returns SVN 组条目（可为空数组）
+ */
+function svnEntriesOf(state: TabMenuState): TabMenuEntry[] {
+  if (state.svnReady !== true && state.tortoiseReady !== true) return []
+  const status = state.svnStatusOfTarget
+  const context: SvnActionContext = {
+    managed: true,
+    svnCli: state.svnReady === true,
+    tortoise: state.tortoiseReady === true,
+    // 自研能力集合：驱动「自研替换时间线」（隐藏已被自研覆盖的 Tortoise 项）
+    svnFeatures: state.svnFeatures,
+    target: 'file',
+    versioned: status !== 'unversioned' && status !== 'ignored',
+    status,
+    diffable: isSvnDiffable(state.path, status),
+  }
+  const entries: TabMenuEntry[] = []
+  for (const action of svnActionsFor('tab')) {
+    if (!svnActionOn(action, context)) continue
+    entries.push({
+      id: 'svn-' + action.id,
+      label: action.label,
+      danger: action.danger === true,
+      // 分隔线属入口级外观：页签菜单的 SVN 组恒以分隔线起头（挂在前一组「固定」之后），
+      // 故由本入口决定，不放进共享元数据（否则会连带改动树菜单的分组外观）
+      separator: entries.length === 0,
+    })
+  }
+  return entries
+}
 
 /**
  * 构建页签右键菜单条目。
@@ -82,6 +132,7 @@ export function buildTabMenu(state: TabMenuState): TabMenuEntry[] {
       label: pinned ? '取消固定' : '固定',
       separator: true,
     },
+    ...svnEntriesOf(state),
   ]
 }
 

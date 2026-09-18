@@ -1,7 +1,8 @@
 /**
  * 文件页签右键菜单模型测试：条目顺序与分组、各禁用规则、固定态标签切换、
- * 键位提示只在真实绑定时出现，以及「不可实现条目」的排除守约。
- * 作者 ddj 2026-09-11
+ * 键位提示只在真实绑定时出现、「不可实现条目」的排除守约，
+ * 以及 P2 SVN 组能力守卫与 CLI 三项状态矩阵。
+ * 作者 ddj 2026-09-11 / 2026-09-16
  */
 import { describe, expect, it } from 'vitest'
 import { CLOSE_MENU_IDS, UNSUPPORTED_MENU_IDS, buildTabMenu } from '../src/client/tabMenu.js'
@@ -158,5 +159,96 @@ describe('buildTabMenu 固定态标签', () => {
 
   it('右键目标不存在于页签表（竞态）时按未固定处理，不抛错', () => {
     expect(entry({ path: 'ghost.ts' }, 'toggle-pinned').label).toBe('固定')
+  })
+})
+
+describe('buildTabMenu SVN 组（动态能力守卫）', () => {
+  const svnState = { svnReady: true, tortoiseReady: true }
+
+  it('能力未就绪（缺省）时菜单不含 SVN 条目（非 SVN 工作区零变化）', () => {
+    const all = ids(buildTabMenu(state()))
+    expect(all).not.toContain('svn-update')
+    expect(all).not.toContain('svn-tortoise-commit')
+  })
+
+  it('svnReady 时追加「SVN 更新」，Tortoise 未就绪时不含 Tortoise 组', () => {
+    const all = ids(buildTabMenu(state({ svnReady: true })))
+    expect(all).toContain('svn-update')
+    expect(all).not.toContain('svn-tortoise-commit')
+    expect(all).not.toContain('svn-tortoise-revert')
+  })
+
+  it('svnReady + tortoiseReady 时追加完整 SVN 组（更新 + 比较 + 查看日志 + Tortoise 五项）', () => {
+    // 目标不在变更清单（干净文件）→ 无「加入版本控制」「SVN 还原」（状态门禁），仅比较与日志
+    expect(ids(buildTabMenu(state(svnState)))).toEqual([
+      'add-to-conversation',
+      'close', 'close-others', 'close-right', 'close-saved', 'close-all',
+      'copy-path', 'copy-relative-path',
+      'reveal-in-os', 'reveal-in-view',
+      'toggle-pinned',
+      'svn-update',
+      'svn-diff-base',
+      'svn-log',
+      'svn-tortoise-commit', 'svn-tortoise-log', 'svn-tortoise-diff', 'svn-tortoise-blame', 'svn-tortoise-revert',
+    ])
+  })
+
+  it('SVN 组以分隔线开头（挂在固定组之后），还原条目带 danger', () => {
+    const entries = buildTabMenu(state(svnState))
+    // 页签菜单的 SVN 组只有首条带分隔线（与 P2 外观一致；Tortoise 组不再另起分隔线）
+    expect(entries.filter((item) => item.separator).map((item) => item.id))
+      .toEqual(['close', 'copy-path', 'reveal-in-os', 'toggle-pinned', 'svn-update'])
+    const torRevert = entries.find((item) => item.id === 'svn-tortoise-revert')
+    expect(torRevert?.danger).toBe(true)
+    // 目标为已改动文件时 CLI 还原项出现且带 danger（干净文件不出还原项，故另取状态断言）
+    const withChange = buildTabMenu(state({ svnReady: true, tortoiseReady: true, svnStatusOfTarget: 'modified' }))
+    expect(withChange.find((item) => item.id === 'svn-revert-cli')?.danger).toBe(true)
+  })
+})
+
+describe('buildTabMenu SVN CLI 三项状态矩阵', () => {
+  /** 带目标状态的菜单状态（默认两个页签、CLI+Tortoise 就绪）。 */
+  const withStatus = (svnStatusOfTarget: TabMenuState['svnStatusOfTarget']) =>
+    state({ svnReady: true, tortoiseReady: true, svnStatusOfTarget })
+
+  it('目标为已修改：出现「与基线比较」+「SVN 还原」，无「加入版本控制」', () => {
+    const all = ids(buildTabMenu(withStatus('modified')))
+    expect(all).toContain('svn-diff-base')
+    expect(all).toContain('svn-revert-cli')
+    expect(all).not.toContain('svn-add')
+  })
+
+  it('目标为未版本控制：出现「加入版本控制」，无比较/还原', () => {
+    const all = ids(buildTabMenu(withStatus('unversioned')))
+    expect(all).toContain('svn-add')
+    expect(all).not.toContain('svn-diff-base')
+    expect(all).not.toContain('svn-revert-cli')
+  })
+
+  it('目标不在变更清单（干净文件）：只有「与基线比较」，无加入/还原', () => {
+    const all = ids(buildTabMenu(withStatus(undefined)))
+    expect(all).toContain('svn-diff-base')
+    expect(all).not.toContain('svn-add')
+    expect(all).not.toContain('svn-revert-cli')
+  })
+
+  it('二进制文件（图片）不出「与基线比较」，但已改动的仍可还原', () => {
+    const png = state({ svnReady: true, svnStatusOfTarget: 'modified', path: 'img/logo.png', tabs: [{ path: 'img/logo.png' }] })
+    const all = ids(buildTabMenu(png))
+    expect(all).not.toContain('svn-diff-base')
+    expect(all).toContain('svn-revert-cli')
+  })
+
+  it('冲突条目：可比较且可还原（danger 标记）', () => {
+    const entries = buildTabMenu(withStatus('conflicted'))
+    expect(ids(entries)).toContain('svn-diff-base')
+    expect(entries.find((item) => item.id === 'svn-revert-cli')?.danger).toBe(true)
+  })
+
+  it('缺少 svnReady 时不出任何 CLI 三项（能力守卫优先）', () => {
+    const all = ids(buildTabMenu(state({ svnStatusOfTarget: 'modified' })))
+    expect(all).not.toContain('svn-diff-base')
+    expect(all).not.toContain('svn-revert-cli')
+    expect(all).not.toContain('svn-add')
   })
 })
