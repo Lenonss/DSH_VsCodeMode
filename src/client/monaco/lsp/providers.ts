@@ -23,6 +23,9 @@ const SEMANTIC_LEGEND = {
 let registered = false
 const disposables = []
 
+/** LSP provider 注册标记的全局挂点名（跨插件重载认领；见 disposeLspProviders）。 */
+const LSP_PROVIDERS_GLOBAL = '__edrvLspProvidersRegistered__'
+
 /** 目标文件打开并定位（复用现有 openFileAt 的 edrv:open-editor 事件通道）。 */
 function openAt(path, target) {
   window.dispatchEvent(new CustomEvent('edrv:open-editor', { detail: Object.assign({ path }, target) }))
@@ -56,6 +59,12 @@ export function navTargetOf(selectionOrPosition) {
 /** 注册全部 Monaco LSP provider 与文档跟踪（幂等）。 */
 export function registerLspProviders(monaco) {
   if (registered) return
+  // 跨重载守卫：window.monaco 存活的上一代已注册过整套 provider（标记落 window）
+  const host = /* @__PURE__ */ (typeof window === 'undefined' ? undefined : window)
+  if (host && host[LSP_PROVIDERS_GLOBAL]) {
+    registered = true
+    return
+  }
   registered = true
 
   // —— 文档跟踪：model 生命周期 → host 文档同步（含未保存编辑）——
@@ -152,6 +161,29 @@ export function registerLspProviders(monaco) {
       releaseDocumentSemanticTokens: () => {},
     }),
   )
+  // 注销器落 window：window.monaco 跨插件重载存活，模块级 registered 会复位，
+  // 只判 registered 会在重载后重复注册全部 LSP provider（见 disposeLspProviders）。
+  if (host) host[LSP_PROVIDERS_GLOBAL] = true
+}
+
+/**
+ * 卸载 LSP provider 集合：注销全部注册并复位状态（插件重载/卸载时调用）。
+ *
+ * 必须存在的原因：DSH 0.1.6-alpha.2 起支持插件运行时卸载/重载，而 `window.monaco`
+ * 由 loader 注入后**跨重载存活**；模块级 `registered`/`disposables` 却随 bundle 重新
+ * 求值清空 —— 不注销则每次重载都重复叠加一整套 provider（跳转/hover/语义高亮翻倍）。
+ * @author ddj 2026年09月18号
+ */
+export function disposeLspProviders() {
+  for (const dispose of disposables.splice(0)) {
+    try {
+      if (typeof dispose === 'function') dispose()
+      else if (dispose && typeof dispose.dispose === 'function') dispose.dispose()
+    } catch { /* 单个注销异常不影响其余清理 */ }
+  }
+  registered = false
+  const host = /* @__PURE__ */ (typeof window === 'undefined' ? undefined : window)
+  if (host) delete host[LSP_PROVIDERS_GLOBAL]
 }
 
 /** LSP SymbolInfo（host 归一化后）→ Monaco DocumentSymbol。 */

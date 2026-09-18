@@ -9,6 +9,7 @@
 import React from 'react'
 import { rpc } from '../rpc.js'
 import { setAiInlineEnabled } from '../ai/inlineProvider.js'
+import { isDelistedModel } from '../../shared/ai.js'
 
 /**
  * AI 补全设置卡片（设置页「AI 补全」Tab 主体）。
@@ -79,9 +80,16 @@ export function AiSettings() {
   if (!cfg) return React.createElement('div', { className: 'vsm-mcp-empty' }, error || '正在读取 AI 补全配置…')
 
   const modelValue = cfg.provider && cfg.model ? cfg.provider + '/' + cfg.model : ''
+  // G7：配置指向已从官方默认列表下架的模型（DSH 0.1.6-alpha.2 移除 V4 Flash 系列）。
+  // 仅提示，不擅自改写用户已保存的配置（避免覆盖其意图）；清空即回到自动路由。
+  const delisted = isDelistedModel(cfg.model)
   return React.createElement('section', { className: 'vsm-lsp-card' },
     React.createElement('h3', null, 'AI 自动补全（实验）'),
     React.createElement('p', { className: 'vsm-lsp-note' }, '编辑停顿后由模型生成内联建议（ghost text），Tab 接受，Alt+\\ 手动触发。每次补全是一次模型调用；建议选择非推理模型，且思考强度选「跟随默认」或最低档以获得更快响应。'),
+    (delisted
+      ? React.createElement('div', { className: 'vsm-mcp-error vsm-mcp-banner' },
+          '当前模型「' + cfg.model + '」已从 DSH 默认模型列表移除（0.1.6-alpha.2 起）。该模型可能不再可用；将「模型」改回「自动」即可使用第一个可用模型（现有配置不会被自动改动）。')
+      : null),
     React.createElement('div', { className: 'vsm-lsp-row' },
       React.createElement('button', { className: cfg.enabled ? 'vsm-primary' : '', disabled: busy, onClick: toggle },
         cfg.enabled ? '已开启（点击关闭）' : '已关闭（点击开启）'),

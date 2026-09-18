@@ -23,6 +23,16 @@ let pending = null
 let registered = false
 let disposer = null
 
+/**
+ * 片段 provider 注销器的全局挂点名。
+ *
+ * 为什么挂 window：`window.monaco` 由 loader 注入后**跨插件重载存活**，而模块级
+ * registered/disposer 会随 bundle 重新求值复位 —— 只判 registered 会在每次重载后
+ * 重复注册补全 provider（同一编辑器出现重复候补）。故注销器落 window 供跨代认领与清理。
+ * @author ddj 2026年09月18号
+ */
+const SNIPPET_GLOBAL = '__edrvSnippetsDisposer__'
+
 /** 当前会话 id（补全按会话工作区叠加项目片段；EditorView 装配时注入）。 */
 let sessionId = null
 
@@ -102,6 +112,12 @@ export function entriesForLanguage(entries, languageId) {
  */
 export function registerSnippetProvider(monaco) {
   if (registered || !monaco?.languages?.registerCompletionItemProvider) return
+  // 跨重载守卫：上一代 bundle 注册的 provider 仍在存活 window.monaco 上（注销器已落 window）
+  const host = /* @__PURE__ */ (typeof window === 'undefined' ? undefined : window)
+  if (host && host[SNIPPET_GLOBAL]) {
+    registered = true
+    return
+  }
   const snippetKind = monaco.languages.CompletionItemKind?.Snippet
   const asSnippet = monaco.languages.CompletionItemInsertTextRule?.InsertAsSnippet
   // 缺少片段枚举（精简版 Monaco）时不注册：否则候选项会退化为纯文本插入，误导用户
@@ -135,6 +151,8 @@ export function registerSnippetProvider(monaco) {
       }
     },
   })
+  // 注销器落 window：跨重载认领（见 SNIPPET_GLOBAL 说明）
+  if (host) host[SNIPPET_GLOBAL] = disposer
 }
 
 /**
@@ -147,13 +165,17 @@ export function setupSnippets(monaco) {
 }
 
 /**
- * 卸载：注销 provider（插件热重载/卸载时调用）。
- * @author ddj 2026年09月10号
+ * 卸载：注销 provider 并复位状态（插件热重载/卸载时调用）。
+ * 兼容上一代 bundle 遗留的 window 注销器（模块级 disposer 为空时仍能清干净）。
+ * @author ddj 2026年09月10号 / 2026年09月18号
  */
 export function disposeSnippets() {
-  if (typeof disposer === 'function') {
-    try { disposer.dispose?.() } catch { /* 已注销 */ }
+  const host = /* @__PURE__ */ (typeof window === 'undefined' ? undefined : window)
+  const target = (typeof disposer === 'function' ? disposer : null) ?? (host ? host[SNIPPET_GLOBAL] : null)
+  if (target && typeof target.dispose === 'function') {
+    try { target.dispose() } catch { /* 已注销 */ }
   }
+  if (host) delete host[SNIPPET_GLOBAL]
   disposer = null
   registered = false
   invalidateSnippets()

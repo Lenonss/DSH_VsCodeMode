@@ -11,11 +11,14 @@ import {
   parseOfficialFileAddress,
   officialFileTitle,
   buildFileAddress,
+  deferToOfficial,
   forwardToEditor,
   registerOfficialFileClaim,
   resolveNavLine,
   resolveNavOpen,
   restoreEditorTab,
+  BLIND_EXT,
+  OFFICE_EXT,
   OFFICIAL_FILE_TAB_ID,
   OFFICIAL_SERVICE,
   OFFICIAL_SLOT_NAME,
@@ -272,6 +275,17 @@ describe('registerOfficialFileClaim', () => {
     expect(canOpen('dsh-resource://file/session/s1/a.ts')).toBe(true)
     expect(canOpen('sidebar://guide')).toBe(false)
     expect(canOpen('dsh-resource://file/session/s1/%zz.ts')).toBe(false)
+    // G2：Office/不可预览后缀让位官方（不认领 → 回落官方预览/提示）
+    expect(canOpen('dsh-resource://file/session/s1/a.docx')).toBe(false)
+    expect(canOpen('dsh-resource://file/session/s1/a.xlsx')).toBe(false)
+    expect(canOpen('dsh-resource://file/session/s1/a.pptx')).toBe(false)
+    expect(canOpen('dsh-resource://file/session/s1/a.zip')).toBe(false)
+    expect(canOpen('dsh-resource://file/session/s1/a.mp4')).toBe(false)
+    // 自研保留：文本/代码/图片/PDF/Markdown 仍归本插件编辑器
+    expect(canOpen('dsh-resource://file/session/s1/a.md')).toBe(true)
+    expect(canOpen('dsh-resource://file/session/s1/a.png')).toBe(true)
+    expect(canOpen('dsh-resource://file/session/s1/a.avif')).toBe(true)
+    expect(canOpen('dsh-resource://file/session/s1/a.pdf')).toBe(true)
     const title = definition['title'] as (a: string) => string
     expect(title('dsh-resource://file/session/s1/src/a%20b.txt')).toBe('a b.txt')
     dispose!()
@@ -286,8 +300,54 @@ describe('registerOfficialFileClaim', () => {
   })
 })
 
-describe('markEditorActive / isEditorTabActive', () => {
-  beforeEach(() => { markEditorActive(false) })
+describe('deferToOfficial（G2：Office / 不可预览后缀让位官方）', () => {
+  it('Office 文档后缀让位（含同类文档补全）', () => {
+    expect(OFFICE_EXT).toContain('docx')
+    for (const ext of OFFICE_EXT) expect(deferToOfficial('a.' + ext)).toBe(true)
+  })
+
+  it('官方不可预览二进制容器让位', () => {
+    for (const ext of BLIND_EXT) expect(deferToOfficial('a.' + ext)).toBe(true)
+    expect(deferToOfficial('dir/sub/a.zip')).toBe(true)
+    expect(deferToOfficial('D:\\w\\a.mp4')).toBe(true)
+  })
+
+  it('大小写不敏感，且无后缀/隐藏文件不误判', () => {
+    expect(deferToOfficial('a.DOCX')).toBe(true)
+    expect(deferToOfficial('a.Zip')).toBe(true)
+    expect(deferToOfficial('a.ts')).toBe(false)
+    expect(deferToOfficial('Makefile')).toBe(false)
+    expect(deferToOfficial('.gitignore')).toBe(false)
+    expect(deferToOfficial('')).toBe(false)
+    expect(deferToOfficial(undefined)).toBe(false)
+    expect(deferToOfficial(42)).toBe(false)
+  })
+
+  it('自研能力不受影响：图片/文本/代码/PDF/Markdown 不 让位', () => {
+    for (const p of ['a.png', 'a.jpg', 'a.jpeg', 'a.gif', 'a.webp', 'a.bmp', 'a.ico', 'a.svg', 'a.md', 'a.ts', 'a.lua', 'a.cs', 'a.json', 'a.pdf']) {
+      expect(deferToOfficial(p)).toBe(false)
+    }
+  })
+
+  it('avif 为例外：官方列不可预览，但本插件支持图片预览故不让位', () => {
+    expect(BLIND_EXT).not.toContain('avif')
+    expect(deferToOfficial('a.avif')).toBe(false)
+  })
+
+  it('清单取自官方常量（防止漏抄）：计数与去重自洽', () => {
+    // 官方 UNVIEWABLE_BINARY_EXTENSIONS 共 64 项；本表移除 Office 类后缀（已入 OFFICE_EXT 让位）
+    // 与 avif（本插件支持图片预览）→ 64 - 11 - 1 = 52。
+    expect(OFFICE_EXT.length).toBe(11)
+    expect(BLIND_EXT.length).toBe(52)
+    const all = [...OFFICE_EXT, ...BLIND_EXT]
+    expect(new Set(all).size).toBe(all.length)
+    expect(all.every((e) => /^[a-z0-9]+$/.test(e))).toBe(true)
+    // Office 后缀不得重复出现在 BLIND_EXT（避免两表职责重叠）
+    for (const ext of OFFICE_EXT) expect(BLIND_EXT).not.toContain(ext)
+  })
+})
+
+describe('markEditorActive / isEditorTabActive', () => {  beforeEach(() => { markEditorActive(false) })
   it('标记翻转生效', () => {
     expect(isEditorTabActive()).toBe(false)
     markEditorActive(true)

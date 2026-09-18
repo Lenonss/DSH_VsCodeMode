@@ -82,10 +82,17 @@ export function inDshRange(version: DshVersion | null | undefined, range: DshRan
   return true
 }
 
-/** 版本线标签：报告与文档展示版本归属；不可解析返回 '未知'。 */
+/**
+ * 版本线标签：报告与文档展示版本归属；不可解析返回 '未知'。
+ * 逐线自新到旧匹配，先命中先返回（区间无上界，故顺序即优先级）。
+ * @author ddj 2026年09月02号 / 2026年09月18号
+ * @param input 版本串（如 '0.1.6-alpha.2'）
+ * @returns 版本线标签
+ */
 export function familyLabel(input: string): string {
   const version = parseDshVersion(input)
   if (!version) return '未知'
+  if (inDshRange(version, { from: '0.1.6-alpha.2' })) return '0.1.6-alpha.2 及更新（会话多实例共存 + 回合改动卡片 + Office 侧栏预览 + 侧栏浏览器）'
   if (inDshRange(version, { from: '0.1.6-alpha.1' })) return '0.1.6-alpha 及更新（MCP SDK v2 + Web 侧边栏终端 + 文件链接默认侧栏预览）'
   if (inDshRange(version, { from: '0.1.5-alpha.1' })) return '0.1.5-alpha 及更新（官方右侧 Sidebar 编辑区 + sidebar.panellist）'
   if (inDshRange(version, { from: '0.1.3-alpha.1' })) return '0.1.3-alpha 及更新（对话文件链接=remote.session.openWorkspacePath）'

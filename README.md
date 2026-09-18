@@ -347,13 +347,13 @@ TortoiseSVN（`TortoiseProc.exe`）仅作 Windows 过渡增强：自研能力覆
 
 ```bash
 # ① Git 安装（clone + prepare 构建；推荐打固定 tag）
-dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.5.0
+dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.5.1
 
 # ② npm 注册表（发布到 npm 后）
 dsh plugin --profile web add dsh-vscode-mode
 
 # ③ GitHub Release tgz 直装
-dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.5.0/dsh-vscode-mode-0.5.0.tgz
+dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.5.1/dsh-vscode-mode-0.5.1.tgz
 ```
 
 > `dsh plugin ...` 是 pnpm 转发器：git 安装会克隆仓库、执行该包 `prepare` 脚本
@@ -640,6 +640,12 @@ Keep All / Undo All 却是亮的。修复：单文件 Keep / Undo 覆盖冲突�
 完整变更见 [GitHub Releases](https://github.com/Lenonss/DSH_VsCodeMode/releases)。
 近期关键版本：
 
+- **v0.5.1**：**适配 DSH 0.1.6-alpha.2**——会话作用域三级取值链（`uiSession.current`
+  优先，兼容旧版 `sessions.list.current`；修复官方移除 `current` 后 Monaco 预热 / LSP
+  同步 / 编辑 Tab 恢复 / 文件链接静默失效）；Office 与官方「不可预览」后缀让位官方
+  查看器；页签路径统一为工作区相对路径（差异栏跳转与资源管理器显示形态一致，并修复
+  连带的「在资源管理器视图中显示」失效与重复页签）；插件重载时注销 Monaco provider
+  防止重复注册；peer 依赖清理与预发布区间修正。
 - **v0.5.0**：**SVN 集成**——侧栏变更面板与状态徽标、自研日志弹窗（过滤 / 排序 /
   多选比较 / 区间 / Stop on copy / Include merged revisions / Statistics）、
   并排差异（基线 / 版本间 / 与工作副本）、诊断日志查看器。

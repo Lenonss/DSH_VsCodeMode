@@ -5,7 +5,28 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
 
 # dsh-vscode-mode 开发/发布经验集（自我更新型技能）
 
-> updated: 2026-09-22 · 维护者：ddj（AI 会话按文末协议追加，保持精炼、去重）
+> updated: 2026-09-18 · 维护者：ddj（AI 会话按文末协议追加，保持精炼、去重）
+- 2026-09-18 坑（v0.5.1 实测）：**官方 alpha 线会移除 client 快照字段，取「当前会话」必须走多级链**——
+  DSH 0.1.6-alpha.2 起 `sessions.list` 快照不再有 `current`（改为 `uiSession.current`，其绑定源
+  `getSnapshot().key` = sessionId），仍直读 `list.getSnapshot().current` 的代码**静默失效**（不报错，
+  只是预热/LSP 同步/编辑 Tab 恢复/文件链接上下文全不工作）。取值顺序：`uiSession.current.key` →
+  `list.current`（旧版）→ `byId` 中 `retainedBy.mainView > 0` 的首行 → 槽位 `props.sessionId`；
+  `uiSession` 用 `ctx.get` 探测**别进 inject**（旧版无此服务会停等）。本仓实现在 `src/client/sessionScope.ts`。
+- 2026-09-18 坑（v0.5.1 实测）：**`window.monaco` 跨插件重载存活，模块级 `registered` 守卫会失效**——
+  插件重载后 bundle 重新求值使模块状态复位，但 Monaco 实例还在 → 每次重载**重复注册整套 provider**
+  （补全/跳转/hover 翻倍）。规矩：provider 注册标记与注销器一律落 `window.__edrv*__`（跨代认领 + 可清理），
+  并在 client `apply` 的 `ctx.effect` 卸载回调统一 dispose。改动前先 grep「`disposeXxx` 是否有调用方」——
+  本仓曾出现 `disposeSnippets()` 定义完整却**零调用**（死代码），AI/LSP 两处更是完全没有复位路径。
+- 2026-09-18 坑（v0.5.1 实测）：**peer 区间写 `>=0.1.0-rc.1 <0.2.0-0` 对 alpha 版本恒不匹配**——
+  semver 要求比较器的元组自带预发布标识，否则该区间对**任何**预发布返回 false（实测
+  `satisfies('0.1.6-alpha.2','>=0.1.0-rc.1 <0.2.0-0')===false`，而 `'0.1.0-rc.8'===true` 只因恰好落
+  在下界元组内）。每条 alpha 线要显式写 `>=0.1.6-0 <0.2.0-0`。本仓守卫见 `tests/peerDeps.test.ts`。
+- 2026-09-18 事实（v0.5.1 实测）：**host 半改动不随 client 热更新生效**——client 走 combo 端点按 rev 读盘
+  可即时生效（新增 window 标记浏览器里能立刻读到），但 host 半在进程内**不重载**：`compat` RPC 仍报旧
+  `TESTED_DSH_MAX` 而磁盘 bundle 已是新值。判别「跑的是不是新 host」= 调一个只有新代码才有的行为/RPC；
+  **改 host 后必须重启 DSH 才能验收 host 侧效果**，别把「磁盘已改」当「已生效」。
+- 2026-09-18 事实（v0.5.1）：`plans/` 在 `.gitignore:19` 被忽略 → 计划文件不会进发布提交（本轮 22 个
+  文件全为 `src/`、`tests/`、`docs/`、`package.json`、`README.md` 改动，可直接 `git add -A`）。
 - 2026-09-18 事实（v0.5.0 实测，四条全绿一次过）：① **真实仓库数据样本不入库**——测试若依赖真实仓库导出（如 `svn log -g` 的 XML），把样本放 `tests/fixtures/*.xml` 并加进 `.gitignore`（已加），用例写成
   `const f = fileURLToPath(new URL('./fixtures/x.xml', import.meta.url)); it.skipIf(!existsSync(f))('…', () => …)`：本地有文件即真跑，CI 无文件自动 skip（v0.5.0 实测 43→42 passed + 1 skipped，两面都绿）；
   别指望 `git rm --cached` 之后 CI 还能找到它。② 发布前**本地跑全量**（本仓 1337 用例≈8s）= CI 的 Test 步骤，别把 ubuntu 未知项留给 CI。

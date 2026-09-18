@@ -51,7 +51,10 @@ import { createCommandBridge } from './commandBridge.js'
 import { REGISTRY_GLOBAL } from './commandGlobals.js'
 import { sidebarMinApply } from './sidebarMin.js'
 import { log } from './log.js'
-import { setupLsp, setSession } from './monaco/lsp/index.js'
+import { setupLsp, setSession, disposeLsp } from './monaco/lsp/index.js'
+import { disposeSnippets } from './snippets/provider.js'
+import { disposeAiInline } from './ai/inlineProvider.js'
+import { readSessionScope, subscribeScope } from './sessionScope.js'
 import type { CompatAdapter } from '../shared/compat.js'
 
 // ⚠️ inject 只列必需服务：webUiSettings 是 @linxin666/dsh-client-ui-web-ui-settings 提供的
@@ -105,52 +108,48 @@ export function apply(ctx: any): void {
   // 外部深链落地：Windows 右键菜单 / Unity 外部编辑器 → 浏览器 URL 参数 → 打开规则路由
   setupExtOpen(ctx)
 
-  // Monaco 加载时机：不再 DSH 启动即预热，改为进入会话界面（sessions.list.current 出现）后再后台加载，
+  // Monaco 加载时机：不再 DSH 启动即预热，改为进入会话界面（当前会话出现）后再后台加载，
   // 用户点开「文件编辑」页签即用；空闲时仍由 EditorView 挂载兜底加载。
   // 模块级 promise 去重，重复触发只首次真正加载；requestIdleCallback 让出会话首屏带宽，缺省回退延时调度；
   // 预热失败静默吞掉（loader 失败会重置 promise，页签打开时仍走原有加载/重试路径）。
-  const monacoList = sessions?.list
-  if (typeof window !== 'undefined' && monacoList && typeof monacoList.subscribe === 'function') {
-    const list = monacoList as { getSnapshot: () => { current?: unknown }; subscribe: (listener: () => void) => () => void }
+  //
+  // 会话取值经 readSessionScope 收敛（跨版本三级链，见 sessionScope.ts）：
+  // DSH 0.1.6-alpha.2 随多实例共存移除了 sessions.list.current，旧版则没有 uiSession；
+  // 原先直读 list.getSnapshot().current 在新版恒为 undefined，会让预热/LSP 同步/编辑 Tab 恢复静默失效。
+  // 会话切换 → LSP 文档归属更新 + 状态刷新（原先为两条订阅，取值源一致，此处合流为一条）。
+  if (typeof window !== 'undefined') {
     const schedulePreload = () => {
       const preload = () => loadMonaco(() => {}).then((m: unknown) => setupLsp(m)).catch(() => {})
       if (typeof window.requestIdleCallback === 'function') window.requestIdleCallback(preload, { timeout: 2000 })
       else schedule(preload, 300)
     }
-    const onSessionEnter = () => {
-      const current = list.getSnapshot()?.current
-      if (!current) return
-      setSession(current)
+    let preloadedFor: string | undefined
+    const onScopeChange = () => {
+      const scope = readSessionScope(ctx)
+      // 传 undefined = 清除绑定（保留原 LSP 同步语义：无当前会话时不残留旧归属）
+      setSession(scope.sessionId)
+      if (!scope.sessionId || scope.sessionId === preloadedFor) return
+      preloadedFor = scope.sessionId
       schedulePreload()
     }
-    ctx.effect(() => list.subscribe(onSessionEnter), 'vscode-mode: monaco session trigger')
-    onSessionEnter()
-  }
-  // 会话切换 → LSP 文档归属更新 + 状态刷新
-  if (monacoList && typeof monacoList.subscribe === 'function') {
-    const list = monacoList as { getSnapshot: () => { current?: string }; subscribe: (listener: () => void) => () => void }
-    ctx.effect(() => list.subscribe(() => {
-      setSession(list.getSnapshot()?.current)
-    }), 'vscode-mode: lsp session sync')
+    ctx.effect(() => subscribeScope(ctx, onScopeChange), 'vscode-mode: monaco session trigger')
+    onScopeChange()
   }
   // 会话切换 → 编辑 Tab 跨会话自动恢复：上一会话编辑区激活时，新会话自动展开并激活
   //（官方停靠面按会话隔离，新会话默认收起；先试 openTabIn 直写新会话面，未 adopt 走有界重试）。
-  // 注意：首次打开某会话时通知早于 current 字段落定，故通知只调度延迟任务，执行时再读最新快照
-  if (monacoList && typeof monacoList.subscribe === 'function') {
-    const list = monacoList as { getSnapshot: () => { current?: string }; subscribe: (listener: () => void) => () => void }
-    ctx.effect(() => {
-      let lastCurrent = list.getSnapshot?.()?.current
-      const check = () => {
-        const current = list.getSnapshot?.()?.current
-        if (!current || current === lastCurrent) return
-        lastCurrent = current
-        if (!isEditorTabActive() || officialService === undefined) return
-        try { officialService.service.openTabIn?.(current, OFFICIAL_TAB_KIND, {}) } catch { /* 未 adopt 等 seat 就绪走重试 */ }
-        restoreEditorTab(officialService.service, schedule)
-      }
-      return list.subscribe(() => schedule(check, 0))
-    }, 'vscode-mode: editor tab restore')
-  }
+  // 注意：首次打开某会话时通知早于会话字段落定，故通知只调度延迟任务，执行时再读最新作用域
+  ctx.effect(() => {
+    let lastCurrent = readSessionScope(ctx).sessionId
+    const check = () => {
+      const current = readSessionScope(ctx).sessionId
+      if (!current || current === lastCurrent) return
+      lastCurrent = current
+      if (!isEditorTabActive() || officialService === undefined) return
+      try { officialService.service.openTabIn?.(current, OFFICIAL_TAB_KIND, {}) } catch { /* 未 adopt 等 seat 就绪走重试 */ }
+      restoreEditorTab(officialService.service, schedule)
+    }
+    return subscribeScope(ctx, () => schedule(check, 0))
+  }, 'vscode-mode: editor tab restore')
   const originalOpenPath = workspaces?.openPath
   const binder = pickSettingsBinder(ctx)
   const settings = binder.scope
@@ -159,13 +158,8 @@ export function apply(ctx: any): void {
   let remoteOpenInstalled = false
   /** 两条文件链接路由共用的路由日志（openPathRouter / remoteOpenRouter；统一走插件日志器）。 */
   const routeLogger = (message: string): void => log.warn(message)
-  /** 两条路由共用的 FileOpenContext：当前会话 id 与工作区 cwd。 */
-  const openContext = (): FileOpenContext => {
-    const current = sessions?.list?.getSnapshot?.()
-    const sessionId = current?.current
-    const summary = sessionId ? current?.byId?.[sessionId] : undefined
-    return { sessionId, cwd: summary?.cwd } as FileOpenContext
-  }
+  /** 两条路由共用的 FileOpenContext：当前会话 id 与工作区 cwd（跨版本取值链）。 */
+  const openContext = (): FileOpenContext => readSessionScope(ctx) as FileOpenContext
   /** 可选探测 betterSidebar 服务（不进 inject：缺失会让插件停靠等待，杀死回退路径）。 */
   let sideService = detectSidebarService(ctx)
   /** 可选探测官方右侧 Sidebar（DSH 0.1.5-alpha.1+；探测命中 ≡ 版本判定，不进 inject 同上）。 */
@@ -381,10 +375,9 @@ export function apply(ctx: any): void {
         service: sideService as NonNullable<typeof sideService>,
         renderTab: (props: Record<string, unknown>) => React.createElement(SideEditorTab, Object.assign({}, props, { schedule, addToConversation, sidebarPanels, outlineSources, fileMenuItems, sessions })),
         activeSession: () => {
-          const snapshot = sessions?.list?.getSnapshot?.() as { current?: string; byId?: Record<string, { cwd?: string }> } | undefined
-          const sessionId = snapshot?.current
-          if (!sessionId) return undefined
-          return { sessionId, cwd: snapshot?.byId?.[sessionId]?.cwd }
+          const scope = readSessionScope(ctx)
+          if (!scope.sessionId) return undefined
+          return { sessionId: scope.sessionId, cwd: scope.cwd }
         },
         registerLegacyFallback: registerLegacyTab,
       }), 'vscode-mode: sidebar editor tab')
@@ -445,4 +438,13 @@ export function apply(ctx: any): void {
     order: 30,
     label: 'VSCodeMode',
   }, () => React.createElement(SettingsContext.Provider, { value: settings }, React.createElement(McpSettings, { openerRegistry: registry, compatSummary })))
+
+  // 卸载收尾（G4，DSH 0.1.6-alpha.2 起支持运行时卸载/重载）：
+  // 注销挂在存活的 window.monaco 上的全部 Monaco provider 并复位模块状态。
+  // 不做会导致重载后重复注册（补全/跳转/hover 各翻倍）与陈旧开关残留。
+  ctx.effect(() => () => {
+    try { disposeSnippets() } catch { /* 卸载异常不得阻断其余清理 */ }
+    try { disposeAiInline() } catch { /* 同上 */ }
+    try { disposeLsp() } catch { /* 同上 */ }
+  }, 'vscode-mode: monaco providers teardown')
 }

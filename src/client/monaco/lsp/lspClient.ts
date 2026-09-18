@@ -54,7 +54,9 @@ export function setLspSession(id) {
 /**
  * 订阅窗口会话广播（幂等）：EditorView 是 sessionId 的权威来源，挂载与会话切换时广播。
  * 独立于服务订阅，避免服务形状变化时 LSP 整体失联。
- * @author ddj 2026年09月11号
+ *
+ * 返回值是可重入的取消订阅函数；调用方应保存并在卸载时调用（否则重载后会累积监听）。
+ * @author ddj 2026年09月11号 / 2026年09月18号
  * @returns 取消订阅函数
  */
 export function bindLspSession() {

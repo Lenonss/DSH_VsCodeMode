@@ -184,21 +184,46 @@ function isPinned(tab: TabLike): boolean {
 /**
  * 归一化持久化的页签数据：兼容旧版 `string[]`、去重、固定分区。
  * 损坏项（非字符串/非对象/无 path）直接丢弃。
- * @author ddj 2026年09月11号
+ *
+ * G9：传入 cwd 时把每个路径收敛为**页签规范形态**（工作区相对路径），
+ * 以迁移历史持久化数据里残留的绝对路径（见 {@link tabPathOf}）。
+ * @author ddj 2026年09月11号 / 2026年09月18号
  * @param raw localStorage 解析结果（任意形状）
+ * @param cwd 会话工作区目录（可选；给出时同步归一化路径形态）
  * @returns 归一化后的页签数组
  */
-export function normalizeTabs(raw: unknown): TabLike[] {
+export function normalizeTabs(raw: unknown, cwd?: string | null): TabLike[] {
   if (!Array.isArray(raw)) return []
   const seen = new Set<string>()
   const out: TabLike[] = []
   for (const item of raw) {
     const tab = tabOf(item)
-    if (!tab || seen.has(tab.path)) continue
-    seen.add(tab.path)
-    out.push(tab)
+    if (!tab) continue
+    const path = tabPathOf(tab.path, cwd)
+    if (!path || seen.has(path)) continue
+    seen.add(path)
+    out.push(tab.pinned === true ? { path, pinned: true } : { path })
   }
   return pinnedFirst(out)
+}
+
+/**
+ * 页签规范形态 = 工作区相对路径（G9）。
+ *
+ * 为什么需要：差异记录路径取自工具结果 `target.displayPath`（官方恒为绝对拼写），
+ * 而资源管理器树给出的是工作区相对路径。两者进页签后，地址栏形态不一致，且
+ * `insertTab` 按原串去重 → 同一文件可能出两个页签；绝对路径还会被
+ * `isTreeRevealable` 判为不可定位，「在资源管理器视图中显示」对差异入口失效。
+ * 统一经 {@link relativeOf} 收敛后，页签/地址栏/去重/持久化/`sameFile` 口径一致。
+ *
+ * 工作区外文件（全局片段/规则）由 relativeOf 自然回退为原绝对路径，语义不变。
+ * @author ddj 2026年09月18号
+ * @param path 原始路径（绝对或相对，两种分隔符均可）
+ * @param cwd 会话工作区目录（可空；无 cwd 时仅做分隔符归一）
+ * @returns 页签规范路径
+ */
+export function tabPathOf(path: string, cwd?: string | null): string {
+  return relativeOf(path, cwd)
 }
 
 /**

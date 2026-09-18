@@ -38,6 +38,17 @@ let inFlight = null
 let debounceTimer = null
 const cache = new Map()
 
+/**
+ * 补全 provider 注销器的全局挂点名。
+ *
+ * 为什么挂 window 而不是只靠模块级 registered：DSH 0.1.6-alpha.2 起支持插件运行时
+ * 卸载/重载，而 `window.monaco` 由 loader 注入后**跨重载存活**，模块级状态却会随
+ * bundle 重新求值而复位 —— 只判 registered 会在每次重载后再注册一次 provider，
+ * 导致同一编辑器出现重复补全。故注销器落 window，重载时命中即跳过注册。
+ * @author ddj 2026年09月18号
+ */
+const AI_INLINE_GLOBAL = '__edrvAiInlineDisposer__'
+
 /** 上次开关状态（configUpdate 后经事件刷新，关闭时立即静默）。 */
 let enabled = false
 
@@ -96,8 +107,15 @@ function diffPending(editor) {
  */
 export function registerAiInline(monaco) {
   if (registered || !monaco?.languages?.registerInlineCompletionsProvider) return
+  // 跨重载守卫：上一代 bundle 注册的 provider 仍挂在存活的 window.monaco 上，
+  // 此时直接认领为「已注册」，避免重复注册（注销器在首次注册时已落 window）。
+  const host = /* @__PURE__ */ (typeof window === 'undefined' ? undefined : window)
+  if (host && host[AI_INLINE_GLOBAL]) {
+    registered = true
+    return
+  }
   registered = true
-  monaco.languages.registerInlineCompletionsProvider('*', {
+  const inlineDisposer = monaco.languages.registerInlineCompletionsProvider('*', {
     async provideInlineCompletions(model, position, context, token) {
       const t0 = Date.now()
       if (!enabled || token?.isCancellationRequested) return { items: [] }
@@ -166,6 +184,29 @@ export function registerAiInline(monaco) {
     },
     freeInlineCompletions() { /* 无资源需释放 */ },
   })
+  if (host) host[AI_INLINE_GLOBAL] = inlineDisposer
+}
+
+/**
+ * 卸载 AI 内联补全：注销 provider 并复位模块状态（插件重载/卸载时调用）。
+ *
+ * 复位 registered 让重装后能重新注册；清 window 挂点避免新实例被旧注销器误判为「已注册」。
+ * 同时作废在飞请求与去抖定时器，防止卸载后仍有回调写状态。
+ * @author ddj 2026年09月18号
+ */
+export function disposeAiInline() {
+  const host = /* @__PURE__ */ (typeof window === 'undefined' ? undefined : window)
+  const inlineDisposer = host ? host[AI_INLINE_GLOBAL] : undefined
+  if (inlineDisposer && typeof inlineDisposer.dispose === 'function') {
+    try { inlineDisposer.dispose() } catch { /* 已注销 */ }
+  }
+  if (host) delete host[AI_INLINE_GLOBAL]
+  registered = false
+  seq += 1 // 作废在飞响应
+  if (debounceTimer) { clearTimeout(debounceTimer); debounceTimer = null }
+  if (inFlight) { try { inFlight.abort() } catch { /* 已结束 */ } inFlight = null }
+  cache.clear()
+  monacoRef = null
 }
 
 /** 缓存写入（超限整体清空，LRU 简化）。 */

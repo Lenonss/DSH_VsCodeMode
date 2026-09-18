@@ -7,7 +7,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   absoluteOf, ancestorDirsOf, applyClose, baseNameOf, closeAll, closeOthers, closeRight, closeSaved,
-  insertTab, isAbsolutePath, isTreeRevealable, normalizeTabs, pickActive, relativeOf, togglePin,
+  insertTab, isAbsolutePath, isTreeRevealable, normalizeTabs, pickActive, relativeOf, tabPathOf, togglePin,
 } from '../src/client/tabActions.js'
 import type { TabLike } from '../src/client/tabActions.js'
 
@@ -225,5 +225,49 @@ describe('路径推导', () => {
     expect(baseNameOf('a/b/c.ts')).toBe('c.ts')
     expect(baseNameOf('D:\\work\\c.ts')).toBe('c.ts')
     expect(baseNameOf('')).toBe('')
+  })
+})
+
+describe('G9 页签路径形态统一（tabPathOf / normalizeTabs 迁移）', () => {
+  it('tabPathOf：工作区内绝对路径收敛为相对（反斜杠也归一）', () => {
+    expect(tabPathOf('D:\\work\\app\\src\\a.ts', 'D:/work/app')).toBe('src/a.ts')
+    expect(tabPathOf('D:/work/app/src/a.ts', 'D:/work/app')).toBe('src/a.ts')
+  })
+
+  it('tabPathOf：已是相对路径保持相对（幂等）', () => {
+    expect(tabPathOf('src/a.ts', 'D:/work/app')).toBe('src/a.ts')
+    expect(tabPathOf(tabPathOf('D:/work/app/src/a.ts', 'D:/work/app'), 'D:/work/app')).toBe('src/a.ts')
+  })
+
+  it('tabPathOf：工作区外文件回退绝对路径（不回归）', () => {
+    expect(tabPathOf('D:/other/a.ts', 'D:/work/app')).toBe('D:/other/a.ts')
+    expect(tabPathOf('D:/work/app/a.ts', null)).toBe('D:/work/app/a.ts')
+  })
+
+  it('normalizeTabs 带 cwd：迁移历史绝对路径页签为相对形态', () => {
+    const raw = [{ path: 'D:/work/app/src/a.ts' }, { path: 'D:/work/app/b.ts', pinned: true }]
+    expect(paths(normalizeTabs(raw, 'D:/work/app'))).toEqual(['!b.ts', 'src/a.ts'])
+  })
+
+  it('normalizeTabs 带 cwd：绝对与相对指向同一文件时合并为一个页签（G9 去重）', () => {
+    const raw = ['src/a.ts', 'D:/work/app/src/a.ts']
+    expect(paths(normalizeTabs(raw, 'D:/work/app'))).toEqual(['src/a.ts'])
+  })
+
+  it('normalizeTabs 不带 cwd：保持历史行为（仅原样去重）', () => {
+    expect(paths(normalizeTabs(['src/a.ts', 'D:/work/app/src/a.ts']))).toEqual(['src/a.ts', 'D:/work/app/src/a.ts'])
+  })
+
+  it('迁移后再迁移幂等（刷新两次不会产生重复页签）', () => {
+    const once = normalizeTabs([{ path: 'D:/work/app/src/a.ts' }], 'D:/work/app')
+    const twice = normalizeTabs(once, 'D:/work/app')
+    expect(paths(twice)).toEqual(['src/a.ts'])
+  })
+
+  it('迁移后 isTreeRevealable 成立（差异入口的「在资源管理器视图中显示」恢复可用）', () => {
+    const migrated = normalizeTabs([{ path: 'D:/work/app/src/a.ts' }], 'D:/work/app')
+    expect(isTreeRevealable(migrated[0].path)).toBe(true)
+    // 对照：未迁移的绝对路径不可定位
+    expect(isTreeRevealable('D:/work/app/src/a.ts')).toBe(false)
   })
 })

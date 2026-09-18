@@ -38,7 +38,10 @@ docs/version-adaptation.md   本文档（版本线 × 影响 × 适配器矩阵�
 | `0.1.2-alpha.1`（08-28）起 alpha 线 | ① `dsh-settings` 移除 `installSettingsSection/settingsNamespace/deepEqualJson`，SettingsProvider 新增 `installSection(owner, ns, schema, entry, hooks)` 方法；② `dsh-client-runtime`、`dsh-host-apiproxy` 包从核心树移除（slots 服务改由 `dsh-client-ui-renderer` 提供；新增 api/sdk/controller 系列）；③ 部署期 apiproxy `WEB_SETTINGS_NAMESPACES` 白名单补丁不再适用（api-settings-controller 自动暴露） | ① host 两处设置 section 注册崩溃点 → **0.1.43 已适配（service 策略）**；② 插件 client 源码零静态依赖 @deepseek-ai 包、服务级 inject 9 名全部有同名提供者 → 加载关通过（审计表见下）；`dsh.client.inject` 收敛为空（图排序不校验 inject 存在性，实证自 dsh-client-modules 源码）；③ 无代码影响，部署脚本不再需要白名单补丁 | `service` 策略 · **待 alpha 实测闭环**（见第五节） |
 | `0.1.2-alpha.3`（08-31） | 移除可选 SQLite Session 持久化后端 | 插件用 JSONL 会话、`sessions.list` 摘要 → 无影响 | 监控项 M1 |
 | `0.1.2-alpha.4`（09-01） | `Session.events` → `seq/eventAt()/snapshotEvents()`；`SessionSeq`/`SessionLogOffset` 强类型 | 插件不消费 Session 事件流 → 无影响；未来接入会话日志按新 API | 监控项 M2 |
-| 高于已实测版本 | 未知 | 能力探测降级 + 报告警告「高于已实测版本 0.1.2-alpha.4」 | 例行适配（见第四节） |
+| `0.1.5-alpha.1` 起 | 官方右侧 Sidebar（`sidebarRight`/`sidebarRightTabs`）+ `sidebar.panellist` | 编辑区改住官方右侧 Sidebar Tab；`dsh-resource://file/**` 认领转发 | **0.1.44+ 已适配** |
+| `0.1.6-alpha.1` | MCP SDK v2；Web 侧边栏终端；文件链接默认侧栏预览 | 版本探测宿主锚点修正（避免 dev-link 命中 rc 副本） | **0.4.4 已适配** |
+| `0.1.6-alpha.2`（09-17）线 | ① **`sessions.list` 移除 `current`/`currentAddress`**（客户端 Session 多实例共存）；② 新增回合作产物：`dsh-workspace-changes` 回合改动卡片 + `dsh-client-ui-deliverables` 侧边栏逐文件审阅；③ 侧栏 Office 预览（`ui-sidebar-documentpreview`）；④ 侧栏浏览器 Tab；⑤ 侧栏布局持久化；⑥ 插件依赖改运行时解析 + 支持运行时卸载；⑦ 默认模型移除 V4 Flash 系列 | ① **命中 4 处读取**（Monaco 预热 / LSP 会话同步 / 编辑 Tab 跨会话恢复 / 文件链接上下文）→ 新增 `src/client/sessionScope.ts` 三级取值链（`uiSession.current` → `list.current` → `byId.retainedBy.mainView`）+ 订阅合流；② 数据源关系见 `plans/version-adapt-0.1.6-alpha.2/`（官方为回合级只读聚合，不可替代自有调用级记录源，仅作补充覆盖）；③ **命中冲突**：本插件 `extension` 档全量认领 `file/**` 会盖过官方 Office/builtin 渲染器 → `deferToOfficial()` 后缀 carve-out 让位（Office 11 项 + 官方不可预览 52 项，例外保留 `avif` 图片预览）；④⑤ 与自研 `sidebar.right.pane.tab` 不冲突，但恢复路径不得依赖内存态；⑥ 卸载洁净度审计（模块级单例复位）；⑦ `aiProvider/aiModel` 指向已下架模型时给降级提示 | **已适配（0.5.1）** · `service` 策略不变 |
+| 高于已实测版本 | 未知 | 能力探测降级 + 报告警告「高于已实测版本 0.1.6-alpha.2」 | 例行适配（见第四节） |
 
 ### 加载关审计表（回答"运行时适配能否过加载关"）
 
@@ -55,7 +58,7 @@ docs/version-adaptation.md   本文档（版本线 × 影响 × 适配器矩阵�
 - 以运行时解析的 `@deepseek-ai/dsh-settings` 版本代表 DSH 核心版本：核心包发布锁步同版
   （rc.2 / alpha.2 全树同版实证）；候选降级链 `dsh-settings → dsh-web-app → dsh-base → dsh`。
 - 解析失败返回空串：报告「未探测到版本号」，功能按能力探测运行。
-- 上界常量 `TESTED_DSH_MAX = '0.1.2-alpha.4'`（src/compat.ts）：超过则报告警告，驱动例行适配。
+- 上界常量 `TESTED_DSH_MAX = '0.1.6-alpha.2'`（src/compat.ts）：超过则报告警告，驱动例行适配。
 
 ## 四、新 DSH 版本发布后的例行适配清单
 

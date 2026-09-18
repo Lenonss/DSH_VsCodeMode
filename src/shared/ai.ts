@@ -78,6 +78,31 @@ export interface AiConfigPatch {
 }
 
 /**
+ * 已从官方默认模型列表下架的模型标识（依据 DSH 0.1.6-alpha.2 release notes：
+ * 「默认模型列表移除 V4 Flash 和 V4 Flash Vision Exp」）。
+ *
+ * 用途：用户此前保存过这些模型时，配置仍指向它们，而新版模型目录不再列出 →
+ * 需给出可读降级提示（而非静默失败）。按模型名小写子串匹配，
+ * 因为 provider 前缀与具体版本后缀（如 -exp）在不同部署下写法不一。
+ */
+export const DELISTED_MODEL_MARKERS: readonly string[] = ['v4-flash']
+
+/**
+ * 配置指向的模型是否已被官方下架（G7）。
+ *
+ * 语义：仅当确实指定了 model（非空 = 非自动路由）且命中下架标识时返回 true。
+ * 空 model 表示「自动取首个可用模型」，不构成问题，故不提示。
+ * @author ddj 2026年09月18号
+ * @param model 配置中的模型标识（可空）
+ * @returns 是否已下架
+ */
+export function isDelistedModel(model: unknown): boolean {
+  const text = typeof model === 'string' ? model.trim().toLowerCase() : ''
+  if (!text) return false
+  return DELISTED_MODEL_MARKERS.some((marker) => text.includes(marker))
+}
+
+/**
  * 按 AI_PREFIX_MAX/AI_SUFFIX_MAX 裁剪前后缀（client 侧发请求前调用）。
  * @author ddj
  * @param prefix 光标前全文

@@ -56,7 +56,7 @@ import { SnippetsPicker } from './SnippetsPicker.js'
 import { invalidateSnippets, setSnippetsSession, setupSnippets } from '../snippets/provider.js'
 import {
   absoluteOf, ancestorDirsOf, applyClose, baseNameOf, closeAll, closeOthers, closeRight, closeSaved,
-  insertTab, isTreeRevealable, normalizeTabs, pickActive, relativeOf, togglePin,
+  insertTab, isTreeRevealable, normalizeTabs, pickActive, relativeOf, tabPathOf, togglePin,
 } from '../tabActions.js'
 import { buildTabMenu } from '../tabMenu.js'
 import { ensureSvnChanges, ensureSvnStatus, getSvnChanges, getSvnStatus, refreshSvnChanges, svnAdd, svnChangeMapOf, svnDiffBase, svnEditorActions, svnRevert, svnTortoise, svnUpdate } from '../svnStatus.js'
@@ -308,6 +308,33 @@ export function EditorView(props) {
   }
 
   /**
+   * 页签规范路径（G9）：统一收敛为工作区相对路径后再进页签。
+   *
+   * 差异记录路径取自工具结果 `target.displayPath`（官方恒绝对），而资源管理器树给相对路径；
+   * 不归一会导致地址栏形态不一致、同文件出现两个页签（insertTab 按原串去重）、
+   * 且绝对路径被 isTreeRevealable 判为不可定位（「在资源管理器视图中显示」失效）。
+   * 工作区外文件由 relativeOf 回退原绝对路径，语义不变。
+   * @author ddj 2026年09月18号
+   * @param path 原始路径（绝对或相对）
+   * @returns 页签规范路径
+   */
+  const tabPath = (path) => tabPathOf(path, cwd)
+  /**
+   * 打开文件入口的统一收敛（G9）：所有「进页签」路径都经此归一，避免逐点打补丁。
+   * @author ddj 2026年09月18号
+   * @param path 原始路径
+   * @param select 是否设为活动页签
+   * @returns 归一后的路径（空值返回 null）
+   */
+  const addTabNorm = (path, select) => {
+    if (!path) return null
+    const normalized = tabPath(path)
+    if (!normalized) return null
+    addTab(normalized, select)
+    return normalized
+  }
+
+  /**
    * 保存当前活动文件的视图状态（光标/滚动/折叠）到工作区作用域缓存。
    * @author ddj 2026年08月28号
    * @param path 要保存的文件路径（缺省 = 当前 active）
@@ -388,7 +415,7 @@ export function EditorView(props) {
     flushSave()
     saveViewState(active)
     navPendingRef.current = entry
-    addTab(entry.path, true)
+    addTabNorm(entry.path, true)
     setFocusRequest((value) => value + 1) // 目标已是活动文件时也触发恢复
   }
 
@@ -832,20 +859,23 @@ export function EditorView(props) {
     const onOpen = (e) => {
       const p = e?.detail?.path
       if (!p) return
+      // G9：入口统一归一为工作区相对路径（差异栏/对话链接/LSP 跳转等都经此事件）
+      const normalized = tabPath(p)
+      if (!normalized) return
       if (e?.detail?.focusDiff === true) {
         recordNav()
-        pendingFocusRef.current = { path: p, region: null }
+        pendingFocusRef.current = { path: normalized, region: null }
         setFocusRequest((value) => value + 1)
-        addTab(p, true)
+        addTab(normalized, true)
         return
       }
       if (e?.detail?.line != null) {
         // LSP/搜索跳转：打开并定位到行列（endLine/endColumn 为目标区间，供落地高亮）
-        openFileAt(p, e?.detail?.line, e?.detail?.column, e?.detail?.endLine, e?.detail?.endColumn)
+        openFileAt(normalized, e?.detail?.line, e?.detail?.column, e?.detail?.endLine, e?.detail?.endColumn)
         return
       }
       recordNav()
-      addTab(p, true)
+      addTab(normalized, true)
     }
     const onShowLauncher = (event) => {
       const tab = event?.detail?.tab
@@ -939,10 +969,13 @@ export function EditorView(props) {
         ?? localStorage.getItem(CACHE_KEY.editorLegacy + String(scope))
       if (raw) {
         const saved = JSON.parse(raw)
-        const restored = normalizeTabs(saved?.tabs)
+        // G9：迁移历史持久化里的绝对路径页签（旧版差异入口写入），并顺带按新形态去重
+        const restored = normalizeTabs(saved?.tabs, cwd)
         if (restored.length) {
           setTabs(restored)
-          setActive(pickActive(restored, saved?.active))
+          // 活动路径同形态归一，否则恢复后匹配不到任何页签（pickActive 回退首个）
+          const wanted = typeof saved?.active === 'string' ? tabPathOf(saved.active, cwd) : saved?.active
+          setActive(pickActive(restored, wanted))
         }
       }
     } catch (e) { /* 损坏忽略 */ }
@@ -2495,8 +2528,9 @@ export function EditorView(props) {
     // 打开文件即离开基线差异审阅态（差异视图是「当前文件」的临时视图）
     setSvnDiff(null)
     recordNav()
-    addTab(path, true)
-    if (focusDiff) pendingFocusRef.current = { path, region: null }
+    // G9：统一归一为页签规范形态（差异栏/启动器/树/命令栏等入口一致）
+    const normalized = addTabNorm(path, true)
+    if (focusDiff && normalized) pendingFocusRef.current = { path: normalized, region: null }
   }
 
   /**
@@ -2512,8 +2546,10 @@ export function EditorView(props) {
   const openFileAt = (path, line, column, endLine, endColumn) => {
     if (!path) return
     recordNav()
-    addTab(path, true)
-    pendingFocusRef.current = { path, region: null, line: line ?? null, column: column ?? 1, endLine: endLine ?? null, endColumn: endColumn ?? null }
+    // G9：同 openFile，先归一再进页签，保证待跳转路径与 active 同形态
+    const normalized = addTabNorm(path, true)
+    if (!normalized) return
+    pendingFocusRef.current = { path: normalized, region: null, line: line ?? null, column: column ?? 1, endLine: endLine ?? null, endColumn: endColumn ?? null }
     setFocusRequest((value) => value + 1)
   }
 
@@ -2683,7 +2719,9 @@ export function EditorView(props) {
       }, '保留本地')))
   }
 
-  const otherFiles = sum.pendingFiles.filter((f) => f.path !== active)
+  // G9：记录路径为绝对、active 为页签规范形态（相对），必须经 sameFile 归一比较，
+  // 否则当前活动文件会被误列入「其他差异文件」。
+  const otherFiles = sum.pendingFiles.filter((f) => !sameFile(f.path, active))
 
   /**
    * 渲染编辑器/文件加载进度面板。

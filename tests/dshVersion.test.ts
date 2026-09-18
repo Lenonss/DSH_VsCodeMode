@@ -79,6 +79,15 @@ describe('familyLabel', () => {
     expect(familyLabel('0.1.5-rc.1')).toContain('0.1.5-alpha')
   })
 
+  it('0.1.6-alpha.2 独立成线（多实例共存等新增点）', () => {
+    expect(familyLabel('0.1.6-alpha.2')).toContain('0.1.6-alpha.2')
+    expect(familyLabel('0.1.6-alpha.2')).toContain('多实例')
+    // 更高版本仍归该线（区间无上界，先命中先返回）
+    expect(familyLabel('0.1.6-alpha.3')).toContain('0.1.6-alpha.2')
+    // alpha.1 不被 alpha.2 线吞掉
+    expect(familyLabel('0.1.6-alpha.1')).not.toContain('多实例')
+  })
+
   it('中间线仍归 0.1.3 版本线', () => {
     expect(familyLabel('0.1.4-rc.1')).toContain('0.1.3-alpha')
     expect(familyLabel('0.1.3-alpha.2')).toContain('0.1.3-alpha')
