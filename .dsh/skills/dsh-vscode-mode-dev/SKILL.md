@@ -6,6 +6,21 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
 # dsh-vscode-mode 开发/发布经验集（自我更新型技能）
 
 > updated: 2026-09-18 · 维护者：ddj（AI 会话按文末协议追加，保持精炼、去重）
+- 2026-09-18 坑（v0.5.1 实测，**发布前必查**）：**改 `package.json` 的依赖/peer 后必须同步重生成
+  `pnpm-lock.yaml`**，否则 CI 的 `Install deps`（`pnpm install --frozen-lockfile`）直接失败 ——
+  症状极具迷惑性：CI 两个 job 都在 **~15 秒**内 failure，`Typecheck`/`Test`/`Build` 全部 **skipped**，
+  annotations 只有一句「Process completed with exit code 1.」指向 workflow 文件行号（不是源码），
+  看代码怎么都找不到问题。修法：`pnpm install --lockfile-only` 后提交 lockfile；本地自检 =
+  `pnpm install --frozen-lockfile --lockfile-only` 返回 0。
+  （判据：失败时间远小于跑测试所需时间 ⇒ 问题在安装/构建前置步骤，别去翻测试。）
+- 2026-09-18 事实（v0.5.1 实测）：重发同版本前确认**失败的那次没产出 Release**（
+  `GET /releases/tags/v<ver>` 应 404）→ 才可删远端 tag 重推；本轮 13 步全 success，
+  `Verify published tarball` 约 **4.5 分钟**属正常 CDN 延迟（非 staged），闭环三向对齐即可：
+  registry `<pkg>/<ver>` 的 `gitHead` == release commit SHA、`dist-tags.latest` 已切换、
+  git tag 指向同一 commit。
+- 2026-09-18 事实（v0.5.1）：本仓 `tests/outline.test.ts`（自 v0.1.21 起未改）存在**既有顺序依赖**
+  ——`npx vitest run --sequence.shuffle` 会偶发失败，而 CI 用默认顺序（不 shuffle）恒绿；
+  排查「偶发失败」时先用 shuffle 复现并区分是否本次引入，别把它当自己的回归去改别人的测试。
 - 2026-09-18 坑（v0.5.1 实测）：**官方 alpha 线会移除 client 快照字段，取「当前会话」必须走多级链**——
   DSH 0.1.6-alpha.2 起 `sessions.list` 快照不再有 `current`（改为 `uiSession.current`，其绑定源
   `getSnapshot().key` = sessionId），仍直读 `list.getSnapshot().current` 的代码**静默失效**（不报错，
