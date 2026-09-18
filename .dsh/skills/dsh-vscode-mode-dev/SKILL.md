@@ -6,6 +6,11 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
 # dsh-vscode-mode 开发/发布经验集（自我更新型技能）
 
 > updated: 2026-09-22 · 维护者：ddj（AI 会话按文末协议追加，保持精炼、去重）
+- 2026-09-18 事实（v0.5.0 实测，四条全绿一次过）：① **真实仓库数据样本不入库**——测试若依赖真实仓库导出（如 `svn log -g` 的 XML），把样本放 `tests/fixtures/*.xml` 并加进 `.gitignore`（已加），用例写成
+  `const f = fileURLToPath(new URL('./fixtures/x.xml', import.meta.url)); it.skipIf(!existsSync(f))('…', () => …)`：本地有文件即真跑，CI 无文件自动 skip（v0.5.0 实测 43→42 passed + 1 skipped，两面都绿）；
+  别指望 `git rm --cached` 之后 CI 还能找到它。② 发布前**本地跑全量**（本仓 1337 用例≈8s）= CI 的 Test 步骤，别把 ubuntu 未知项留给 CI。
+  ③ 本次 `release` 工作流 13 步全 success，含 `Verify published tarball`（**5 分 34 秒**才拿到 tarball，属正常 CDN 延迟，不是 staged）；判别仍按既有条目：registry `latest` 的
+  `gitHead` == release commit SHA 即闭环。④ 顺手更新 README 的**安装示例固定 tag** 与「更新日志」段——它常年停在旧版本号（v0.5.0 时发现还写着 v0.1.23）。
 ## 何时使用
 
 - 发布新版本（commit/push/tag/npm 相关操作）。
