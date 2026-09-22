@@ -330,6 +330,44 @@
 [data-edrv-view] .edrv-svndiff-tag { padding: 1px 6px; border-radius: 999px; background: var(--dsw-alias-bg-layer-2, #f0f4f4); color: var(--dsw-alias-label-tertiary, #9aa5b1); }
 [data-edrv-view] .edrv-svndiff-host { flex: 1 1 auto; min-height: 0; }
 [data-edrv-view] .edrv-svndiff-empty { display: flex; flex: 1 1 auto; align-items: center; justify-content: center; padding: 24px; color: var(--dsw-alias-label-tertiary, #9aa5b1); font-size: 12px; text-align: center; }
+/* 差异整行色块与行首 +/- 指示符：vendored Monaco（diffEditorWidget2）静态 CSS 无
+   .line-insert/.line-delete 背景规则，整行色块靠主题键 + 此处固定色兜底保证可见。
+   注意不要用 --dsw-alias-interactive-bg-hover 类 token：实测为 92% 透明中性色，肉眼不可见。
+   固定色取自研差异 UI 同色相（绿 #0f9d58 / 红 #d9534f），alpha 提到肉眼可辨。 */
+[data-edrv-view] .monaco-editor .line-insert { background: rgba(15, 157, 88, 0.18); }
+[data-edrv-view] .monaco-editor .line-delete { background: rgba(217, 83, 79, 0.16); }
+[data-edrv-view] .monaco-editor .gutter-insert { background: rgba(15, 157, 88, 0.35); }
+[data-edrv-view] .monaco-editor .gutter-delete { background: rgba(217, 83, 79, 0.35); }
+[data-edrv-view] .monaco-editor .insert-sign { color: var(--dsw-alias-state-success-primary, #0f9d58); }
+[data-edrv-view] .monaco-editor .delete-sign { color: var(--dsw-alias-state-error-primary, #d9534f); }
+/* 差异条快速跳转簇（对齐自研审查条 ↑ i/N ↓ 的形态） */
+[data-edrv-view] .edrv-svndiff-nav { display: flex; align-items: center; gap: 2px; flex-shrink: 0; }
+[data-edrv-view] .edrv-svndiff-nav-count { min-width: 36px; text-align: center; font-size: 11px; color: var(--dsw-alias-label-secondary, #52606d); }
+/* W1-3 差异统计徽标（+新增/修改 −删除/修改；色相与行块绿红一致） @author ddj 2026-09-20 */
+[data-edrv-view] .edrv-svndiff-stat { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; font-family: var(--ds-font-family-code, ui-monospace, monospace); font-size: 11px; font-variant-numeric: tabular-nums; }
+[data-edrv-view] .edrv-svndiff-stat-add { color: var(--dsw-alias-state-success-primary, #0f9d58); }
+[data-edrv-view] .edrv-svndiff-stat-del { color: var(--dsw-alias-state-error-primary, #d9534f); }
+/* W1-1 差异视图选项条（右端开关组；复用 .edrv-svn-check 的 label 形态） */
+[data-edrv-view] .edrv-svndiff-opts { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+/* W1-2 变更面板名称过滤输入框（工具条行内，紧凑） @author ddj 2026-09-20 */
+[data-edrv-view] .edrv-svn-name-filter { width: 168px; padding: 1px 6px; border: 1px solid var(--dsw-alias-border-l1, #e0e6e8); border-radius: 5px; background: var(--dsw-alias-bg-layer-1, #fff); color: var(--dsw-alias-label-primary, #1f2933); font-size: 11px; line-height: 14px; }
+[data-edrv-view] .edrv-svn-name-filter:focus { outline: none; border-color: var(--dsw-alias-brand-primary, #0f9d58); }
+[data-edrv-view] .edrv-svn-name-filter::placeholder { color: var(--dsw-alias-label-tertiary, #9aa5b1); }
+/* W2-3 远端更新提示条（工具条上方；warn = 失败降级） @author ddj 2026-09-20 */
+[data-edrv-view] .edrv-svn-hintbar { display: flex; align-items: center; gap: 6px; margin: 0 10px 4px 12px; padding: 3px 8px; border-radius: 5px; background: var(--dsw-alias-bg-layer-2, #f0f4f4); color: var(--dsw-alias-label-secondary, #52606d); font-size: 11px; flex-shrink: 0; }
+[data-edrv-view] .edrv-svn-hintbar-warn { background: rgba(217, 83, 79, 0.12); color: var(--dsw-alias-state-error-primary, #d9534f); }
+/* W2-5 疑似改名标记（行内 ⇄；hover 见 tooltip） */
+[data-edrv-view] .edrv-svn-pair-mark { flex-shrink: 0; color: var(--dsw-alias-state-warn-primary, #7c3aed); font-size: 11px; cursor: help; }
+/* W2-1 补丁对话框 / W2-2 目录对比对话框 @author ddj 2026-09-20 */
+[data-edrv-view] .edrv-svn-patch-dialog { max-width: calc(100vw - 48px); }
+[data-edrv-view] .edrv-svn-patch-head { display: flex; align-items: center; gap: 8px; padding-bottom: 8px; }
+[data-edrv-view] .edrv-svn-patch-notes { display: flex; flex-direction: column; gap: 4px; padding-bottom: 6px; }
+[data-edrv-view] .edrv-svn-patch-warn { color: var(--dsw-alias-state-error-primary, #d9534f); font-size: 11px; }
+[data-edrv-view] .edrv-svn-patch-pre { max-height: 46vh; overflow: auto; margin: 0 0 8px; padding: 8px; border: 1px solid var(--dsw-alias-border-l1, #e0e6e8); border-radius: 6px; background: var(--dsw-alias-bg-layer-2, #f7f9f9); color: var(--dsw-alias-label-primary, #1f2933); font-family: var(--ds-font-family-code, ui-monospace, monospace); font-size: 11px; line-height: 1.5; white-space: pre; user-select: text; }
+[data-edrv-view] .edrv-svn-patch-foot { display: flex; align-items: center; gap: 8px; }
+[data-edrv-view] .edrv-svn-sum-form { display: flex; align-items: center; gap: 10px; padding-bottom: 8px; }
+[data-edrv-view] .edrv-svn-sum-list { max-height: 44vh; overflow: auto; border: 1px solid var(--dsw-alias-border-l1, #e0e6e8); border-radius: 6px; padding: 2px; margin-bottom: 8px; }
+[data-edrv-view] .edrv-svnlog-path-kind { flex-shrink: 0; padding: 0 5px; border-radius: 999px; background: var(--dsw-alias-bg-layer-2, #f0f4f4); color: var(--dsw-alias-label-tertiary, #9aa5b1); font-size: 10px; }
 
 /* ===== 通用弹窗外壳（ModalShell）+ SVN 日志弹窗 @author ddj 2026-09-16 ===== */
 /* z-index 190：落在既有阶梯内（命令栏 200 > 片段二级 197 > 片段一级 195 > 190），
@@ -623,3 +661,141 @@
 
 
 
+
+/* 调试（DAP）：断点圆点 / 停帧行 / 浮动调试工具条。
+   圆点挂在 Monaco glyphMargin（glyphMarginClassName），行背景为 isWholeLine className；
+   工具条绝对定位于编辑区右上（editorArea relative 由 .edrv-editor-area 自身定位）。 */
+/* 断点圆点：装饰类占满整行，圆点经 ::before 在本行盒子内居中（行归属明确、不跨行界） */
+[data-edrv-view] .edrv-dap-bp { cursor: pointer; }
+[data-edrv-view] .edrv-dap-bp::before { content: ''; display: block; width: 7px; height: 7px; margin: 6px auto 0; border-radius: 50%; background: var(--dsw-alias-state-error-primary, #e51400); }
+[data-edrv-view] .edrv-dap-bp-off { cursor: pointer; }
+[data-edrv-view] .edrv-dap-bp-off::before { content: ''; display: block; box-sizing: border-box; width: 7px; height: 7px; margin: 6px auto 0; border-radius: 50%; border: 1px solid var(--dsw-alias-label-tertiary, #9aa5b1); opacity: .6; }
+/* 未验证断点（适配器真实回执 verified:false）：空心红圈，对齐 VS Code 空心圆语义 */
+[data-edrv-view] .edrv-dap-bp-unverified { cursor: pointer; }
+[data-edrv-view] .edrv-dap-bp-unverified::before { content: ''; display: block; box-sizing: border-box; width: 7px; height: 7px; margin: 6px auto 0; border-radius: 50%; border: 1px solid var(--dsw-alias-state-error-primary, #e51400); opacity: .75; }
+[data-edrv-view] .edrv-dap-paused-line { background: var(--dsw-alias-state-warn-tertiary, rgba(229, 185, 63, .22)); }
+[data-edrv-view] .edrv-dap-paused-glyph { cursor: pointer; }
+[data-edrv-view] .edrv-dap-paused-glyph::before { content: ''; display: block; width: 5px; height: 12px; margin: 4px auto 0; border-radius: 2px; background: var(--dsw-alias-state-warn-primary, #e5b93f); }
+[data-edrv-view] .edrv-editor-area { position: relative; }
+/* launch.json 右下角「添加配置」按钮（VSCode 同款形态）：仅 launch.json 打开时渲染 */
+[data-edrv-view] .edrv-addcfg { position: absolute; right: 14px; bottom: 10px; z-index: 13; padding: 4px 12px; border: 1px solid var(--dsw-alias-border-l1, #e0e6e8); border-radius: 6px; background: var(--dsw-alias-bg-layer-1, #f7f9fa); color: var(--dsw-alias-label-secondary, #52606d); font-size: 12px; line-height: 18px; cursor: pointer; box-shadow: 0 1px 4px rgba(0, 0, 0, .1); }
+[data-edrv-view] .edrv-addcfg:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(127, 127, 127, .15)); color: var(--dsw-alias-label-primary, #1f2933); }
+[data-edrv-view] .edrv-dapbar { position: absolute; top: 6px; right: 14px; z-index: 12; display: none; align-items: center; gap: 3px; padding: 3px 5px; border-radius: 8px; border: 1px solid var(--dsw-alias-border-l1, #e0e6e8); background: var(--dsw-alias-bg-layer-1, #f7f9fa); box-shadow: 0 2px 8px rgba(0, 0, 0, .12); }
+[data-edrv-view] .edrv-dapbar.on { display: flex; border-color: var(--dsw-alias-border-l2, #cdd6da); }
+[data-edrv-view] .edrv-dapbar-grip { flex: 0 0 auto; width: 16px; height: 22px; display: inline-flex; align-items: center; justify-content: center; cursor: grab; user-select: none; color: var(--dsw-alias-label-tertiary, #7b8794); font-size: 12px; }
+[data-edrv-view] .edrv-dapbar-grip:active, [data-edrv-view] .edrv-dapbar.dragging .edrv-dapbar-grip { cursor: grabbing; }
+[data-edrv-view] .edrv-dapbar.dragging { user-select: none; }
+[data-edrv-view] .edrv-dapbar-cfg { max-width: 220px; height: 22px; font-size: 11px; border: 1px solid var(--dsw-alias-border-l1, #e0e6e8); border-radius: 6px; background: var(--dsw-alias-bg-base, transparent); color: var(--dsw-alias-label-primary, inherit); }
+[data-edrv-view] .edrv-dapbar-btn { min-width: 24px; height: 22px; padding: 0 6px; border: none; border-radius: 6px; background: transparent; color: var(--dsw-alias-label-primary, inherit); font-size: 12px; line-height: 1; cursor: pointer; }
+[data-edrv-view] .edrv-dapbar-btn:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover, rgba(127, 127, 127, .15)); }
+[data-edrv-view] .edrv-dapbar-btn:disabled { opacity: .35; cursor: default; }
+[data-edrv-view] .edrv-dapbar-phase { padding: 0 4px; font-size: 11px; white-space: nowrap; color: var(--dsw-alias-label-secondary, #52606d); }
+[data-edrv-view] .edrv-dapbar-phase.paused { color: var(--dsw-alias-state-warn-primary, #b7791f); font-weight: 600; }
+[data-edrv-view] .edrv-dapbar-err { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--dsw-alias-state-error-primary, #e05252); }
+
+/* 调试面板（活动栏「调试」页签）：四段折叠区 + 断点列表 + REPL。 */
+[data-edrv-view] .edrv-dappanel { display: flex; flex-direction: column; gap: 10px; height: 100%; min-height: 0; overflow: auto; padding: 2px 2px 8px; }
+[data-edrv-view] .edrv-dappanel-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; row-gap: 4px; font-size: 12px; color: var(--dsw-alias-label-secondary, #52606d); }
+[data-edrv-view] .edrv-dappanel-phase { padding: 2px 8px; border-radius: 999px; background: var(--dsw-alias-bg-layer-2, #f0f4f4); }
+[data-edrv-view] .edrv-dappanel-phase.paused { background: var(--dsw-alias-state-warn-tertiary, rgba(229, 185, 63, .18)); color: var(--dsw-alias-state-warn-primary, #b7791f); font-weight: 600; }
+[data-edrv-view] .edrv-dappanel-cfg { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+[data-edrv-view] .edrv-dappanel-pid { font-family: var(--ds-font-family-code, ui-monospace, monospace); font-size: 11px; }
+[data-edrv-view] .edrv-dappanel-err { color: var(--dsw-alias-state-error-primary, #e05252); }
+[data-edrv-view] .edrv-dapseg { display: flex; flex-direction: column; gap: 2px; min-height: 0; }
+[data-edrv-view] .edrv-dapseg-body { min-height: 0; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; }
+/* 段间分隔条（splitview sash）：拖动调整相邻两段高度占比；各段高度由 DebugPanel 内联接管。 */
+[data-edrv-view] .edrv-dapseg-sash { flex: 0 0 auto; height: 4px; margin: 2px 0; border-radius: 2px; background: transparent; cursor: row-resize; }
+[data-edrv-view] .edrv-dapseg-sash:hover, [data-edrv-view] .edrv-dapseg-sash.dragging { background: var(--dsw-alias-border-l2, #cdd6da); }
+/* 折叠段头：chevron + 标题 + 悬浮动作区（动作 hover 显隐；REPL 头不参与折叠）。 */
+[data-edrv-view] .edrv-dapseg-head { display: flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 600; color: var(--dsw-alias-label-tertiary, #7b8794); padding: 2px 2px; cursor: pointer; border-radius: 4px; }
+[data-edrv-view] .edrv-dapseg-head:hover { color: var(--dsw-alias-label-secondary, #52606d); }
+[data-edrv-view] .edrv-daprepl .edrv-dapseg-head { cursor: default; padding: 2px 0; }
+[data-edrv-view] .edrv-dapseg-chevron { flex: 0 0 auto; width: 14px; text-align: center; font-size: 10px; }
+[data-edrv-view] .edrv-dapseg-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+[data-edrv-view] .edrv-dapseg-act { flex: 0 0 auto; min-width: 20px; height: 18px; padding: 0 4px; border: none; border-radius: 4px; background: transparent; color: var(--dsw-alias-label-tertiary, #7b8794); font-size: 11px; line-height: 1; cursor: pointer; opacity: 0; }
+[data-edrv-view] .edrv-dapseg-head:hover .edrv-dapseg-act { opacity: 1; }
+[data-edrv-view] .edrv-dapseg-act:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(127, 127, 127, .15)); color: var(--dsw-alias-label-primary, inherit); }
+[data-edrv-view] .edrv-dapempty { font-size: 12px; color: var(--dsw-alias-label-tertiary, #9aa5b1); padding: 4px 2px; }
+[data-edrv-view] .edrv-dapframe { display: flex; align-items: baseline; gap: 8px; padding: 3px 4px; border-radius: 6px; cursor: pointer; font-size: 12px; }
+[data-edrv-view] .edrv-dapframe:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(127, 127, 127, .12)); }
+[data-edrv-view] .edrv-dapframe-name { color: var(--dsw-alias-label-primary, inherit); font-weight: 600; }
+[data-edrv-view] .edrv-dapframe-loc { color: var(--dsw-alias-label-tertiary, #9aa5b1); font-family: var(--ds-font-family-code, ui-monospace, monospace); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+[data-edrv-view] .edrv-dapscope { font-size: 11px; font-weight: 600; color: var(--dsw-alias-label-secondary, #52606d); padding: 4px 2px 1px; }
+[data-edrv-view] .edrv-dapvar { display: flex; align-items: baseline; gap: 6px; width: 100%; box-sizing: border-box; font-size: 12px; padding: 1px 2px; min-width: 0; }
+[data-edrv-view] .edrv-dapvar-tw { flex: 0 0 auto; width: 14px; border: none; background: transparent; color: var(--dsw-alias-label-tertiary, #9aa5b1); cursor: pointer; font-size: 10px; padding: 0; }
+[data-edrv-view] span.edrv-dapvar-tw { cursor: default; }
+[data-edrv-view] .edrv-dapvar-name { flex: 0 1 34%; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--dsw-alias-label-primary, inherit); font-family: var(--ds-font-family-code, ui-monospace, monospace); white-space: nowrap; }
+[data-edrv-view] .edrv-dapvar-val { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dsw-alias-label-secondary, #52606d); }
+[data-edrv-view] .edrv-dapvar-type { flex: 0 0 auto; font-size: 10px; color: var(--dsw-alias-label-tertiary, #9aa5b1); }
+[data-edrv-view] .edrv-dapframe.selected { background: var(--dsw-alias-interactive-bg-hover, rgba(127, 127, 127, .16)); outline: 1px solid var(--dsw-alias-border-l2, #cdd6da); }
+[data-edrv-view] .edrv-dapwatch { display: flex; align-items: baseline; gap: 6px; width: 100%; box-sizing: border-box; min-width: 0; font-size: 12px; padding: 1px 2px; }
+[data-edrv-view] .edrv-dapwatch-x { border: none; background: transparent; color: var(--dsw-alias-label-tertiary, #9aa5b1); cursor: pointer; width: 14px; }
+[data-edrv-view] .edrv-dapwatch-x:hover { color: var(--dsw-alias-state-error-primary, #e05252); }
+[data-edrv-view] .edrv-dapwatch-add { padding: 2px 0; }
+[data-edrv-view] .edrv-dapbp { display: flex; align-items: center; gap: 6px; font-size: 12px; padding: 2px 2px; border-radius: 6px; cursor: pointer; }
+[data-edrv-view] .edrv-dapbp:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(127, 127, 127, .12)); }
+[data-edrv-view] .edrv-dapbp:active { background: var(--dsw-alias-interactive-bg-pressed, rgba(127, 127, 127, .2)); }
+[data-edrv-view] .edrv-dapbp-dot { flex: 0 0 auto; width: 9px; height: 9px; border-radius: 50%; background: var(--dsw-alias-state-error-primary, #e51400); }
+[data-edrv-view] .edrv-dapbp-dot.off { background: transparent; border: 1.5px solid var(--dsw-alias-label-tertiary, #9aa5b1); opacity: .6; }
+[data-edrv-view] .edrv-dapbp-file { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border: none; background: transparent; color: var(--dsw-alias-label-primary, inherit); cursor: pointer; padding: 0; font-size: 12px; }
+[data-edrv-view] .edrv-dapbp-dir { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dsw-alias-label-tertiary, #9aa5b1); font-size: 11px; text-align: right; }
+[data-edrv-view] .edrv-dapbp-line { flex: 0 0 auto; font-size: 10px; padding: 1px 6px; border-radius: 999px; background: var(--dsw-alias-bg-layer-2, #f0f4f4); color: var(--dsw-alias-label-secondary, #52606d); }
+[data-edrv-view] .edrv-dapbp-x { flex: 0 0 auto; border: none; background: transparent; color: transparent; cursor: pointer; width: 14px; }
+[data-edrv-view] .edrv-dapbp:hover .edrv-dapbp-x { color: var(--dsw-alias-label-tertiary, #9aa5b1); }
+[data-edrv-view] .edrv-dapbp-x:hover { color: var(--dsw-alias-state-error-primary, #e05252) !important; }
+[data-edrv-view] .edrv-daprepl { display: flex; flex-direction: column; gap: 4px; }
+[data-edrv-view] .edrv-daprepl-log { display: flex; flex-direction: column; gap: 1px; max-height: 180px; overflow: auto; }
+[data-edrv-view] .edrv-daprepl-line { font-size: 11px; font-family: var(--ds-font-family-code, ui-monospace, monospace); color: var(--dsw-alias-label-secondary, #52606d); white-space: pre-wrap; word-break: break-all; display: flex; gap: 6px; }
+[data-edrv-view] .edrv-daprepl-line.out { color: var(--dsw-alias-label-tertiary, #9aa5b1); }
+[data-edrv-view] .edrv-daprepl-in { width: 100%; box-sizing: border-box; height: 26px; padding: 0 8px; font-size: 12px; border: 1px solid var(--dsw-alias-border-l1, #e0e6e8); border-radius: 6px; background: var(--dsw-alias-bg-base, transparent); color: var(--dsw-alias-label-primary, inherit); }
+[data-edrv-view] .edrv-dappanel-run { flex: 0 0 auto; width: 24px; height: 24px; border: none; border-radius: 6px; background: transparent; color: var(--dsw-alias-label-primary, inherit); font-size: 13px; line-height: 1; cursor: pointer; }
+[data-edrv-view] .edrv-dappanel-run:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(127, 127, 127, .15)); }
+[data-edrv-view] .edrv-dappanel-run:disabled { opacity: .35; cursor: default; background: transparent; }
+/* 面板顶部配置下拉（与编辑器浮动条 .edrv-dapbar-cfg 同视觉）。 */
+[data-edrv-view] .edrv-dappanel-cfg-select { max-width: 190px; height: 24px; padding: 0 4px; font-size: 11px; border: 1px solid var(--dsw-alias-border-l1, #e0e6e8); border-radius: 6px; background: var(--dsw-alias-bg-base, transparent); color: var(--dsw-alias-label-primary, inherit); }
+/* 断点行内编辑行（面板内展开编辑，控件复用 .edrv-bpwidget-* 视觉；左缩进对齐断点行文字列）。 */
+[data-edrv-view] .edrv-dapbp-edit { display: flex; align-items: center; gap: 6px; padding: 3px 2px 3px 20px; border-radius: 6px; background: var(--dsw-alias-bg-layer-2, #f0f4f4); }
+[data-edrv-view] .edrv-dapbp-edit .edrv-bpwidget-mode { height: 20px; }
+[data-edrv-view] .edrv-dapbp-edit .edrv-bpwidget-input { height: 20px; }
+/* 断点回执：未验证空心红圈（须排在 .off 之后，禁用态优先展示灰圈语义）。 */
+[data-edrv-view] .edrv-dapbp-dot.unverified { background: transparent; border: 1.5px solid var(--dsw-alias-state-error-primary, #e51400); opacity: .75; }
+/* 断点行内编辑浮层（Monaco content widget，锚定断点行上方；对齐 VS Code breakpointWidget 形态）。 */
+/* View Zone 浮层：宽度/左移由 BpWidget.syncWidth 按 layout 内联设置
+   （Monaco .view-zones 仅内容区宽，需补偿 contentLeft 与滚动条），此处只管视觉。 */
+[data-edrv-view] .edrv-bpwidget { position: relative; box-sizing: border-box; display: flex; align-items: center; gap: 6px; padding: 3px 8px; border-top: 1px solid var(--dsw-alias-border-l2, #cdd6da); border-bottom: 1px solid var(--dsw-alias-border-l2, #cdd6da); background: var(--dsw-alias-bg-layer-1, #f7f9fa); }
+/* 断点编辑中的目标行高亮（浮层打开期间） */
+[data-edrv-view] .edrv-dap-editing-line { background: var(--dsw-alias-interactive-bg-hover, rgba(127, 127, 127, .12)); }
+[data-edrv-view] .edrv-bpwidget-mode { flex: 0 0 auto; height: 22px; padding: 0 4px; font-size: 12px; border: 1px solid var(--dsw-alias-border-l1, #e0e6e8); border-radius: 3px; background: var(--dsw-alias-bg-base, transparent); color: var(--dsw-alias-label-primary, inherit); cursor: pointer; }
+[data-edrv-view] .edrv-bpwidget-input { flex: 1 1 auto !important; min-width: 0; width: auto !important; box-sizing: border-box; height: 22px; padding: 0 6px; font-size: 12px; font-family: var(--ds-font-family-code, ui-monospace, monospace); border: 1px solid var(--dsw-alias-border-l1, #e0e6e8); border-radius: 3px; background: var(--dsw-alias-bg-base, transparent); color: var(--dsw-alias-label-primary, inherit); }
+[data-edrv-view] .edrv-bpwidget-input:focus { outline: 1px solid var(--dsw-alias-border-l2, #cdd6da); }
+
+/* 断点 hover 预览（glyph 区）：半透明小红点 + pointer 光标（对齐 VS Code .codicon-debug-hint）。 */
+[data-edrv-view] .edrv-dap-bp-hint { cursor: pointer; }
+[data-edrv-view] .edrv-dap-bp-hint::before { content: ''; display: block; width: 7px; height: 7px; margin: 6px auto 0; border-radius: 50%; background: var(--dsw-alias-state-error-primary, #e51400); opacity: .4; }
+/* 行号区也给出可点提示（与 VS Code 一致：glyph 区与行号区都可点/可 hover）；
+   不拦截折叠箭头等自有控件的光标。 */
+[data-edrv-view] .edrv-editor-row .monaco-editor .margin-view-overlays .line-numbers:hover { cursor: pointer; }
+
+/* 暂停态 hover 调试块 + 变量树（成员全量直显 + table 成员折叠展开）。
+   ⚠️ 选择器一律用 data-*：本仓 vendored Monaco 的 markdown→DOM 管线会剥掉我们 HTML 里的
+   class（supportHtml/isTrusted 都不豁免），只有 data-* 存活；用 class 会静默失效。 */
+[data-edrv-view] [data-edrv-dap] { display: block; min-width: 0; }
+[data-edrv-view] [data-edrv-head] { display: flex; align-items: baseline; gap: 2px; }
+[data-edrv-view] [data-edrv-head] [data-edrv-expr] { font-weight: 600; color: var(--dsw-alias-label-primary, #1f2933); }
+[data-edrv-view] [data-edrv-head] [data-edrv-val] { font-family: var(--ds-font-family-code, ui-monospace, monospace); word-break: break-all; }
+[data-edrv-view] [data-edrv-type] { margin-top: 2px; font-size: 12px; color: var(--dsw-alias-label-tertiary, #8a949b); }
+[data-edrv-view] [data-edrv-tree] { margin: 2px 0 0; padding: 0; list-style: none; font-variant-numeric: tabular-nums; }
+[data-edrv-view] [data-edrv-line] { display: flex; align-items: baseline; gap: 4px; padding: 1px 2px; border-radius: 3px; white-space: nowrap; }
+[data-edrv-view] [data-edrv-line]:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(127, 127, 127, .12)); }
+/* 折叠按钮（对齐 CodeBuddy 调试浮窗变量树的 twist）：热区 14px + hover 反馈，未可展开时留空占位 */
+[data-edrv-view] [data-edrv-twist] { flex: 0 0 auto; box-sizing: border-box; width: 14px; height: 14px; line-height: 13px; text-align: center; border-radius: 3px; color: var(--dsw-alias-label-tertiary, #8a949b); }
+[data-edrv-view] [data-edrv-twist]:not(:empty) { cursor: pointer; user-select: none; }
+[data-edrv-view] [data-edrv-twist]:not(:empty):hover { background: var(--dsw-alias-interactive-bg-hover, rgba(127, 127, 127, .2)); color: var(--dsw-alias-label-primary, #1f2933); }
+[data-edrv-view] [data-edrv-name] { flex: 0 0 auto; color: var(--dsw-alias-label-primary, #1f2933); }
+[data-edrv-view] [data-edrv-line] [data-edrv-eq] { flex: 0 0 auto; color: var(--dsw-alias-label-tertiary, #8a949b); }
+[data-edrv-view] [data-edrv-line] [data-edrv-val] { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--dsw-alias-label-secondary, #52606d); }
+[data-edrv-view] [data-edrv-note] { color: var(--dsw-alias-label-tertiary, #8a949b); font-style: italic; }
+/* Alt 提示层：由 hoverTree 注入到 .monaco-hover（滚动区之外）贴底常驻；容器预留同高内边距避免遮挡末行。
+   不再用 sticky / `:has()`：滚动链在 .monaco-hover-content 上，sticky 会被滚走。 */
+[data-edrv-view] .monaco-hover[data-edrv-hint-host="1"] { padding-bottom: 22px; }
+[data-edrv-view] [data-edrv-hint="1"] { position: absolute; left: 0; right: 0; bottom: 0; box-sizing: border-box; height: 22px; padding: 2px 8px; font-size: 11px; line-height: 18px; color: var(--dsw-alias-label-tertiary, #8a949b); background: var(--dsw-alias-bg-overlay, #ffffff); border-top: 1px solid var(--dsw-alias-border-l1, #e0e6e8); }

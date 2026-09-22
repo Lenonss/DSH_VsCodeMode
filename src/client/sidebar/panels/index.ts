@@ -7,10 +7,12 @@
  */
 import React from 'react'
 import { IconBranchOutline16, IconFolderOpenOutline16, IconListPenOutline16, IconSearchOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
+import { dapStore } from '../../dap/store.js'
 import { FileExplorer } from './FileExplorer.js'
 import { SearchPanel } from './SearchPanel.js'
 import { RulesPanel } from './RulesPanel.js'
 import { SvnPanel } from './SvnPanel.js'
+import { DebugPanel } from './DebugPanel.js'
 import type { SidebarPanelDef, SidebarCtx } from '../types.js'
 
 /**
@@ -96,4 +98,21 @@ function svnVisibleCount(entries) {
     count += 1
   }
   return count
+}
+
+/**
+ * 构造「调试」面板定义（VS Code 调试视图四段布局 + REPL）。
+ * 图标用文本回落（官方原语图标集未含调试类图标时由 SidebarView 文本渲染）。
+ * @author ddj 2026年09月29号
+ * @returns 面板定义（徽标 = 已暂停时显示 1，吸引注意）
+ */
+export function createDebugPanel(): SidebarPanelDef {
+  return {
+    id: 'debug',
+    title: '调试',
+    icon: '🐞',
+    order: 22,
+    badge: () => (dapStore.getSnapshot().phase === 'paused' ? 1 : null),
+    render: (ctx: SidebarCtx) => React.createElement(DebugPanel, { ctx }),
+  }
 }

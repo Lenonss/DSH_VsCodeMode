@@ -5,7 +5,30 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
 
 # dsh-vscode-mode 开发/发布经验集（自我更新型技能）
 
-> updated: 2026-09-18 · 维护者：ddj（AI 会话按文末协议追加，保持精炼、去重）
+> updated: 2026-09-21 · 维护者：ddj（AI 会话按文末协议追加，保持精炼、去重）
+- 2026-09-21 事实 + 坑（暂停态调试 hover 对齐 CodeBuddy，源码级核对 `CodeBuddy CN/resources/app/out/vs/
+  workbench/workbench.desktop.main.js`）：CodeBuddy/VS Code 的调试浮窗是**独立 widget**（`debug.hoverWidget`
+  → `.debug-hover-widget` / `.debug-hover-tree[role=tree]`，成员全量 + 行内折叠按钮），显示时调
+  `preventDefaultEditorHover()`（`editor.updateOptions({hover:{enabled:false}})`）**禁用默认（LSP）hover**；
+  **按住 Alt** 反过来隐藏调试浮窗、解除禁用 → 显示 LSP hover。本仓 Monaco hover 只能返回 markdown，
+  等价实现落在三处：调试内容单块 HTML（`[data-edrv-dap]`，`src/client/dap/hover.ts`）、hover 层
+  （`src/client/dap/hoverTree.ts`：给行打 `data-edrv-row=debug|lsp`、注入贴底提示层、按 Alt 切 display）、
+  Alt 跟踪（`src/client/dap/hoverMode.ts`）。四个实测坑：
+  **①（切换）别用 `showContentHover` 主动重算**：`getContribution('editor.contrib.hover')
+  .showContentHover(光标处折叠 Range, 1 Immediate, 0 Mouse, false)` 看似是官方 `showEditorHover` 同法，
+  但 `_startShowingOrUpdateHover` 在「新 anchor 与当前结果 anchor 相等」时**直接 return**
+  （`HoverRangeAnchor.equals` 只比 range）⇒ 同一鼠标位置反复按 Alt **只有第一次生效**（且整块重渲染闪烁）。
+  正解是**不动 provider 的显示层切换**：Alt 变化只改行的 `display` 与提示文案，瞬时、且不依赖 keydown 送达
+  （`mousemove.altKey` 兜底）；`debugHoverOwns()` 让位逻辑随之作废（LSP 行默认隐藏、Alt 时显示）。
+  **②（钩子）markdown 会剥掉 `class`**：本仓 vendored Monaco 的 markdown→DOM 管线把我们 hover 内容 HTML 里的
+  `class` **全部丢掉**（`supportHtml:true` / `isTrusted` 都不豁免，页内实测三种写法全丢），**只有 `data-*` 存活**
+  ⇒ 经 provider 返回的 HTML，交互钩子与 CSS 选择器**一律用 data-***；用 class 会静默失效（折叠按钮点了没反应、
+  样式全不生效，且 tsc/单测都抓不到）。**③（提示常显）**贴底提示别用 `position: sticky`（滚动链在
+  `.monaco-hover-content` 上，会被滚走）也别用 `:has(class)`（class 已被剥）：注入到 `.monaco-hover`
+  （**滚动区之外**）`position:absolute;bottom:0`，并给容器打 `data-edrv-hint-host` + `padding-bottom` 预留同高。
+  **④（树状态）**`createTreeState` 同 key 必须**复用**旧状态（按名+ref 判等），否则 hover 一重渲染
+  `expanded/cache` 清零，观感是「点开又收起」；绑定要用批次末兜底扫描
+  （`[data-edrv-tree]:not([data-edrv-wired])`），因为 markdown 内容是异步插入 DOM 的。
 - 2026-09-18 实录（v0.5.3 发布，全绿）：`build` 41s success、`release` **5m34s** success
   （`Verify published tarball` 同轮内取到，非 staged）。三向闭环一次对齐：registry
   `dsh-vscode-mode/0.5.3` 的 `gitHead` == `7f71d8e`（release commit SHA）、`dist-tags.latest`
@@ -317,6 +340,17 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
   inherit；`handle.done` 成功解析为 `{ exitCode, signal }`（非 `{code}`）。
 - teardown/卸载路径里直调子进程用 node `child_process.spawn` + `stdio: 'ignore'`
   （`execFile` 异步重载不支持 stdio 选项，TS2769）。
+- 2026-09-20 坑（**GUI 拉起绝不能走 `ctx.subprocess.spawn`**）：DSH 在 Win32 走 Windows Job runner，
+  其 `launchWindowsJob` 与 runner 内部 spawn **硬编码 `windowsHide: true`**——连 `explorer.exe` 的窗口
+  一起隐藏，症状是 `edrv.revealInExplorer` 回 `{"ok":true}` 但**资源管理器窗口根本不出现**（用户报
+  「在文件浏览器打开不生效」）。同目录交替 `windowsHide` 实测 4/4 出窗 vs 0/4 不出，`cmd /c start` 与
+  `powershell Start-Process` 均无效。修法 = 该路径改 node `child_process.spawn` + `{ stdio:'ignore',
+  windowsHide:false, detached:true }`，只等 `spawn` 事件（GUI 进程退出码无意义）后 `child.unref()`；
+  契约抽成纯函数 `revealSpawnOpts` 以便单测断言 `windowsHide === false`。
+  凡「让 OS 弹窗/拉起外部 GUI」的新功能都要按此自检。
+- 2026-09-20 坑：**验证 GUI 是否真弹出**别只看 RPC 返回或进程存在——`windowsHide` 只隐窗口、
+  进程照起。判据用 `Get-Process explorer | Where MainWindowTitle`，且 Explorer 对**已打开**的
+  同一目录只复用窗口不一定新建，必须挑没开过的目录或先关窗，否则误判「没生效」。
 - 本会话审批策略为 never 时，pwsh 工具会降级 ConstrainedLanguage（子进程无输出、无
   `$LASTEXITCODE`，报 `Cannot run a document in the middle of a pipeline`）→ 派子代理跑构建；
   其环境 `PATHEXT` 被污染（=.CPL），需 cmd 内 `set PATHEXT=.COM;.EXE;.BAT;.CMD` 修正。

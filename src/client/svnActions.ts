@@ -11,7 +11,7 @@
  */
 import type { SvnActionDef } from '../shared/svnActions.js'
 import { svnCleanup } from './svnLog.js'
-import { refreshSvnChanges, svnAdd, svnDiffBase, svnRevert, svnTortoise, svnUpdate } from './svnStatus.js'
+import { refreshSvnChanges, svnAdd, svnDiffBase, svnPatchText, svnRevert, svnTortoise, svnUpdate } from './svnStatus.js'
 
 /** 动作执行上下文（各入口把自身能力投影进来）。 */
 export interface SvnActionRunCtx {
@@ -29,6 +29,10 @@ export interface SvnActionRunCtx {
   openSvnDiffRev?: (path: string, revision: number) => void
   /** 打开日志弹窗（log 动作）。 */
   openSvnLog?: (path?: string) => void
+  /** 打开补丁对话框（create-patch 动作；执行器完成 RPC 后把载荷交回 UI）。 */
+  openPatchDialog?: (payload: { path: string; text: string; truncated: boolean; binary: boolean }) => void
+  /** 打开目录对比对话框（diff-summarize 动作；目标目录相对路径，'' = 工作副本根）。 */
+  openSumDialog?: (path: string) => void
   /** 重查变更清单（写操作后）。 */
   refreshChanges?: () => void
   /** 就地打开文件（日志面板点击变更文件）。 */
@@ -91,6 +95,19 @@ export const SVN_ACTION_RUNNERS: Record<string, SvnActionRunner> = {
     afterWrite(ctx, svnRevert(ctx.sessionId, [ctx.path]))
   },  log: (ctx) => {
     ctx.openSvnLog?.(ctx.path || undefined)
+  },
+  // W2-1：补丁生成（只读，仅生成不落盘应用）；RPC 后把载荷交给 UI 对话框
+  'create-patch': (ctx) => {
+    if (!ctx.path) { ctx.notify?.('无活动文件'); return }
+    const target = ctx.path
+    void svnPatchText(ctx.sessionId, target).then((outcome) => {
+      if (!outcome.ok || typeof outcome.text !== 'string') { ctx.notify?.(outcome.message); return }
+      ctx.openPatchDialog?.({ path: target, text: outcome.text, truncated: outcome.truncated === true, binary: outcome.binary === true })
+    })
+  },
+  // W2-2：目录对比（RPC 在对话框内做，执行器只负责打开并传入默认目标目录）
+  'diff-summarize': (ctx) => {
+    ctx.openSumDialog?.(ctx.path ?? '')
   },
   cleanup: (ctx) => {
     const options = ctx.cleanupOptions ?? {}

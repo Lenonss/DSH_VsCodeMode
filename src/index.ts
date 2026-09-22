@@ -13,7 +13,6 @@ import { handleRpc } from './rpc.js'
 import { newSearcher } from './search/orchestrator.js'
 import { newContentSearcher } from './search/content.js'
 import { installIsolation } from './mcpIsolation.js'
-import { dropFileIndex } from './workspace.js'
 import { cwdOf } from './registry.js'
 import { setupOpenSettings } from './fileOpenSettings.js'
 import { shellMenuLifecycle } from './integrate.js'
@@ -27,6 +26,7 @@ import { disposeAllServers, hookExitReclaim } from './lsp/transport.js'
 import { createAiRpc } from './ai/rpc.js'
 import { createFileVersions } from './fileVersions.js'
 import { createSvnRpc } from './svn.js'
+import { createDapRpc } from './dap/rpc.js'
 import { installRulesSection } from './rules.js'
 import { installSkillGroup } from './skills.js'
 import type { RpcHandlerMap } from './shared/rpc.js'
@@ -70,6 +70,9 @@ export function apply(ctx: Ctx, config?: unknown): void {
   /** SVN RPC（检测/更新/Tortoise 发射；settings 提供 svnPath/tortoisePath）。 */
   const svnRpc = createSvnRpc({ ctx, settings: openSettings })
   const svnHandlers: Partial<RpcHandlerMap> = svnRpc.handlers as Partial<RpcHandlerMap>
+  /** 调试 RPC（DAP 桥单例：spawn 扩展适配器 + 事件缓冲 + findFile 反向匹配）。 */
+  const dapRpc = createDapRpc(ctx)
+  const dapHandlers: Partial<RpcHandlerMap> = dapRpc.handlers
   /** 文件磁盘新鲜度观察器（客户端轮询 edrv.versions；变化时顺带失效目录树缓存）。 */
   const fileVersions = createFileVersions(ctx)
 
@@ -81,7 +84,6 @@ export function apply(ctx: Ctx, config?: unknown): void {
     const cwd = cwdOf(session as never)
     if (cwd) {
       registry.delete(cwd)
-      dropFileIndex(cwd)
       searcher.dispose(cwd)
       contentSearcher.dispose(cwd)
       disposeIndex(cwd)
@@ -90,7 +92,7 @@ export function apply(ctx: Ctx, config?: unknown): void {
     if (typeof sid === 'string') lspRpc.disposeSession(sid)
   })
 
-  registerRoutes(ctx, config, (method, args) => handleRpc(ctx, registry, method, args, searcher, contentSearcher, lspHandlers, aiHandlers, fileVersions, svnHandlers), (warning) => warnings.push(warning))
+  registerRoutes(ctx, config, (method, args) => handleRpc(ctx, registry, method, args, searcher, contentSearcher, lspHandlers, aiHandlers, fileVersions, svnHandlers, dapHandlers), (warning) => warnings.push(warning))
   installIsolation(ctx)
   // 系统集成生命周期：启动自动恢复右键菜单注册（marker 存在时）；插件卸载/reload 清理注册痕迹
   ctx.effect(() => shellMenuLifecycle(ctx))
@@ -104,6 +106,8 @@ export function apply(ctx: Ctx, config?: unknown): void {
   })
   // 卸载时清空文件版本基准表（观察器为模块内单例，不清会跨装配残留陈旧版本）
   ctx.effect(() => () => fileVersions.dispose())
+  // 卸载/重启时结束调试会话并强杀适配器子进程（防残留注入器/适配器孤儿）
+  ctx.effect(() => () => dapRpc.dispose())
   // 宿主进程退出回收：ctx.effect 清理不覆盖进程退出，缺此注册会留下跨重启的孤儿服务器
   hookExitReclaim()
 

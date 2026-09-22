@@ -22,10 +22,12 @@ import {
   SVN_STATUS_LETTER,
   SVN_STATUS_TONE,
   isSvnDiffable,
+  pairMissingWithUnversioned,
   svnVisibleChanges,
 } from '../../../shared/svn.js'
 import { CACHE_KEY } from '../../paths.js'
-import { refreshSvnChanges, svnAdd, svnRevert } from '../../svnStatus.js'
+import { refreshSvnChanges, svnAdd, svnConflictArtifacts, svnFileSizes, svnRemoteStatus, svnRevert } from '../../svnStatus.js'
+import { csvOf, downloadText, htmlTableOf } from '../../ui/svnExport.js'
 import type { SidebarCtx } from '../types.js'
 
 /** 未分组条目的分组键（changelist 为空）。 */
@@ -44,7 +46,7 @@ const REVERT_CONFIRM_TAIL = ' 个文件的本地改动？新增（A）文件在�
  * @returns 开关（默认：显示未版本控制、隐藏忽略项）
  */
 function loadFilter(scope) {
-  const fallback = { unversioned: true, ignored: false }
+  const fallback = { unversioned: true, ignored: false, name: '' }
   if (!scope) return fallback
   try {
     const raw = window.localStorage.getItem(CACHE_KEY.svn + scope)
@@ -53,6 +55,8 @@ function loadFilter(scope) {
     return {
       unversioned: parsed?.unversioned !== false,
       ignored: parsed?.ignored === true,
+      // W1-2 名称过滤随开关一并持久化（旧数据缺字段 = 不过滤，向后兼容）
+      name: typeof parsed?.name === 'string' ? parsed.name : '',
     }
   } catch (error) {
     return fallback
@@ -121,16 +125,18 @@ export function groupByChangelist(entries) {
 
 /**
  * 单条变更行（状态字母 + 路径 + 行内动作；双击 = 与基线比较）。
- * @author ddj 2026年09月16号
+ * @author ddj 2026年09月16号 / 2026年09月20号
  * @param props.entry 变更条目
  * @param props.busy 批量动作进行中（按钮置灰）
  * @param props.onDiff 打开基线差异
  * @param props.onAdd 加入版本控制
  * @param props.onRevert 还原
+ * @param props.onConflict 冲突副本对比（W2-4；仅冲突行出现按钮）
+ * @param props.pairNote 疑似改名标记文案（W2-5；空 = 无配对）
  * @returns 行元素
  */
 function SvnRow(props) {
-  const { entry, busy, onDiff, onAdd, onRevert } = props
+  const { entry, busy, onDiff, onAdd, onRevert, onConflict, pairNote } = props
   const diffable = isSvnDiffable(entry.path, entry.status)
   const act = (label, title, danger, run) => React.createElement('button', {
     className: 'edrv-svn-act' + (danger ? ' edrv-svn-act-danger' : ''),
@@ -145,7 +151,9 @@ function SvnRow(props) {
   },
     statusLetterEl(entry),
     React.createElement('span', { className: 'edrv-svn-path' }, entry.path),
+    (pairNote ? React.createElement('span', { className: 'edrv-svn-pair-mark', title: pairNote }, '⇄') : null),
     React.createElement('span', { className: 'edrv-svn-acts' },
+      (entry.status === 'conflicted' ? act('冲突对比', '与 .mine/.rN 冲突副本并排对比（解决指引见差异视图顶部）', false, () => onConflict(entry.path)) : null),
       (diffable ? act('比较', SVN_DIFF_BASE_LABEL + '（BASE 与工作区并排）', false, () => onDiff(entry.path)) : null),
       (!entry.versioned ? act('加入', SVN_ADD_LABEL, false, () => onAdd([entry.path])) : null),
       (entry.versioned ? act('还原', SVN_REVERT_LABEL + '（放弃本地改动）', true, () => onRevert([entry.path])) : null)))
@@ -161,7 +169,11 @@ function SvnRow(props) {
 function svnListBody(state, handlers) {
   if (!state.managed) return React.createElement('div', { className: 'edrv-tree-loading' }, '当前工作区不受 SVN 管理')
   if (state.entries === null) return React.createElement('div', { className: 'edrv-tree-loading' }, '读取变更中…')
-  if (!state.visible.length) return React.createElement('div', { className: 'edrv-tree-loading' }, '无变更（工作副本干净）')
+  if (!state.visible.length) {
+    // W1-2：名称过滤生效时区分「无匹配」与「无变更」，提示清空过滤框
+    return React.createElement('div', { className: 'edrv-tree-loading' },
+      state.nameFiltered ? '无匹配条目（名称过滤生效中，清空过滤框可看全部）' : '无变更（工作副本干净）')
+  }
   const rows = []
   for (const group of state.groups) {
     if (state.groups.length > 1 || group.name !== NO_CHANGELIST) {
@@ -170,47 +182,64 @@ function svnListBody(state, handlers) {
         React.createElement('span', { className: 'edrv-svn-group-n' }, String(group.entries.length))))
     }
     for (const entry of group.entries) {
-      rows.push(React.createElement(SvnRow, Object.assign({ key: entry.path, entry }, handlers)))
+      rows.push(React.createElement(SvnRow, Object.assign({ key: entry.path, entry, pairNote: handlers.pairNotes?.[entry.path] }, handlers)))
     }
   }
   return rows
 }
 
 /**
- * 工具条（显示开关 + 批量动作）。
- * @author ddj 2026年09月16号
- * @param props.filter 当前开关
- * @param props.count 可见条目数
- * @param props.paths 批量动作目标（add/revert 各自清单）
- * @param props.handlers 动作回调（toggle/add/revert/busy）
+ * 工具条（显示开关 + 名称过滤 + 批量动作 + 导出）。
+ * @author ddj 2026年09月16号 / 2026年09月20号
+ * @param props.filter 当前开关（含 W1-2 name）
+ * @param props.count 可见条目数（名称过滤后）
+ * @param props.countAll 全量条数（未按名称过滤，供「x/y 项」展示）
+ * @param props.paths 批量动作目标（add/revert 各自清单；按未过滤集合计算）
+ * @param props.handlers 动作回调（toggle/add/revert/onNameFilter/onExportCsv/onExportHtml/busy）
  * @returns 工具条元素数组
  */
 function svnToolbarEl(props) {
-  const { filter, count, paths, handlers } = props
+  const { filter, count, countAll, paths, handlers } = props
   const check = (label, title, checked, onChange) => React.createElement('label', {
     className: 'edrv-svn-check', title,
   },
     React.createElement('input', { type: 'checkbox', checked, onChange }),
     React.createElement('span', null, label))
+  const nameFiltered = String(filter.name || '').trim() !== ''
   return [
     React.createElement('div', { key: 'tools', className: 'edrv-svn-toolbar' },
       check('未版本控制', '显示未纳入版本控制的文件', filter.unversioned, handlers.toggleUnversioned),
-      check('忽略项', '显示被忽略的文件', filter.ignored, handlers.toggleIgnored)),
+      check('忽略项', '显示被忽略的文件', filter.ignored, handlers.toggleIgnored),
+      React.createElement('input', {
+        className: 'edrv-svn-name-filter',
+        placeholder: '名称过滤：* ? 通配或子串',
+        title: '按路径过滤条目（* 任意串、? 单字符；无通配符按子串包含，忽略大小写；只影响列表展示，不缩小批量动作范围）',
+        value: filter.name || '',
+        onChange: (event) => handlers.onNameFilter(event.target.value),
+      })),
     (count
       ? React.createElement('div', { key: 'bulk', className: 'edrv-svn-bulk' },
-          React.createElement('span', { className: 'edrv-svn-count' }, String(count) + ' 项'),
+          React.createElement('span', { className: 'edrv-svn-count' }, String(count) + (nameFiltered ? '/' + countAll : '') + ' 项'),
           React.createElement('span', { style: { flex: 1 } }),
+          React.createElement('button', {
+            className: 'edrv-svn-act', title: '导出当前列表为 CSV（带 BOM，Excel 直开；状态/路径/changelist/修订）',
+            onClick: handlers.onExportCsv,
+          }, '导出CSV'),
+          React.createElement('button', {
+            className: 'edrv-svn-act', title: '导出当前列表为 HTML 报表（仅本地查看，不外发）',
+            onClick: handlers.onExportHtml,
+          }, '导出HTML'),
           (paths.unversioned.length
             ? React.createElement('button', {
                 className: 'edrv-svn-act', disabled: handlers.busy,
-                title: '把全部未版本控制文件加入版本控制',
+                title: '把全部未版本控制文件加入版本控制（不受名称过滤影响）',
                 onClick: () => handlers.add(paths.unversioned),
               }, '全部加入')
             : null),
           (paths.revert.length
             ? React.createElement('button', {
                 className: 'edrv-svn-act edrv-svn-act-danger', disabled: handlers.busy,
-                title: '还原全部已受版本控制文件的本地改动',
+                title: '还原全部已受版本控制文件的本地改动（不受名称过滤影响）',
                 onClick: () => handlers.revert(paths.revert),
               }, '全部还原')
             : null))
@@ -233,10 +262,17 @@ export function SvnPanel(props) {
   const managed = Boolean(ctx?.svn?.managed && ctx?.svn?.svnCli)
   const [filter, setFilter] = React.useState(() => loadFilter(scope))
   const [busy, setBusy] = React.useState(false)
+  // W2-3：远端检查结果（null = 未检查；{ failed: true } = 失败降级；否则 { outdated, againstRev }）
+  const [remote, setRemote] = React.useState(null)
+  const [remoteBusy, setRemoteBusy] = React.useState(false)
+  // W2-5：配对候选的文件大小（path → size|null）与成对结果
+  const [sizes, setSizes] = React.useState({})
 
-  // 作用域切换：重读该作用域自己的开关（同一工作区共享）
+  // 作用域切换：重读该作用域自己的开关（同一工作区共享）并清掉远端/配对的会话内状态
   React.useEffect(() => {
     setFilter(loadFilter(scope))
+    setRemote(null)
+    setSizes({})
   }, [scope])
 
   const applyFilter = (next) => {
@@ -264,30 +300,133 @@ export function SvnPanel(props) {
     }).finally(() => setBusy(false))
   }
 
-  const visible = entries === null ? [] : svnVisibleChanges(entries, filter)
+  /**
+   * 远端更新检查（W2-3；host 侧 15s 短超时，离线/超时降级为提示条文案，不阻塞面板）。
+   * @author ddj 2026年09月20号
+   */
+  const checkRemote = () => {
+    if (remoteBusy) return
+    setRemoteBusy(true)
+    void svnRemoteStatus(sessionId, '').then((outcome) => {
+      if (!outcome.ok) {
+        setRemote({ failed: true })
+        ctx?.notify?.(outcome.message)
+        return
+      }
+      setRemote({ outdated: outcome.outdated ?? [], againstRev: outcome.againstRev ?? null })
+    }).finally(() => setRemoteBusy(false))
+  }
+
+  /**
+   * 冲突副本对比入口（W2-4，只读）：扫描 .mine/.working/.rN → 默认首个 .rN ↔ .mine 并排；
+   * resolve 指引在差异视图顶部展示，本入口绝不自动执行 svn resolve（归 P2 破坏性批次）。
+   * @author ddj 2026年09月20号
+   * @param path 冲突文件的工作区相对路径
+   */
+  const openConflictDiff = (path) => {
+    void svnConflictArtifacts(sessionId, path).then((outcome) => {
+      if (!outcome.ok) { ctx?.notify?.(outcome.message); return }
+      const artifacts = outcome.artifacts ?? []
+      const revSide = artifacts.find((item) => item.kind === 'rev')
+      const mineSide = artifacts.find((item) => item.kind === 'mine')
+      if (!revSide || !mineSide) {
+        ctx?.notify?.('未发现冲突副本（.mine/.rN）：' + artifacts.map((item) => item.name).join('、'))
+        return
+      }
+      if (!ctx?.openSvnLocalPair) { ctx?.notify?.('当前视图不支持冲突对比'); return }
+      ctx.openSvnLocalPair(revSide.path, mineSide.path, '.r' + (revSide.rev ?? '?'), '.mine', path)
+    })
+  }
+
+  // W1-2：展示集合（含名称过滤）与批量动作集合（不含名称过滤）分离，「全部加入/还原」不缩小范围
+  const shown = entries === null ? [] : svnVisibleChanges(entries, filter)
+  const actionable = entries === null ? [] : svnVisibleChanges(entries, { unversioned: filter.unversioned, ignored: filter.ignored })
+  const nameFiltered = String(filter.name || '').trim() !== ''
+
+  // W2-5：`!`（missing）与 `?`（unversioned）共存时才做大小查询（候选少，一次批量查完成对）
+  const missingEntries = entries === null ? [] : entries.filter((entry) => entry.status === 'missing')
+  const unversionedEntries = entries === null ? [] : entries.filter((entry) => entry.status === 'unversioned')
+  const candidates = [...missingEntries, ...unversionedEntries].map((entry) => entry.path)
+  const pairsKnown = missingEntries.length > 0 && unversionedEntries.length > 0
+    && candidates.every((path) => path in sizes)
+  React.useEffect(() => {
+    if (!pairsKnown && candidates.length) {
+      void svnFileSizes(sessionId, candidates).then((table) => setSizes(table))
+    }
+  }, [pairsKnown, candidates.join('\n'), sessionId]) // eslint-disable-line react-hooks/exhaustive-deps
+  const pairNoteOf = pairsKnown
+    ? (() => {
+      const notes = {}
+      for (const pair of pairMissingWithUnversioned(entries ?? [], sizes)) {
+        notes[pair.missingPath] = '疑似改名：原文件 → ' + pair.unversionedPath
+        notes[pair.unversionedPath] = '疑似改名：← 原文件 ' + pair.missingPath
+      }
+      return notes
+    })()
+    : {}
+
   const openSvnDiff = (p) => ctx?.openSvnDiff?.(p)
   const handlers = {
     busy,
     onDiff: openSvnDiff,
+    onConflict: openConflictDiff,
+    pairNotes: pairNoteOf,
     onAdd: (paths) => runBatch('add', paths),
     onRevert: (paths) => runBatch('revert', paths),
   }
-  const listState = { managed, entries, visible, groups: groupByChangelist(visible) }
+
+  /**
+   * 导出当前展示列表（W1-4）：CSV 带 BOM 供 Excel 直开；HTML 本地报表；失败经 notify 提示。
+   * @author ddj 2026年09月20号
+   * @param kind 导出格式（'csv' | 'html'）
+   */
+  const onExport = (kind) => {
+    const rows = shown.map((entry) => [
+      SVN_STATUS_LETTER[entry.status] || '',
+      entry.path,
+      entry.changelist || '',
+      entry.revision && entry.revision > 0 ? String(entry.revision) : '',
+    ])
+    const headers = ['状态', '路径', 'changelist', '修订']
+    const stamp = new Date().toISOString().slice(0, 10)
+    const done = kind === 'html'
+      ? downloadText('svn-changes-' + stamp + '.html', htmlTableOf(headers, rows, 'SVN 变更列表 ' + stamp), 'text/html')
+      : downloadText('svn-changes-' + stamp + '.csv', csvOf([headers, ...rows]), 'text/csv')
+    if (!done) ctx?.notify?.('导出失败：浏览器下载能力不可用')
+  }
+
+  const listState = { managed, entries, visible: shown, groups: groupByChangelist(shown), nameFiltered }
   const toolbar = svnToolbarEl({
     filter,
-    count: visible.length,
+    count: shown.length,
+    countAll: actionable.length,
     paths: {
-      unversioned: visible.filter((entry) => !entry.versioned).map((entry) => entry.path),
-      revert: visible.filter((entry) => entry.versioned).map((entry) => entry.path),
+      unversioned: actionable.filter((entry) => !entry.versioned).map((entry) => entry.path),
+      revert: actionable.filter((entry) => entry.versioned).map((entry) => entry.path),
     },
     handlers: Object.assign({}, handlers, {
       toggleUnversioned: () => applyFilter({ ...filter, unversioned: !filter.unversioned }),
       toggleIgnored: () => applyFilter({ ...filter, ignored: !filter.ignored }),
+      onNameFilter: (name) => applyFilter({ ...filter, name }),
+      onExportCsv: () => onExport('csv'),
+      onExportHtml: () => onExport('html'),
       add: (paths) => runBatch('add', paths),
       revert: (paths) => runBatch('revert', paths),
     }),
   })
   const rootName = ctx?.svn?.wcRoot ? String(ctx.svn.wcRoot).split(/[\\/]/).pop() || ctx.svn.wcRoot : ''
+
+  // W2-3：远端更新提示条（null = 未检查；failed = 降级文案；否则展示落后数与 against 修订）
+  const remoteEl = remote === null
+    ? null
+    : React.createElement('div', { className: 'edrv-svn-hintbar' + (remote.failed ? ' edrv-svn-hintbar-warn' : '') },
+        React.createElement('span', { style: { flex: 1 } },
+          remote.failed
+            ? '远端检查失败（网络不可达或超时；可用 ⟳ 或「检查远端」重试）'
+            : (remote.outdated.length
+              ? '远端有 ' + remote.outdated.length + ' 个更新（against r' + (remote.againstRev ?? '?') + '），其中本地已改 ' + remote.outdated.filter((item) => item.path && entries?.some((entry) => entry.path === item.path && entry.versioned)).length + ' 个；更新前请先提交或还原'
+              : '远端无更新（against r' + (remote.againstRev ?? '?') + '）')),
+        React.createElement('button', { className: 'edrv-svn-act', title: '关闭提示条', onClick: () => setRemote(null) }, '✕'))
 
   return React.createElement('div', { className: 'edrv-side-panel' },
     React.createElement('div', { className: 'edrv-side-head' },
@@ -295,9 +434,14 @@ export function SvnPanel(props) {
       React.createElement('span', { className: 'edrv-side-root', title: ctx?.svn?.wcRoot || '' }, rootName),
       React.createElement('span', { style: { flex: 1 } }),
       React.createElement('button', {
+        className: 'edrv-side-btn', title: '检查远端更新（svn status -u；约数秒，离线自动降级）',
+        onClick: checkRemote,
+      }, remoteBusy ? '…' : '⇅'),
+      React.createElement('button', {
         className: 'edrv-side-btn', title: '刷新变更',
         onClick: () => { refreshSvnChanges(sessionId, scope); ctx?.refreshRecords?.() },
       }, refreshIconEl())),
+    remoteEl,
     ...toolbar,
     React.createElement('div', { className: 'edrv-svn-list' }, svnListBody(listState, handlers)))
 }

@@ -27,6 +27,13 @@ describe('keybindings shared defaults', () => {
       'edrv.prevEditorRow': 'Ctrl+Alt+ArrowUp',
       'edrv.addSelectionRef': 'Ctrl+U',
       'edrv.closeTab': 'Ctrl+F4',
+      // 调试（VS Code 同款；F5 空闲时可用性为假自动放行浏览器刷新）
+      'edrv.debugToggleBreakpoint': 'F9',
+      'edrv.debugStartContinue': 'F5',
+      'edrv.debugStepOver': 'F10',
+      'edrv.debugStepInto': 'F11',
+      'edrv.debugStepOut': 'Shift+F11',
+      'edrv.debugStop': 'Shift+F5',
     })
   })
 

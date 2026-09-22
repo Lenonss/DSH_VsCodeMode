@@ -256,6 +256,7 @@ export function buildHandlers(
   aiHandlers?: Partial<RpcHandlerMap>,
   fileVersions?: FileVersions,
   svnHandlers?: Partial<RpcHandlerMap>,
+  dapHandlers?: Partial<RpcHandlerMap>,
 ): RpcHandlerMap {
   return {
     // edrv.lsp.* 由 createLspRpc 一次性提供（tracker 跨请求保留），这里并入。
@@ -264,6 +265,8 @@ export function buildHandlers(
     ...((aiHandlers ?? {}) as RpcHandlerMap),
     // svn.* 由 createSvnRpc 提供（SVN 检测/更新/Tortoise 发射），这里并入。
     ...((svnHandlers ?? {}) as RpcHandlerMap),
+    // edrv.dap.* 由 createDapRpc 提供（调试会话单例），这里并入。
+    ...((dapHandlers ?? {}) as RpcHandlerMap),
     'edrv.list': async (args) => {
       const sc = await requireSession(ctx, args.sessionId)
       if ('err' in sc) return { ok: false, error: sc.err }
@@ -333,6 +336,7 @@ export function buildHandlers(
       if (!fs) return { ok: false, error: '缺少 fs' }
       try {
         const target = await resolveTarget(ctx, sc.session, args.path)
+         debugRecord(ctx, sc.cwd, '[DEBUG path.resolve] input=' + String(args.path ?? '') + ' resolved=' + fs.processPath(target), 'debug')
         const info = await fs.stat(target)
         if (!info || info.type !== 'file') {
           // 带上解析后的真实路径：跳转失败时可直接看出是路径解析错还是目标本身不存在
@@ -366,6 +370,7 @@ export function buildHandlers(
       if (!fs) return { ok: false, error: '缺少 fs' }
       try {
         const target = await resolveTarget(ctx, sc.session, args.path)
+         debugRecord(ctx, sc.cwd, '[DEBUG path.resolve] input=' + String(args.path ?? '') + ' resolved=' + fs.processPath(target), 'debug')
         const info = await fs.stat(target)
         if (!info || info.type !== 'file') return { ok: false, error: '文件不存在' }
         if ((info.size ?? 0) > READ_CAP) return { ok: false, error: '文件过大（>8MB），不支持差异重建' }
@@ -399,6 +404,7 @@ export function buildHandlers(
       if (!fs) return { ok: false, error: '缺少 fs' }
       try {
         const target = await resolveTarget(ctx, sc.session, args.path)
+         debugRecord(ctx, sc.cwd, '[DEBUG path.resolve] input=' + String(args.path ?? '') + ' resolved=' + fs.processPath(target), 'debug')
         // 版本守卫（客户端带回上次读取的版本）：文件在读取后被外部改过则拒绝写入，
         // 避免用陈旧缓冲静默覆盖外部改动；客户端未带 rev（旧版/无版本后端）时行为不变。
         const rev = typeof args.rev === 'string' && args.rev ? args.rev : null
@@ -421,6 +427,7 @@ export function buildHandlers(
       if (!fs) return { ok: false, error: '缺少 fs' }
       try {
         const target = await resolveTarget(ctx, sc.session, args.path)
+         debugRecord(ctx, sc.cwd, '[DEBUG path.resolve] input=' + String(args.path ?? '') + ' resolved=' + fs.processPath(target), 'debug')
         const info = await fs.stat(target)
         if (!info || info.type !== 'file') return { ok: false, error: '文件不存在' }
         // fs 服务仅提供文本写（writeText/editText），二进制回写经 node:fs 直写解析后的
@@ -540,7 +547,7 @@ export function buildHandlers(
     },
     'edrv.dlog.reveal': async () => {
       // 打开日志根目录（OS 文件管理器；目录形态 → 直接打开）
-      const revealed = await revealInExplorer(ctx, pluginLogRoot(), true)
+      const revealed = await revealInExplorer(pluginLogRoot(), true)
       if (!revealed.ok) return { ok: false, error: revealed.error }
       return { ok: true, opened: true }
     },
@@ -598,7 +605,7 @@ export function buildHandlers(
         const info = await fs.stat(target)
         if (!info) return { ok: false, error: '路径不存在' }
         const abs = fs.processPath(target)
-        const outcome = await revealInExplorer(ctx, abs, info.type === 'directory')
+        const outcome = await revealInExplorer(abs, info.type === 'directory')
         if (!outcome.ok) return { ok: false, error: outcome.error }
         return { ok: true, revealed: abs }
       } catch (error) {
@@ -951,8 +958,9 @@ export async function handleRpc<M extends RpcMethod>(
   aiHandlers?: Partial<RpcHandlerMap>,
   fileVersions?: FileVersions,
   svnHandlers?: Partial<RpcHandlerMap>,
+  dapHandlers?: Partial<RpcHandlerMap>,
 ): Promise<RpcResult<M>> {
-  const handlers = buildHandlers(ctx, registry, searcher, contentSearcher, lspHandlers, aiHandlers, fileVersions, svnHandlers)
+  const handlers = buildHandlers(ctx, registry, searcher, contentSearcher, lspHandlers, aiHandlers, fileVersions, svnHandlers, dapHandlers)
   const handler = handlers[method]
   if (!handler) return { ok: false, error: '未知方法: ' + String(method) } as RpcResult<M>
   return handler(args)

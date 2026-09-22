@@ -29,6 +29,7 @@ import { ModalShell } from './ModalShell.js'
 import { ContextMenu } from './ContextMenu.js'
 import type { ContextMenuEntry } from './ContextMenu.js'
 import { SvnLogStats } from './SvnLogStats.js'
+import { csvOf, downloadText, htmlTableOf } from './svnExport.js'
 
 /** 弹窗默认宽（P0-14 可拖拽调整；窄屏按视口 clamp）。 */
 const DIALOG_W_DEFAULT = 920
@@ -736,13 +737,29 @@ function statusLineOf(list, filtered, shownCount, keyword, truncated, current, s
 }
 
 /**
+ * 日志条目 → 导出行（W1-4）：修订/作者/日期/提交信息/路径（relPath 优先，分号拼接）。
+ * @author ddj 2026年09月20号
+ * @param rows 日志条目数组
+ * @returns 二维字符串表（不含表头）
+ */
+function logExportRows(rows) {
+  return (rows || []).map((entry) => [
+    'r' + String(entry.revision ?? ''),
+    String(entry.author ?? ''),
+    String(entry.date ?? ''),
+    String(entry.message ?? ''),
+    (entry.paths || []).map((item) => item.relPath || item.path).join('; '),
+  ])
+}
+
+/**
  * 底部（状态行 P0-11 + 勾选项 P0-5/P1-4/P1-5 + 按钮组 P0-6：Next 100 / Show All / Refresh）。
- * @author ddj 2026年09月17号 / 2026年09月18号
+ * @author ddj 2026年09月17号 / 2026年09月18号 / 2026年09月20号
  * @param props 见内部解构
  * @returns 底部元素
  */
 function LogFoot(props) {
-  const { list, filtered, shownCount, keyword, truncated, current, selectedCount, onlyAffected, onOnlyAffected, busy, onLoadMore, onShowAll, onRefresh, onStats, stopOnCopy, onStopCopy, includeMerged, onIncludeMerged, rangeActive, onOpenRange, onRangeReset } = props
+  const { list, filtered, shownCount, keyword, truncated, current, selectedCount, onlyAffected, onOnlyAffected, busy, onLoadMore, onShowAll, onRefresh, onStats, stopOnCopy, onStopCopy, includeMerged, onIncludeMerged, rangeActive, onOpenRange, onRangeReset, onExportCsv, onExportHtml } = props
   const status = statusLineOf(list, filtered, shownCount, keyword, truncated, current, selectedCount)
   return React.createElement('div', { className: 'edrv-svnlog-footwrap' },
     React.createElement('div', { className: 'edrv-svnlog-foot' },
@@ -778,6 +795,16 @@ function LogFoot(props) {
       (rangeActive
         ? React.createElement('button', { className: 'edrv-svn-act', disabled: busy, title: '清除区间，回到默认 HEAD 往前的窗口', onClick: onRangeReset }, '回到最新')
         : null),
+      React.createElement('button', {
+        className: 'edrv-svn-act', disabled: busy || !filtered || !filtered.length,
+        title: '导出当前过滤后的修订列表为 CSV（带 BOM，Excel 直开；修订/作者/日期/信息/路径）',
+        onClick: onExportCsv,
+      }, '导出CSV'),
+      React.createElement('button', {
+        className: 'edrv-svn-act', disabled: busy || !filtered || !filtered.length,
+        title: '导出当前过滤后的修订列表为 HTML 报表（仅本地查看，不外发）',
+        onClick: onExportHtml,
+      }, '导出HTML'),
       React.createElement('span', { style: { flex: 1 } }),
       React.createElement('button', { className: 'edrv-svn-act', disabled: busy, title: '重新读取日志（F5）', onClick: onRefresh }, 'Refresh'),
       React.createElement('button', {
@@ -874,6 +901,20 @@ export function SvnLogDialog(props) {
     setSortDir((prev) => (prev === 'asc' ? 'desc' : 'asc'))
   }
   const onSortReset = () => { setSortKey(null); setSortDir('desc') }
+
+  /**
+   * 导出当前过滤后列表（W1-4）：CSV 带 BOM 供 Excel 直开 / HTML 本地报表；失败静默。
+   * @author ddj 2026年09月20号
+   * @param kind 导出格式（'csv' | 'html'）
+   */
+  const onExport = (kind) => {
+    if (!sorted || !sorted.length) return
+    const headers = ['修订', '作者', '日期', '信息', '路径']
+    const rows = logExportRows(sorted)
+    const stamp = new Date().toISOString().slice(0, 10)
+    if (kind === 'html') downloadText('svn-log-' + stamp + '.html', htmlTableOf(headers, rows, 'SVN 日志 ' + stamp), 'text/html')
+    else downloadText('svn-log-' + stamp + '.csv', csvOf([headers, ...rows]), 'text/csv')
+  }
 
   /**
    * 多选点击解释（P1-3）：单击=单选；Ctrl=切换；Shift=以 anchor 为基准在显示列表内范围选。
@@ -1080,6 +1121,7 @@ export function SvnLogDialog(props) {
       list, filtered: sorted, shownCount: sorted ? sorted.length : 0, keyword: query.trim(), truncated, current,
       selectedCount: visibleSelected.length, onlyAffected, onOnlyAffected: setOnlyAffected, busy, onLoadMore, onShowAll, onRefresh,
       onStats: () => setStatsOpen(true), stopOnCopy, onStopCopy, includeMerged, onIncludeMerged,
+      onExportCsv: () => onExport('csv'), onExportHtml: () => onExport('html'),
       rangeActive: rangeActive === true, onOpenRange: () => setRangeOpen(true), onRangeReset: () => onRangeReset?.(),
     }),
     React.createElement(Grip, { mode: 'r', onDragStart: startResize, onReset: () => { setDlgW(DIALOG_W_DEFAULT); setDlgH(DIALOG_H_DEFAULT) } }),

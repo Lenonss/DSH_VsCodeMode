@@ -214,8 +214,9 @@ export function sdkEnvOf(sdkRoot: string): Record<string, string> {
   return env
 }
 
-/** 读扩展目录 package.json 的 version（读取失败不影响入口使用，返回 undefined）。 */
-function manifestVersionOf(extDir: string): string | undefined {
+/** 读扩展目录 package.json 的 version（读取失败不影响入口使用，返回 undefined）。
+ * 导出供 dap/discovery 复用（扩展清单版本排序同口径，避免第二份实现）。 */
+export function manifestVersionOf(extDir: string): string | undefined {
   try {
     const manifest = JSON.parse(readFileSync(join(extDir, 'package.json'), 'utf8')) as { version?: unknown }
     return typeof manifest.version === 'string' ? manifest.version : undefined

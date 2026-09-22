@@ -12,7 +12,10 @@ import {
   SVN_STATUS_LABEL,
   SVN_STATUS_LETTER,
   SVN_STATUS_TONE,
+  changeNameMatch,
+  contentGuardOf,
   isSvnDiffable,
+  pairMissingWithUnversioned,
   svnBadgeOf,
   svnBadgeTitle,
   svnVisibleChanges,
@@ -199,6 +202,29 @@ describe('状态表与消费纯函数', () => {
     expect(svnVisibleChanges(list, { unversioned: false }).map((item) => item.path)).toEqual([])
   })
 
+  it('svnVisibleChanges：name 子串过滤（W1-2，忽略大小写，空/空白 = 不过滤）', () => {
+    const list = [entry('Assets/a.cs', 'modified'), entry('Docs/readme.md', 'modified'), entry('u.txt', 'unversioned')]
+    expect(svnVisibleChanges(list, { name: 'aSSETS' }).map((item) => item.path)).toEqual(['Assets/a.cs'])
+    expect(svnVisibleChanges(list, { name: '  ' }).map((item) => item.path)).toEqual(['Assets/a.cs', 'Docs/readme.md', 'u.txt'])
+    expect(svnVisibleChanges(list, {}).map((item) => item.path)).toEqual(['Assets/a.cs', 'Docs/readme.md', 'u.txt'])
+  })
+
+  it('svnVisibleChanges：name 通配 * 与 ?（整串锚定，作用于全部状态）', () => {
+    const list = [entry('a/one.cs', 'modified'), entry('a/one.cs.meta', 'modified'), entry('b/two.lua', 'modified')]
+    expect(svnVisibleChanges(list, { name: '*.cs' }).map((item) => item.path)).toEqual(['a/one.cs'])
+    expect(svnVisibleChanges(list, { name: 'a/*.cs*' }).map((item) => item.path)).toEqual(['a/one.cs', 'a/one.cs.meta'])
+    expect(svnVisibleChanges(list, { name: 'b/tw?.lua' }).map((item) => item.path)).toEqual(['b/two.lua'])
+  })
+
+  it('changeNameMatch：正则元字符按字面匹配（转义），不抛错', () => {
+    expect(changeNameMatch('a+b.txt', 'a+b.*')).toBe(true)
+    expect(changeNameMatch('aab.txt', 'a+b.*')).toBe(false)
+    expect(changeNameMatch('x(1).cs', 'x(*).cs')).toBe(true)
+    expect(changeNameMatch('foo/bar.txt', 'foo?bar.txt')).toBe(true)
+    expect(changeNameMatch('', '')).toBe(true)
+    expect(changeNameMatch('a.txt', undefined)).toBe(true)
+  })
+
   it('svnBadgeOf/svnBadgeTitle：normal 与 external 不出徽标', () => {
     expect(svnBadgeOf(entry('a', 'normal'))).toBe('')
     expect(svnBadgeOf(entry('a', 'external'))).toBe('')
@@ -216,5 +242,56 @@ describe('状态表与消费纯函数', () => {
     expect(isSvnDiffable('doc/manual.pdf', 'modified')).toBe(false)
     expect(isSvnDiffable('Dockerfile')).toBe(true)
     expect(base.wcRoot).toBe('/wc')
+  })
+})
+
+describe('contentGuardOf（W2-6 内容护栏嗅探）', () => {
+  it('嗅探窗含 NUL → binary（M4：svn cat 对二进制原样透传字节）', () => {
+    expect(contentGuardOf('ok\u0000binary')).toEqual({ binary: true })
+    expect(contentGuardOf('clean text')).toEqual({})
+  })
+
+  it('嗅探窗含 U+FFFD → encodingHint（非 UTF-8 经 UTF-8 解码的替换符）', () => {
+    expect(contentGuardOf('正常\uFFFD乱码')).toEqual({ encodingHint: true })
+  })
+
+  it('NUL 优先于编码提示（二进制不叠加编码提示）；空/非字符串安全', () => {
+    expect(contentGuardOf('\u0000\uFFFD')).toEqual({ binary: true })
+    expect(contentGuardOf('')).toEqual({})
+    expect(contentGuardOf(null)).toEqual({})
+    expect(contentGuardOf(undefined)).toEqual({})
+  })
+})
+
+describe('pairMissingWithUnversioned（W2-5 疑似改名配对）', () => {
+  const pairEntry = (path: string, status: SvnItemStatus): SvnChangeEntry => ({ path, status, versioned: status !== 'unversioned' && status !== 'ignored' })
+  it('basename 相同且 size 相等才配对（M2 定论：status XML 无 copyfrom，只能启发式）', () => {
+    const list = [
+      pairEntry('Old/Const.lua', 'missing'),
+      pairEntry('New/Const.lua', 'unversioned'),
+      pairEntry('Old/keep.cs', 'missing'),
+      pairEntry('New/other.lua', 'unversioned'),
+    ]
+    const sizes = { 'Old/Const.lua': 120, 'New/Const.lua': 120, 'Old/keep.cs': 10 }
+    expect(pairMissingWithUnversioned(list, sizes)).toEqual([
+      { missingPath: 'Old/Const.lua', unversionedPath: 'New/Const.lua' },
+    ])
+  })
+
+  it('size 缺失/未知/不相等一律不配对（从严防误报）', () => {
+    const list = [pairEntry('a/X.lua', 'missing'), pairEntry('b/X.lua', 'unversioned')]
+    expect(pairMissingWithUnversioned(list, {})).toEqual([])
+    expect(pairMissingWithUnversioned(list, { 'a/X.lua': 1, 'b/X.lua': null })).toEqual([])
+    expect(pairMissingWithUnversioned(list, { 'a/X.lua': 1, 'b/X.lua': 2 })).toEqual([])
+  })
+
+  it('无 missing 或无 unversioned 时为空；同 basename 多候选取首个', () => {
+    const onlyMod = [pairEntry('a/X.lua', 'modified')]
+    expect(pairMissingWithUnversioned(onlyMod, {})).toEqual([])
+    const multi = [pairEntry('a/X.lua', 'missing'), pairEntry('b/X.lua', 'unversioned'), pairEntry('c/X.lua', 'unversioned')]
+    const sizes = { 'a/X.lua': 5, 'b/X.lua': 5, 'c/X.lua': 5 }
+    expect(pairMissingWithUnversioned(multi, sizes)).toEqual([
+      { missingPath: 'a/X.lua', unversionedPath: 'b/X.lua' },
+    ])
   })
 })

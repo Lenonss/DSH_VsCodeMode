@@ -6,14 +6,14 @@
  * TortoiseProc 为长驻 GUI 进程：发射后不 await done（只挂 no-op catch 防未处理 rejection）。
  * 作者 ddj 2026年09月16号
  */
-import { stat } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { readdir, stat } from 'node:fs/promises'
+import { basename, dirname, join } from 'node:path'
 import { tmpdir } from 'node:os'
 import type { Ctx, Session } from './store.js'
 import { cwdOf, sessionOf } from './registry.js'
-import type { SvnAction, SvnChangeEntry, SvnFeature, SvnItemStatus, SvnLogEntry, SvnStatusPayload } from './shared/svn.js'
-import { SVN_CLI_DEFAULT, TORTOISE_EXE, tortoiseLaunchArgv } from './shared/svn.js'
-import { attrOf, numAttrOf, scanXmlTags, textOf } from './svnXml.js'
+import type { SvnAction, SvnChangeEntry, SvnConflictArtifact, SvnFeature, SvnItemStatus, SvnLogEntry, SvnRemoteOutdatedEntry, SvnStatusPayload, SvnSumEntry } from './shared/svn.js'
+import { SVN_CLI_DEFAULT, TORTOISE_EXE, contentGuardOf, tortoiseLaunchArgv } from './shared/svn.js'
+import { attrOf, numAttrOf, scanXmlTags, textOf, unescapeXml } from './svnXml.js'
 import { TEXT_OUTPUT_CAP, batchResultOf, tailOfText, updateResultOf } from './svnText.js'
 import { LOG_CAP, LOG_DEFAULT_LIMIT, SVN_LOG_SHOW_ALL_CAP, parseLogXml, parseSvnInfoRevision } from './svnLog.js'
 export { batchResultOf, commitResultOf, updateResultOf } from './svnText.js'
@@ -58,6 +58,23 @@ const MUTATE_GRACE_MS = 120_000
 export const CHANGES_TTL_MS = 5_000
 /** 文本读取上限（对齐 rpc.ts READ_CAP：>8MB 拒绝整文件读取/差异）。 */
 const READ_CAP = 8 * 1024 * 1024
+/**
+ * W2-1 补丁文本输出上限（16MB）。实测教训复用（PROGRESS §六.1）：DSH stdout 收集器
+ * 超限**保留尾部**——补丁被截断时头部 `Index:` 会丢失，host 以「不以 Index: 开头」
+ * 标记 truncated，客户端明示「不完整」而非让用户拿半份补丁去用。
+ */
+const PATCH_OUTPUT_CAP = 16 * 1024 * 1024
+/** W2-2 目录对比 summarize 输出上限（8MB；大目录长区间的变更条目 XML）。 */
+const SUM_OUTPUT_CAP = 8 * 1024 * 1024
+/**
+ * W2-3 远端检查超时（15s）。M3 实测：无凭据/离线时 `status -u` 会长时间挂起
+ * （受限沙箱内 120s 无输出），远端检查必须短超时 + 失败降级，绝不阻塞面板。
+ */
+const REMOTE_GRACE_MS = 15_000
+/** W2-2 summarize 服务器往返预算（大目录长区间可能较慢）。 */
+const SUM_GRACE_MS = 60_000
+/** W2-5 fileSizes 单次查询路径上限（配对候选是少数条目，防滥用）。 */
+export const FILE_SIZES_CAP = 200
 
 /** 文件存在性探测（可注入替身）。 */
 export type ExistsFn = (path: string) => Promise<boolean>
@@ -225,6 +242,120 @@ export function parseStatusXml(xml: string, cap: number = CHANGES_CAP): { entrie
     if (hit.selfClosing) pendingPath = null
   }
   return { entries, truncated }
+}
+
+/**
+ * 绝对路径 → 工作副本相对路径（W2-2/W2-3：M3/M5 实测 XML 中 path 为绝对路径）。
+ * Windows 大小写不敏感文件系统：前缀匹配按小写比较，剥离后保留原大小写。
+ * @author ddj 2026年09月20号
+ * @param abs 绝对路径（`/` 或 `\` 分隔均可）
+ * @param wcRoot 工作副本根绝对路径
+ * @returns 相对路径（`/` 分隔）；不在根下返回 null
+ */
+export function relPathOfAbs(abs: string, wcRoot: string): string | null {
+  const norm = (p: string) => String(p ?? '').replace(/\\/g, '/').replace(/\/+$/, '')
+  const a = norm(abs)
+  const r = norm(wcRoot)
+  if (!r || !a.toLowerCase().startsWith(r.toLowerCase() + '/')) return null
+  return a.slice(r.length + 1)
+}
+
+/**
+ * W2-1 补丁的 `-x` 扩展选项组合（纯函数）。
+ * 冒烟实测修正（2026-09-20）：本机 svn 内部 diff 的上下文行数只认 `-U<N>`，
+ * `--unified=N` 报 E200016 erroneous argument（07 计划 §1 当年只核对了 help 文案，未实测）。
+ * @author ddj 2026年09月20号
+ * @param opts 空白语义 / EOL 忽略 / 上下文行数
+ * @returns 空格连接的单个 `-x` 值；无选项时空串
+ */
+export function patchExtOf(opts: { whitespace?: string; ignoreEol?: boolean; unified?: number }): string {
+  const parts: string[] = []
+  if (opts.whitespace === 'b') parts.push('-b')
+  if (opts.whitespace === 'w') parts.push('-w')
+  if (opts.ignoreEol === true) parts.push('--ignore-eol-style')
+  const unified = Math.floor(Number(opts.unified))
+  if (Number.isFinite(unified) && unified >= 0 && unified <= 100 && unified !== 3) parts.push('-U' + unified)
+  return parts.join(' ')
+}
+
+/**
+ * 解析 `svn diff --summarize --xml` 输出（W2-2；M5 实测形态，svn 1.14.5）：
+ * `<diff><paths><path item="modified" kind="file" props="none">ABS:\\PATH</path>...`
+ * - path 的**文本内容**是绝对路径（非属性）→ relPathOfAbs 归一为工作副本相对；
+ * - 属性输出顺序不稳定（与 M1 log 同款教训），只按字段名取值、不做字符串快照；
+ * - 区间无变更时 `<paths>` 为空 → entries 为空数组（非错误）。
+ * @author ddj 2026年09月20号
+ * @param xml summarize --xml 的 stdout
+ * @param wcRoot 工作副本根（路径归一锚点）
+ * @param cap 条目上限（超出标记 truncated）
+ * @returns 变更条目与是否截断
+ */
+export function parseSummarizeXml(xml: string, wcRoot: string, cap: number = CHANGES_CAP): { entries: SvnSumEntry[]; truncated: boolean } {
+  const entries: SvnSumEntry[] = []
+  let truncated = false
+  if (typeof xml !== 'string' || !xml) return { entries, truncated }
+  const re = /<path\b([^>]*?)>([\s\S]*?)<\/path>/g
+  let match: RegExpExecArray | null
+  while ((match = re.exec(xml)) !== null) {
+    const abs = unescapeXml(match[2].trim())
+    // 路径形态双兼容（冒烟实测 2026-09-20）：绝对路径目标 → svn 回显绝对路径；相对路径目标
+    // （host 常态，cwd=wcRoot）→ svn 回显相对路径。先按绝对剥离前缀，失败按相对归一。
+    const rel = relPathOfAbs(abs, wcRoot) ?? changePathOf(abs)
+    if (!rel) continue
+    if (entries.length >= cap) { truncated = true; break }
+    entries.push({
+      path: rel,
+      item: attrOf(match[1], 'item') || 'none',
+      kind: attrOf(match[1], 'kind') || 'none',
+      props: attrOf(match[1], 'props') || 'none',
+    })
+  }
+  return { entries, truncated }
+}
+
+/**
+ * 解析 `svn status -u --xml` 输出（W2-3；M3 实测形态，svn 1.14.5）：
+ * `<entry path="ABS"><wc-status ...>...</wc-status><repos-status item="modified" props="none"/></entry>` + `<against revision="N"/>`
+ * - 落后锚点 = 存在 `<repos-status>` 且 `item !== 'none'`（实测落后文件为 modified）；
+ *   远端无变化的条目**没有** repos-status 元素（省略，非 'none' 值）；
+ * - 离线/无凭据时会长时间挂起（M3 实测 120s+），调用方必须用 REMOTE_GRACE_MS 短超时。
+ * @author ddj 2026年09月20号
+ * @param xml status -u --xml 的 stdout
+ * @param wcRoot 工作副本根（路径归一锚点）
+ * @param cap 条目上限（超出标记 truncated）
+ * @returns 落后清单 + against 修订
+ */
+export function parseRemoteStatusXml(
+  xml: string,
+  wcRoot: string,
+  cap: number = CHANGES_CAP,
+): { outdated: SvnRemoteOutdatedEntry[]; againstRev: number | null; truncated: boolean } {
+  const outdated: SvnRemoteOutdatedEntry[] = []
+  let againstRev: number | null = null
+  let truncated = false
+  if (typeof xml !== 'string' || !xml) return { outdated, againstRev, truncated }
+  // 开标签属性截取（M3 实测长形态：`<repos-status\n item="...">\n</repos-status>`，
+  // 开标签 `>` 与闭标签之间可能有换行，故只截开标签而非要求紧邻闭标签）
+  const against = /<against\b([^>]*?)\/?>/.exec(xml)
+  if (against) {
+    const rev = numAttrOf(against[1], 'revision')
+    if (rev !== undefined) againstRev = rev
+  }
+  const re = /<entry\b([^>]*?)>([\s\S]*?)<\/entry>/g
+  let match: RegExpExecArray | null
+  while ((match = re.exec(xml)) !== null) {
+    const repos = /<repos-status\b([^>]*?)\/?>/.exec(match[2])
+    if (!repos) continue
+    const item = attrOf(repos[1], 'item')
+    if (!item || item === 'none') continue
+    // 路径形态双兼容（同 parseSummarizeXml：绝对/相对取决于调用目标形态）
+    const rawPath = attrOf(match[1], 'path')
+    const rel = relPathOfAbs(rawPath, wcRoot) ?? changePathOf(rawPath)
+    if (!rel) continue
+    if (outdated.length >= cap) { truncated = true; break }
+    outdated.push({ path: rel, item })
+  }
+  return { outdated, againstRev, truncated }
 }
 
 // --endregion
@@ -639,6 +770,42 @@ export function createSvnRpc(deps: SvnRpcDeps): { handlers: Record<string, unkno
     }
   }
 
+  /**
+   * 扫描冲突副本文件（W2-4；svn 冲突时的标准后缀 `.mine`/`.working`/`.rN`，纯本地 fs 只读）。
+   * @author ddj 2026年09月20号
+   * @param wcRoot 工作副本根
+   * @param rel 冲突文件的工作副本相对路径
+   * @returns 副本清单（rev 升序 → working → mine；默认对比对 = 首个 .rN ↔ .mine）
+   */
+  const conflictArtifactsOf = async (wcRoot: string, rel: string): Promise<SvnConflictArtifact[]> => {
+    const abs = join(wcRoot, rel)
+    const base = basename(abs)
+    const names = await readdir(dirname(abs))
+    const rankOf = (kind: SvnConflictArtifact['kind']) => (kind === 'rev' ? 0 : kind === 'working' ? 1 : 2)
+    const artifacts: SvnConflictArtifact[] = []
+    for (const name of names) {
+      let kind: SvnConflictArtifact['kind'] | null = null
+      let rev: number | undefined
+      if (name === base + '.mine') kind = 'mine'
+      else if (name === base + '.working') kind = 'working'
+      else if (name.startsWith(base + '.r') && /^\d+$/.test(name.slice(base.length + 2))) {
+        kind = 'rev'
+        rev = Number.parseInt(name.slice(base.length + 2), 10)
+      }
+      if (kind === null) continue
+      const artifactPath = relPathOfAbs(join(dirname(abs), name), wcRoot)
+      if (!artifactPath) continue
+      artifacts.push({ path: artifactPath, name, kind, ...(rev !== undefined ? { rev } : {}) })
+    }
+    return artifacts.sort((a, b) => rankOf(a.kind) - rankOf(b.kind) || (a.rev ?? 0) - (b.rev ?? 0) || a.name.localeCompare(b.name))
+  }
+
+  /** W2-6：双侧内容护栏标记（干净时返回空对象，展开进载荷不添字段）。 */
+  const guardSides = (a: string | null, b: string | null): { binary?: boolean; encodingHint?: boolean } => {
+    const merged = { ...contentGuardOf(a ?? ''), ...contentGuardOf(b ?? '') }
+    return merged.binary || merged.encodingHint ? merged : {}
+  }
+
   const handlers = {
     'svn.status': async (args: { sessionId?: string; force?: boolean }) => {
       const sc = await requireSvnSession(ctx, args.sessionId)
@@ -685,9 +852,9 @@ export function createSvnRpc(deps: SvnRpcDeps): { handlers: Record<string, unkno
           // added/未提交条目没有 pristine：非致命，按原因返回（客户端提示而非报错面板）
           const text = (outcome.stderr || outcome.stdout).trim()
           const reason = /pristine|E200009/i.test(text) ? 'no-pristine' : 'cat-failed'
-          return { ok: true as const, base: null, working, reason, error: tailOfText(text) }
+          return { ok: true as const, base: null, working, reason, error: tailOfText(text), ...guardSides(null, working) }
         }
-        return { ok: true as const, base: outcome.stdout, working }
+        return { ok: true as const, base: outcome.stdout, working, ...guardSides(outcome.stdout, working) }
       } catch (error) {
         return { ok: false as const, error: '读取基线失败：' + String(error) }
       }
@@ -731,7 +898,7 @@ export function createSvnRpc(deps: SvnRpcDeps): { handlers: Record<string, unkno
       if (!status.svnCli) return { ok: false as const, error: 'svn 命令不可用（可在设置页配置 svn 路径）' }
       try {
         const result = await diffRevSides(status.wcRoot, rel, Math.floor(revision))
-        return { ok: true as const, ...result }
+        return { ok: true as const, ...result, ...guardSides(result.left, result.right) }
       } catch (error) {
         return { ok: false as const, error: '读取版本差异失败：' + String(error) }
       }
@@ -751,7 +918,7 @@ export function createSvnRpc(deps: SvnRpcDeps): { handlers: Record<string, unkno
       if (!status.svnCli) return { ok: false as const, error: 'svn 命令不可用（可在设置页配置 svn 路径）' }
       try {
         const result = await pairSides(status.wcRoot, rel, Math.floor(revA), Math.floor(revB))
-        return { ok: true as const, ...result }
+        return { ok: true as const, ...result, ...guardSides(result.left, result.right) }
       } catch (error) {
         return { ok: false as const, error: '读取版本差异失败：' + String(error) }
       }
@@ -782,12 +949,154 @@ export function createSvnRpc(deps: SvnRpcDeps): { handlers: Record<string, unkno
         const leftOutcome = await runSvn(status.wcRoot, ['cat', '-r', String(Math.floor(revision)), '--', rel], READ_GRACE_MS)
         if (leftOutcome.code !== 0) {
           const text = (leftOutcome.stderr || leftOutcome.stdout).trim()
-          return { ok: true as const, left: null, right: working, reason: 'not-exist', error: tailOfText(text) }
+          return { ok: true as const, left: null, right: working, reason: 'not-exist', error: tailOfText(text), ...guardSides(null, working) }
         }
-        return { ok: true as const, left: leftOutcome.stdout, right: working }
+        return { ok: true as const, left: leftOutcome.stdout, right: working, ...guardSides(leftOutcome.stdout, working) }
       } catch (error) {
         return { ok: false as const, error: '读取工作副本差异失败：' + String(error) }
       }
+    },
+    'svn.patchText': async (args: { sessionId?: string; path?: string; whitespace?: 'none' | 'b' | 'w'; ignoreEol?: boolean; unified?: number }) => {
+      const sc = await requireSvnSession(ctx, args.sessionId)
+      if ('err' in sc) return { ok: false as const, error: sc.err }
+      const rel = safeRel(args.path)
+      if (rel === null || rel === '') return { ok: false as const, error: '路径不合法' }
+      const status = await statusOf(sc.cwd)
+      if (!status.managed || !status.wcRoot) return { ok: false as const, error: '当前工作区不受 SVN 管理' }
+      if (!status.svnCli) return { ok: false as const, error: 'svn 命令不可用（可在设置页配置 svn 路径）' }
+      try {
+        // W2-1：`-x` 单值承载全部扩展选项（-b/-w/--ignore-eol-style/--unified=N，patchExtOf 组合）
+        const ext = patchExtOf({ whitespace: args.whitespace, ignoreEol: args.ignoreEol === true, unified: args.unified })
+        const argv = ['diff', ...(ext ? ['-x', ext] : []), '--', rel]
+        const outcome = await runSvn(status.wcRoot, argv, READ_GRACE_MS, PATCH_OUTPUT_CAP)
+        if (outcome.code !== 0) {
+          return { ok: false as const, error: '生成补丁失败：' + tailOfText([outcome.stderr, outcome.stdout].filter(Boolean).join('\n')) }
+        }
+        const text = outcome.stdout
+        // 截断判定（PROGRESS §六.1）：收集器超限保留尾部 → 头部丢失；补丁恒以 Index:/Property changes on: 开头
+        const head = text.slice(0, 200)
+        const truncated = !head.startsWith('Index:') && !head.startsWith('Property changes on:')
+        // M4 实测：svn diff 对二进制只输出 "Cannot display" 通知（几百字节），如实标记给客户端
+        return { ok: true as const, text, truncated, binary: text.includes('Cannot display:') }
+      } catch (error) {
+        return { ok: false as const, error: '生成补丁失败：' + String(error) }
+      }
+    },
+    'svn.diffSum': async (args: { sessionId?: string; path?: string; revA?: number; revB?: number }) => {
+      const sc = await requireSvnSession(ctx, args.sessionId)
+      if ('err' in sc) return { ok: false as const, error: sc.err }
+      const rel = safeRel(args.path)
+      if (rel === null) return { ok: false as const, error: '路径不合法' }
+      const revA = Number(args.revA)
+      const revB = Number(args.revB)
+      if (!Number.isFinite(revA) || revA < 1 || !Number.isFinite(revB) || revB < 1) {
+        return { ok: false as const, error: '版本号不合法' }
+      }
+      const status = await statusOf(sc.cwd)
+      if (!status.managed || !status.wcRoot) return { ok: false as const, error: '当前工作区不受 SVN 管理' }
+      if (!status.svnCli) return { ok: false as const, error: 'svn 命令不可用（可在设置页配置 svn 路径）' }
+      try {
+        // W2-2：M5 实测 —— summarize 输出的 path 是绝对路径，parseSummarizeXml 内归一为相对
+        const argv = ['diff', '--summarize', '--xml', '-r', String(Math.floor(revA)) + ':' + String(Math.floor(revB))]
+        if (rel) argv.push('--', rel)
+        const outcome = await runSvn(status.wcRoot, argv, SUM_GRACE_MS, SUM_OUTPUT_CAP)
+        if (outcome.code !== 0) {
+          return { ok: false as const, error: '目录对比失败：' + tailOfText([outcome.stderr, outcome.stdout].filter(Boolean).join('\n')) }
+        }
+        return { ok: true as const, ...parseSummarizeXml(outcome.stdout, status.wcRoot) }
+      } catch (error) {
+        return { ok: false as const, error: '目录对比失败：' + String(error) }
+      }
+    },
+    'svn.remoteStatus': async (args: { sessionId?: string; path?: string }) => {
+      const sc = await requireSvnSession(ctx, args.sessionId)
+      if ('err' in sc) return { ok: false as const, error: sc.err }
+      const rel = safeRel(args.path)
+      if (rel === null) return { ok: false as const, error: '路径不合法' }
+      const status = await statusOf(sc.cwd)
+      if (!status.managed || !status.wcRoot) return { ok: false as const, error: '当前工作区不受 SVN 管理' }
+      if (!status.svnCli) return { ok: false as const, error: 'svn 命令不可用（可在设置页配置 svn 路径）' }
+      try {
+        // W2-3：M3 实测 —— 离线/无凭据会长时间挂起，REMOTE_GRACE_MS 短超时是硬约束
+        const argv = ['status', '-u', '--xml']
+        if (rel) argv.push('--', rel)
+        const outcome = await runSvn(status.wcRoot, argv, REMOTE_GRACE_MS, SUM_OUTPUT_CAP)
+        if (outcome.code !== 0) {
+          return { ok: false as const, error: '远端检查失败：' + tailOfText([outcome.stderr, outcome.stdout].filter(Boolean).join('\n')) }
+        }
+        return { ok: true as const, ...parseRemoteStatusXml(outcome.stdout, status.wcRoot) }
+      } catch (error) {
+        return { ok: false as const, error: '远端检查失败：' + String(error) }
+      }
+    },
+    'svn.conflictArtifacts': async (args: { sessionId?: string; path?: string }) => {
+      const sc = await requireSvnSession(ctx, args.sessionId)
+      if ('err' in sc) return { ok: false as const, error: sc.err }
+      const rel = safeRel(args.path)
+      if (rel === null || rel === '') return { ok: false as const, error: '路径不合法' }
+      const status = await statusOf(sc.cwd)
+      if (!status.managed || !status.wcRoot) return { ok: false as const, error: '当前工作区不受 SVN 管理' }
+      try {
+        // W2-4：纯本地 fs 只读扫描，不跑 svn、不触碰 resolve
+        const artifacts = await conflictArtifactsOf(status.wcRoot, rel)
+        return { ok: true as const, artifacts }
+      } catch (error) {
+        return { ok: false as const, error: '扫描冲突副本失败：' + String(error) }
+      }
+    },
+    'svn.diffLocalPair': async (args: { sessionId?: string; left?: string; right?: string }) => {
+      const sc = await requireSvnSession(ctx, args.sessionId)
+      if ('err' in sc) return { ok: false as const, error: sc.err }
+      // W2-4：双侧均为本地文件（冲突副本对比）；safeRel 兜底防越界，与 diffBase 同一安全口径
+      const left = safeRel(args.left)
+      const right = safeRel(args.right)
+      if (!left || !right) return { ok: false as const, error: '路径不合法（需工作副本内相对路径）' }
+      const status = await statusOf(sc.cwd)
+      if (!status.managed || !status.wcRoot) return { ok: false as const, error: '当前工作区不受 SVN 管理' }
+      const fs = ctx.get('fs') as {
+        resolve?: (p: string, o: object) => Promise<unknown>
+        stat?: (t: unknown) => Promise<{ type?: string; size?: number } | null>
+        readText?: (t: unknown) => Promise<string>
+      } | null | undefined
+      if (!fs?.resolve || !fs?.stat || !fs?.readText) return { ok: false as const, error: '缺少 fs' }
+      try {
+        const sides: string[] = []
+        for (const rel of [left, right]) {
+          const resolved = await fs.resolve(rel, { cwd: sc.cwd })
+          const info = await fs.stat(resolved)
+          if (!info || info.type !== 'file') return { ok: false as const, error: '文件不存在：' + rel }
+          if ((info.size ?? 0) > READ_CAP) return { ok: false as const, error: '文件过大（>8MB）：' + rel }
+          sides.push(await fs.readText(resolved))
+        }
+        return { ok: true as const, left: sides[0], right: sides[1], ...guardSides(sides[0], sides[1]) }
+      } catch (error) {
+        return { ok: false as const, error: '读取冲突副本失败：' + String(error) }
+      }
+    },
+    'svn.fileSizes': async (args: { sessionId?: string; paths?: string[] }) => {
+      const sc = await requireSvnSession(ctx, args.sessionId)
+      if ('err' in sc) return { ok: false as const, error: sc.err }
+      // W2-5：配对候选是少数条目；上限护栏 + 单条失败按 null（未知）处理，不因个别路径失败整体报错
+      const list = Array.isArray(args.paths) ? args.paths.slice(0, FILE_SIZES_CAP) : []
+      if (!list.length) return { ok: true as const, sizes: [] }
+      const fs = ctx.get('fs') as {
+        resolve?: (p: string, o: object) => Promise<unknown>
+        stat?: (t: unknown) => Promise<{ type?: string; size?: number } | null>
+      } | null | undefined
+      if (!fs?.resolve || !fs?.stat) return { ok: false as const, error: '缺少 fs' }
+      const sizes: Array<{ path: string; size: number | null }> = []
+      for (const raw of list) {
+        const rel = safeRel(raw)
+        if (rel === null || rel === '') { sizes.push({ path: String(raw ?? ''), size: null }); continue }
+        try {
+          const resolved = await fs.resolve(rel, { cwd: sc.cwd })
+          const info = await fs.stat(resolved)
+          sizes.push({ path: rel, size: info && info.type === 'file' ? (info.size ?? null) : null })
+        } catch {
+          sizes.push({ path: rel, size: null })
+        }
+      }
+      return { ok: true as const, sizes }
     },
     'svn.wcRev': async (args: { sessionId?: string; path?: string }) => {
       const sc = await requireSvnSession(ctx, args.sessionId)

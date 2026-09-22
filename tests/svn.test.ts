@@ -13,6 +13,7 @@ import {
   findSvnRoot,
   findTortoiseProc,
   foregroundHelperArgv,
+  patchExtOf,
   processNameOf,
   updateResultOf,
 } from '../src/svn.js'
@@ -881,5 +882,26 @@ describe('svnEditorActions（编辑区右键动作表）', () => {
     expect(ids).not.toContain('edrv.svnEditorDiff')
     expect(ids).not.toContain('edrv.svnEditorRevert')
     expect(ids).not.toContain('edrv.svnEditorLog')
+  })
+})
+
+describe('patchExtOf（W2-1 补丁 -x 扩展选项组合）', () => {
+  it('缺省 = 空串（不传 -x，保持 svn 默认 unified 3）', () => {
+    expect(patchExtOf({})).toBe('')
+    expect(patchExtOf({ whitespace: 'none', ignoreEol: false, unified: 3 })).toBe('')
+  })
+
+  it('空白语义互斥取后值；ignoreEol 与 unified 组合用空格连接（单个 -x 值）', () => {
+    expect(patchExtOf({ whitespace: 'b' })).toBe('-b')
+    expect(patchExtOf({ whitespace: 'w' })).toBe('-w')
+    expect(patchExtOf({ whitespace: 'b', ignoreEol: true })).toBe('-b --ignore-eol-style')
+    expect(patchExtOf({ whitespace: 'b', ignoreEol: true, unified: 8 })).toBe('-b --ignore-eol-style -U8')
+  })
+
+  it('unified 越界/非法回落不传（防 -x 值注入非法选项）', () => {
+    expect(patchExtOf({ unified: 0 })).toBe('-U0')
+    expect(patchExtOf({ unified: 101 })).toBe('')
+    expect(patchExtOf({ unified: Number.NaN })).toBe('')
+    expect(patchExtOf({ unified: 2.9 })).toBe('-U2')
   })
 })

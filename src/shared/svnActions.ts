@@ -132,6 +132,26 @@ export const SVN_ACTIONS: readonly SvnActionDef[] = [
     gates: ['versioned'],
   },
   {
+    id: 'create-patch',
+    commandId: 'edrv.svnCreatePatch',
+    label: '生成补丁…',
+    order: 20,
+    surfaces: ['palette'],
+    capability: 'cli',
+    targets: ['file', 'directory'],
+    needsEditorModel: true,
+  },
+  {
+    id: 'diff-summarize',
+    commandId: 'edrv.svnDiffSum',
+    label: '目录对比（两修订）…',
+    order: 21,
+    surfaces: ['palette'],
+    capability: 'cli',
+    // 目录对比以活动文件所在目录为默认目标（无活动文件 = 工作副本根），不限制目标类型
+    needsEditorModel: false,
+  },
+  {
     id: 'cleanup',
     commandId: 'edrv.svnCleanup',
     label: '清理工作副本',

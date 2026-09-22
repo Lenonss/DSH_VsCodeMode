@@ -41,6 +41,8 @@ export interface SidebarCtx {
   svnChangeMap?: Record<string, SvnChangeEntry>
   /** 打开 SVN 基线差异视图（变更面板行内「与基线比较」；缺省时面板降级提示）。 */
   openSvnDiff?: (path: string) => void
+  /** 打开双侧本地文件差异（W2-4 冲突副本 `.rN` ↔ `.mine`；缺省时面板降级提示）。 */
+  openSvnLocalPair?: (left: string, right: string, leftLabel: string, rightLabel: string, title: string) => void
   /** 重查 SVN 变更清单（CLI 更新/还原/加入版本控制后由菜单动作调用）。 */
   refreshSvnChanges?: () => void
   /** 打开 SVN 日志弹窗（P3；菜单/命令栏「查看日志」）。 */

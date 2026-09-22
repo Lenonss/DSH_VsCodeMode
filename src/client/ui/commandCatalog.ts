@@ -8,6 +8,7 @@
  */
 import { hasEditorModel, hasOpenTabs } from '../editorModelState.js'
 import { svnCurrentStatus } from '../svnStatus.js'
+import { dapStore } from '../dap/store.js'
 import { svnActionOn, svnActionsFor } from '../../shared/svnActions.js'
 import type { SvnActionDef } from '../../shared/svnActions.js'
 
@@ -160,6 +161,8 @@ function svnEventOf(action: SvnActionDef): string {
     add: 'svnAdd',
     revert: 'svnRevertCli',
     log: 'svnLog',
+    'create-patch': 'svnCreatePatch',
+    'diff-summarize': 'svnDiffSum',
     cleanup: 'svnCleanup',
     'tortoise-commit': 'svnTortoiseCommit',
     'tortoise-log': 'svnTortoiseLog',
@@ -262,6 +265,51 @@ export const EDITOR_COMMANDS: readonly CommandDef[] = [
 ]
 
 /**
+ * 调试（DAP）命令组：全部桥接派发，EditorView 统一接线调 dapStore。
+ * 可用性：步进类仅在暂停态可用（无编辑器时不吞键）；F5 需有配置或已暂停。
+ * @author ddj 2026年09月29号
+ * @returns 命令定义数组
+ */
+function debugPaletteDefs(): CommandDef[] {
+  const phase = () => dapStore.getSnapshot().phase
+  const paused = () => phase() === 'paused'
+  const canStart = () => paused() || dapStore.getSnapshot().configs.length > 0
+  const canStop = () => phase() !== 'idle' && phase() !== 'terminated'
+  return [
+    {
+      id: 'edrv.debugToggleBreakpoint', label: '调试：切换断点（光标行）', category: '调试', order: 10,
+      keybinding: 'F9', available: needsModel,
+      run: () => emit('debugToggleBreakpoint'),
+    },
+    {
+      id: 'edrv.debugStartContinue', label: '调试：启动 / 继续', category: '调试', order: 20,
+      keybinding: 'F5', available: canStart,
+      run: () => emit('debugStartContinue'),
+    },
+    {
+      id: 'edrv.debugStepOver', label: '调试：单步跳过', category: '调试', order: 30,
+      keybinding: 'F10', available: paused,
+      run: () => emit('debugStepOver'),
+    },
+    {
+      id: 'edrv.debugStepInto', label: '调试：单步步入', category: '调试', order: 40,
+      keybinding: 'F11', available: paused,
+      run: () => emit('debugStepInto'),
+    },
+    {
+      id: 'edrv.debugStepOut', label: '调试：单步步出', category: '调试', order: 50,
+      keybinding: 'Shift+F11', available: paused,
+      run: () => emit('debugStepOut'),
+    },
+    {
+      id: 'edrv.debugStop', label: '调试：停止', category: '调试', order: 60,
+      keybinding: 'Shift+F5', available: canStop,
+      run: () => emit('debugStop'),
+    },
+  ]
+}
+
+/**
  * 桥接派发指令（无原生监听，键位由 commandBridge 统一 capture 处理）。
  * 新增「只填目录、不写监听」的编辑器指令一律放这里：键位、命令栏、设置页自动可用。
  * @author ddj 2026年09月10号
@@ -271,6 +319,7 @@ export const BRIDGE_COMMANDS: readonly CommandDef[] = [
   prevEditorRowDef(),
   addSelectionRefDef(),
   closeTabDef(),
+  ...debugPaletteDefs(),
 ]
 
 /**

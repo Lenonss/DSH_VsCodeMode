@@ -58,13 +58,15 @@ import { onLspProgress, refreshStatus, setSession as setLspSession } from '../mo
 import { setupAiInline, trackAiEditor, aiInlineEnabled } from '../ai/inlineProvider.js'
 import { SnippetsPicker } from './SnippetsPicker.js'
 import { invalidateSnippets, setSnippetsSession, setupSnippets } from '../snippets/provider.js'
+import { setupLaunchJson, prefetchSnippets } from '../dap/launchSnippetProvider.js'
+import { findArrayPos, LAUNCH_JSON_RE } from '../dap/launchInsert.js'
 import {
   absoluteOf, ancestorDirsOf, applyClose, baseNameOf, closeAll, closeOthers, closeRight, closeSaved,
   evictPlan, insertTab, isTreeRevealable, normalizeTabs, pickActive, relativeOf, tabPathOf, togglePin,
 } from '../tabActions.js'
 import { getMaxOpenEditors } from '../editorLimit.js'
 import { buildTabMenu } from '../tabMenu.js'
-import { ensureSvnChanges, ensureSvnStatus, getSvnChanges, getSvnStatus, refreshSvnChanges, svnAdd, svnChangeMapOf, svnDiffBase, svnEditorActions, svnRevert, svnTortoise, svnUpdate } from '../svnStatus.js'
+import { ensureSvnChanges, ensureSvnStatus, getSvnChanges, getSvnStatus, refreshSvnChanges, svnAdd, svnChangeMapOf, svnDiffBase, svnDiffLocalPair, svnEditorActions, svnRevert, svnTortoise, svnUpdate } from '../svnStatus.js'
 import { ensureSvnLog, getSvnLog, refreshSvnLog, svnDiffPair, svnDiffRev, svnDiffWorking, svnLogKeyOf, svnLogLoadedLimit, svnLogTruncated, svnWcRev, SVN_LOG_SHOW_ALL_LIMIT } from '../svnLog.js'
 import { runSvnAction } from '../svnActions.js'
 import { dshTrace } from '../svnStore.js'
@@ -74,7 +76,18 @@ import type { SvnAction } from '../../shared/svn.js'
 import { createSaveTimer } from '../saveDebounce.js'
 import { ContextMenu } from './ContextMenu.js'
 import { SvnLogDialog } from './SvnLogDialog.js'
+import { SvnPatchDialog } from './SvnPatchDialog.js'
+import { SvnSumDialog } from './SvnSumDialog.js'
 import { LogDialog } from './LogDialog.js'
+import { dapStore } from '../dap/store.js'
+import { bpDisabledLinesOf, bpLinesOf } from '../dap/breakpoints.js'
+import { applyBpDecorations, setEditingLine, setHintLine, setPausedLine } from '../dap/decorate.js'
+import { hintLineFor } from '../dap/hintLine.js'
+import { createBpWidget } from '../dap/BpWidget.js'
+import { buildBpMenu } from '../dap/bpMenu.js'
+import { clampToolbarPosition, loadToolbarPosition, saveToolbarPosition } from '../dap/toolbarDrag.js'
+import { editorModelPathOf } from '../dap/modelPath.js'
+import { dapTrace } from '../dap/trace.js'
 
 /** 日志弹窗每次加载条数（「加载更多」按此步长递增；上限由 host 的 SVN_LOG_SHOW_ALL_CAP 约束）。 */
 const SVN_LOG_PAGE = 100
@@ -88,6 +101,18 @@ const SVN_LOG_PAGE = 100
 function svnLogOptsOf(svnLog) {
   if (!svnLog) return {}
   return { stopOnCopy: svnLog.soc === true, showMerged: svnLog.merged === true, range: svnLog.range ?? null }
+}
+
+/**
+ * 工作区相对路径 → 所在目录相对路径（W2-2 目录对比的默认目标；无目录 = 工作副本根）。
+ * @author ddj 2026年09月20号
+ * @param relPath 工作区相对路径（可空）
+ * @returns 目录相对路径（'' = 工作副本根）
+ */
+function dirOfRel(relPath) {
+  const value = String(relPath ?? '').replace(/\\/g, '/')
+  const cut = value.lastIndexOf('/')
+  return cut > 0 ? value.slice(0, cut) : ''
 }
 
 /** 跳转目标高亮的保留时长（LSP/搜索跳转落地后给用户的位置提示，到期自动清除）。 */
@@ -194,7 +219,9 @@ export function EditorView(props) {
   const [tabMenu, setTabMenu] = React.useState(null) // Tab 右键菜单 { x,y,path }（编辑区右键走 Monaco 原生菜单，无此浮层）
   const [svnStatus, setSvnStatus] = React.useState(null) // SVN 能力状态（SvnStatusPayload；null=未加载，SVN 入口隐藏）
   const [svnChanges, setSvnChanges] = React.useState(null) // SVN 变更清单（null=未加载；徽标/菜单判定）
-  const [svnDiff, setSvnDiff] = React.useState(null) // 差异视图 { path, base, working, reason, message, leftLabel, rightLabel, scheme }（null=关闭）
+  const [svnDiff, setSvnDiff] = React.useState(null) // 差异视图 { path, base, working, reason, message, leftLabel, rightLabel, scheme, logTarget?, binary?, encodingHint? }（null=关闭；logTarget 存在 = 来自日志弹窗，差异条可返回日志）
+  const [patchDialog, setPatchDialog] = React.useState(null) // W2-1 补丁对话框 { path, text, truncated, binary }（null = 关闭）
+  const [sumDialog, setSumDialog] = React.useState(null) // W2-2 目录对比对话框 { path }（null = 关闭）
   const [svnLog, setSvnLog] = React.useState(null) // 日志弹窗 { target, limit, soc?, range? }（null=关闭；P1-4/P1-6 增选项维度）
   const [svnLogData, setSvnLogData] = React.useState(null) // 日志条目（null=未加载）
   const [svnLogBusy, setSvnLogBusy] = React.useState(false) // 日志在途
@@ -262,6 +289,82 @@ export function EditorView(props) {
   const batchBusyRef = React.useRef(false) // 批量 Keep All/Undo All 防重入
   const menuHandlersRef = React.useRef(null) // 右键菜单动作的最新闭包（Monaco addAction 空依赖回调读取）
   const svnMenuDisposersRef = React.useRef([]) // Monaco 右键 SVN 组当前 disposables（同步时先注销旧组）
+  // 调试（DAP）：store 订阅 tick 驱动重渲 + gutter/F9 切换闭包（ensureEditor 空依赖读取）
+  const [dapTick, setDapTick] = React.useState(0)
+  React.useEffect(() => dapStore.subscribe(() => setDapTick((t) => t + 1)), [])
+  const dapSnap = dapStore.getSnapshot()
+  const [dapBarPos, setDapBarPos] = React.useState(() => loadToolbarPosition(scope))
+  const [dapBarDragging, setDapBarDragging] = React.useState(false)
+  const dapBarRef = React.useRef(null)
+  const dapDragRef = React.useRef(null)
+  React.useEffect(() => {
+    setDapBarPos(loadToolbarPosition(scope))
+  }, [scope])
+  React.useEffect(() => {
+    const onMove = (event) => {
+      const drag = dapDragRef.current
+      const bar = dapBarRef.current
+      const area = bar?.parentElement
+      if (!drag || !bar || !area) return
+      const areaRect = area.getBoundingClientRect()
+      const barRect = bar.getBoundingClientRect()
+      const next = clampToolbarPosition({
+        left: event.clientX - areaRect.left - drag.offsetX,
+        top: event.clientY - areaRect.top - drag.offsetY,
+      }, {
+        width: areaRect.width,
+        height: areaRect.height,
+        barWidth: barRect.width,
+        barHeight: barRect.height,
+      })
+      setDapBarPos(next)
+    }
+    const onUp = () => {
+      if (!dapDragRef.current) return
+      dapDragRef.current = null
+      setDapBarDragging(false)
+      const latest = dapBarPosRef.current
+      if (latest) saveToolbarPosition(scope, latest)
+    }
+    document.addEventListener('pointermove', onMove)
+    document.addEventListener('pointerup', onUp)
+    return () => {
+      document.removeEventListener('pointermove', onMove)
+      document.removeEventListener('pointerup', onUp)
+    }
+  }, [scope])
+  const dapBarPosRef = React.useRef(dapBarPos)
+  dapBarPosRef.current = dapBarPos
+  const startDapBarDrag = (event) => {
+    if (event.button !== 0 || !dapBarRef.current) return
+    const rect = dapBarRef.current.getBoundingClientRect()
+    event.preventDefault()
+    event.stopPropagation()
+    dapDragRef.current = { offsetX: event.clientX - rect.left, offsetY: event.clientY - rect.top }
+    setDapBarDragging(true)
+    event.currentTarget.setPointerCapture?.(event.pointerId)
+  }
+  // 进程选择器选中项（多候选附加时；候选集变化回落首个）
+  const [dapPickPid, setDapPickPid] = React.useState(0)
+  React.useEffect(() => { setDapPickPid(dapSnap.candidates?.[0]?.pid ?? 0) }, [dapSnap.candidates])
+  // 断点右键菜单（glyph 区右键）与行内断点编辑浮层（Monaco content widget）
+  const [dapBpMenu, setDapBpMenu] = React.useState(null)
+  const bpWidgetRef = React.useRef(null) // { close, path, line } | null
+  const dapScopeRef = React.useRef(scope)
+  const dapCwdRef = React.useRef(cwd)
+  dapScopeRef.current = scope
+  dapCwdRef.current = cwd
+  const dapToggleRef = React.useRef(null)
+  dapToggleRef.current = (path, line) => {
+    if (!cwd || !path || !line) return
+    // 严格对齐 CodeBuddy：任意文件都可切换断点（不再限定 .lua 调试目标）
+    dapStore.toggleAt(scope, cwd, path, line)
+  }
+  // 工作区变化同步调试 store（配置清单/启动基准）；有 cwd 时预拉 launch.json 配置
+  React.useEffect(() => {
+    dapStore.setWorkspace(cwd || '')
+    if (cwd) void dapStore.ensureConfigs()
+  }, [cwd])
   const svnStatusRef = React.useRef(null) // svnStatus 渲染值镜像（ensureEditor 空依赖闭包读取最新状态）
   const [snippetPicker, setSnippetPicker] = React.useState(null) // 'configure' | 'insert' | null（代码片段浮层）
   const doSaveRef = React.useRef(null) // 保存动作的最新闭包（窗口级保存监听读取）
@@ -640,8 +743,9 @@ export function EditorView(props) {
         setStatus('已加载')
       } else {
         const base = res?.error ? String(res.error) : '读取失败'
+        dapTrace('read-failed', { path, error: base, resolvedPath: res?.resolvedPath, cwd })
         // 带出 host 解析后的真实路径：跳转失败时一眼看出是路径解析错还是目标不存在
-        const message = res?.resolvedPath ? base + '：' + String(res.resolvedPath) : base
+        const message = res?.resolvedPath ? base + '：' + relativeOf(String(res.resolvedPath), cwd) : base
         setLoadError(message)
         setError(message)
         setStatus('读取失败')
@@ -1324,6 +1428,20 @@ export function EditorView(props) {
       ['edrv.command.svnAdd', () => runSvnAdd(activeRef.current)],
       ['edrv.command.svnRevertCli', () => runSvnRevertCli(activeRef.current)],
       ['edrv.command.svnLog', () => openSvnLog(activeRef.current || undefined)],
+      ['edrv.command.svnCreatePatch', () => runSvnAction(SVN_ACTION_BY_ID['create-patch'], {
+        sessionId,
+        scope,
+        path: activeRef.current ?? '',
+        notify: (message) => setStatus(message),
+        openPatchDialog: (payload) => setPatchDialog(payload),
+      })],
+      ['edrv.command.svnDiffSum', () => runSvnAction(SVN_ACTION_BY_ID['diff-summarize'], {
+        sessionId,
+        scope,
+        path: dirOfRel(activeRef.current ?? ''),
+        notify: (message) => setStatus(message),
+        openSumDialog: (target) => setSumDialog({ path: target }),
+      })],
       ['edrv.command.svnCleanup', () => runSvnAction(SVN_ACTION_BY_ID.cleanup, {
         sessionId,
         scope,
@@ -1428,6 +1546,8 @@ export function EditorView(props) {
       setupAiInline(m)
       // 代码片段补全 provider 注册（幂等；条目按会话工作区懒加载）
       setupSnippets(m)
+      // launch.json「添加配置」补全 provider 注册（幂等；仅 launch.json configurations 数组内出条目）
+      setupLaunchJson(m)
     }).catch((e) => {
       if (alive) {
         setMonacoErr(String(e?.message ?? e))
@@ -1461,10 +1581,7 @@ export function EditorView(props) {
   monacoRef.current = monaco
 
   /** 从编辑器实例 model URI 解析活动文件路径（工作区相对；无模型返回 null）。 */
-  const modelPathOf = (edx) => {
-    const uriPath = edx?.getModel?.()?.uri?.path
-    return uriPath ? decodeURIComponent(String(uriPath).replace(/^\//, '')) : null
-  }
+  const modelPathOf = (edx) => editorModelPathOf(edx)
 
   /**
    * 同步 Monaco 右键菜单 SVN 组：先注销旧组，再按最新 svn 状态注册（空状态 = 全部移除）。
@@ -1503,6 +1620,7 @@ export function EditorView(props) {
             path: def.id === 'update' ? (relPath ?? '') : relPath,
             notify: (message) => setStatus(message),
             openSvnDiff: (p) => runSvnDiffBase(p),
+            openSvnLocalPair: runSvnDiffLocalPair,
             openSvnLog: (p) => openSvnLog(p ?? relPath),
             refreshChanges: () => refreshSvnChanges(sessionId, scope),
           })
@@ -1887,8 +2005,104 @@ export function EditorView(props) {
       if (hideTimerRef.current) { clearTimeout(hideTimerRef.current); hideTimerRef.current = null }
       setHoverAct({ region: hit, top, right })
     })
+    // 调试断点：行首 glyph 圆点区**左键**点击切换（右键走下方 contextmenu 菜单，
+    // 必须区分按键——否则右键会既 toggle 断点又弹菜单）。
+    // ⚠️ 枚举在 monaco.editor 子命名空间（monaco.editor.MouseTargetType，值为 2）；
+    //    取顶层 m.MouseTargetType 是 undefined，会让点击永远静默返回（实测踩坑）。
+    ed.onMouseDown((e) => {
+      const target = e?.target
+      if (!e?.event?.leftButton) return
+      const GUTTER = m.editor?.MouseTargetType?.GUTTER_GLYPH_MARGIN ?? 2
+      if (!target || target.type !== GUTTER) return
+      const line = target.position?.lineNumber
+      const path = pathOf(ed)
+      if (line && path) dapToggleRef.current?.(path, line)
+    })
+    // 断点 hover 预览（对齐 VS Code `ensureBreakpointHintDecoration`）：
+    // 鼠标移到 glyph 区（type=2）或行号区（type=3）的可下断点行 → 半透明红点 + pointer 光标；
+    // 移开/离开编辑器 → 清除。已有断点的行不显示预览（避免与实心红点重叠）。
+    ed.onMouseMove((e) => {
+      const target = e?.target
+      const path = pathOf(ed)
+      const list = path ? (dapStore.bpMapOf(dapScopeRef.current)[path] ?? []) : []
+      const line = hintLineFor(target?.type, target?.position?.lineNumber, list.map((it) => it.line))
+      setHintLine(ed, line || null)
+    })
+    ed.onMouseLeave(() => setHintLine(ed, null))
+    // 断点右键菜单：glyph 区右键**始终**由本插件接管（严格对齐 CodeBuddy：任意文件都出菜单，
+    // 不再限定 .lua）。命中行改用 Monaco 官方 getTargetAtClientPoint——
+    // 手算 floor((relY+scrollTop)/lineHeight)+1 **未扣编辑器 padding-top**（实测 6px），
+    // 点在某行框下半部会被算成下一行 → 对空行显示"添加"菜单（实测踩坑）。
+    const glyphHitLine = (ev) => {
+      const edi = editorRef.current
+      if (!edi?.getTargetAtClientPoint) return null
+      const rect = edi.getDomNode?.()?.getBoundingClientRect?.()
+      if (!rect) return null
+      const layout = edi.getLayoutInfo?.()
+      if (!layout) return null
+      const relX = ev.clientX - rect.left
+      if (relX < layout.glyphMarginLeft || relX > layout.glyphMarginLeft + layout.glyphMarginWidth) return null
+      const GUTTER = m.editor?.MouseTargetType?.GUTTER_GLYPH_MARGIN ?? 2
+      const target = edi.getTargetAtClientPoint(ev.clientX, ev.clientY)
+      if (!target || target.type !== GUTTER) return null
+      return target.position?.lineNumber ?? null
+    }
+    const onBpCtxCapture = (ev) => {
+      const line = glyphHitLine(ev)
+      if (!line) return
+      const path = pathOf(editorRef.current)
+      if (!path) return
+      const entry = (dapStore.bpMapOf(dapScopeRef.current)[path] ?? []).find((it) => it.line === line)
+      ev.preventDefault()
+      ev.stopPropagation()
+      setDapBpMenu({
+        x: ev.clientX,
+        y: ev.clientY,
+        path,
+        line,
+        hasBp: !!entry,
+        enabled: entry ? entry.enabled !== false : true,
+        isLogpoint: !!(entry && entry.logMessage),
+      })
+    }
+    node.addEventListener('contextmenu', onBpCtxCapture, true)
     editorRef.current = ed
   }, [])
+
+  // 调试断点装饰：断点表/活动文件变化时全量替换行首圆点（独立 collection，与差异/下划线互不干扰）；
+  // 适配器真实回执 verified:false 的行渲染空心红圈（对齐 VS Code 未验证语义）
+  React.useEffect(() => {
+    const ed = editorRef.current
+    if (!ed || !active) return
+    const map = dapStore.bpMapOf(scope)
+    const unverified = bpLinesOf(map, active).filter((line) => dapStore.ackOf(active, line)?.verified === false)
+    applyBpDecorations(ed, bpLinesOf(map, active), bpDisabledLinesOf(map, active), unverified)
+  }, [scope, active, contentPath, dapSnap.bpVersion, dapSnap.bpAckVersion, monaco])
+
+  // 行内断点编辑浮层：切换文件 / 编辑器重建时关闭（浮层锚定旧 model 的行号，留着会错位）
+  React.useEffect(() => {
+    closeBpWidget()
+  }, [active, contentPath])
+
+  // 编辑浮层的目标断点被删除（如 agent 清理埋点/用户在面板删除）→ 浮层自动关闭
+  React.useEffect(() => {
+    const held = bpWidgetRef.current
+    if (!held) return
+    const entry = (dapStore.bpMapOf(scope)[held.path] ?? []).some((it) => it.line === held.line)
+    if (!entry) closeBpWidget()
+  }, [scope, dapSnap.bpVersion])
+
+  // 编辑器卸载时移除浮层（content widget 不随 React 树回收）
+  React.useEffect(() => () => closeBpWidget(), [])
+
+  // 调试停帧行：paused 且首帧属于当前文件时高亮该行；继续/停止/切走自动清除
+  React.useEffect(() => {
+    const ed = editorRef.current
+    if (!ed) return
+    const top = dapSnap.topFrame
+    const hit = top && top.file && sameFile(top.file, active)
+    setPausedLine(ed, hit ? top.line : null)
+  }, [dapSnap.phase, dapSnap.topFrame, active, contentPath, sameFile])
 
   /**
    * 跳转落地后给目标区域挂临时高亮（默认 1.2s 后自动清除）。
@@ -1920,6 +2134,14 @@ export function EditorView(props) {
   }
 
   // 打开文件后的跳转（导航历史恢复/差异聚焦/搜索与 LSP 行列跳转，目标内容就绪后执行一次）
+  //
+  // ⚠️ 依赖必须含 monaco：contentReady 在**文本到达**时即为真，可能早于 Monaco 就绪；
+  // 那一帧 editorRef.current 仍是 null → 本 effect 提前返回并保留 pendingFocus，随后
+  // Monaco 载入、ensureEditor 建好编辑器，若 effect 不因 monaco 变化重跑，pendingFocus
+  // 就永久滞留 —— 观感是「首次跳转只打开文件不定位，手动再触发一次才落到目标行」
+  // （实测复现：Monaco 未就绪时派发 line=500，首次停在 1:1，二次触发才到 500）。
+  // ⚠️ 依赖也必须含 mdPreviewing：预览态切换会替换 Monaco host 并**重建**编辑器实例，
+  // 而 active/content 都没变；缺此依赖同样不重跑（同下方 model 同步 effect）。
   //
   // ⚠️ 门控必须用 contentReady（contentPath === active），不能用 `content === null`：
   // 跨文件跳转时切页签的那一帧 content 仍是**上一个文件**的内容（非 null），据此判定
@@ -1962,7 +2184,7 @@ export function EditorView(props) {
     ed.revealLineInCenter(Math.max(1, target.start ?? 1))
     ed.setPosition({ lineNumber: Math.max(1, target.start ?? 1), column: 1 })
     ed.focus()
-  }, [active, content, contentReady, pendingRegions, focusRequest])
+  }, [active, content, contentReady, pendingRegions, focusRequest, monaco, mdPreviewing])
 
   const jumpTo = (region) => {
     if (editorRef.current) {
@@ -2379,6 +2601,8 @@ export function EditorView(props) {
         leftLabel: 'BASE',
         rightLabel: '工作区',
         scheme: 'edrv-svn-base',
+        binary: outcome.binary === true,
+        encodingHint: outcome.encodingHint === true,
       })
       setStatus(outcome.message)
     })
@@ -2390,8 +2614,9 @@ export function EditorView(props) {
    * @author ddj 2026年09月16号
    * @param relPath 目标工作区相对路径
    * @param revision 目标版本
+   * @param logTarget 来自日志弹窗时的日志目标（不传 = 非日志入口）
    */
-  const runSvnDiffRev = (relPath, revision) => {
+  const runSvnDiffRev = (relPath, revision, logTarget) => {
     if (!relPath) { setStatus('无目标文件'); return }
     setStatus('读取 r' + revision + ' 差异…')
     void svnDiffRev(sessionId, relPath, revision).then((outcome) => {
@@ -2406,6 +2631,9 @@ export function EditorView(props) {
         leftLabel: 'r' + Math.max(1, revision - 1),
         rightLabel: 'r' + revision,
         scheme: 'edrv-svn-rev' + revision,
+        binary: outcome.binary === true,
+        encodingHint: outcome.encodingHint === true,
+        logTarget,
       })
       setStatus('已打开 r' + revision + ' 差异')
     })
@@ -2418,8 +2646,9 @@ export function EditorView(props) {
    * @param relPath 目标工作区相对路径
    * @param revA 左侧版本（选中顺序在前）
    * @param revB 右侧版本（选中顺序在后）
+   * @param logTarget 来自日志弹窗时的日志目标（不传 = 非日志入口）
    */
-  const runSvnDiffPair = (relPath, revA, revB) => {
+  const runSvnDiffPair = (relPath, revA, revB, logTarget) => {
     if (!relPath) { setStatus('仅文件目标支持比较两个修订'); return }
     setStatus('读取 r' + revA + ' ↔ r' + revB + ' 差异…')
     void svnDiffPair(sessionId, relPath, revA, revB).then((outcome) => {
@@ -2436,6 +2665,9 @@ export function EditorView(props) {
         leftLabel: 'r' + revA,
         rightLabel: 'r' + revB,
         scheme: 'edrv-svn-pair-' + revA + '-' + revB,
+        binary: outcome.binary === true,
+        encodingHint: outcome.encodingHint === true,
+        logTarget,
       })
       setStatus('已打开 r' + revA + ' ↔ r' + revB + ' 差异')
     })
@@ -2447,8 +2679,9 @@ export function EditorView(props) {
    * @author ddj 2026年09月17号
    * @param relPath 目标工作区相对路径
    * @param revision 左侧版本
+   * @param logTarget 来自日志弹窗时的日志目标（不传 = 非日志入口）
    */
-  const runSvnDiffWorking = (relPath, revision) => {
+  const runSvnDiffWorking = (relPath, revision, logTarget) => {
     if (!relPath) { setStatus('仅文件目标支持与工作副本比较'); return }
     setStatus('读取 r' + revision + ' ↔ 工作副本 差异…')
     void svnDiffWorking(sessionId, relPath, revision).then((outcome) => {
@@ -2462,8 +2695,39 @@ export function EditorView(props) {
         leftLabel: 'r' + revision,
         rightLabel: '工作区',
         scheme: 'edrv-svn-work-' + revision,
+        binary: outcome.binary === true,
+        encodingHint: outcome.encodingHint === true,
+        logTarget,
       })
       setStatus('已打开 r' + revision + ' ↔ 工作副本 差异')
+    })
+  }
+
+  /**
+   * 打开双侧本地文件差异（W2-4 冲突副本 `.rN` ↔ `.mine`，只读并排；resolve 由用户自行执行）。
+   * @author ddj 2026年09月20号
+   * @param left 左侧工作区相对路径
+   * @param right 右侧工作区相对路径
+   * @param leftLabel 左侧标签（如 `.r293524`）
+   * @param rightLabel 右侧标签（如 `.mine`）
+   * @param title 标题（冲突文件路径）
+   */
+  const runSvnDiffLocalPair = (left, right, leftLabel, rightLabel, title) => {
+    setStatus('读取冲突副本差异…')
+    void svnDiffLocalPair(sessionId, left, right).then((outcome) => {
+      if (!outcome.ok) { setStatus(outcome.message); return }
+      setSvnDiff({
+        path: title,
+        base: outcome.leftText ?? null,
+        working: outcome.rightText ?? '',
+        message: '解决后执行 svn resolve --accept working（本插件不自动执行）',
+        leftLabel,
+        rightLabel,
+        scheme: 'edrv-svn-local',
+        binary: outcome.binary === true,
+        encodingHint: outcome.encodingHint === true,
+      })
+      setStatus('已打开冲突副本对比')
     })
   }
 
@@ -2480,6 +2744,17 @@ export function EditorView(props) {
     setSvnLogError('')
     setSvnLogBusy(true)
     ensureSvnLog(sessionId, scope, target, SVN_LOG_PAGE)
+  }
+
+  /**
+   * 从日志弹窗打开的差异视图返回日志：按打开时记录的日志目标重开弹窗。
+   * 日志数据走 scope 缓存（openSvnLog → ensureSvnLog 命中即不重查）；选中项不复原。
+   * @author ddj 2026年09月18号
+   */
+  const backToSvnLog = () => {
+    const target = svnDiff?.logTarget ?? ''
+    setSvnDiff(null)
+    openSvnLog(target)
   }
 
   /** 加入版本控制（活动文件；未纳入版本控制的文件才有意义，host 侧会再校验）。 */
@@ -2584,6 +2859,7 @@ export function EditorView(props) {
         path,
         notify: (message) => setStatus(message),
         openSvnDiff: (p) => runSvnDiffBase(p),
+        openSvnLocalPair: runSvnDiffLocalPair,
         openSvnLog: (p) => openSvnLog(p ?? path),
         refreshChanges: () => refreshSvnChanges(sessionId, scope),
       })
@@ -2681,6 +2957,8 @@ export function EditorView(props) {
    */
   const openFileAt = (path, line, column, endLine, endColumn) => {
     if (!path) return
+    const tracePath = tabPathOf(path, cwd)
+    dapTrace('open-file-at', { input: path, normalized: tracePath, line, cwd })
     recordNav()
     // G9：同 openFile，先归一再进页签，保证待跳转路径与 active 同形态
     const normalized = addTabNorm(path, true)
@@ -2688,6 +2966,51 @@ export function EditorView(props) {
     pendingFocusRef.current = { path: normalized, region: null, line: line ?? null, column: column ?? 1, endLine: endLine ?? null, endColumn: endColumn ?? null }
     setFocusRequest((value) => value + 1)
   }
+
+  // 停帧跳转/调试命令监听（openFileAt 每渲染重建，经 ref 让空依赖监听读最新闭包）
+  const dapOpenRef = React.useRef(null)
+  dapOpenRef.current = openFileAt
+  React.useEffect(() => {
+    const onStopped = (e) => {
+      const detail = e?.detail
+      dapTrace('debug-stopped', detail)
+      if (!detail?.file) {
+        // 适配器只给了 chunkname 且工作区未定位到源文件：明确告知，不留静默无反应
+        setStatus('已暂停：未定位到源文件')
+        return
+      }
+      dapOpenRef.current?.(detail.file, detail.line, 1)
+    }
+    const onToggle = () => {
+      const ed = editorRef.current
+      const path = modelPathOf(ed)
+      const line = ed?.getPosition?.()?.lineNumber
+      if (path && line) dapToggleRef.current?.(path, line)
+      else setStatus('无活动文件，无法切换断点')
+    }
+    const onToggleEvt = () => onToggle()
+    const onStart = () => dapStore.startOrContinue()
+    const onStop = () => { void dapStore.stop() }
+    const onStepOver = () => { void dapStore.action('next') }
+    const onStepIn = () => { void dapStore.action('stepIn') }
+    const onStepOut = () => { void dapStore.action('stepOut') }
+    window.addEventListener('edrv:debug-stopped', onStopped)
+    window.addEventListener('edrv.command.debugToggleBreakpoint', onToggleEvt)
+    window.addEventListener('edrv.command.debugStartContinue', onStart)
+    window.addEventListener('edrv.command.debugStepOver', onStepOver)
+    window.addEventListener('edrv.command.debugStepInto', onStepIn)
+    window.addEventListener('edrv.command.debugStepOut', onStepOut)
+    window.addEventListener('edrv.command.debugStop', onStop)
+    return () => {
+      window.removeEventListener('edrv:debug-stopped', onStopped)
+      window.removeEventListener('edrv.command.debugToggleBreakpoint', onToggleEvt)
+      window.removeEventListener('edrv.command.debugStartContinue', onStart)
+      window.removeEventListener('edrv.command.debugStepOver', onStepOver)
+      window.removeEventListener('edrv.command.debugStepInto', onStepIn)
+      window.removeEventListener('edrv.command.debugStepOut', onStepOut)
+      window.removeEventListener('edrv.command.debugStop', onStop)
+    }
+  }, [])
 
   const openPath = () => {
     const p = (pathDraft || '').trim()
@@ -2900,6 +3223,7 @@ export function EditorView(props) {
       message: svnDiff.message,
       leftLabel: svnDiff.leftLabel,
       rightLabel: svnDiff.rightLabel,
+      onBack: svnDiff.logTarget !== undefined ? backToSvnLog : undefined,
       onClose: () => setSvnDiff(null),
     })
   } else if (!monaco && !monacoErr) {
@@ -3064,14 +3388,125 @@ export function EditorView(props) {
     svnChanges,
     svnChangeMap: svnChangeMapOf(scope),
     openSvnDiff: (p) => runSvnDiffBase(p),
+    openSvnLocalPair: runSvnDiffLocalPair,
     refreshSvnChanges: () => refreshSvnChanges(sessionId, scope),
     openSvnLog: (p) => openSvnLog(p),
     confirm: (message) => (typeof window === 'undefined' ? false : window.confirm(message)),
     notify: (message) => setStatus(message),
   }
 
+  // 调试工具条（VS Code 浮动条紧凑版，图2 形态）：配置下拉 + 启动/继续 + 单步组 + 停止 + 相位。
+  // 配置来自工作区 .dsh/launch.json（插件专属，与 VS Code 互不干扰）；无配置时下拉提示且按钮禁用。
+  const dapPhaseTextOf = () => ({
+    idle: '', starting: '启动中…', waiting: '等待目标…', running: '运行中', paused: '已暂停', terminated: '已结束',
+  }[dapSnap.phase] || '')
+  const dapActive = dapSnap.phase !== 'idle' && dapSnap.phase !== 'terminated'
+  const dapPaused = dapSnap.phase === 'paused'
+  const dapBtn = (label, title, disabled, onClick) => React.createElement('button', {
+    key: title, className: 'edrv-dapbar-btn', title, disabled: disabled === true, onClick,
+  }, label)
+  const dapBarVisible = dapActive || Boolean(dapSnap.candidates)
+  const dapBarStyle = dapBarPos
+    ? { left: dapBarPos.left, top: dapBarPos.top, right: 'auto' }
+    : undefined
+  const dapBar = dapBarVisible ? React.createElement('div', {
+    ref: dapBarRef,
+    className: 'edrv-dapbar' + (dapBarVisible ? ' on' : '') + (dapBarDragging ? ' dragging' : ''),
+    style: dapBarStyle,
+  },
+    React.createElement('span', {
+      className: 'edrv-dapbar-grip',
+      role: 'button',
+      tabIndex: 0,
+      title: '拖动调试工具条',
+      'aria-label': '拖动调试工具条',
+      onPointerDown: startDapBarDrag,
+    }, '⠿'),
+    (dapSnap.candidates
+      ? [
+          React.createElement('select', {
+            key: 'pick', className: 'edrv-dapbar-cfg', title: '选择附加目标进程（processName 命中多个候选）',
+            value: String(dapPickPid || dapSnap.candidates[0]?.pid || ''),
+            onChange: (e) => setDapPickPid(Number(e.target.value)),
+          },
+            dapSnap.candidates.map((it) => React.createElement('option', { key: it.pid, value: String(it.pid) },
+              it.pid + ' : ' + it.name + (it.title ? ' — ' + it.title.slice(0, 44) : '')))),
+          dapBtn('✓', '附加到选中进程', false, () => dapStore.confirmPick(dapPickPid || dapSnap.candidates![0]?.pid || 0)),
+          dapBtn('✕', '取消', false, () => dapStore.cancelPick()),
+        ]
+      : React.createElement('select', {
+          className: 'edrv-dapbar-cfg',
+          title: '调试配置（读取工作区 .dsh/launch.json；适配器由扩展清单 contributes.debuggers 提供）',
+          value: dapSnap.selectedConfig ?? '',
+          onChange: (e) => dapStore.selectConfig(e.target.value),
+        },
+          dapSnap.configs.length
+            ? dapSnap.configs.map((c) => {
+                // 旧 host 无 adapters 数据时视为全部可用（保持兼容）；有数据则按可用性置灰并给原因
+                const adapter = dapSnap.adapters.find((a) => a.type === c.type)
+                const ready = dapSnap.adapters.length === 0 || adapter?.available === true
+                const suffix = ready ? '' : '（' + (adapter?.reason || '未发现该类型适配器') + '）'
+                return React.createElement('option', { key: c.name, value: c.name, disabled: !ready }, c.name + suffix)
+              })
+            : React.createElement('option', { value: '' }, '无可用调试配置'))),
+    dapBtn(dapPaused ? '▶' : '▶', '启动 / 继续（F5）', !dapPaused && (!dapSnap.configs.some((c) => dapSnap.adapters.length === 0 || dapSnap.adapters.find((a) => a.type === c.type)?.available === true) || dapActive), () => dapStore.startOrContinue()),
+    dapBtn('⏸', '暂停', !dapActive, () => { void dapStore.action('pause') }),
+    dapBtn('⤵', '单步跳过（F10）', !dapPaused, () => { void dapStore.action('next') }),
+    dapBtn('↓', '单步步入（F11）', !dapPaused, () => { void dapStore.action('stepIn') }),
+    dapBtn('↑', '单步步出（Shift+F11）', !dapPaused, () => { void dapStore.action('stepOut') }),
+    dapBtn('⏹', '停止（Shift+F5）', !dapActive, () => { void dapStore.stop() }),
+    (dapPhaseTextOf()
+      ? React.createElement('span', { className: 'edrv-dapbar-phase' + (dapPaused ? ' paused' : '') },
+          dapPhaseTextOf() + (dapSnap.pid ? ' · pid ' + dapSnap.pid : ''))
+      : null),
+    (dapSnap.error
+      ? React.createElement('span', { className: 'edrv-dapbar-err', title: dapSnap.error }, '⚠ ' + dapSnap.error.slice(0, 40))
+      : null)) : null
+
+  /**
+   * 「添加配置」按钮点击：定位 configurations 数组插入点（数组开头行首），
+   * 显式拉起 Monaco 补全下拉选择调试配置片段插入。
+   * @author ddj 2026年09月22号
+   */
+  const addLaunchConfig = async () => {
+    const ed = editorRef.current
+    if (!ed) { setStatus('无活动编辑器'); return }
+    const path = modelPathOf(ed)
+    if (!path || !LAUNCH_JSON_RE.test(String(path).replace(/\\/g, '/'))) {
+      setStatus('请先打开 .dsh/launch.json')
+      return
+    }
+    const model = ed.getModel && ed.getModel()
+    const pos = model ? findArrayPos(model.getValue()) : null
+    if (!pos) { setStatus('未找到 configurations 数组'); return }
+    // 预拉片段并预检可用条数：全不可用时不弹空 suggest（否则按钮点了无反馈）
+    const snippets = await prefetchSnippets().catch(() => [])
+    if (!snippets.some((snip) => snip.available !== false)) {
+      setStatus('无可用适配器的配置模板（适配器入口缺失或未发现该类型适配器）')
+      return
+    }
+    ed.focus()
+    ed.setPosition({ lineNumber: pos.line, column: pos.column })
+    if (typeof ed.revealPositionInCenterIfOutsideViewport === 'function') {
+      ed.revealPositionInCenterIfOutsideViewport({ lineNumber: pos.line, column: pos.column })
+    }
+    ed.trigger('edrv-addcfg', 'editor.action.triggerSuggest', null)
+    setStatus('选择要插入的调试配置')
+  }
+
+  // 「添加配置」按钮（VSCode 同款形态，编辑区右下角）：仅插件专属 launch.json 打开且非差异审阅态显示
+  const addCfgBtn = (active && !svnDiff && LAUNCH_JSON_RE.test(String(active).replace(/\\/g, '/')))
+    ? React.createElement('button', {
+        className: 'edrv-addcfg',
+        title: '添加调试配置（插入到 configurations 数组开头）',
+        onClick: addLaunchConfig,
+      }, '添加配置…')
+    : null
+
   // 主编辑列（侧边栏右侧）：pathBar + tabRow + 编辑/差异区（底部整条留给 DSH 对话输入栏）
   const editorArea = React.createElement('div', { className: 'edrv-editor-area' },
+    dapBar,
+    addCfgBtn,
     body,
     hoverEl,
     overlay)
@@ -3216,31 +3651,124 @@ export function EditorView(props) {
           setSvnLog({ ...svnLog, limit: SVN_LOG_SHOW_ALL_LIMIT })
           ensureSvnLog(sessionId, scope, svnLog.target || '', SVN_LOG_SHOW_ALL_LIMIT, true, svnLogOptsOf(svnLog))
         },
-        onOpenDiff: (relPath, revision) => { setSvnLog(null); runSvnDiffRev(relPath, revision) },
-        onComparePair: (revA, revB) => { setSvnLog(null); runSvnDiffPair(svnLog.target || '', revA, revB) },
-        onCompareWorking: (revision) => { setSvnLog(null); runSvnDiffWorking(svnLog.target || '', revision) },
+        onOpenDiff: (relPath, revision) => { setSvnLog(null); runSvnDiffRev(relPath, revision, svnLog.target || '') },
+        onComparePair: (revA, revB) => { setSvnLog(null); runSvnDiffPair(svnLog.target || '', revA, revB, svnLog.target || '') },
+        onCompareWorking: (revision) => { setSvnLog(null); runSvnDiffWorking(svnLog.target || '', revision, svnLog.target || '') },
         onOpenFile: (relPath) => { setSvnLog(null); openFile(relPath, false) },
         onClose: () => { setSvnLog(null); setSvnLogError('') },
+      })
+    : null
+  // W2-1 补丁对话框 / W2-2 目录对比对话框：portal 到 body，与日志弹窗同一挂载方式
+  const patchDialogEl = patchDialog
+    ? React.createElement(SvnPatchDialog, {
+        key: 'edrv-svn-patch',
+        path: patchDialog.path,
+        text: patchDialog.text,
+        truncated: patchDialog.truncated === true,
+        binary: patchDialog.binary === true,
+        onNote: (message) => setStatus(message),
+        onClose: () => setPatchDialog(null),
+      })
+    : null
+  const sumDialogEl = sumDialog
+    ? React.createElement(SvnSumDialog, {
+        key: 'edrv-svn-sum',
+        sessionId,
+        path: sumDialog.path,
+        onNote: (message) => setStatus(message),
+        onClose: () => setSumDialog(null),
       })
     : null
   // 诊断日志弹窗：portal 到 body，与命令栏/SVN 日志弹窗同一挂载方式
   const dlogEl = dlogOpen
     ? React.createElement(LogDialog, { key: 'edrv-dlog', sessionId, onClose: () => setDlogOpen(false) })
     : null
+  // 断点右键菜单（逐条对齐 CodeBuddy：4 项添加类 / 删除·编辑·启停 / 记录点名词 / 暂停追加运行到行）
+  const runBpMenuAction = (action) => {
+    const scope = dapScopeRef.current
+    const cwd = dapCwdRef.current
+    const menu = dapBpMenu
+    if (!menu) return
+    const { path, line } = menu
+    if (action === 'add') { dapStore.toggleAt(scope, cwd, path, line); return }
+    if (action === 'delete') { if (menu.hasBp) dapStore.toggleAt(scope, cwd, path, line); return }
+    if (action === 'disable' || action === 'enable') { dapStore.setBpEnabled(scope, cwd, path, line, action === 'enable'); return }
+    if (action === 'edit') { openBpEditor(path, line); return }
+    if (action === 'run-to-line') { dapStore.runTo(cwd, path, line); return }
+    if (action === 'add-triggered') { setStatus('当前 Lua 调试器不支持触发的断点'); return }
+    // 添加条件断点 / 添加记录点：先建点，再开浮层并选中对应模式（0 表达式 / 2 日志消息）
+    dapStore.toggleAt(scope, cwd, path, line)
+    openBpEditor(path, line, action === 'add-logpoint' ? 2 : 0)
+  }
+  const openBpEditor = (path, line, mode) => {
+    const entry = (dapStore.bpMapOf(dapScopeRef.current)[path] ?? []).find((it) => it.line === line)
+    if (!entry) return
+    const ed = editorRef.current
+    if (!ed?.changeViewZones) return
+    // 行内浮层（View Zone，整编辑区宽 + 推开内容，对齐 VS Code breakpointWidget）：同一时刻只挂一个
+    closeBpWidget()
+    bpWidgetRef.current = { ...createBpWidget(ed, {
+      line,
+      entry,
+      mode,
+      onSave: (fields) => {
+        dapStore.applyBpFields(dapScopeRef.current, dapCwdRef.current, path, line, fields)
+        setStatus('断点已更新')
+        closeBpWidget()
+      },
+      onClose: () => closeBpWidget(),
+    }), path, line }
+  }
+  const closeBpWidget = () => {
+    const held = bpWidgetRef.current
+    if (!held) return
+    bpWidgetRef.current = null
+    try { held.close() } catch { /* 编辑器可能已销毁 */ }
+  }
+  const dapBpMenuEl = dapBpMenu
+    ? React.createElement(ContextMenu, {
+        x: dapBpMenu.x,
+        y: dapBpMenu.y,
+        onClose: () => setDapBpMenu(null),
+        entries: buildBpMenu({
+          hasBreakpoint: dapBpMenu.hasBp,
+          enabled: dapBpMenu.enabled,
+          isLogpoint: dapBpMenu.isLogpoint,
+          paused: dapSnap.phase === 'paused',
+          canRunTo: true,
+          canTriggered: false,
+        }).map((item) => ({
+          id: 'dap-bp-' + item.id,
+          label: item.label,
+          hint: item.hint,
+          separator: item.separator,
+          onClick: () => runBpMenuAction(item.id),
+        })),
+      })
+    : null
+  const dapBpEditEl = null
   const rootEl = layout === 'side'
     ? React.createElement('div', { ref: viewRootRef, 'data-edrv-view': '1', 'data-edrv-layout': 'side', className: 'edrv-view-side', style: Object.assign({}, baseStyle, { height: '100%' }) },
         editorRow,
         tabMenuEl,
         paletteEl,
         svnLogEl,
+        patchDialogEl,
+        sumDialogEl,
         dlogEl,
-        snippetPickerEl)
+        snippetPickerEl,
+        dapBpMenuEl,
+        dapBpEditEl)
     : React.createElement('div', { ref: viewRootRef, 'data-edrv-view': '1', style: Object.assign({}, baseStyle, { height: 'var(--edrv-editor-height, 100%)', maxHeight: 'var(--edrv-editor-height, 100%)' }) },
         editorRow,
         tabMenuEl,
         paletteEl,
         svnLogEl,
+        patchDialogEl,
+        sumDialogEl,
         dlogEl,
-        snippetPickerEl)
+        snippetPickerEl,
+        dapBpMenuEl,
+        dapBpEditEl)
   return rootEl
 }

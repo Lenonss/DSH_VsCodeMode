@@ -258,7 +258,7 @@ export async function svnDiffRev(sessionId: string | undefined, path: string, re
   try {
     const res = await rpc('svn.diffRev', { sessionId, path, revision })
     if (!res.ok) return { ok: false, left: null, right: null, error: res.error }
-    return { ok: true, left: res.left ?? null, right: res.right ?? null, reason: res.reason, error: res.error }
+    return { ok: true, left: res.left ?? null, right: res.right ?? null, reason: res.reason, error: res.error, binary: res.binary === true, encodingHint: res.encodingHint === true }
   } catch (error) {
     return { ok: false, left: null, right: null, error: String(error) }
   }
@@ -278,7 +278,7 @@ export async function svnDiffPair(sessionId: string | undefined, path: string, r
   try {
     const res = await rpc('svn.diffPair', { sessionId, path, revA, revB })
     if (!res.ok) return { ok: false, left: null, right: null, error: res.error }
-    return { ok: true, left: res.left ?? null, right: res.right ?? null, reason: res.reason, error: res.error }
+    return { ok: true, left: res.left ?? null, right: res.right ?? null, reason: res.reason, error: res.error, binary: res.binary === true, encodingHint: res.encodingHint === true }
   } catch (error) {
     return { ok: false, left: null, right: null, error: String(error) }
   }
@@ -297,7 +297,7 @@ export async function svnDiffWorking(sessionId: string | undefined, path: string
   try {
     const res = await rpc('svn.diffWorking', { sessionId, path, revision })
     if (!res.ok) return { ok: false, left: null, right: null, error: res.error }
-    return { ok: true, left: res.left ?? null, right: res.right ?? null, reason: res.reason, error: res.error }
+    return { ok: true, left: res.left ?? null, right: res.right ?? null, reason: res.reason, error: res.error, binary: res.binary === true, encodingHint: res.encodingHint === true }
   } catch (error) {
     return { ok: false, left: null, right: null, error: String(error) }
   }

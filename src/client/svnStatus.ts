@@ -211,6 +211,10 @@ export interface SvnDiffBaseOutcome {
   reason?: string
   /** 失败提示文案（ok=false，或 ok=true 时的补充说明）。 */
   message: string
+  /** W2-6 护栏：内容含 NUL（二进制）。 */
+  binary?: boolean
+  /** W2-6 护栏：内容可能非 UTF-8。 */
+  encodingHint?: boolean
 }
 
 /**
@@ -228,9 +232,9 @@ export async function svnDiffBase(sessionId: string | undefined, path: string): 
       const message = res.reason === 'no-pristine'
         ? '该文件尚无基线版本（未提交的新增文件）'
         : '读取基线失败' + (res.error ? '：' + res.error : '')
-      return { ok: true, base: null, working: res.working, message }
+      return { ok: true, base: null, working: res.working, message, binary: res.binary === true, encodingHint: res.encodingHint === true }
     }
-    return { ok: true, base: res.base, working: res.working, message: '已打开基线差异' }
+    return { ok: true, base: res.base, working: res.working, message: '已打开基线差异', binary: res.binary === true, encodingHint: res.encodingHint === true }
   } catch (error) {
     return { ok: false, base: null, working: '', message: '读取基线失败：' + String(error) }
   }
@@ -269,6 +273,140 @@ export async function svnAdd(sessionId: string | undefined, paths: string[]): Pr
     return { ok: false, message: '加入版本控制失败：' + String(error) }
   }
 }
+
+// --region W2 差异管理补全（补丁/目录对比/远端检查/冲突/配对）
+
+/**
+ * 生成统一格式补丁文本（W2-1，只读不落盘）。
+ * @author ddj 2026年09月20号
+ * @param sessionId 会话 id
+ * @param path 工作区相对路径（文件/目录）
+ * @param opts 扩展选项（空白语义/EOL/上下文行数；缺省 = svn 默认）
+ * @returns 补丁文本 + 截断/二进制标记，或错误文案
+ */
+export async function svnPatchText(
+  sessionId: string | undefined,
+  path: string,
+  opts: { whitespace?: 'none' | 'b' | 'w'; ignoreEol?: boolean; unified?: number } = {},
+): Promise<{ ok: boolean; text?: string; truncated?: boolean; binary?: boolean; message: string }> {
+  try {
+    const res = await rpc('svn.patchText', { sessionId, path, ...opts })
+    if (!res.ok) return { ok: false, message: '生成补丁失败：' + res.error }
+    return { ok: true, text: res.text, truncated: res.truncated, binary: res.binary, message: '已生成补丁' }
+  } catch (error) {
+    return { ok: false, message: '生成补丁失败：' + String(error) }
+  }
+}
+
+/**
+ * 目录对比（W2-2，任意两修订的 summarize 变更列表）。
+ * @author ddj 2026年09月20号
+ * @param sessionId 会话 id
+ * @param revA 起始修订（较早）
+ * @param revB 结束修订（较晚）
+ * @param path 目标相对路径（'' = 工作副本根）
+ * @returns 变更条目或错误文案
+ */
+export async function svnDiffSum(
+  sessionId: string | undefined,
+  revA: number,
+  revB: number,
+  path = '',
+): Promise<{ ok: boolean; entries?: Array<{ path: string; item: string; kind: string; props: string }>; message: string }> {
+  try {
+    const res = await rpc('svn.diffSum', { sessionId, path, revA, revB })
+    if (!res.ok) return { ok: false, message: '目录对比失败：' + res.error }
+    return { ok: true, entries: res.entries, message: '已读取 ' + res.entries.length + ' 条变更' }
+  } catch (error) {
+    return { ok: false, message: '目录对比失败：' + String(error) }
+  }
+}
+
+/**
+ * 远端更新检查（W2-3，`svn status -u`；host 侧 15s 短超时，离线/超时走本函数错误分支）。
+ * @author ddj 2026年09月20号
+ * @param sessionId 会话 id
+ * @param path 目标相对路径（'' = 工作副本根）
+ * @returns 落后条目 + against 修订，或错误文案
+ */
+export async function svnRemoteStatus(
+  sessionId: string | undefined,
+  path = '',
+): Promise<{ ok: boolean; outdated?: Array<{ path: string; item: string }>; againstRev?: number | null; message: string }> {
+  try {
+    const res = await rpc('svn.remoteStatus', { sessionId, path })
+    if (!res.ok) return { ok: false, message: '远端检查失败：' + res.error }
+    return { ok: true, outdated: res.outdated, againstRev: res.againstRev, message: '远端检查完成' }
+  } catch (error) {
+    return { ok: false, message: '远端检查失败：' + String(error) }
+  }
+}
+
+/**
+ * 扫描冲突副本文件（W2-4，`.mine`/`.working`/`.rN`，纯本地只读）。
+ * @author ddj 2026年09月20号
+ * @param sessionId 会话 id
+ * @param path 冲突文件的工作区相对路径
+ * @returns 副本清单或错误文案
+ */
+export async function svnConflictArtifacts(
+  sessionId: string | undefined,
+  path: string,
+): Promise<{ ok: boolean; artifacts?: Array<{ path: string; name: string; kind: 'mine' | 'working' | 'rev'; rev?: number }>; message: string }> {
+  try {
+    const res = await rpc('svn.conflictArtifacts', { sessionId, path })
+    if (!res.ok) return { ok: false, message: '扫描冲突副本失败：' + res.error }
+    return { ok: true, artifacts: res.artifacts, message: '发现 ' + res.artifacts.length + ' 个冲突副本' }
+  } catch (error) {
+    return { ok: false, message: '扫描冲突副本失败：' + String(error) }
+  }
+}
+
+/**
+ * 双侧本地文件差异（W2-4，冲突副本 `.rN` ↔ `.mine` 对比）。
+ * @author ddj 2026年09月20号
+ * @param sessionId 会话 id
+ * @param left 左侧工作区相对路径
+ * @param right 右侧工作区相对路径
+ * @returns 双侧内容（含护栏标记）或错误文案
+ */
+export async function svnDiffLocalPair(
+  sessionId: string | undefined,
+  left: string,
+  right: string,
+): Promise<{ ok: boolean; leftText?: string | null; rightText?: string | null; binary?: boolean; encodingHint?: boolean; message: string }> {
+  try {
+    const res = await rpc('svn.diffLocalPair', { sessionId, left, right })
+    if (!res.ok) return { ok: false, message: '读取冲突副本失败：' + res.error }
+    return { ok: true, leftText: res.left, rightText: res.right, binary: res.binary === true, encodingHint: res.encodingHint === true, message: '已读取双侧内容' }
+  } catch (error) {
+    return { ok: false, message: '读取冲突副本失败：' + String(error) }
+  }
+}
+
+/**
+ * 批量取文件大小（W2-5，改名配对启发式用；未知/失败按 null）。
+ * @author ddj 2026年09月20号
+ * @param sessionId 会话 id
+ * @param paths 工作区相对路径列表（host 上限 200）
+ * @returns 路径 → 大小表
+ */
+export async function svnFileSizes(
+  sessionId: string | undefined,
+  paths: string[],
+): Promise<Record<string, number | null>> {
+  try {
+    const res = await rpc('svn.fileSizes', { sessionId, paths })
+    if (!res.ok) return {}
+    const table: Record<string, number | null> = {}
+    for (const item of res.sizes) table[item.path] = item.size
+    return table
+  } catch (error) {
+    return {}
+  }
+}
+
+// --endregion
 
 /**
  * Monaco 右键菜单 SVN 动作条目（编辑区动态注册用）。

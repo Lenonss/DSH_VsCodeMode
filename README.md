@@ -352,19 +352,60 @@ TortoiseSVN（`TortoiseProc.exe`）仅作 Windows 过渡增强：自研能力覆
 
 > 说明：`plans/`（含对标蓝图与实测结论）为本地开发资料，不入库。
 
+### 17. 断点调试（DAP，开发中）
+
+编辑器内断点调试（DAP 桥通用化：适配器由扩展清单 `contributes.debuggers` 驱动，
+不限定语言；Lua 链路复用已装 emmylua 扩展适配器，**零游戏侧改动**）：
+
+- **断点**：编辑器行首点击（或 `F9`）切换断点，红点/灰点（禁用）持久化跨刷新保留；
+  鼠标悬停在行首/行号区时显示**半透明预览红点**并切换为手型光标（对齐 VS Code 的 breakpoint hint）；
+  侧栏「调试」面板断点列表支持启停复选框 / 删除 / 点击跳转（VS Code 断点视图形态）。
+- **断点右键菜单与编辑浮层**（逐条对齐 CodeBuddy / VS Code 内核，文案取自官方中文语言包）：
+  空行 → `添加断点` / `添加条件断点...` / `添加记录点...` / `添加触发的断点...`；
+  已有断点 → `删除 断点`（`Delete`）/ `编辑 断点…` / `禁用断点`（记录点场景名词自动切换为「记录点」）；
+  暂停中额外追加 `运行到行`。「编辑断点…」打开**整宽行内浮层**（View Zone：横跨整个编辑区、
+  把下方内容推开，并高亮目标行）：左侧「模式下拉」（`表达式` / `命中次数` / `日志消息` / `等待断点`）+
+  右侧**单行输入框**，切换模式时各模式内容独立记忆；`Enter` 确认、`Escape` 取消
+  （提示写在输入框占位里）。
+- **启动**：编辑区右上浮动工具条选择配置（读取工作区 `.dsh/launch.json`——插件专属文件，
+  与 VS Code 的 `.vscode/launch.json` 互不干扰，旧共用文件首次读取时自动迁移过来；类型可用性由
+  扩展清单裁决：未发现适配器/入口缺失的类型在下拉置灰并给原因）→ `F5` 启动/继续。
+  `emmylua_attach` 按进程名自动附加（复刻 VS Code 扩展的进程枚举语义：窗口标题/进程名包含匹配，
+  多候选时工具条切进程选择器明确选择）。
+- **命中暂停**：断点命中自动打开对应文件并高亮停帧行；适配器上报 chunkname 由插件工作区
+  索引反向映射为工作区文件（`findFileReq` 反向请求应答）。
+- **四段调试面板**（活动栏「调试」）：调用堆栈（点击跳转）/ 变量（懒展开树，Variables + ENV）/
+  监视（表达式持久化，暂停态求值）/ 断点 + 底部**调试控制台**（REPL 输入表达式即时求值）。
+- **实现**：host 半 DAP 桥（`src/dap/*`）spawn 扩展清单声明的 DAP 适配器（`runtime: node`
+  跑 js 入口 / 无 runtime 直启原生 exe，清单 `args` 随行），事件经缓冲 + 400ms
+  活跃轮询上抛；断点先落 host，适配器就绪（initialized）后全量下发，并按适配器能力位
+  发送 `configurationDone` 收尾握手（emmylua 未声明该能力 → 不发，行为不变）。
+  `.dsh/launch.json` 配置全量透传给适配器（未识别字段原样保留，`${workspaceFolder}`/`${cwd}`
+  已替换；`${command:...}` 为 VS Code 命令占位，启动时明确报错而非假解析）。
+  命中行解析用 Monaco 官方 `getTargetAtClientPoint`（手算需扣 `padding-top`，实测易错行）。
+- **回执与多线程**：断点回执消费适配器真实响应（可能挪行/判不可验证），未验证断点渲染
+  空心红圈（对齐 VS Code）；栈帧 id 用适配器原生值（emmylua 保持栈下标私有语义），
+  stopped 事件携带的真实 threadId 贯穿调用栈/单步/暂停（多线程适配器必需，emmylua 恒 1 不变）；
+  断点按适配器声明语言过滤下发，杜绝跨语言串发。
+- **能力边界**：`emmylua_attach` 仅 Windows（适配器原生限制）；适配器自动探测
+  `~/.vscode/extensions`、`~/.vscode-server/extensions` 与插件扩展目录
+  `~/.dsh/dsh-vscode-mode/extensions`（与 LSP 探测根一致）；求值/查看变量需处于暂停态。
+  `运行到行` = 临时断点 + 继续（命中/手动继续后自动清理，不污染用户断点表）；
+  `添加触发的断点...` 当前适配器不支持 → 点击给出明确提示（不做静默失败的假功能）。
+
 ## 安装
 
 官方 `dsh plugin` 方式，三选一：
 
 ```bash
 # ① Git 安装（clone + prepare 构建；推荐打固定 tag）
-dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.5.3
+dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.6.0
 
 # ② npm 注册表（发布到 npm 后）
 dsh plugin --profile web add dsh-vscode-mode
 
 # ③ GitHub Release tgz 直装
-dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.5.3/dsh-vscode-mode-0.5.3.tgz
+dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.6.0/dsh-vscode-mode-0.6.0.tgz
 ```
 
 > `dsh plugin ...` 是 pnpm 转发器：git 安装会克隆仓库、执行该包 `prepare` 脚本
@@ -424,6 +465,10 @@ bundles 层后重启 DSH 即自动把插件行挂进 loader 树。**不要**再�
 | `Ctrl+Alt+-` / `Ctrl+Shift+-` | 后退 / 前进（同导航历史） |
 | 鼠标侧键 XButton | 后退 / 前进 |
 | `Tab` / `Enter`（补全中） | 展开代码片段 |
+| `F9` | 调试：切换光标行断点 |
+| `F5` | 调试：启动 / 继续 |
+| `F10` / `F11` / `Shift+F11` | 调试：单步跳过 / 步入 / 步出（暂停态） |
+| `Shift+F5` | 调试：停止 |
 
 ### 差异审查流程
 
@@ -653,6 +698,14 @@ Keep All / Undo All 却是亮的。修复：单文件 Keep / Undo 覆盖冲突�
 完整变更见 [GitHub Releases](https://github.com/Lenonss/DSH_VsCodeMode/releases)。
 近期关键版本：
 
+- **v0.6.0**：**编辑器内断点调试（DAP）+ SVN 补丁/汇总/导出**——① DAP 桥通用化
+  （适配器由扩展清单 `contributes.debuggers` 驱动，Lua 链路复用 emmylua 适配器、零游戏侧
+  改动）：行首点击/`F9` 断点（悬停预览红点、禁用灰点、跨刷新持久化）、断点右键菜单与
+  **整宽行内编辑浮层**（表达式/命中次数/日志消息/等待断点，模式内容独立记忆）、
+  `.dsh/launch.json` 启动配置（`F5` 启动/继续、`emmylua_attach` 按进程名自动附加与多候选
+  选择）、命中暂停跳转（chunkname 反向映射工作区文件）、活动栏**四段调试面板**
+  （调用堆栈/变量/监视/断点 + 调试控制台 REPL）；② SVN 增强：补丁对话框、汇总对话框、
+  导出（`svnExport`）。
 - **v0.5.3**：**编辑器四项体验增强**——① `Ctrl+Shift+F` 时编辑器有选中则把选中文本
   自动填入搜索框并立即搜索（多行选区取首行；侧栏原本收起也生效）；② 页签数量上限
   （通用设置 `maxOpenEditors`，默认 10，**0 = 不限制**），超限自动关闭**最久未使用**的

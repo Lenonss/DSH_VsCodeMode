@@ -137,6 +137,14 @@ const DARK_COLORS = {
   'scrollbarSlider.background': '#79797966',
   'scrollbarSlider.hoverBackground': '#646464b3',
   'scrollbarSlider.activeBackground': '#bfbfbf66',
+  // 差异视图色块（本仓库 vendored Monaco 无 .line-insert 静态背景规则，靠主题键保证；
+  // 色相取自研差异 UI 同源：绿 #0f9d58 / 红 #d9534f，alpha 提到肉眼可辨）
+  'diffEditor.insertedLineBackground': '#0f9d5830',
+  'diffEditor.removedLineBackground': '#d9534f2e',
+  'diffEditor.insertedTextBackground': '#0f9d5833',
+  'diffEditor.removedTextBackground': '#d9534f40',
+  'diffEditorGutter.insertedLineBackground': '#0f9d5859',
+  'diffEditorGutter.removedLineBackground': '#d9534f59',
 }
 
 const LIGHT_COLORS = {
@@ -157,6 +165,13 @@ const LIGHT_COLORS = {
   'scrollbarSlider.background': '#64646466',
   'scrollbarSlider.hoverBackground': '#646464b3',
   'scrollbarSlider.activeBackground': '#00000099',
+  // 差异视图色块（同上：主题键保证整行背景可见；色相/透明度与暗色一致）
+  'diffEditor.insertedLineBackground': '#0f9d5830',
+  'diffEditor.removedLineBackground': '#d9534f2e',
+  'diffEditor.insertedTextBackground': '#0f9d5833',
+  'diffEditor.removedTextBackground': '#d9534f40',
+  'diffEditorGutter.insertedLineBackground': '#0f9d5859',
+  'diffEditorGutter.removedLineBackground': '#d9534f59',
 }
 
 /**

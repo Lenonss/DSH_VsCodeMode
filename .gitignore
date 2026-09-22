@@ -20,6 +20,10 @@ plans/
 codegraph.json
 .mcp.json
 
+# 本机调试配置（launch 配置含本机进程/项目路径，不入库）
+.dsh/launch.json
+.vscode/
+
 # 本地环境
 .DS_Store
 Thumbs.db

@@ -19,7 +19,17 @@
  *   A. navTargetOf 对 opener 三种第三参形态都能解析出正确的 1-based 行/列；
  *   B. EditorView 的跳转门控必须是 contentReady（并用源码契约钉死，防退回 content === null）；
  *   C. 落地高亮装饰与样式类名存在且可用。
- * 作者 ddj 2026-09-17
+ *
+ * 追加事故（用户报告，v0.5.3 实测复现）：「文件未打开时跳转只打开文件、不定位行，
+ * 需手动再触发一次才落到目标行」。运行时证据（chrome-devtools 探针）：
+ *   Monaco 未就绪时派发 {line:500} 的跳转 → 首次停在 1:1；等就绪后再派发 → 首次即 500。
+ * 根因：contentReady 在**文本到达**时即为真，可能早于 Monaco 就绪；那一帧
+ * editorRef.current 仍为 null → 该 effect 提前返回并保留 pendingFocus；随后 Monaco 载入、
+ * ensureEditor 建好编辑器，但变化的只有 monaco，而 monaco 不在依赖数组里 → effect 不重跑，
+ * pendingFocus 永久滞留。二次触发会 +1 focusRequest（是依赖）才落地。
+ * 修复：跳转 effect 依赖补 monaco 与 mdPreviewing（后者是预览态重建编辑器的同类竞态）。
+ * 见 navFlashRangeOf / 本文件 D 组用例。
+ * 作者 ddj 2026-09-17 / 2026年09月21号
  */
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -127,6 +137,46 @@ describe('EditorView：跳转门控必须用 contentReady', () => {
 
   it('卸载时清理高亮计时器与装饰 id（防泄漏）', () => {
     expect(code).toContain('clearTimeout(navFlashTimerRef.current)')
+  })
+})
+
+describe('EditorView：跳转 effect 依赖必须覆盖编辑器就绪（回归：首次跳转不定位）', () => {
+  const code = stripComments(readSrc(EDITOR_VIEW))
+  /** 取跳转 effect 的依赖数组（锚点 = 该 effect 的 contentReady 门控语句）。 */
+  const depsOfJumpEffect = (): string => {
+    const anchor = code.indexOf('if (!ed || !contentReady) return')
+    expect(anchor, '应能定位跳转 effect').toBeGreaterThan(-1)
+    const body = code.slice(anchor, code.indexOf('const jumpTo = (region) =>', anchor))
+    const m = body.match(/\}, \[([^\]]*)\]\)/)
+    expect(m, '应能定位跳转 effect 的依赖数组').not.toBeNull()
+    return m![1]
+  }
+
+  it('依赖含 monaco（回归：Monaco 晚于文本就绪时 effect 必须重跑，否则 pendingFocus 滞留）', () => {
+    const deps = depsOfJumpEffect()
+    // 关键回归断言：缺 monaco 时，editorRef 在 contentReady 那一帧为 null，
+    // 提前返回后 effect 再无重跑机会 → 首次跳转只打开文件、落到 1:1（需二次触发）
+    expect(deps).toContain('monaco')
+    // 也不得只靠 focusRequest 兜底（那是二次触发才生效的路径）
+    expect(deps).not.toBe('active, content, contentReady, pendingRegions, focusRequest')
+  })
+
+  it('依赖含 mdPreviewing（预览态会重建编辑器实例，同类竞态）', () => {
+    expect(depsOfJumpEffect()).toContain('mdPreviewing')
+  })
+
+  it('依赖仍含原有的四个触发源（未因修复漏掉已有语义）', () => {
+    const deps = depsOfJumpEffect()
+    for (const dep of ['active', 'content', 'contentReady', 'pendingRegions', 'focusRequest']) {
+      expect(deps, dep).toContain(dep)
+    }
+  })
+
+  it('pendingFocus 仍在 contentReady 之后消费（修复不得挪动就绪判据）', () => {
+    const anchor = code.indexOf('if (!ed || !contentReady) return')
+    const body = code.slice(anchor, code.indexOf('const jumpTo = (region) =>', anchor))
+    expect(body).toContain('pendingFocusRef.current')
+    expect(body).not.toContain('content === null')
   })
 })
 

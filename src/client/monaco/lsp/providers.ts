@@ -136,6 +136,8 @@ export function registerLspProviders(monaco) {
     }),
     monaco.languages.registerHoverProvider(LSP_LANGS, {
       provideHover: async (model, position, token) => {
+        // 暂停态的 LSP 行由调试 hover 层默认隐藏、按住 Alt 时显示（见 dap/hoverTree.ts），
+        // 因此这里照常返回内容，不再按位置让位。
         const path = pathOfModel(model)
         if (!path) return null
         const hover = await fetchHover(path, model.getValue(), position)

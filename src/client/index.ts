@@ -41,6 +41,7 @@ import { createFilePanel } from './sidebar/panels/index.js'
 import { createSearchPanel } from './sidebar/panels/index.js'
 import { createRulesPanel } from './sidebar/panels/index.js'
 import { createSvnPanel } from './sidebar/panels/index.js'
+import { createDebugPanel } from './sidebar/panels/index.js'
 import { createTreeMenuRegistry } from './sidebar/contextMenu.js'
 import { createDefaultFileMenuItems } from './sidebar/menuItems.js'
 import { createOutlinePanel } from './outline/index.js'
@@ -54,8 +55,10 @@ import { editorLimitApply } from './editorLimit.js'
 import { log } from './log.js'
 import { setupLsp, setSession, disposeLsp } from './monaco/lsp/index.js'
 import { disposeSnippets } from './snippets/provider.js'
+import { disposeLaunchJson } from './dap/launchSnippetProvider.js'
 import { disposeAiInline } from './ai/inlineProvider.js'
 import { readSessionScope, subscribeScope } from './sessionScope.js'
+import { dapStore } from './dap/store.js'
 import type { CompatAdapter } from '../shared/compat.js'
 
 // ⚠️ inject 只列必需服务：webUiSettings 是 @linxin666/dsh-client-ui-web-ui-settings 提供的
@@ -194,6 +197,11 @@ export function apply(ctx: any): void {
   ctx.effect(() => sidebarPanels.register(createRulesPanel()), 'vscode-mode: sidebar panel rules')
   // SVN 变更面板：活动栏「SVN 变更」页签（工作副本状态列表；visible 守卫使非 SVN 工作区不出现）
   ctx.effect(() => sidebarPanels.register(createSvnPanel()), 'vscode-mode: sidebar panel svn')
+  // 调试面板：活动栏「调试」页签（VS Code 调试视图四段布局 + REPL；DAP 桥接）
+  ctx.effect(() => sidebarPanels.register(createDebugPanel()), 'vscode-mode: sidebar panel debug')
+  // 客户端（重）装配对账：host 的 DapSession 常驻，而本模块状态随刷新/HMR 归零，
+  // 不对账则调试面板与暂停态 hover 静默失效（见 dapStore.resync）。
+  void dapStore.resync()
   // 文件右键菜单项注册表（对外 provide，供本插件/第三方注册；内置「在文件浏览器中打开」）
   const fileMenuItems = createTreeMenuRegistry()
   ctx.provide('edrvFileContextMenuItems', fileMenuItems)
@@ -448,6 +456,7 @@ export function apply(ctx: any): void {
   // 不做会导致重载后重复注册（补全/跳转/hover 各翻倍）与陈旧开关残留。
   ctx.effect(() => () => {
     try { disposeSnippets() } catch { /* 卸载异常不得阻断其余清理 */ }
+    try { disposeLaunchJson() } catch { /* 同上 */ }
     try { disposeAiInline() } catch { /* 同上 */ }
     try { disposeLsp() } catch { /* 同上 */ }
   }, 'vscode-mode: monaco providers teardown')

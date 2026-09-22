@@ -19,7 +19,9 @@ import type { RuleInfo, RuleProject, RuleRefInput, RuleSaveInput } from './rules
 import type { SnippetEntry, SnippetInfo, SnippetProject, SnippetRefInput, SnippetSaveInput } from './snippets.js'
 import type { LspEnvInstallState, LspExtInfo, LspExtUpdate, LspHover, LspLocation, LspMarketItem, LspPosition, LspSemanticTokens, LspServerStatus, LspSymbol } from './lsp.js'
 import type { AiConfigPatch, AiConfigView, AiDirectoryView, AiInlineRequest, AiInlineResult } from './ai.js'
-import type { SvnAction, SvnChangeEntry, SvnDiffRevResult, SvnLogEntry, SvnStatusPayload, SvnUpdateResult } from './svn.js'
+import type { SvnAction, SvnChangeEntry, SvnConflictArtifact, SvnDiffRevResult, SvnLogEntry, SvnRemoteOutdatedEntry, SvnStatusPayload, SvnSumEntry, SvnUpdateResult } from './svn.js'
+import type { DapAction, DapAdapterInfo, DapBreakpointAck, DapBreakpointInput, DapConfigSnippet, DapConfigSource, DapDebugConfig, DapFrameView, DapPhase, DapPollResult, DapProcessInfo, DapScopeView, DapVariableView } from './dap.js'
+import { DAP_ACTIONS } from './dap.js'
 import type { LoggerLevel } from './logger.js'
 
 /** webServer 精确路由。 */
@@ -298,6 +300,24 @@ export interface RpcRequestMap {
   'svn.cleanup': { sessionId?: string; removeUnversioned?: boolean; removeIgnored?: boolean }
   'svn.update': { sessionId?: string; path?: string }
   'svn.tortoise': { sessionId?: string; action: SvnAction; path?: string }
+  'svn.patchText': { sessionId?: string; path: string; whitespace?: 'none' | 'b' | 'w'; ignoreEol?: boolean; unified?: number }
+  'svn.diffSum': { sessionId?: string; path?: string; revA: number; revB: number }
+  'svn.remoteStatus': { sessionId?: string; path?: string }
+  'svn.conflictArtifacts': { sessionId?: string; path: string }
+  'svn.diffLocalPair': { sessionId?: string; left: string; right: string }
+  'svn.fileSizes': { sessionId?: string; paths: string[] }
+  'edrv.dap.configs': { workspacePath: string }
+  'edrv.dap.snippets': {}
+  'edrv.dap.processes': { processName?: string }
+  'edrv.dap.start': { config: DapDebugConfig; workspacePath: string; pid?: number }
+  'edrv.dap.stop': {}
+  'edrv.dap.poll': { since: number }
+  'edrv.dap.setBreakpoints': { workspacePath: string; file: string; points: DapBreakpointInput[] }
+  'edrv.dap.stackTrace': {}
+  'edrv.dap.scopes': { frameId: number }
+  'edrv.dap.variables': { ref: number }
+  'edrv.dap.evaluate': { expression: string; frameId?: number }
+  'edrv.dap.command': { action: DapAction }
 }
 
 export type RpcMethod = keyof RpcRequestMap
@@ -398,7 +418,7 @@ export interface RpcOkMap {
   'snippets.entries': { entries: SnippetEntry[] }
   'svn.status': SvnStatusPayload
   'svn.changes': { wcRoot: string; entries: SvnChangeEntry[]; truncated: boolean }
-  'svn.diffBase': { base: string | null; working: string; reason?: string; error?: string }
+  'svn.diffBase': { base: string | null; working: string; reason?: string; error?: string; binary?: boolean; encodingHint?: boolean }
   'svn.revert': { count: number; summary: string; output: string }
   'svn.add': { count: number; summary: string; output: string }
   'svn.log': { entries: SvnLogEntry[]; truncated: boolean; target: string; limit?: number }
@@ -409,6 +429,24 @@ export interface RpcOkMap {
   'svn.cleanup': { summary: string; output: string }
   'svn.update': SvnUpdateResult
   'svn.tortoise': { launched: string }
+  'svn.patchText': { text: string; truncated: boolean; binary: boolean }
+  'svn.diffSum': { entries: SvnSumEntry[]; truncated: boolean }
+  'svn.remoteStatus': { outdated: SvnRemoteOutdatedEntry[]; againstRev: number | null }
+  'svn.conflictArtifacts': { artifacts: SvnConflictArtifact[] }
+  'svn.diffLocalPair': SvnDiffRevResult
+  'svn.fileSizes': { sizes: Array<{ path: string; size: number | null }> }
+  'edrv.dap.configs': { configs: DapDebugConfig[]; adapters: DapAdapterInfo[]; source: DapConfigSource }
+  'edrv.dap.snippets': { snippets: DapConfigSnippet[] }
+  'edrv.dap.processes': { items: DapProcessInfo[] }
+  'edrv.dap.start': { phase: DapPhase }
+  'edrv.dap.stop': object
+  'edrv.dap.poll': DapPollResult
+  'edrv.dap.setBreakpoints': { breakpoints: DapBreakpointAck[] }
+  'edrv.dap.stackTrace': { frames: DapFrameView[] }
+  'edrv.dap.scopes': { scopes: DapScopeView[] }
+  'edrv.dap.variables': { variables: DapVariableView[] }
+  'edrv.dap.evaluate': { result: string; type?: string; ref: number }
+  'edrv.dap.command': object
 }
 
 /** 统一响应：{ok:true, ...payload} 或 {ok:false, error}。 */

@@ -6,6 +6,9 @@
  * 作者 ddj 2026-08-27
  */
 import { registerLspProviders, disposeLspProviders, hideReferencesOverlay } from './providers.js'
+import { registerDapHover, disposeDapHover } from '../../dap/hover.js'
+import { installHoverTree, disposeHoverTree } from '../../dap/hoverTree.js'
+import { installHoverMode, disposeHoverMode } from '../../dap/hoverMode.js'
 import { setLspSession, refreshStatus, lspStatusFor, onLspProgress, bindLspSession } from './lspClient.js'
 
 let monacoRef = null
@@ -19,7 +22,16 @@ const LSP_SESSION_GLOBAL = '__edrvLspSessionUnbind__'
 /** Monaco 加载后装配（幂等；重复调用仅刷新会话）。 */
 export function setupLsp(monaco) {
   monacoRef = monaco
+  // 注册顺序决定同分 provider 的 ordinal：LanguageFeatureRegistry._compareByScoreAndTime 对
+  // 同分选择器按 _time 倒序（后注册者排前），hover 部件再按 ordinal 升序渲染 —— 因此 DAP
+  // 必须**最后**注册，暂停态的调试值行才会稳定渲染在 LSP 文档行之前；反序会让调试值被
+  // LSP 长文档挤到浮窗下方（超出 maxHeight 需滚动，等同看不到）。
   registerLspProviders(monaco)
+  registerDapHover(monaco)
+  // hover 变量树的 DOM 绑定（观察 hover 面板插入/重渲染；幂等）
+  installHoverTree()
+  // Alt 跟踪：暂停态默认调试值浮窗、按住 Alt 切 LSP 信息（对齐 CodeBuddy）
+  installHoverMode()
   // 会话广播订阅只装一次：跨重载时上一代已订阅（取消函数落 window，模块级状态会复位），
   // 只判 sessionBound 会重复订阅 → 同一 LSP 会话事件被处理多次。
   const host = /* @__PURE__ */ (typeof window === 'undefined' ? undefined : window)
@@ -52,6 +64,9 @@ export function disposeLspOverlay() {
  */
 export function disposeLsp() {
   disposeLspProviders()
+  disposeDapHover()
+  disposeHoverTree()
+  disposeHoverMode()
   const unbind = sessionUnbind
   if (typeof unbind === 'function') {
     try { unbind() } catch { /* 已解绑 */ }

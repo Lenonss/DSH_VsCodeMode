@@ -189,6 +189,10 @@ export interface SvnDiffRevResult {
   reason?: string
   /** 失败提示（诊断用）。 */
   error?: string
+  /** W2-6 护栏：内容含 NUL 字节（二进制嫌疑），客户端不渲染编辑器。 */
+  binary?: boolean
+  /** W2-6 护栏：嗅探窗含 U+FFFD（可能非 UTF-8），客户端提示乱码风险。 */
+  encodingHint?: boolean
 }
 
 // --endregion
@@ -281,6 +285,31 @@ export interface SvnChangeFilter {
   unversioned?: boolean
   /** 是否显示已被忽略的条目（默认 false）。 */
   ignored?: boolean
+  /**
+   * 名称过滤串（W1-2，纯前端）：`*`/`?` 通配或子串包含，忽略大小写；空/空白 = 不过滤。
+   * 只影响列表展示；「全部加入/全部还原」等批量动作仍按未过滤集合计算（防误伤）。
+   */
+  name?: string
+}
+
+/**
+ * 路径名称过滤匹配（W1-2）：`*` 任意串、`?` 单字符（忽略大小写）；
+ * 无通配符时回落子串包含。非法正则元字符已转义，永不抛错。
+ * @author ddj 2026年09月20号
+ * @param path 条目路径（`/` 分隔）
+ * @param pattern 过滤串（空/空白 = 不过滤）
+ * @returns 是否命中
+ */
+export function changeNameMatch(path: string, pattern: string | undefined): boolean {
+  const query = String(pattern ?? '').trim().toLowerCase()
+  if (!query) return true
+  const target = String(path ?? '').toLowerCase()
+  if (!query.includes('*') && !query.includes('?')) return target.includes(query)
+  const source = query
+    .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+    .replaceAll('*', '.*')
+    .replaceAll('?', '.')
+  return new RegExp('^' + source + '$').test(target)
 }
 
 /**
@@ -297,6 +326,7 @@ export function svnVisibleChanges(
   const showUnversioned = filter.unversioned !== false
   const showIgnored = filter.ignored === true
   return entries.filter((entry) => {
+    if (!changeNameMatch(entry.path, filter.name)) return false
     if (entry.status === 'ignored') return showIgnored
     if (entry.status === 'unversioned') return showUnversioned
     return isSvnChange(entry)
@@ -375,3 +405,120 @@ export const SVN_TORTOISE_LABELS: Record<SvnAction, string> = {
   blame: 'TortoiseSVN 追溯',
   revert: 'TortoiseSVN 还原',
 }
+
+// --region W2 差异管理补全（护栏/目录对比/远端检查/冲突/配对）
+
+/** W2-6 内容护栏嗅探窗（字符数；NUL/U+FFFD 只看前 8K，全量扫描大文本得不偿失）。 */
+export const GUARD_SNIFF_CHARS = 8 * 1024
+
+/** W2-6 内容级护栏标记（host 嗅探 → client 提示）。 */
+export interface SvnContentGuard {
+  /** 嗅探窗含 NUL 字节（二进制嫌疑；M4 实测 svn cat 对二进制原样透传字节）。 */
+  binary?: boolean
+  /** 嗅探窗含 U+FFFD（UTF-8 解码失败替换符；可能非 UTF-8 编码）。 */
+  encodingHint?: boolean
+}
+
+/**
+ * 文本级内容护栏（W2-6，纯函数）：对喂给差异视图/补丁的文本做低成本嗅探。
+ * 二进制锚点取 NUL 字节（比 svn:mime-type 更兜底——mime 缺省的「伪文本」二进制也拦得住）；
+ * 编码提示取 U+FFFD（host fs.readText 按 UTF-8 解码，无效序列会变成替换符）。
+ * @author ddj 2026年09月20号
+ * @param text 待嗅探文本（null/undefined 按空处理）
+ * @returns 护栏标记（干净内容返回空对象）
+ */
+export function contentGuardOf(text: string | null | undefined): SvnContentGuard {
+  if (typeof text !== 'string' || !text) return {}
+  const window = text.slice(0, GUARD_SNIFF_CHARS)
+  if (window.includes('\u0000')) return { binary: true }
+  if (window.includes('\uFFFD')) return { encodingHint: true }
+  return {}
+}
+
+/** W2-5 一对「疑似改名」配对（missing `!` ↔ unversioned `?`）。 */
+export interface SvnRenamePair {
+  /** 原路径（missing 条目）。 */
+  missingPath: string
+  /** 新路径（unversioned 条目）。 */
+  unversionedPath: string
+}
+
+/** 取路径 basename（`/`/`\` 通用；纯函数）。 */
+function baseNameOf(path: string): string {
+  return String(path ?? '').split(/[\\/]/).pop() ?? ''
+}
+
+/**
+ * 疑似改名配对（W2-5，纯函数；M2 定论：status XML 无 copyfrom，只能客户端启发式）。
+ * 配对条件从严：basename 相同 **且** 双侧 size 均已知且相等（size 缺失不配对，防误报）。
+ * @author ddj 2026年09月20号
+ * @param entries 变更清单
+ * @param sizes 路径 → 字节大小（未知为 null/缺失）
+ * @returns 配对数组（每个 missing 至多配一个，先到先得保持输入顺序）
+ */
+export function pairMissingWithUnversioned(
+  entries: readonly SvnChangeEntry[],
+  sizes: Record<string, number | null>,
+): SvnRenamePair[] {
+  const unversioned = entries.filter((entry) => entry.status === 'unversioned')
+  const pairs: SvnRenamePair[] = []
+  for (const missing of entries) {
+    if (missing.status !== 'missing') continue
+    const name = baseNameOf(missing.path)
+    for (const candidate of unversioned) {
+      if (baseNameOf(candidate.path) !== name) continue
+      const a = sizes[missing.path]
+      const b = sizes[candidate.path]
+      if (typeof a !== 'number' || typeof b !== 'number' || a !== b) continue
+      pairs.push({ missingPath: missing.path, unversionedPath: candidate.path })
+      break
+    }
+  }
+  return pairs
+}
+
+/** W2-2 目录对比单条（`svn diff --summarize --xml` 的 `<path>`；M5 实测形态）。 */
+export interface SvnSumEntry {
+  /** 工作副本相对路径（host 已从绝对路径归一）。 */
+  path: string
+  /** 变更动作（svn 词汇：added/deleted/replaced/modified/normal/none）。 */
+  item: string
+  /** 节点类型（file/dir；异常输出回 'none'）。 */
+  kind: string
+  /** 属性变更（none/modified）。 */
+  props: string
+}
+
+/** W2-3 远端落后条目（`svn status -u --xml` 的 repos-status；M3 实测形态）。 */
+export interface SvnRemoteOutdatedEntry {
+  /** 工作副本相对路径。 */
+  path: string
+  /** 远端状态（实测落后文件为 modified；'none' = 远端无变化）。 */
+  item: string
+}
+
+/** W2-2 summarize 动作 → 展示字母（对齐 svn status 首列字母；normal/none 不出徽标）。 */
+export const SVN_SUM_LETTER: Record<string, string> = {
+  added: 'A',
+  deleted: 'D',
+  replaced: 'R',
+  modified: 'M',
+  normal: ' ',
+  none: ' ',
+  'props-deleted': ' ',
+  'props-modified': ' ',
+}
+
+/** W2-4 冲突副本文件（`.mine`/`.working`/`.rN`）。 */
+export interface SvnConflictArtifact {
+  /** 工作副本相对路径。 */
+  path: string
+  /** 文件名（含冲突后缀）。 */
+  name: string
+  /** 种类：mine = 我的（.mine）/ working = 基础工作版（.working）/ rev = 仓库版本（.rN）。 */
+  kind: 'mine' | 'working' | 'rev'
+  /** rev 种类时的修订号。 */
+  rev?: number
+}
+
+// --endregion

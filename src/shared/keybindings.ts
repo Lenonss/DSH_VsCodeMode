@@ -31,6 +31,13 @@ export const KEYBINDING_DEFAULTS: Record<string, string> = {
   // 关闭当前页签：VS Code 同款为 Ctrl+W，但浏览器会截获该键（脚本无法 preventDefault），
   // 故取参考图里的第二候选 Ctrl+F4（Chrome/Edge 默认无行为，可安全拦截）。
   'edrv.closeTab': 'Ctrl+F4',
+  // 调试（VS Code 同款键位；F5 在有调试配置或暂停态才吞键，空闲时放行浏览器刷新）
+  'edrv.debugToggleBreakpoint': 'F9',
+  'edrv.debugStartContinue': 'F5',
+  'edrv.debugStepOver': 'F10',
+  'edrv.debugStepInto': 'F11',
+  'edrv.debugStepOut': 'Shift+F11',
+  'edrv.debugStop': 'Shift+F5',
 }
 
 /**
