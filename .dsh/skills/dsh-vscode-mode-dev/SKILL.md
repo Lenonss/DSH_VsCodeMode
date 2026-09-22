@@ -6,6 +6,16 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
 # dsh-vscode-mode 开发/发布经验集（自我更新型技能）
 
 > updated: 2026-09-22 · 维护者：ddj（AI 会话按文末协议追加，保持精炼、去重）
+- 2026-09-22 实录（v0.7.0 发布，资源管理器右键菜单；**经历首跑失败→重跑→第三结局**，四向闭环仍一次对齐）：
+  三门本地全绿（typecheck 0 err / **1745 passed · 7 skipped · 137 文件 · 19.7s** / build 双面绿）；`build` job 37s success。
+  **首跑 `release` 35 秒即挂**：`tests/dapFakeAdapter.test.ts:234` 握手用例 `waitFor 超时`——该文件与 `src/dap/*`
+  本次未改动、本地与 v0.6.0 CI 均绿 → 判**抖动非回归**，处置用 **`gh run rerun <run-id> --failed` 原地重跑**
+  （发布未发生时无需走「删远端 tag 重推」流程，更省）。重跑测试全过、Release 已产出，但
+  `Verify published tarball` 走满 15×30s 仍 `not retrievable` → 查 registry：`0.7.0` HTTP 200、
+  `dist-tags.latest=0.7.0`、`gitHead==c7e15b0`（release commit）→ **v0.4.4 第三结局再现（CDN 慢于重试窗口，
+  CI 红叉是误报，勿重跑防 409）**，GitHub Release tgz digest `sha256:ffb9fb0f…` 补齐四向闭环。
+  教训：`Verify` 步失败**先查 registry 三个字段（200 / latest / gitHead）再决定动作**；判「抖动 vs 回归」的
+  判据 = 失败用例所在文件是否在本次 diff 中 + 本地与前次 CI 是否双绿。
 - 2026-09-22 实录（v0.6.0 发布，全绿）：`build` 54s success、`release` **5m29s** success（含
   `Verify published tarball`）；四向闭环一次对齐：registry `0.6.0` 的 `gitHead` == `427b7ec`
   （release commit）、`dist-tags.latest` → `0.6.0`、tag 同 commit、Release 挂 tgz
