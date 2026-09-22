@@ -5,7 +5,19 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
 
 # dsh-vscode-mode 开发/发布经验集（自我更新型技能）
 
-> updated: 2026-09-21 · 维护者：ddj（AI 会话按文末协议追加，保持精炼、去重）
+> updated: 2026-09-22 · 维护者：ddj（AI 会话按文末协议追加，保持精炼、去重）
+- 2026-09-22 实录（v0.6.0 发布，全绿）：`build` 54s success、`release` **5m29s** success（含
+  `Verify published tarball`）；四向闭环一次对齐：registry `0.6.0` 的 `gitHead` == `427b7ec`
+  （release commit）、`dist-tags.latest` → `0.6.0`、tag 同 commit、Release 挂 tgz
+  （digest sha256:52c2c3…）。改动 99 文件（DAP 断点调试 + SVN 补丁/汇总/导出），逐条核对后单提交不 stash。
+- 2026-09-22 坑（v0.6.0 发布前实测，**新测试首次上 CI 前必查**）：伪造扩展清单的 fixture
+  **漏抄真实清单字段**会产出本地/CI 双态失败——`dapDiscovery` 的 coreclr fixture 漏写
+  `languages`（真实 DotRush 清单有 → 经 `LSP_LANG_EXT` 才映射出 `exts=['.cs','.csx']`），
+  且只创建 `clrdbg.exe` 入口（Windows 走 `windows.program` 覆盖本地绿；ubuntu 回落基名
+  `clrdbg` 不存在 → `available=false` 第 66 行必挂）。规矩：**fixture 模拟真实扩展时对照本机
+  实际 package.json 抄全 `languages`/平台入口文件**；判「该修测试还是修实现」看三方契约
+  （实现注释「皆空=不限=[]」、`bpAllowed` 空表不过滤、README「按**声明**语言过滤」）——
+  三方一致则 fixture 错，改 fixture 不改实现。
 - 2026-09-21 事实 + 坑（暂停态调试 hover 对齐 CodeBuddy，源码级核对 `CodeBuddy CN/resources/app/out/vs/
   workbench/workbench.desktop.main.js`）：CodeBuddy/VS Code 的调试浮窗是**独立 widget**（`debug.hoverWidget`
   → `.debug-hover-widget` / `.debug-hover-tree[role=tree]`，成员全量 + 行内折叠按钮），显示时调
