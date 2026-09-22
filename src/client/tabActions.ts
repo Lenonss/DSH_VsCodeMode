@@ -375,6 +375,25 @@ function normalizeSlashes(path: string | null | undefined): string {
 }
 
 /**
+ * 路径改写（资源管理器右键重命名后页签/脏标同步用）：
+ * 目标本身替换为新路径，其子树按前缀跟随改写，无关路径原样返回。
+ * @author ddj 2026年09月22号
+ * @param path 待改写路径
+ * @param from 原路径
+ * @param to 新路径
+ * @returns 改写后的路径
+ */
+export function remapPathOf(path: string, from: string, to: string): string {
+  const text = normalizeSlashes(path)
+  const src = normalizeSlashes(from).replace(/\/+$/, '')
+  const dst = normalizeSlashes(to).replace(/\/+$/, '')
+  if (!src || !dst || src === dst) return text
+  if (text === src) return dst
+  if (text.startsWith(src + '/')) return dst + text.slice(src.length)
+  return text
+}
+
+/**
  * 文件路径的祖先目录（由浅到深）：`a/b/c.ts` → `['a', 'a/b']`。
  * 根级文件、绝对路径与含 `..` 的路径返回空数组。
  * @author ddj 2026年09月11号
@@ -392,14 +411,7 @@ export function ancestorDirsOf(path: string): string[] {
   return out
 }
 
-/**
- * 文件名（页签/状态栏展示与 tooltip 用）。
- * @author ddj 2026年09月11号
- * @param path 路径
- * @returns 末段文件名；空路径返回空串
- */
-export function baseNameOf(path: string): string {
-  const text = normalizeSlashes(path)
-  return text.split('/').filter(Boolean).pop() ?? ''
-}
+// baseNameOf（取末段文件名）已收敛到 shared/fsNames.ts（host 与 client 共用同一份语义），
+// 此处转出口保持既有引用不动。
+export { baseNameOf } from '../shared/fsNames.js'
 // --endregion

@@ -224,7 +224,7 @@ export function apply(ctx: any): void {
     return sidebar ? registry.register(sidebar) : undefined
   }, 'vscode-mode: sidebar file opener')
   // 官方侧边栏正文组件装配（页类型正文；兼作 file 认领转发失败时的兜底正文）
-  const officialRenderTab = (props: Record<string, unknown>) => React.createElement(OfficialSideTab, Object.assign({}, props, { schedule, addToConversation, sidebarPanels, outlineSources, fileMenuItems, sessions }))
+  const officialRenderTab = (props: Record<string, unknown>) => React.createElement(OfficialSideTab, Object.assign({}, props, { schedule, addToConversation, sidebarPanels, outlineSources, fileMenuItems, fileOpeners: registry, sessions }))
   /** 官方 file 地址认领同步：自动/VSCodeMode 档认领（转发进单一编辑器页签），其余交官方查看器。 */
   const syncFileClaim = (): void => {
     const official = officialService
@@ -334,7 +334,7 @@ export function apply(ctx: any): void {
       order: 5,
       label: '文件编辑',
       inject: (sessionId: string) => ({ sessionId }),
-    }, (props: unknown) => React.createElement(EditorView, Object.assign({}, props, { layout: 'tab', sideHint: SIDEBAR_INSTALL_CMD, schedule, addToConversation, sidebarPanels, outlineSources, fileMenuItems, sessions })))
+    }, (props: unknown) => React.createElement(EditorView, Object.assign({}, props, { layout: 'tab', sideHint: SIDEBAR_INSTALL_CMD, schedule, addToConversation, sidebarPanels, outlineSources, fileMenuItems, fileOpeners: registry, sessions })))
   }
 
   // 侧边栏三形态互斥切换：官方（DSH 0.1.5+）> better-sidebar（归档，仅旧版回退）> 中央页签。
@@ -385,7 +385,7 @@ export function apply(ctx: any): void {
       if (legacyDisposer !== null) { legacyDisposer(); legacyDisposer = null }
       sideDisposer = ctx.effect(() => installSideEditor({
         service: sideService as NonNullable<typeof sideService>,
-        renderTab: (props: Record<string, unknown>) => React.createElement(SideEditorTab, Object.assign({}, props, { schedule, addToConversation, sidebarPanels, outlineSources, fileMenuItems, sessions })),
+        renderTab: (props: Record<string, unknown>) => React.createElement(SideEditorTab, Object.assign({}, props, { schedule, addToConversation, sidebarPanels, outlineSources, fileMenuItems, fileOpeners: registry, sessions })),
         activeSession: () => {
           const scope = readSessionScope(ctx)
           if (!scope.sessionId) return undefined

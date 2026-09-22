@@ -86,6 +86,7 @@ export function OfficialSideTab(props) {
     sidebarPanels: props?.sidebarPanels,
     outlineSources: props?.outlineSources,
     fileMenuItems: props?.fileMenuItems,
+    fileOpeners: props?.fileOpeners,
     sessions: props?.sessions,
   })
 }

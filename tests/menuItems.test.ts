@@ -1,15 +1,18 @@
 /**
  * client sidebar/menuItems.ts 内置菜单项测试。
- * 覆盖：默认项结构与排序、新增「添加引用到对话」的文件/文件夹分派、
+ * 覆盖：默认项结构与排序（对齐 CodeBuddy 参考图分组）、「添加引用到对话」的文件/文件夹分派、
  * 忙态/不可用降级、visible 守卫（空路径/无会话/动作集缺失）、
+ * 文件/文件夹/根空白区显隐矩阵（打开方式/新建/查找/剪贴板/复制路径/重命名/删除）、
+ * 粘贴灰显与删除文案分派、文件管理动作执行（新建/重命名/删除/粘贴的 RPC 接线与降级）、
  * SVN 组显隐（managed/svnCli/tortoise × 文件/目录/根）与 P2 CLI 三项的状态矩阵。
- * 作者 ddj 2026-09-03 / 2026-09-16
+ * 作者 ddj 2026-09-03 / 2026-09-16 / 2026年09月22号
  */
 import { describe, expect, it, vi } from 'vitest'
 import { createDefaultFileMenuItems } from '../src/client/sidebar/menuItems.js'
-import type { TreeMenuItem } from '../src/client/sidebar/contextMenu.js'
+import type { TreeMenuItem, TreeMenuTarget } from '../src/client/sidebar/contextMenu.js'
 import type { SidebarCtx } from '../src/client/sidebar/types.js'
 import type { SvnChangeEntry, SvnStatusPayload } from '../src/shared/svn.js'
+import { clearFileClip, fileClipOf, setFileClip } from '../src/client/fileClipboard.js'
 
 /** 按 id 索引内置菜单项。 */
 const byId = (): Record<string, TreeMenuItem> =>
@@ -39,11 +42,22 @@ const makeCtx = (add: ReturnType<typeof makeAdd> | null = makeAdd(), overrides =
   ) as unknown as SidebarCtx
 
 describe('createDefaultFileMenuItems', () => {
-  it('内置项按 order 排序：浏览器打开 → 引用到对话 → SVN 组（树入口：CLI 四项 + 查看日志 + Tortoise 五项）', () => {
+  it('内置项按 order 排序：打开/新建 → 浏览器打开 → 对话/查找 → 剪贴板 → 复制路径 → 重命名/删除 → SVN 组', () => {
     const items = createDefaultFileMenuItems()
     expect(items.map((item) => item.id)).toEqual([
+      'open-with',
+      'new-file',
+      'new-folder',
       'reveal-in-explorer',
       'add-to-conversation',
+      'find-in-folder',
+      'cut',
+      'copy',
+      'paste',
+      'copy-path',
+      'copy-relative-path',
+      'rename',
+      'delete',
       'svn-update',
       'svn-diff-base',
       'svn-add',
@@ -55,7 +69,8 @@ describe('createDefaultFileMenuItems', () => {
       'svn-tortoise-blame',
       'svn-tortoise-revert',
     ])
-    expect(items[1]).toMatchObject({ id: 'add-to-conversation', label: '添加引用到对话', order: 1 })
+    expect(byId()['reveal-in-explorer']).toMatchObject({ label: '在文件资源管理器中显示', order: 30, group: 2 })
+    expect(byId()['add-to-conversation']).toMatchObject({ label: '添加引用到对话', order: 50, group: 3 })
   })
 
   it('文件目标：以 file 外观追加引用并提示「已添加文件引用」', async () => {
@@ -181,9 +196,12 @@ describe('SVN 组显隐（动态能力守卫）', () => {
     expect(byId()['svn-tortoise-commit'].visible({ path: '', type: 'directory' }, svnCtx())).toBe(true)
   })
 
-  it('Tortoise 还原条目带 danger 标记', () => {
+  it('Tortoise 还原条目带 danger 标记；Tortoise 段另起分组（分隔线由分组号驱动）', () => {
     expect(byId()['svn-tortoise-revert'].danger).toBe(true)
-    expect(byId()['svn-tortoise-commit'].separator).toBe(true)
+    expect(byId()['svn-update'].group).toBe(7)
+    expect(byId()['svn-log'].group).toBe(7)
+    expect(byId()['svn-tortoise-commit'].group).toBe(8)
+    expect(byId()['svn-tortoise-log'].group).toBe(8)
   })
 })
 
@@ -262,5 +280,246 @@ describe('SVN CLI 三项（与基线比较 / 加入版本控制 / 还原）状�
     byId()['svn-revert-cli'].run(file, ctx)
     expect(confirm).toHaveBeenCalled()
     expect(refreshSvnChanges).not.toHaveBeenCalled()
+  })
+})
+
+describe('文件/文件夹/根空白区显隐矩阵（对齐 CodeBuddy 参考图）', () => {
+  const file = { path: 'src/a.ts', type: 'file' } as const
+  const dir = { path: 'src', type: 'directory' } as const
+  const root = { path: '', type: 'directory' } as const
+  /** 带 UI 能力的 ctx（openWith/searchInFolder/cwd 齐备）。 */
+  const uiCtx = (): SidebarCtx => makeCtx(makeAdd(), { cwd: '/wc', openWith: vi.fn(), searchInFolder: vi.fn() })
+
+  it('打开方式…：仅文件 + openWith 可用', () => {
+    const item = byId()['open-with']
+    expect(item.visible(file, uiCtx())).toBe(true)
+    expect(item.visible(dir, uiCtx())).toBe(false)
+    expect(item.visible(root, uiCtx())).toBe(false)
+    expect(item.visible(file, makeCtx())).toBe(false)
+  })
+
+  it('新建文件…/新建文件夹：文件夹与根空白区；文件不出', () => {
+    for (const id of ['new-file', 'new-folder']) {
+      const item = byId()[id]
+      expect(item.visible(file, uiCtx())).toBe(false)
+      expect(item.visible(dir, uiCtx())).toBe(true)
+      expect(item.visible(root, uiCtx())).toBe(true)
+    }
+  })
+
+  it('在文件夹中查找…：仅文件夹/根 + searchInFolder 可用', () => {
+    const item = byId()['find-in-folder']
+    expect(item.visible(file, uiCtx())).toBe(false)
+    expect(item.visible(dir, uiCtx())).toBe(true)
+    expect(item.visible(root, uiCtx())).toBe(true)
+    expect(item.visible(dir, makeCtx())).toBe(false)
+  })
+
+  it('剪切/复制：非根目标；粘贴：文件夹/根专属（文件菜单不带粘贴）', () => {
+    expect(byId()['cut'].visible(root, uiCtx())).toBe(false)
+    expect(byId()['copy'].visible(root, uiCtx())).toBe(false)
+    expect(byId()['cut'].visible(file, uiCtx())).toBe(true)
+    const paste = byId()['paste']
+    expect(paste.visible(file, uiCtx())).toBe(false)
+    expect(paste.visible(dir, uiCtx())).toBe(true)
+    expect(paste.visible(root, uiCtx())).toBe(true)
+  })
+
+  it('粘贴：剪贴板空 → 置灰；有内容 → 可点', () => {
+    clearFileClip()
+    const paste = byId()['paste']
+    const disabledOf = (target: TreeMenuTarget): boolean =>
+      typeof paste.disabled === 'function' ? paste.disabled(target, uiCtx()) : paste.disabled === true
+    expect(disabledOf(dir)).toBe(true)
+    setFileClip('copy', 'src/a.ts')
+    expect(disabledOf(dir)).toBe(false)
+    clearFileClip()
+  })
+
+  it('复制路径：仅非根；复制相对路径还需 cwd', () => {
+    expect(byId()['copy-path'].visible(root, uiCtx())).toBe(false)
+    expect(byId()['copy-path'].visible(file, uiCtx())).toBe(true)
+    const rel = byId()['copy-relative-path']
+    expect(rel.visible(file, uiCtx())).toBe(true)
+    expect(rel.visible(file, makeCtx())).toBe(false)
+    expect(rel.visible(root, uiCtx())).toBe(false)
+  })
+
+  it('重命名/删除：仅非根；删除文案区分文件「删除」与文件夹「永久删除」', () => {
+    expect(byId()['rename'].visible(root, uiCtx())).toBe(false)
+    const del = byId()['delete']
+    expect(del.visible(root, uiCtx())).toBe(false)
+    expect(del.visible(file, uiCtx())).toBe(true)
+    expect(del.danger).toBe(true)
+    const labelOf = (target: TreeMenuTarget): string =>
+      typeof del.label === 'function' ? del.label(target, uiCtx()) : del.label
+    expect(labelOf(file)).toBe('删除')
+    expect(labelOf(dir)).toBe('永久删除')
+  })
+})
+
+describe('文件管理动作执行（新建/重命名/删除/粘贴的 RPC 接线与降级）', () => {
+  /** 桩 fetch：解析 { method, args } 载荷并返回可配置结果；返回调用记录与恢复函数。 */
+  const stubFetch = (result: unknown) => {
+    const original = (globalThis as { fetch?: unknown }).fetch
+    const calls: Array<{ method: string; args: Record<string, unknown> }> = []
+    ;(globalThis as { fetch: unknown }).fetch = vi.fn((_url: string, init: { body: string }) => {
+      calls.push(JSON.parse(init.body))
+      return Promise.resolve({ json: () => Promise.resolve(result) })
+    })
+    return { calls, restore: () => { (globalThis as { fetch?: unknown }).fetch = original } }
+  }
+
+  /** 落定异步动作（run 返回 void，内部 void + Promise 链）。 */
+  const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0))
+
+  it('剪切/复制：登记文件剪贴板并提示；不发 RPC', () => {
+    clearFileClip()
+    const stub = stubFetch({ ok: true })
+    try {
+      const notify = vi.fn()
+      const ctx = makeCtx(makeAdd(), { notify })
+      byId()['cut'].run({ path: 'src/a.ts', type: 'file' }, ctx)
+      expect(fileClipOf()).toEqual({ mode: 'cut', path: 'src/a.ts' })
+      expect(notify).toHaveBeenCalledWith('已剪切「a.ts」')
+      byId()['copy'].run({ path: 'src/b.ts', type: 'file' }, ctx)
+      expect(fileClipOf()).toEqual({ mode: 'copy', path: 'src/b.ts' })
+      expect(notify).toHaveBeenCalledWith('已复制「b.ts」')
+      expect(stub.calls).toHaveLength(0)
+    } finally {
+      stub.restore()
+      clearFileClip()
+    }
+  })
+
+  it('粘贴：剪贴板空提示并不发 RPC', async () => {
+    clearFileClip()
+    const stub = stubFetch({ ok: true })
+    try {
+      const notify = vi.fn()
+      byId()['paste'].run({ path: 'docs', type: 'directory' }, makeCtx(makeAdd(), { notify }))
+      await settle()
+      expect(notify).toHaveBeenCalledWith('剪贴板为空')
+      expect(stub.calls).toHaveLength(0)
+    } finally {
+      stub.restore()
+    }
+  })
+
+  it('粘贴（复制模式）：fsCopy 到目标目录，剪贴板保留', async () => {
+    setFileClip('copy', 'src/a.ts')
+    const stub = stubFetch({ ok: true, from: 'src/a.ts', to: 'docs/a.ts' })
+    try {
+      const notify = vi.fn()
+      byId()['paste'].run({ path: 'docs', type: 'directory' }, makeCtx(makeAdd(), { notify }))
+      await settle()
+      expect(stub.calls).toEqual([{ method: 'edrv.fsCopy', args: { sessionId: 's1', from: 'src/a.ts', toDir: 'docs' } }])
+      expect(notify).toHaveBeenCalledWith('已复制到 docs')
+      expect(fileClipOf()).toEqual({ mode: 'copy', path: 'src/a.ts' })
+    } finally {
+      stub.restore()
+      clearFileClip()
+    }
+  })
+
+  it('粘贴（剪切模式）：fsMove 后清空剪贴板', async () => {
+    setFileClip('cut', 'src/a.ts')
+    const stub = stubFetch({ ok: true, from: 'src/a.ts', to: 'docs/a.ts' })
+    try {
+      const notify = vi.fn()
+      byId()['paste'].run({ path: 'docs', type: 'directory' }, makeCtx(makeAdd(), { notify }))
+      await settle()
+      expect(stub.calls[0].method).toBe('edrv.fsMove')
+      expect(notify).toHaveBeenCalledWith('已移动到 docs')
+      expect(fileClipOf()).toBeNull()
+    } finally {
+      stub.restore()
+      clearFileClip()
+    }
+  })
+
+  it('新建文件…：名称弹窗 → fsCreateFile（嵌套名拼接）→ 打开文件', async () => {
+    const stub = stubFetch({ ok: true, path: 'src/sub/a.ts' })
+    try {
+      const notify = vi.fn()
+      const openFile = vi.fn()
+      const prompt = vi.fn(() => Promise.resolve('sub/a.ts'))
+      byId()['new-file'].run({ path: 'src', type: 'directory' }, makeCtx(makeAdd(), { notify, openFile, prompt }))
+      await settle()
+      expect(prompt).toHaveBeenCalledWith('新建文件', '')
+      expect(stub.calls).toEqual([{ method: 'edrv.fsCreateFile', args: { sessionId: 's1', path: 'src/sub/a.ts' } }])
+      expect(openFile).toHaveBeenCalledWith('src/sub/a.ts')
+      expect(notify).toHaveBeenCalledWith('已新建文件 src/sub/a.ts')
+    } finally {
+      stub.restore()
+    }
+  })
+
+  it('新建文件…：非法名称（.. 路径段）弹回提示、不发 RPC', async () => {
+    const stub = stubFetch({ ok: true })
+    try {
+      const notify = vi.fn()
+      const prompt = vi.fn(() => Promise.resolve('a/../b'))
+      byId()['new-folder'].run({ path: 'src', type: 'directory' }, makeCtx(makeAdd(), { notify, prompt }))
+      await settle()
+      expect(notify).toHaveBeenCalledWith('名称不能包含 . 或 .. 路径段')
+      expect(stub.calls).toHaveLength(0)
+    } finally {
+      stub.restore()
+    }
+  })
+
+  it('重命名…：fsRename 带新名称段；名称未变化为 no-op', async () => {
+    const stub = stubFetch({ ok: true, from: 'src/a.ts', to: 'src/b.ts' })
+    try {
+      const notify = vi.fn()
+      const prompt = vi.fn(() => Promise.resolve('b.ts'))
+      byId()['rename'].run({ path: 'src/a.ts', type: 'file' }, makeCtx(makeAdd(), { notify, prompt }))
+      await settle()
+      expect(prompt).toHaveBeenCalledWith('重命名', 'a.ts')
+      expect(stub.calls).toEqual([{ method: 'edrv.fsRename', args: { sessionId: 's1', path: 'src/a.ts', newName: 'b.ts' } }])
+      expect(notify).toHaveBeenCalledWith('已重命名')
+
+      stub.calls.length = 0
+      prompt.mockReturnValueOnce(Promise.resolve('a.ts'))
+      byId()['rename'].run({ path: 'src/a.ts', type: 'file' }, makeCtx(makeAdd(), { notify, prompt }))
+      await settle()
+      expect(stub.calls).toHaveLength(0)
+    } finally {
+      stub.restore()
+    }
+  })
+
+  it('删除：confirm 拦截取消则不发 RPC；确认后 fsDelete', async () => {
+    const stub = stubFetch({ ok: true, path: 'src/a.ts' })
+    try {
+      const notify = vi.fn()
+      const confirm = vi.fn(() => false)
+      byId()['delete'].run({ path: 'src/a.ts', type: 'file' }, makeCtx(makeAdd(), { notify, confirm }))
+      await settle()
+      expect(confirm).toHaveBeenCalled()
+      expect(stub.calls).toHaveLength(0)
+
+      confirm.mockReturnValueOnce(true)
+      byId()['delete'].run({ path: 'src/a.ts', type: 'file' }, makeCtx(makeAdd(), { notify, confirm }))
+      await settle()
+      expect(stub.calls).toEqual([{ method: 'edrv.fsDelete', args: { sessionId: 's1', path: 'src/a.ts' } }])
+      expect(notify).toHaveBeenCalledWith('已删除「a.ts」')
+    } finally {
+      stub.restore()
+    }
+  })
+
+  it('删除：RPC 失败只提示错误、不清剪贴板语义', async () => {
+    const stub = stubFetch({ ok: false, error: '源不存在' })
+    try {
+      const notify = vi.fn()
+      const confirm = vi.fn(() => true)
+      byId()['delete'].run({ path: 'src', type: 'directory' }, makeCtx(makeAdd(), { notify, confirm }))
+      await settle()
+      expect(notify).toHaveBeenCalledWith('删除失败：源不存在')
+    } finally {
+      stub.restore()
+    }
   })
 })

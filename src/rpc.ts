@@ -20,8 +20,8 @@ import {
   resolveTarget,
   saveBucket,
 } from './store.js'
-import { mkdir, readFile, rm, stat, writeFile, readdir } from 'node:fs/promises'
-import { basename, join } from 'node:path'
+import { cp, mkdir, readFile, rename, rm, stat, writeFile, readdir } from 'node:fs/promises'
+import { basename, dirname, join } from 'node:path'
 import { archiveEntryFor, markDecision, recordResolved, reconstructOriginal } from './model.js'
 import type { Registry } from './registry.js'
 import { bucketOf, cwdOf, sessionOf } from './registry.js'
@@ -42,6 +42,7 @@ import { handoffOpen, pendingState, pollPending } from './externalHandoff.js'
 import { buildReport } from './compat.js'
 import { findProfileDir, readDevForm, setDevForm } from './devForm.js'
 import { normalizeRel } from './tree.js'
+import { baseNameOf, checkNewName, checkRenameName, isSubPath, joinRelPath, parentRelOf } from './shared/fsNames.js'
 import { invalidateIndex, listDirCached } from './treeIndex.js'
 import { revealInExplorer } from './reveal.js'
 import { dshHome, debugLogFile, pluginLogRoot } from './paths.js'
@@ -245,6 +246,106 @@ async function integrationBaseUrlOf(ctx: Ctx): Promise<string> {
   const raw = typeof value?.integrationBaseUrl === 'string' ? value.integrationBaseUrl.trim() : ''
   return raw || INTEGRATION_BASE_DEFAULT
 }
+
+// --region 文件操作（edrv.fs.*：资源管理器右键的新建/重命名/删除/复制/移动）
+
+/**
+ * 文件操作目标解析：工作区相对路径 → 绝对路径，并做工作区边界检查。
+ * edrv.fs.* 各方法共用（对齐 edrv.saveBinary 的 contains 护栏口径）。
+ * @author ddj 2026年09月22号
+ * @param ctx DSH 上下文
+ * @param session 当前会话
+ * @param rel 工作区相对路径
+ * @returns 绝对路径；缺 fs/越界/解析失败返回错误文案
+ */
+async function fsOpsTarget(ctx: Ctx, session: Session, rel: string): Promise<{ abs: string } | { err: string }> {
+  const fs = ctx.get('fs')
+  if (!fs) return { err: '缺少 fs' }
+  try {
+    const target = await resolveTarget(ctx, session, rel)
+    const rootTarget = await fs.resolve(policyOf(ctx, session)?.workspaceRoot ?? '.', {})
+    if (!fs.contains(rootTarget, target)) return { err: '拒绝操作：目标不在会话工作区内' }
+    return { abs: fs.processPath(target) }
+  } catch (error) {
+    return { err: '路径解析失败：' + String(error) }
+  }
+}
+
+/**
+ * 取异常的系统错误码（EEXIST/EXDEV 等分支判定用）。
+ * @author ddj 2026年09月22号
+ * @param error 捕获到的异常
+ * @returns 错误码；取不到返回空串
+ */
+function fsErrCode(error: unknown): string {
+  const code = (error as { code?: unknown } | null)?.code
+  return typeof code === 'string' ? code : ''
+}
+
+/**
+ * 复制/移动共用核心（edrv.fsCopy / edrv.fsMove）：目标目录存在 + 同名拒绝覆盖 +
+ * 「不能以自身或其子目录为目标」护栏；move 跨设备（EXDEV）回退「递归复制 + 删除源」。
+ * @author ddj 2026年09月22号
+ * @param ctx DSH 上下文
+ * @param sc requireSession 成功结果（session + cwd）
+ * @param args 请求载荷（from / toDir 均为工作区相对路径）
+ * @param mode copy = 复制；move = 移动
+ * @returns 成功返回 from/to 相对路径；失败返回错误文案
+ */
+async function fsTransfer(
+  ctx: Ctx,
+  sc: { session: Session; cwd: string },
+  args: { from: string; toDir: string },
+  mode: 'copy' | 'move',
+): Promise<{ from: string; to: string } | { err: string }> {
+  const fromRel = normalizeRel(args.from)
+  const toDirRel = normalizeRel(args.toDir)
+  if (fromRel === null || fromRel === '' || toDirRel === null) return { err: '路径不合法' }
+  if (isSubPath(fromRel, toDirRel)) return { err: '不能以自身或其子目录为目标' }
+  const src = await fsOpsTarget(ctx, sc.session, fromRel)
+  if ('err' in src) return src
+  const dir = await fsOpsTarget(ctx, sc.session, toDirRel)
+  if ('err' in dir) return dir
+  const dirInfo = await stat(dir.abs).catch(() => null)
+  if (!dirInfo || !dirInfo.isDirectory()) return { err: '目标目录不存在' }
+  const toRel = joinRelPath(toDirRel, baseNameOf(fromRel))
+  const dst = await fsOpsTarget(ctx, sc.session, toRel)
+  if ('err' in dst) return dst
+  const srcInfo = await stat(src.abs).catch(() => null)
+  if (!srcInfo) return { err: '源不存在' }
+  if (await stat(dst.abs).catch(() => null)) return { err: '目标目录已存在同名文件或目录' }
+  try {
+    await transferEntry(src.abs, dst.abs, mode)
+  } catch (error) {
+    return { err: (mode === 'copy' ? '复制失败：' : '移动失败：') + String(error) }
+  }
+  invalidateIndex(ctx, sc.cwd, fromRel)
+  invalidateIndex(ctx, sc.cwd, toRel)
+  return { from: fromRel, to: toRel }
+}
+
+/**
+ * 单条目复制/移动落盘（文件/目录通用；move 跨设备回退复制+删除源）。
+ * @author ddj 2026年09月22号
+ * @param absFrom 源绝对路径
+ * @param absTo 目标绝对路径
+ * @param mode copy = 复制；move = 移动
+ */
+async function transferEntry(absFrom: string, absTo: string, mode: 'copy' | 'move'): Promise<void> {
+  if (mode === 'copy') {
+    await cp(absFrom, absTo, { recursive: true, force: false, errorOnExist: true })
+    return
+  }
+  try {
+    await rename(absFrom, absTo)
+  } catch (error) {
+    if (fsErrCode(error) !== 'EXDEV') throw error
+    await cp(absFrom, absTo, { recursive: true, force: false, errorOnExist: true })
+    await rm(absFrom, { recursive: true })
+  }
+}
+
+// --endregion
 
 /** 各方法 handler 表（类型由 shared/rpc 的 RpcHandlerMap 约束）。 */
 export function buildHandlers(
@@ -611,6 +712,101 @@ export function buildHandlers(
       } catch (error) {
         return { ok: false, error: '打开失败：' + String(error) }
       }
+    },
+    'edrv.fsCreateFile': async (args) => {
+      // 新建文件（资源管理器右键「新建文件…」）：空内容独占创建（同名拒绝），
+      // 名称可含 a/b.c 嵌套段（父目录按需创建）；名称校验与客户端弹窗共用 shared/fsNames。
+      const sc = await requireSession(ctx, args.sessionId)
+      if ('err' in sc) return { ok: false, error: sc.err }
+      const bad = checkNewName(args.path)
+      if (bad) return { ok: false, error: bad }
+      const r = await fsOpsTarget(ctx, sc.session, args.path)
+      if ('err' in r) return { ok: false, error: r.err }
+      try {
+        await mkdir(dirname(r.abs), { recursive: true })
+        await writeFile(r.abs, '', { flag: 'wx' })
+      } catch (error) {
+        const code = fsErrCode(error)
+        return { ok: false, error: code === 'EEXIST' ? '已存在同名文件或目录' : '新建文件失败：' + String(error) }
+      }
+      invalidateIndex(ctx, sc.cwd, args.path)
+      return { ok: true, path: args.path }
+    },
+    'edrv.fsCreateDir': async (args) => {
+      // 新建文件夹（资源管理器右键「新建文件夹」）：名称可含嵌套段（父目录按需创建），已存在拒绝。
+      const sc = await requireSession(ctx, args.sessionId)
+      if ('err' in sc) return { ok: false, error: sc.err }
+      const bad = checkNewName(args.path)
+      if (bad) return { ok: false, error: bad }
+      const r = await fsOpsTarget(ctx, sc.session, args.path)
+      if ('err' in r) return { ok: false, error: r.err }
+      try {
+        await mkdir(dirname(r.abs), { recursive: true })
+        await mkdir(r.abs)
+      } catch (error) {
+        const code = fsErrCode(error)
+        return { ok: false, error: code === 'EEXIST' ? '已存在同名文件或目录' : '新建文件夹失败：' + String(error) }
+      }
+      invalidateIndex(ctx, sc.cwd, args.path)
+      return { ok: true, path: args.path }
+    },
+    'edrv.fsRename': async (args) => {
+      // 重命名（仅名称段、同父目录内）：目标已存在拒绝；名称未变化按幂等成功返回。
+      const sc = await requireSession(ctx, args.sessionId)
+      if ('err' in sc) return { ok: false, error: sc.err }
+      const bad = checkRenameName(args.newName)
+      if (bad) return { ok: false, error: bad }
+      const fromRel = normalizeRel(args.path)
+      if (fromRel === null || fromRel === '') return { ok: false, error: '路径不合法' }
+      const toRel = joinRelPath(parentRelOf(fromRel), args.newName)
+      if (toRel === fromRel) return { ok: true, from: fromRel, to: fromRel }
+      const src = await fsOpsTarget(ctx, sc.session, fromRel)
+      if ('err' in src) return { ok: false, error: src.err }
+      const dst = await fsOpsTarget(ctx, sc.session, toRel)
+      if ('err' in dst) return { ok: false, error: dst.err }
+      if (!(await stat(src.abs).catch(() => null))) return { ok: false, error: '源不存在' }
+      try {
+        await rename(src.abs, dst.abs)
+      } catch (error) {
+        const code = fsErrCode(error)
+        const exists = code === 'EEXIST' || code === 'ENOTEMPTY' || code === 'EPERM'
+        return { ok: false, error: exists ? '已存在同名文件或目录' : '重命名失败：' + String(error) }
+      }
+      invalidateIndex(ctx, sc.cwd, fromRel)
+      invalidateIndex(ctx, sc.cwd, toRel)
+      return { ok: true, from: fromRel, to: toRel }
+    },
+    'edrv.fsDelete': async (args) => {
+      // 删除（文件/文件夹递归；「删除/永久删除」共用）：根拒绝；破坏性由客户端确认框把关。
+      const sc = await requireSession(ctx, args.sessionId)
+      if ('err' in sc) return { ok: false, error: sc.err }
+      const rel = normalizeRel(args.path)
+      if (rel === null || rel === '') return { ok: false, error: '路径不合法' }
+      const r = await fsOpsTarget(ctx, sc.session, rel)
+      if ('err' in r) return { ok: false, error: r.err }
+      try {
+        await rm(r.abs, { recursive: true })
+      } catch (error) {
+        return { ok: false, error: '删除失败：' + String(error) }
+      }
+      invalidateIndex(ctx, sc.cwd, rel)
+      return { ok: true, path: rel }
+    },
+    'edrv.fsCopy': async (args) => {
+      // 复制到目标目录（文件/文件夹递归）：同名拒绝覆盖（细节见 fsTransfer）。
+      const sc = await requireSession(ctx, args.sessionId)
+      if ('err' in sc) return { ok: false, error: sc.err }
+      const r = await fsTransfer(ctx, sc, args, 'copy')
+      if ('err' in r) return { ok: false, error: r.err }
+      return { ok: true, from: r.from, to: r.to }
+    },
+    'edrv.fsMove': async (args) => {
+      // 移动到目标目录（文件/文件夹）：同名拒绝覆盖（细节见 fsTransfer）。
+      const sc = await requireSession(ctx, args.sessionId)
+      if ('err' in sc) return { ok: false, error: sc.err }
+      const r = await fsTransfer(ctx, sc, args, 'move')
+      if ('err' in r) return { ok: false, error: r.err }
+      return { ok: true, from: r.from, to: r.to }
     },
     'mcp.list': async () => ({ ok: true, ...listMcp(ctx) }),
     'mcp.save': async (args) => {

@@ -62,6 +62,63 @@ describe('buildTreeMenu', () => {
   })
 })
 
+describe('buildTreeMenu 分组分隔线与动态字段', () => {
+  const target = { path: 'src', type: 'directory' } as const
+
+  it('组切换出前置分隔线，同组内不出（首条除外）', () => {
+    const reg = createTreeMenuRegistry()
+    reg.register({ id: 'a', label: 'A', order: 1, group: 1, run: () => {} })
+    reg.register({ id: 'b', label: 'B', order: 2, group: 1, run: () => {} })
+    reg.register({ id: 'c', label: 'C', order: 3, group: 2, run: () => {} })
+    const menu = buildTreeMenu(reg, target, ctx)
+    expect(menu.map((item) => item.id + ':' + item.separator)).toEqual(['a:false', 'b:false', 'c:true'])
+  })
+
+  it('组首条被 visible 隐藏时下一条顶上分组头（不丢线不叠线）', () => {
+    const reg = createTreeMenuRegistry()
+    reg.register({ id: 'a', label: 'A', order: 1, group: 1, visible: () => false, run: () => {} })
+    reg.register({ id: 'b', label: 'B', order: 2, group: 1, run: () => {} })
+    reg.register({ id: 'c', label: 'C', order: 3, group: 2, visible: () => false, run: () => {} })
+    reg.register({ id: 'd', label: 'D', order: 4, group: 2, run: () => {} })
+    const menu = buildTreeMenu(reg, target, ctx)
+    expect(menu.map((item) => item.id + ':' + item.separator)).toEqual(['b:false', 'd:true'])
+  })
+
+  it('动态组头与静态 separator 相邻时合并为一条（不叠双线）', () => {
+    const reg = createTreeMenuRegistry()
+    reg.register({ id: 'a', label: 'A', order: 1, group: 1, run: () => {} })
+    reg.register({ id: 'b', label: 'B', order: 2, group: 2, run: () => {} })
+    reg.register({ id: 'c', label: 'C', order: 3, separator: true, run: () => {} })
+    const menu = buildTreeMenu(reg, target, ctx)
+    expect(menu.map((item) => item.id + ':' + item.separator)).toEqual(['a:false', 'b:true', 'c:false'])
+  })
+
+  it('无 group 的存量条目沿用静态 separator（兼容第三方注册）', () => {
+    const reg = createTreeMenuRegistry()
+    reg.register({ id: 'a', label: 'A', order: 1, run: () => {} })
+    reg.register({ id: 'b', label: 'B', order: 2, separator: true, run: () => {} })
+    const menu = buildTreeMenu(reg, target, ctx)
+    expect(menu.map((item) => item.id + ':' + item.separator)).toEqual(['a:false', 'b:true'])
+  })
+
+  it('动态 label / disabled 按目标解析为定值', () => {
+    const reg = createTreeMenuRegistry()
+    reg.register({
+      id: 'dyn',
+      label: (t) => (t.type === 'directory' ? '目录文案' : '文件文案'),
+      order: 1,
+      disabled: (t) => t.path === '',
+      run: () => {},
+    })
+    const menu = buildTreeMenu(reg, target, ctx)
+    expect(menu[0].label).toBe('目录文案')
+    expect(menu[0].disabled).toBe(false)
+    const rootMenu = buildTreeMenu(reg, { path: '', type: 'directory' }, ctx)
+    expect(rootMenu[0].label).toBe('目录文案')
+    expect(rootMenu[0].disabled).toBe(true)
+  })
+})
+
 describe('menuRows 渲染行展开（separator 语义回归）', () => {
   /** 造条目（separator 表示「本条带前置分隔线」）。 */
   const item = (id: string, separator = false): ContextMenuEntry => ({ id, label: id, separator })

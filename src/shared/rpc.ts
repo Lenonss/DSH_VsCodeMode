@@ -216,6 +216,12 @@ export interface RpcRequestMap {
   'edrv.searchContent': { sessionId?: string; query: string; matchCase?: boolean; wholeWord?: boolean; regex?: boolean; maxResults?: number; include?: string[]; exclude?: string[] }
   'edrv.listDir': { sessionId?: string; path: string; force?: boolean }
   'edrv.revealInExplorer': { sessionId?: string; path: string }
+  'edrv.fsCreateFile': { sessionId?: string; path: string }
+  'edrv.fsCreateDir': { sessionId?: string; path: string }
+  'edrv.fsRename': { sessionId?: string; path: string; newName: string }
+  'edrv.fsDelete': { sessionId?: string; path: string }
+  'edrv.fsCopy': { sessionId?: string; from: string; toDir: string }
+  'edrv.fsMove': { sessionId?: string; from: string; toDir: string }
   'mcp.list': {}
   'mcp.save': { config: MpcConfig }
   'mcp.remove': { id: string }
@@ -345,6 +351,12 @@ export interface RpcOkMap {
   'edrv.searchContent': { matches: SearchContentMatch[]; truncated: boolean; warning?: string }
   'edrv.listDir': { root: string; path: string; entries: TreeEntry[] }
   'edrv.revealInExplorer': { revealed: string }
+  'edrv.fsCreateFile': { path: string }
+  'edrv.fsCreateDir': { path: string }
+  'edrv.fsRename': { from: string; to: string }
+  'edrv.fsDelete': { path: string }
+  'edrv.fsCopy': { from: string; to: string }
+  'edrv.fsMove': { from: string; to: string }
   'mcp.list': { servers: MpcServer[] }
   'mcp.save': { server: MpcServer }
   'mcp.remove': object

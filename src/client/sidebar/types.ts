@@ -51,6 +51,12 @@ export interface SidebarCtx {
   confirm?: (message: string) => boolean
   /** 面板动作反馈（如右键菜单操作结果 → 编辑区路径栏状态）。 */
   notify?: (message: string) => void
+  /** 名称输入弹窗（资源管理器右键的新建/重命名；取消/空输入返回 null，缺省时相关项降级提示）。 */
+  prompt?: (title: string, initial: string) => Promise<string | null>
+  /** 「打开方式…」：在已注册打开器间选择并打开（缺省时该项隐藏）。 */
+  openWith?: (path: string) => void
+  /** 「在文件夹中查找…」：限定目录并跳到搜索面板（缺省时该项隐藏）。 */
+  searchInFolder?: (dir: string) => void
 }
 
 /** 单个侧边栏面板定义。 */

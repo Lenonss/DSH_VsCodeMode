@@ -12,7 +12,7 @@ import { rpc } from '../../rpc.js'
 import type { SidebarCtx } from '../types.js'
 import { CACHE_KEY } from '../../paths.js'
 import { workspaceScopeOf } from '../../state/scopeStore.js'
-import { takeSearchSeed } from '../../searchSeed.js'
+import { takeSearchSeed, takeSearchScope } from '../../searchSeed.js'
 
 const DEBOUNCE_MS = 250
 const INCLUDE_PLACEHOLDER = '例如 *.ts, src/**/include'
@@ -237,15 +237,36 @@ export function SearchPanel(props) {
     return true
   }
 
+  /**
+   * 取用一次性目录过滤种子（资源管理器右键「在文件夹中查找…」）。
+   * 有种子即覆盖「包含」过滤为该目录、关闭「仅当前文件」并展开过滤区（让用户看到限定范围）；
+   * 已有可用搜索词时按新范围立即重搜。无种子为 no-op。
+   * @author ddj 2026年09月22号
+   * @returns 是否消费到种子
+   */
+  const applyScopeSeed = () => {
+    const dir = takeSearchScope()
+    if (!dir) return false
+    const glob = dir + '/**'
+    if (timerRef.current) clearTimeout(timerRef.current)
+    setIncludeText(glob)
+    setOnlyActive(false)
+    setSectionOpen(true)
+    requestRef.current = Object.assign({}, requestRef.current, { include: splitGlobs(glob) })
+    if (String(queryRef.current).trim().length >= 2) runSearch(queryRef.current)
+    return true
+  }
+
   // 挂载时消费种子：侧栏原本收起 → 派发 edrv:search-focus 时本面板尚未挂载，
   // 事件无人接收，故必须由挂载路径兜底。
   // ⚠️ 声明在「按作用域恢复」effect 之后：React 按声明序执行 effect，恢复值先落地，
   // 种子再覆盖，避免被记忆的旧查询词盖掉用户刚选中的内容。
-  React.useEffect(() => { applySeed() }, [])
+  React.useEffect(() => { applyScopeSeed(); applySeed() }, [])
 
-  // Ctrl+Shift+F 重复触发：消费种子（有则填入）并聚焦输入框（EditorView 派发 edrv:search-focus）
+  // Ctrl+Shift+F / 「在文件夹中查找…」重复触发：消费种子（有则填入）并聚焦输入框（EditorView 派发 edrv:search-focus）
   React.useEffect(() => {
     const onFocus = () => {
+      applyScopeSeed()
       applySeed()
       inputRef.current?.focus?.()
     }

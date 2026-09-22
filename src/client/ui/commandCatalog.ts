@@ -81,6 +81,19 @@ function prevEditorRowDef(): CommandDef {
 }
 
 /**
+ * 转到行（转发 Monaco 原生 gotoLine widget；补命令栏与快捷键设置页入口）。
+ * @author ddj 2026年09月22号
+ * @returns 命令定义
+ */
+function gotoLineDef(): CommandDef {
+  return {
+    id: 'edrv.goToLine', label: '转到行', category: '导航', order: 45,
+    keybinding: 'Ctrl+G', available: needsModel,
+    run: () => emit('goToLine'),
+  }
+}
+
+/**
  * 添加选中内容为引用（把当前选区追加进对话输入框；无选区则状态栏提示）。
  * 有活动编辑器模型才可用，保证对话框内按 Ctrl+U 不被本命令吞掉。
  * @author ddj 2026年09月10号
@@ -317,6 +330,7 @@ function debugPaletteDefs(): CommandDef[] {
 export const BRIDGE_COMMANDS: readonly CommandDef[] = [
   nextEditorRowDef(),
   prevEditorRowDef(),
+  gotoLineDef(),
   addSelectionRefDef(),
   closeTabDef(),
   ...debugPaletteDefs(),

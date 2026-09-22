@@ -4,7 +4,16 @@
  * 作者 ddj 2026年09月18号
  */
 import { beforeEach, describe, expect, it } from 'vitest'
-import { SEED_MAX, clearSearchSeed, seedQueryOf, setSearchSeed, takeSearchSeed } from '../src/client/searchSeed.js'
+import {
+  SEED_MAX,
+  clearSearchScope,
+  clearSearchSeed,
+  seedQueryOf,
+  setSearchScope,
+  setSearchSeed,
+  takeSearchScope,
+  takeSearchSeed,
+} from '../src/client/searchSeed.js'
 
 describe('seedQueryOf 选区 → 搜索词', () => {
   it('单行选区去首尾空白后原样返回', () => {
@@ -59,5 +68,32 @@ describe('一次性种子槽', () => {
   it('多行选区经槽消费时仍是首行', () => {
     setSearchSeed('lineOne\nlineTwo\nlineThree')
     expect(takeSearchSeed()).toBe('lineOne')
+  })
+})
+
+describe('目录过滤种子槽（「在文件夹中查找…」）', () => {
+  beforeEach(() => clearSearchScope())
+
+  it('set 后 take 取到；再 take 为空（一次性消费，与 query 种子同语义）', () => {
+    setSearchScope('src/logic')
+    expect(takeSearchScope()).toBe('src/logic')
+    expect(takeSearchScope()).toBe('')
+  })
+
+  it('反斜杠归一 + 去尾部斜杠', () => {
+    setSearchScope('src\\logic\\')
+    expect(takeSearchScope()).toBe('src/logic')
+  })
+
+  it('根目录/空值等价于清除（不限定目录）', () => {
+    setSearchScope('src')
+    setSearchScope('')
+    expect(takeSearchScope()).toBe('')
+    setSearchScope('   ')
+    expect(takeSearchScope()).toBe('')
+  })
+
+  it('未写入时 take 返回空串（面板不改过滤，行为与改动前一致）', () => {
+    expect(takeSearchScope()).toBe('')
   })
 })

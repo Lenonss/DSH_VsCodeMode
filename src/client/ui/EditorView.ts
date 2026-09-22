@@ -50,7 +50,7 @@ import { bindingsOf, chordOf, matchEvent, useKeybindingsVersion } from '../keybi
 import { getSidebarMinWidth } from '../sidebarMin.js'
 import { navHistoryFor } from '../navHistory.js'
 import { statusOfAdd } from '../addToConversation.js'
-import { setSearchSeed } from '../searchSeed.js'
+import { setSearchScope, setSearchSeed } from '../searchSeed.js'
 import { CACHE_KEY } from '../paths.js'
 import { runGoToDefinition, runFindReferences, hideReferencesOverlay } from '../monaco/lsp/providers.js'
 import { bindLspUnderline } from '../monaco/lsp/underline.js'
@@ -62,7 +62,7 @@ import { setupLaunchJson, prefetchSnippets } from '../dap/launchSnippetProvider.
 import { findArrayPos, LAUNCH_JSON_RE } from '../dap/launchInsert.js'
 import {
   absoluteOf, ancestorDirsOf, applyClose, baseNameOf, closeAll, closeOthers, closeRight, closeSaved,
-  evictPlan, insertTab, isTreeRevealable, normalizeTabs, pickActive, relativeOf, tabPathOf, togglePin,
+  evictPlan, insertTab, isTreeRevealable, normalizeTabs, pickActive, relativeOf, remapPathOf, tabPathOf, togglePin,
 } from '../tabActions.js'
 import { getMaxOpenEditors } from '../editorLimit.js'
 import { buildTabMenu } from '../tabMenu.js'
@@ -75,6 +75,9 @@ import { isSvnDiffable } from '../../shared/svn.js'
 import type { SvnAction } from '../../shared/svn.js'
 import { createSaveTimer } from '../saveDebounce.js'
 import { ContextMenu } from './ContextMenu.js'
+import { promptName } from './PromptDialog.js'
+import { openWithDialog } from '../openWithDialog.js'
+import { copyText as copyClipText } from '../copyText.js'
 import { SvnLogDialog } from './SvnLogDialog.js'
 import { SvnPatchDialog } from './SvnPatchDialog.js'
 import { SvnSumDialog } from './SvnSumDialog.js'
@@ -629,6 +632,59 @@ export function EditorView(props) {
     commitClose(result)
     setStatus(label + '（' + closing.length + ' 个）')
   }
+
+  /**
+   * 删除落盘后的页签收尾：关闭目标及其子树页签。
+   * 不走 closeTab 的「先落盘」：文件已删除，落盘会把删除的文件写回磁盘。
+   * @author ddj 2026年09月22号
+   * @param path 已删除的工作区相对路径
+   */
+  const dropDeletedTabs = (path) => {
+    const doomed = tabsRef.current.filter((t) => t.path === path || t.path.startsWith(path + '/'))
+    if (!doomed.length) return
+    for (const tab of doomed) releaseTab(tab.path)
+    commitClose(applyClose(tabsRef.current, new Set(doomed.map((t) => t.path)), activeRef.current))
+  }
+
+  /**
+   * 重命名落盘后的页签改写：目标及其子树页签路径整体改写（含脏标与活动页签）。
+   * @author ddj 2026年09月22号
+   * @param from 原路径
+   * @param to 新路径
+   */
+  const remapRenamedTabs = (from, to) => {
+    setTabs((prev) => prev.map((tab) => ({ ...tab, path: remapPathOf(tab.path, from, to) })))
+    setDirtyMap((prev) => {
+      const next = {}
+      for (const key of Object.keys(prev)) next[remapPathOf(key, from, to)] = prev[key]
+      return next
+    })
+    setActive((prev) => (prev ? remapPathOf(prev, from, to) : prev))
+  }
+
+  // 文件树右键的重命名/删除 → 页签同步（动作在 sidebar/menuItems.ts，经窗口事件桥接；
+  // 经 ref 读最新闭包，避免空依赖 effect 捕获陈旧状态）
+  const tabFsSyncRef = React.useRef({ rename: () => {}, drop: () => {} })
+  tabFsSyncRef.current = { rename: remapRenamedTabs, drop: dropDeletedTabs }
+  React.useEffect(() => {
+    const onRenamed = (event) => {
+      const from = event?.detail?.from
+      const to = event?.detail?.to
+      if (typeof from !== 'string' || !from || typeof to !== 'string' || !to || from === to) return
+      tabFsSyncRef.current.rename(from, to)
+    }
+    const onDeleted = (event) => {
+      const path = event?.detail?.path
+      if (typeof path !== 'string' || !path) return
+      tabFsSyncRef.current.drop(path)
+    }
+    window.addEventListener('edrv:path-renamed', onRenamed)
+    window.addEventListener('edrv:path-deleted', onDeleted)
+    return () => {
+      window.removeEventListener('edrv:path-renamed', onRenamed)
+      window.removeEventListener('edrv:path-deleted', onDeleted)
+    }
+  }, [])
 
   /**
    * 在已打开页签间循环切换（文件分页归编辑器自带页签栏）。
@@ -1453,6 +1509,11 @@ export function EditorView(props) {
       ['edrv.command.svnTortoiseDiff', () => runSvnTortoise('diff', activeRef.current)],
       ['edrv.command.svnTortoiseBlame', () => runSvnTortoise('blame', activeRef.current)],
       ['edrv.command.svnTortoiseRevert', () => runSvnTortoise('revert', activeRef.current)],
+      // 转到行：转发 Monaco 原生 action（widget 本体/占位/跳转全原生，插件只补键位与命令栏入口）
+      ['edrv.command.goToLine', () => {
+        const ed = editorRef.current
+        if (ed?.getModel?.()) ed.trigger('edrv-goto', 'editor.action.gotoLine', null)
+      }],
       // 诊断日志弹窗（同片段选择器：执行一条命令即关命令栏，避免残浮层遮挡）
       ['edrv.command.showLogs', () => { closeCommandPalette(); setDlogOpen(true) }],
     ]
@@ -2798,17 +2859,15 @@ export function EditorView(props) {
 
   /**
    * 复制文本到剪贴板（状态栏反馈；浏览器拒绝时提示，不抛异常）。
-   * @author ddj 2026年09月11号
+   * 剪贴板写入与降级文案收敛到 client/copyText.ts（文件树菜单同源共用）。
+   * @author ddj 2026年09月11号 / 2026年09月22号
    * @param text 待复制文本
    * @param okText 成功文案
    */
   const copyText = (text, okText) => {
     const value = String(text ?? '')
     if (!value) { setStatus('无可复制内容'); return }
-    if (!navigator.clipboard?.writeText) { setStatus('剪贴板不可用'); return }
-    navigator.clipboard.writeText(value)
-      .then(() => setStatus(okText + '：' + value))
-      .catch(() => setStatus('复制失败（浏览器拒绝剪贴板写入）'))
+    void copyClipText(value, okText + '：' + value, setStatus)
   }
 
   /**
@@ -3393,6 +3452,21 @@ export function EditorView(props) {
     openSvnLog: (p) => openSvnLog(p),
     confirm: (message) => (typeof window === 'undefined' ? false : window.confirm(message)),
     notify: (message) => setStatus(message),
+    // 名称输入弹窗（资源管理器右键的新建文件/新建文件夹/重命名）
+    prompt: promptName,
+    // 「打开方式…」（资源管理器右键、文件目标）：打开器选择弹窗（注册表由 index 装配传入）
+    openWith: (p) => {
+      const openers = props.fileOpeners
+      if (!openers) return
+      openWithDialog(openers, { sessionId, cwd: cwd ?? undefined }, p, (opener) => {
+        if (opener) setStatus('已用「' + opener.label + '」打开：' + baseNameOf(p))
+      })
+    },
+    // 「在文件夹中查找…」（资源管理器右键、目录目标）：目录过滤种子 + 跳搜索面板
+    searchInFolder: (dir) => {
+      setSearchScope(dir)
+      openSearchPanel()
+    },
   }
 
   // 调试工具条（VS Code 浮动条紧凑版，图2 形态）：配置下拉 + 启动/继续 + 单步组 + 停止 + 相位。

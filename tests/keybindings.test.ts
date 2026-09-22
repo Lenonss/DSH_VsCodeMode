@@ -22,6 +22,7 @@ describe('keybindings shared defaults', () => {
       'edrv.navigateForward': 'Alt+ArrowRight|Ctrl+Shift+-',
       'edrv.nextTab': 'Ctrl+Alt+ArrowRight|Ctrl+PageDown',
       'edrv.prevTab': 'Ctrl+Alt+ArrowLeft|Ctrl+PageUp',
+      'edrv.goToLine': 'Ctrl+G',
       'edrv.showCommands': 'Ctrl+Shift+P|F1',
       'edrv.nextEditorRow': 'Ctrl+Alt+ArrowDown',
       'edrv.prevEditorRow': 'Ctrl+Alt+ArrowUp',
@@ -44,6 +45,14 @@ describe('keybindings shared defaults', () => {
     // Ctrl+F4 缺 Ctrl（裸 F4）不命中；Ctrl+W 不在目录里
     expect(matchEvent({ key: 'F4' }, bindingsOf('edrv.closeTab'))).toBe(false)
     expect(Object.values(KEYBINDING_DEFAULTS)).not.toContain('Ctrl+W')
+  })
+
+  it('转到行（Ctrl+G）可解析命中，裸 G / Ctrl+Shift+G 不误命中', () => {
+    keybindingsApply({})
+    expect(chordOf('edrv.goToLine')).toBe('Ctrl+G')
+    expect(matchEvent({ ctrlKey: true, key: 'g' }, bindingsOf('edrv.goToLine'))).toBe(true)
+    expect(matchEvent({ key: 'g' }, bindingsOf('edrv.goToLine'))).toBe(false)
+    expect(matchEvent({ ctrlKey: true, shiftKey: true, key: 'G' }, bindingsOf('edrv.goToLine'))).toBe(false)
   })
 
   it('添加选中内容为引用（Ctrl+U）可解析命中，Ctrl+Shift+U 不误命中', () => {

@@ -62,3 +62,39 @@ export function takeSearchSeed(): string {
 export function clearSearchSeed(): void {
   pendingSeed = null
 }
+
+// --region 目录过滤种子（「在文件夹中查找…」：SearchPanel 消费后置 include 过滤）
+
+/** 待消费的目录过滤种子（'' = 无）。 */
+let pendingScope: string | null = null
+
+/**
+ * 写入待消费的目录过滤种子（空目录等价于清除）。
+ * @author ddj 2026年09月22号
+ * @param dir 目标目录（工作区相对；空 = 根 = 不限定目录）
+ */
+export function setSearchScope(dir: unknown): void {
+  const text = String(dir ?? '').trim().replace(/\\/g, '/').replace(/\/+$/, '')
+  pendingScope = text ? text : null
+}
+
+/**
+ * 取走待消费的目录过滤种子（取后即清空，与 query 种子同一一次性消费语义）。
+ * @author ddj 2026年09月22号
+ * @returns 目录相对路径；无待消费种子返回空串
+ */
+export function takeSearchScope(): string {
+  const scope = pendingScope
+  pendingScope = null
+  return scope ?? ''
+}
+
+/**
+ * 清空待消费的目录过滤种子（测试隔离用）。
+ * @author ddj 2026年09月22号
+ */
+export function clearSearchScope(): void {
+  pendingScope = null
+}
+
+// --endregion

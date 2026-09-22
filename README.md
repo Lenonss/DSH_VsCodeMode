@@ -160,6 +160,18 @@ cmaps 支持中文渲染）；工具条进入注释编辑：✎ 文本框 / 🖌
   可调 180–560），拖拽低于最小宽度自动收起。
 - 面板经注册表装配（`ctx.provide('edrvSidebarPanels')`），新增面板只加一条注册，
   不改编辑器布局。
+- **资源管理器右键菜单**（v0.7.0，对齐 CodeBuddy 参考图，区分文件 / 文件夹 / 根空白区）：
+  - 文件：打开方式…（已注册打开器中选择）｜ 在文件资源管理器中显示 ｜ 添加引用
+    到对话 ｜ 剪切·复制 ｜ 复制路径·复制相对路径 ｜ 重命名…·删除 ｜ SVN 组。
+  - 文件夹：新建文件…·新建文件夹（名称支持 `a/b.c` 嵌套）｜ 在文件资源管理器
+    中显示 ｜ 添加引用到对话·在文件夹中查找…（搜索面板带目录过滤）｜ 剪切·复制·
+    粘贴（剪贴板空时灰显）｜ 复制路径·复制相对路径 ｜ 重命名…·永久删除 ｜ SVN 组。
+  - 根空白区 = 文件夹菜单去掉全部「仅非根」项；参考图中本架构无法实现的条目
+    （在集成终端中打开 / 运行测试 / Build 等）不显示。
+  - 文件管理写操作走 `edrv.fsCreateFile / fsCreateDir / fsRename / fsDelete /
+    fsCopy / fsMove`（工作区边界 + 同名拒绝 + 名称校验），删除带确认；重命名 /
+    移动 / 删除与开着的页签自动同步（路径改写 / 关签）。剪切·复制·粘贴为应用内
+    文件剪贴板（浏览器无系统文件剪贴板，语义对齐 VS Code）。
 
 ### 10. 规则管理（v0.1.49 / v0.1.50，参考 Codebuddy）
 
@@ -399,13 +411,13 @@ TortoiseSVN（`TortoiseProc.exe`）仅作 Windows 过渡增强：自研能力覆
 
 ```bash
 # ① Git 安装（clone + prepare 构建；推荐打固定 tag）
-dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.6.0
+dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.7.0
 
 # ② npm 注册表（发布到 npm 后）
 dsh plugin --profile web add dsh-vscode-mode
 
 # ③ GitHub Release tgz 直装
-dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.6.0/dsh-vscode-mode-0.6.0.tgz
+dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.7.0/dsh-vscode-mode-0.7.0.tgz
 ```
 
 > `dsh plugin ...` 是 pnpm 转发器：git 安装会克隆仓库、执行该包 `prepare` 脚本
@@ -698,6 +710,11 @@ Keep All / Undo All 却是亮的。修复：单文件 Keep / Undo 覆盖冲突�
 完整变更见 [GitHub Releases](https://github.com/Lenonss/DSH_VsCodeMode/releases)。
 近期关键版本：
 
+- **v0.7.0**：**资源管理器右键菜单**——区分文件 / 文件夹 / 根空白区三套菜单：打开方式…
+  （已注册打开器选择）、在文件资源管理器中显示、添加引用到对话、新建文件/文件夹
+  （支持 `a/b.c` 嵌套）、在文件夹中查找（搜索面板目录过滤）、剪切·复制·粘贴（应用内
+  文件剪贴板，语义对齐 VS Code）、复制路径/相对路径、重命名/删除/移动（写操作走
+  `edrv.fs*` 边界校验，删除带确认，与开着页签自动同步）、SVN 组。
 - **v0.6.0**：**编辑器内断点调试（DAP）+ SVN 补丁/汇总/导出**——① DAP 桥通用化
   （适配器由扩展清单 `contributes.debuggers` 驱动，Lua 链路复用 emmylua 适配器、零游戏侧
   改动）：行首点击/`F9` 断点（悬停预览红点、禁用灰点、跨刷新持久化）、断点右键菜单与
