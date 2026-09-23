@@ -312,3 +312,40 @@ describe('样式：.edrv-nav-target 可辨识且带官方令牌回落', () => {
     expect(css).not.toMatch(/\[data-edrv-view\][^{]*\{[^}]*--dsw-[a-z-]+\s*:/)
   })
 })
+
+describe('EditorView：pending nav 跨挂载交接 + 模型身份守卫（第三次事故）', () => {
+  const code = stripComments(readSrc(EDITOR_VIEW))
+
+  it('pendingNav 模块已接入 EditorView（import 存在）', () => {
+    expect(code).toContain("from '../pendingNav.js'")
+  })
+
+  it('openFileAt 在挂载级 ref 之外同步写 window 槽（热重载交接路径）', () => {
+    const fn = code.slice(code.indexOf('const openFileAt = ('))
+    expect(fn.slice(0, 1600)).toContain('putPendingNav(')
+  })
+
+  it('跳转 effect 从 ref || 槽取 pending（readPendingNav 读槽）', () => {
+    const anchor = code.indexOf('if (!ed || !contentReady) return')
+    expect(anchor, '应能定位跳转 effect').toBeGreaterThan(-1)
+    const body = code.slice(anchor, code.indexOf('const jumpTo = (region) =>', anchor))
+    expect(body).toContain('const refPf = pendingFocusRef.current')
+    expect(body).toContain('slotNav = refPf ? null : readPendingNav()')
+  })
+
+  it('落点前有模型身份守卫，且成功落点才清 ref 与槽（单一清除点）', () => {
+    const anchor = code.indexOf('if (!ed || !contentReady) return')
+    const body = code.slice(anchor, code.indexOf('const jumpTo = (region) =>', anchor))
+    // 守卫必须先于 dropPending：模型不是目标文件时保留 pending 等下一次触发
+    const guardAt = body.indexOf('sameFile(modelPathOf(ed), pf.path)')
+    const dropAt = body.indexOf('dropPending()')
+    expect(guardAt, '模型身份守卫存在').toBeGreaterThan(-1)
+    expect(dropAt, '清除入口存在').toBeGreaterThan(-1)
+    expect(guardAt).toBeLessThan(dropAt)
+    // 单一清除点封装：清 ref 且带 line 才清槽（focusDiff region 路径不误清他人槽）
+    const fn = body.slice(body.indexOf('const dropPending = () =>'), body.indexOf('const dropPending = () =>') + 220)
+    expect(fn).toContain('pendingFocusRef.current = null')
+    expect(fn).toContain('clearPendingNav()')
+    expect(fn).toContain('pf.line != null')
+  })
+})

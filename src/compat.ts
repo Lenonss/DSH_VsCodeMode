@@ -10,7 +10,7 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { entriesOf } from './mcp.js'
-import { loadSettingsDeps, schemaLibName, settingsInstallNote, settingsInstallStrategy } from './fileOpenSettings.js'
+import { loadSettingsDeps, schemaLibName, settingsInstallNote, settingsInstallStrategy, configVolatileState } from './fileOpenSettings.js'
 import { readDevForm } from './devForm.js'
 import { compareDshVersions, detectDshVersion, familyLabel, parseDshVersion } from './dshVersion.js'
 import { SKILL_PREFIXES, skillGroupState } from './skills.js'
@@ -133,9 +133,12 @@ export function detectGuards(ctx: Ctx): CompatAdapter[] {
 }
 
 /** 已实测覆盖的最高 DSH 版本（适配矩阵上界，超过则提示，见 buildReport）。 */
-const TESTED_DSH_MAX = '0.1.7-alpha.1'
+const TESTED_DSH_MAX = '0.1.7-alpha.2'
 
-/** 版本适配机制状态行：DSH 版本探测 + 设置 section 安装策略。 */
+/** Config volatile 标记起效的版本线（此前设置走 section 安装，与 volatile 无关）。 */
+const CONFIG_VOLATILE_MIN = '0.1.7-alpha.1'
+
+/** 版本适配机制状态行：DSH 版本探测 + 设置 section 安装策略 + Config volatile 标记。 */
 export function versionAdapters(dshVersion: string): CompatAdapter[] {
   const adapters: CompatAdapter[] = []
   const parsed = parseDshVersion(dshVersion)
@@ -152,12 +155,24 @@ export function versionAdapters(dshVersion: string): CompatAdapter[] {
     active: strategy === 'legacy' || strategy === 'service' || strategy === 'forms',
     note: settingsInstallNote(),
   })
+  // 追加在末尾（既有下标有断言）；仅 Config 按 volatile 语义构建过才展示该行
+  const volatileState = configVolatileState()
+  if (volatileState.requested) {
+    const volatileOk = volatileState.total > 0 && volatileState.marked === volatileState.total
+    adapters.push({
+      name: 'Config volatile 字段（0.1.7 设置页）',
+      active: volatileOk,
+      note: volatileOk
+        ? volatileState.marked + '/' + volatileState.total + ' 已标记（SettingsForms 可下发本插件 ns）'
+        : volatileState.marked + '/' + volatileState.total + ' 已标记：schemastery 依赖过旧无 .volatile()，0.1.7 设置页不可用',
+    })
+  }
   return adapters
 }
 
 /**
  * 构建完整兼容性报告（RPC 与启动日志共用）。
- * @author ddj 2026年08月24号 / 2026年09月02号
+ * @author ddj 2026年08月24号 / 2026年09月02号 / 2026年09月23号
  * @param ctx DSH host 上下文
  * @param options 测试注入：depsAvailable 跳过动态导入、version 固定插件版本、dshVersion 固定 DSH 版本
  * @returns 兼容性报告
@@ -179,6 +194,12 @@ export async function buildReport(
   const testedMax = parseDshVersion(TESTED_DSH_MAX)
   if (parsed && testedMax && compareDshVersions(parsed, testedMax) > 0) {
     warnings.push('DSH ' + dshVersion + ' 高于已实测版本（' + TESTED_DSH_MAX + '）：设置 API 按能力探测运行，异常时请回报适配矩阵')
+  }
+  // 0.1.7 线上 Config 未完成 volatile 标记 = 设置页不可用（ns 不下发），显式告警而非静默
+  const volatileState = configVolatileState()
+  const volatileMin = parseDshVersion(CONFIG_VOLATILE_MIN)
+  if (volatileState.requested && volatileState.marked < volatileState.total && parsed && volatileMin && compareDshVersions(parsed, volatileMin) >= 0) {
+    warnings.push('插件 Config volatile 标记不完整（' + volatileState.marked + '/' + volatileState.total + '）：@deepseek-ai/schemastery 依赖过旧，0.1.7 设置页不可用（重装插件依赖后重启 DSH）')
   }
   for (const guard of guards) {
     if (!guard.active && guard.note) warnings.push(guard.note)

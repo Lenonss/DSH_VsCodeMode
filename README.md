@@ -417,13 +417,13 @@ TortoiseSVN（`TortoiseProc.exe`）仅作 Windows 过渡增强：自研能力覆
 
 ```bash
 # ① Git 安装（clone + prepare 构建；推荐打固定 tag）
-dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.8.0
+dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.9.0
 
 # ② npm 注册表（发布到 npm 后）
 dsh plugin --profile web add dsh-vscode-mode
 
 # ③ GitHub Release tgz 直装
-dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.8.0/dsh-vscode-mode-0.8.0.tgz
+dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.9.0/dsh-vscode-mode-0.9.0.tgz
 ```
 
 > `dsh plugin ...` 是 pnpm 转发器：git 安装会克隆仓库、执行该包 `prepare` 脚本
@@ -718,6 +718,20 @@ Keep All / Undo All 却是亮的。修复：单文件 Keep / Undo 覆盖冲突�
 完整变更见 [GitHub Releases](https://github.com/Lenonss/DSH_VsCodeMode/releases)。
 近期关键版本：
 
+- **v0.9.0**：**远端工作区差异审查（issue #7）+ SVN 变更 AI 智能分组**——① 支持
+  ssh remote 插件打开的**远端项目**做交互式差异审查：按工作区根 `.remote-ssh.json`
+  识别镜像根（向上 ≤8 层，与官方 findMirrorRoot 同判据），agent 写远端后以 `node:fs`
+  **写穿本机镜像**（不走 ctx.fs 写桥，避免相同内容再推回远端的重复 SSH 往返），
+  展示/决策链路对齐本地工作区；② **SVN 变更列表 AI 智能分组**：AI 对变更文件自动
+  分组归类 + 方案弹窗（`SvnAiPlanDialog`）、单组条目预算防超长（`svnListBudget`）、
+  对话内变更自动分组入列（`svnTriage`），SvnPanel/状态链路与徽标同步增强；
+  ③ **适配 DSH 0.1.7-alpha.2**：Config 全字段 `.volatile()`（否则设置页 entry 不下发、
+  写入抛 `has no volatile fields`）+ `@deepseek-ai/schemastery` 移入 dependencies 钉
+  `~3.18.4` + 配置读点解引用 volatile 引用 + 兼容页「Config volatile 字段」行与告警；
+  ④ **修复 Ctrl+点击首开不定位（第三次回归）**：根因=并行改码触发 client HMR 热重载、
+  EditorView 重挂载销毁挂载级 pendingFocus → 新增 `window.__edrvPendingNav__`
+  跨挂载交接槽（TTL 30s、落点才清）+ 落点前模型身份守卫；首开/交接注入/同文件/
+  搜索入口四轮现场复测通过。
 - **v0.8.0**：**DSH 0.1.7 兼容适配 + 文件树原生打开**——P0×3 修复（0.1.7 移除
   `settingsScope` 致整客户端停等 → 设置桥四级探测 + 15×2s 晚到重试；`installSection`
   移除 → `forms` 策略 + `export const Config` 与 section schema 同源；0.1.7 图标改名

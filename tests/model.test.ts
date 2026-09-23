@@ -51,6 +51,14 @@ describe('normalizeRecord', () => {
     const n = normalizeRecord({ callId: 'x', path: '/p', toolName: 'write' })
     expect(n!.toolName).toBe('write')
   })
+  it('remote_ssh_write 保留 toolName（issue #7）', () => {
+    const n = normalizeRecord({ callId: 'x', path: '/p', toolName: 'remote_ssh_write' })
+    expect(n!.toolName).toBe('remote_ssh_write')
+  })
+  it('未知 toolName 回退 edit（旧记录语义不变）', () => {
+    const n = normalizeRecord({ callId: 'x', path: '/p', toolName: 'weird' })
+    expect(n!.toolName).toBe('edit')
+  })
   it('缺 callId/path 返回 null', () => {
     expect(normalizeRecord(null)).toBeNull()
     expect(normalizeRecord({ path: '/p' })).toBeNull()

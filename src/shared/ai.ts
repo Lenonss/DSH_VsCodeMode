@@ -66,6 +66,12 @@ export interface AiConfigView {
   model: string
   /** 空 = 跟随模型默认（请求不携带 reasoningEffort）。 */
   effort: string
+  /** AI 任务模型（非补全场景）：空/缺省 = 跟随补全配置。 */
+  taskProvider?: string
+  /** AI 任务模型 id（与 taskProvider 成对；空/缺省 = 跟随补全配置）。 */
+  taskModel?: string
+  /** AI 任务模型思考档位（空/缺省 = 跟随补全配置的 effort）。 */
+  taskEffort?: string
 }
 
 /** AI 补全配置更新载荷（edrv.ai.configUpdate）。 */
@@ -75,6 +81,12 @@ export interface AiConfigPatch {
   model?: string
   /** 空 = 清除（跟随默认）。 */
   effort?: string
+  /** AI 任务模型（非补全场景）：空 = 清除（跟随补全配置）。 */
+  taskProvider?: string
+  /** AI 任务模型 id（与 taskProvider 成对更新）。 */
+  taskModel?: string
+  /** AI 任务模型思考档位：空 = 清除（跟随补全配置的 effort）。 */
+  taskEffort?: string
 }
 
 /**

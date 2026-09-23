@@ -6,7 +6,7 @@
  * 插件 Config schema，见 runSettingsInstall 四策略：legacy/service/forms/none）。
  * 缺失/任一策略失败时插件仍可加载（fileOpenTool 降级为配置值，compat 报告可见），
  * 全程 try/catch，不产生未捕获 rejection。
- * 作者 ddj 2026年08月24号 / 2026年08月26号 / 2026年09月02号 / 2026年09月22号
+ * 作者 ddj 2026年08月24号 / 2026年08月26号 / 2026年09月02号 / 2026年09月22号 / 2026年09月23号
  */
 import { createRequire } from 'node:module'
 import { pathToFileURL } from 'node:url'
@@ -24,12 +24,15 @@ export const FILE_OPEN_DEFAULT = 'auto'
 export interface FileOpenSettings { fileOpenTool: string; integrationBaseUrl: string; svnPath: string; tortoisePath: string }
 export interface FileOpenSettingsState { value: string; revision?: number; update: (value: string, expectedRevision?: number) => Promise<void> }
 
-/** AI 内联补全配置默认值（默认关闭；路由空 = 自动；档位空 = 跟随模型默认）。 */
-export const AI_CONFIG_DEFAULT: { enabled: boolean; provider: string; model: string; effort: string } = {
+/** AI 配置默认值（补全默认关；路由空 = 自动；档位空 = 跟随模型默认；任务模型空 = 跟随补全配置）。 */
+export const AI_CONFIG_DEFAULT: { enabled: boolean; provider: string; model: string; effort: string; taskProvider: string; taskModel: string; taskEffort: string } = {
   enabled: false,
   provider: '',
   model: '',
   effort: '',
+  taskProvider: '',
+  taskModel: '',
+  taskEffort: '',
 }
 
 type SettingsProvider = {
@@ -405,29 +408,118 @@ export async function updateSection(provider: SettingsProvider | undefined, ns: 
  * 字段集 = fileOpenTool/keybindings/sidebarMinWidth/maxOpenEditors/integrationBaseUrl/
  * aiInline/aiProvider/aiModel/aiEffort/svnPath/tortoisePath/nativeOpenExts，全部带默认值
  * （Config 启动校验在 undefined/空配置下自动填充，rc/alpha 两代 cordis 均通过）。
- * @author ddj 2026年09月22号
+ * options.volatile：DSH 0.1.7 线的 Config 导出专用——SettingsForms.describe 只下发
+ * 含 volatile 字段的 entry（volatileForm 门槛），不标记则 ns 永不出现在 describe、
+ * client configForms 恒 unavailable；且字段须位于固定 object 路径（keybindings 整个
+ * object 标记、子键不标）。section 安装路径（legacy/service）**不标**：rc/0.1.6 的
+ * register→resolve 无该门槛，标了反而让 scope.get() 返回引用污染读取。
+ * 标记经 markVolatile 能力守卫：z 无 .volatile()（旧 schemastery）或调用抛错时保持
+ * 原字段并记录观测态，模块加载绝不抛错（降级=维持现状，兼容性报告可见）。
+ * @author ddj 2026年09月22号（2026年09月23号 增补 options.volatile 与观测）
  * @param z schemastery 命名空间（静态 import 或动态加载均可）
+ * @param options volatile：是否按 0.1.7 Config 语义标记字段
  * @returns schemastery object schema
  */
-export function buildSettingsSchema(z: SettingsDeps['z']): unknown {
-  return z.object({
-    fileOpenTool: z.string().default(FILE_OPEN_DEFAULT),
-    keybindings: z.object(keybindingsShape(z)).default({ ...KEYBINDING_DEFAULTS }),
-    sidebarMinWidth: z.number().default(300),
+export function buildSettingsSchema(z: SettingsDeps['z'], options?: { volatile?: boolean }): unknown {
+  const wantVolatile = options?.volatile === true
+  let marked = 0
+  const withVol = (field: unknown): unknown => {
+    if (!wantVolatile) return field
+    const result = markVolatile(field)
+    if (result.marked) marked += 1
+    return result.field
+  }
+  const shape: Record<string, unknown> = {
+    fileOpenTool: withVol(z.string().default(FILE_OPEN_DEFAULT)),
+    keybindings: withVol(z.object(keybindingsShape(z)).default({ ...KEYBINDING_DEFAULTS })),
+    sidebarMinWidth: withVol(z.number().default(300)),
     // 页签数量上限（0 = 不限制；超限时淘汰最久未使用的页签，固定页签除外）
-    maxOpenEditors: z.number().default(EDITOR_LIMIT_DEFAULT),
-    integrationBaseUrl: z.string().default(INTEGRATION_BASE_DEFAULT),
+    maxOpenEditors: withVol(z.number().default(EDITOR_LIMIT_DEFAULT)),
+    integrationBaseUrl: withVol(z.string().default(INTEGRATION_BASE_DEFAULT)),
     // AI 内联补全（默认关；provider/model 空 = 自动路由；effort 空 = 跟随模型默认）
-    aiInline: z.boolean().default(AI_CONFIG_DEFAULT.enabled),
-    aiProvider: z.string().default(AI_CONFIG_DEFAULT.provider),
-    aiModel: z.string().default(AI_CONFIG_DEFAULT.model),
-    aiEffort: z.string().default(AI_CONFIG_DEFAULT.effort),
+    aiInline: withVol(z.boolean().default(AI_CONFIG_DEFAULT.enabled)),
+    aiProvider: withVol(z.string().default(AI_CONFIG_DEFAULT.provider)),
+    aiModel: withVol(z.string().default(AI_CONFIG_DEFAULT.model)),
+    aiEffort: withVol(z.string().default(AI_CONFIG_DEFAULT.effort)),
+    // AI 任务模型（非补全场景如 AI 智能整理；空 = 跟随补全配置）
+    aiTaskProvider: withVol(z.string().default(AI_CONFIG_DEFAULT.taskProvider)),
+    aiTaskModel: withVol(z.string().default(AI_CONFIG_DEFAULT.taskModel)),
+    aiTaskEffort: withVol(z.string().default(AI_CONFIG_DEFAULT.taskEffort)),
     // SVN 能力：svn CLI 覆盖（空 = PATH）与 TortoiseSVN 目录（Windows 过渡增强）
-    svnPath: z.string().default(''),
-    tortoisePath: z.string().default(TORTOISE_DIR_DEFAULT),
+    svnPath: withVol(z.string().default('')),
+    tortoisePath: withVol(z.string().default(TORTOISE_DIR_DEFAULT)),
     // 原生打开范围（逗号分隔后缀；默认 = 让位清单并集，csv/tsv 决策见 shared/nativeOpen.ts）
-    nativeOpenExts: z.string().default(DEFAULT_NATIVE_CSV),
-  })
+    nativeOpenExts: withVol(z.string().default(DEFAULT_NATIVE_CSV)),
+  }
+  if (wantVolatile) configVolatile = { requested: true, marked, total: Object.keys(shape).length }
+  return z.object(shape)
+}
+
+/** Config volatile 标记观测（构建期记录；兼容报告读取，测试可复位）。 */
+export interface ConfigVolatileState { requested: boolean; marked: number; total: number }
+
+let configVolatile: ConfigVolatileState = { requested: false, marked: 0, total: 0 }
+
+/**
+ * 读取 Config volatile 标记观测（0.1.7 设置页可用性的构建期判据）。
+ * @author ddj 2026年09月23号
+ * @returns 观测态（requested=是否按 Config 语义构建；marked/total=成功标记字段数）
+ */
+export function configVolatileState(): ConfigVolatileState {
+  return configVolatile
+}
+
+/**
+ * 复位 volatile 标记观测（测试隔离用）。
+ * @author ddj 2026年09月23号
+ */
+export function resetConfigVolatileState(): void {
+  configVolatile = { requested: false, marked: 0, total: 0 }
+}
+
+/**
+ * 为已完成 default 链的 schema 字段追加 volatile 标记（能力守卫）。
+ * @author ddj 2026年09月23号
+ * @param field schema 字段（两代 schemastery 兼容面，可能没有 volatile 方法）
+ * @returns 处理后字段与是否成功标记
+ */
+function markVolatile(field: unknown): { field: unknown; marked: boolean } {
+  const target = field as { volatile?: () => unknown } | null | undefined
+  if (!target || typeof target.volatile !== 'function') return { field, marked: false }
+  try {
+    return { field: target.volatile(), marked: true }
+  } catch {
+    return { field, marked: false }
+  }
+}
+
+/** cosmokit volatile 引用写协议符号（Symbol.for 跨拷贝一致，同 cosmokit.isVolatile 判据）。 */
+const VOLATILE_WRITE = Symbol.for('cosmokit.volatile.write')
+
+/**
+ * 解引用 0.1.7 volatile 配置引用（普通值直传）。
+ * cordis resolveConfig 会把 .volatile() 字段解析成稳定引用，直接读会得到引用对象；
+ * 不解引用则配置回退值全部落入默认值分支。
+ * @author ddj 2026年09月23号
+ * @param value 配置字段原始值
+ * @returns 引用的当前快照，或原值
+ */
+export function unref(value: unknown): unknown {
+  if (value !== null && typeof value === 'object' && VOLATILE_WRITE in (value as object)) {
+    return (value as { get: () => unknown }).get()
+  }
+  return value
+}
+
+/**
+ * 读插件组合配置字段并解引用（配置读取唯一入口）。
+ * @author ddj 2026年09月23号
+ * @param config 插件组合配置（apply 收到的 Config 值）
+ * @param key 字段名
+ * @returns 字段值（引用已解包；缺失为 undefined）
+ */
+export function configField(config: unknown, key: string): unknown {
+  return unref((config as Record<string, unknown> | null | undefined)?.[key])
 }
 
 function normalizeValue(value: unknown): string {
@@ -436,24 +528,24 @@ function normalizeValue(value: unknown): string {
 }
 
 function configValue(config: unknown): string {
-  return normalizeValue((config as { fileOpenTool?: unknown } | undefined)?.fileOpenTool)
+  return normalizeValue(configField(config, 'fileOpenTool'))
 }
 
 /** 配置/设置里的深链基址（缺省/非法回退默认值）。 */
 function baseValueOf(config: unknown): string {
-  const raw = (config as { integrationBaseUrl?: unknown } | undefined)?.integrationBaseUrl
+  const raw = configField(config, 'integrationBaseUrl')
   return typeof raw === 'string' && raw.trim() ? raw.trim() : INTEGRATION_BASE_DEFAULT
 }
 
 /** 配置/设置里的 svn CLI 覆盖（空 = 从 PATH 解析 'svn'）。 */
 function svnPathValueOf(config: unknown): string {
-  const raw = (config as { svnPath?: unknown } | undefined)?.svnPath
+  const raw = configField(config, 'svnPath')
   return typeof raw === 'string' ? raw.trim() : ''
 }
 
 /** 配置/设置里的 TortoiseSVN 目录（空 = 默认安装目录）。 */
 function tortoiseDirValueOf(config: unknown): string {
-  const raw = (config as { tortoisePath?: unknown } | undefined)?.tortoisePath
+  const raw = configField(config, 'tortoisePath')
   return typeof raw === 'string' && raw.trim() ? raw.trim() : TORTOISE_DIR_DEFAULT
 }
 
@@ -490,13 +582,16 @@ export async function installOpenSettingsSection(
 }
 
 /** AI 配置脏值读取（settings 未就绪时回退默认）。 */
-function aiValueOf(stored: unknown): { enabled: boolean; provider: string; model: string; effort: string } {
+function aiValueOf(stored: unknown): { enabled: boolean; provider: string; model: string; effort: string; taskProvider: string; taskModel: string; taskEffort: string } {
   const raw = (stored ?? {}) as Record<string, unknown>
   return {
     enabled: raw.aiInline === true,
     provider: typeof raw.aiProvider === 'string' ? raw.aiProvider : AI_CONFIG_DEFAULT.provider,
     model: typeof raw.aiModel === 'string' ? raw.aiModel : AI_CONFIG_DEFAULT.model,
     effort: typeof raw.aiEffort === 'string' ? raw.aiEffort : AI_CONFIG_DEFAULT.effort,
+    taskProvider: typeof raw.aiTaskProvider === 'string' ? raw.aiTaskProvider : AI_CONFIG_DEFAULT.taskProvider,
+    taskModel: typeof raw.aiTaskModel === 'string' ? raw.aiTaskModel : AI_CONFIG_DEFAULT.taskModel,
+    taskEffort: typeof raw.aiTaskEffort === 'string' ? raw.aiTaskEffort : AI_CONFIG_DEFAULT.taskEffort,
   }
 }
 
@@ -555,8 +650,12 @@ export function setupOpenSettings(ctx: Ctx, config: unknown, onChange: (value: s
   })
   ctx.inject?.(['settings'], (settingsCtx: Ctx) => {
     provider = settingsCtx.get('settings')
-    aiSync()
-    svnSync(storedValue())
+    // 初值直读：settings/document-updated 首事件可能先于本订阅建立，只靠事件会漏初值
+    const stored = storedValue()
+    const section = stored as { fileOpenTool?: unknown } | undefined
+    if (section?.fileOpenTool !== undefined) notify(section.fileOpenTool)
+    aiCurrent = stored !== undefined ? aiValueOf(stored) : aiCurrent
+    svnSync(stored)
     syncRevision()
   })
 
@@ -580,6 +679,9 @@ export function setupOpenSettings(ctx: Ctx, config: unknown, onChange: (value: s
       if (patch.provider !== undefined) { stored.provider = patch.provider; body.aiProvider = patch.provider }
       if (patch.model !== undefined) { stored.model = patch.model; body.aiModel = patch.model }
       if (patch.effort !== undefined) { stored.effort = patch.effort; body.aiEffort = patch.effort }
+      if (patch.taskProvider !== undefined) { stored.taskProvider = patch.taskProvider; body.aiTaskProvider = patch.taskProvider }
+      if (patch.taskModel !== undefined) { stored.taskModel = patch.taskModel; body.aiTaskModel = patch.taskModel }
+      if (patch.taskEffort !== undefined) { stored.taskEffort = patch.taskEffort; body.aiTaskEffort = patch.taskEffort }
       const result = await updateSection(provider, FILE_OPEN_SETTINGS_NS, body, expectedRevision)
       if (!result.ok) {
         // settings 不可用/写入失败：内存态生效（重启回落默认），与 fileOpenTool 降级语义一致

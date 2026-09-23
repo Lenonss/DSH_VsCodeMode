@@ -40,7 +40,7 @@ describe('peerDependencies', () => {
   })
 
   it('每条 @deepseek-ai peer 区间都显式放行各 alpha 版本线', () => {
-    // @deepseek-ai/schemastery 是第三方 vendor 包（版本线 3.18.x，与 DSH 核心版本线无关），单独断言
+    // @deepseek-ai/schemastery 已移入 dependencies（见下一条），peer 面只剩 DSH 核心包
     const dshPeers = Object.entries(peers).filter(([name]) => name.startsWith('@deepseek-ai/') && name !== '@deepseek-ai/schemastery')
     expect(dshPeers.length).toBeGreaterThan(0)
     for (const [name, range] of dshPeers) {
@@ -54,10 +54,11 @@ describe('peerDependencies', () => {
     }
   })
 
-  it('schema 库 peer 同时放行新旧包名（安装树只有 @deepseek-ai/schemastery）', () => {
-    // DSH 自 0.1.5 起把 vendored schemastery 改名为 @deepseek-ai/schemastery；
-    // 新名必须声明（否则 module-fallback 图不含它），旧名保留兼容 rc 线。
-    expect(peers['@deepseek-ai/schemastery']).toBe('>=3.18.0 <4')
+  it('schema 库新名进 dependencies 钉 volatile 版，bare peer 保留旧安装树', () => {
+    // 0.1.7 设置页需要 .volatile()（@deepseek-ai/schemastery 3.18.4 提供，3.18.1 无该方法）；
+    // 且 npm 安装形态只装 dependencies（v0.5.2 教训：peer 在用户端解析不到）。
+    expect(pkg.dependencies?.['@deepseek-ai/schemastery']).toBe('~3.18.4')
+    expect(peers['@deepseek-ai/schemastery']).toBeUndefined()
     expect(peers.schemastery).toBeTruthy()
   })
 

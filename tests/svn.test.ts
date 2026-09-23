@@ -13,11 +13,13 @@ import {
   findSvnRoot,
   findTortoiseProc,
   foregroundHelperArgv,
+  ignoreNameErrorOf,
   patchExtOf,
   processNameOf,
   updateResultOf,
 } from '../src/svn.js'
-import { TORTOISE_EXE, tortoiseLaunchArgv } from '../src/shared/svn.js'
+import { FILE_SIZES_CAP, TORTOISE_EXE, tortoiseLaunchArgv } from '../src/shared/svn.js'
+import { AI_INBOX_TTL_MS } from '../src/svn.js'
 import { SVN_LOG_SHOW_ALL_CAP } from '../src/svnLog.js'
 import { svnEditorActions } from '../src/client/svnStatus.js'
 
@@ -448,6 +450,47 @@ describe('createSvnRpc svn.changes', () => {
   })
 })
 
+describe('createSvnRpc svn.fileSizes（W2-5 批量大小查询）', () => {
+  /** fs mock：resolve 保真回传，stat 报固定大小；可选对指定路径抛错。 */
+  const fsMock = (over: { failPaths?: string[] } = {}) => ({
+    resolve: async (p: string) => {
+      if (over.failPaths?.includes(p)) throw new Error('boom')
+      return p
+    },
+    stat: async () => ({ type: 'file', size: 7 }),
+  })
+
+  it('批量查询：结果与输入等长同序（并发分批不改变载荷语义）', async () => {
+    const { handlers } = createSvnRpc(makeDeps({ ctx: makeCtx(null, '/wc', fsMock()) }))
+    const paths = Array.from({ length: 40 }, (_, i) => 'dir/f' + i + '.txt')
+    const res = await (handlers as Record<string, (a: never) => unknown>)['svn.fileSizes']({ paths } as never) as { ok: boolean; sizes?: Array<{ path: string; size: number | null }> }
+    expect(res.ok).toBe(true)
+    expect(res.sizes!.length).toBe(40)
+    expect(res.sizes!.map((item) => item.path)).toEqual(paths)
+    expect(res.sizes!.every((item) => item.size === 7)).toBe(true)
+  })
+
+  it('路径上限：超出 FILE_SIZES_CAP 的部分不查询（client 预截断对齐）', async () => {
+    const { handlers } = createSvnRpc(makeDeps({ ctx: makeCtx(null, '/wc', fsMock()) }))
+    const paths = Array.from({ length: FILE_SIZES_CAP + 30 }, (_, i) => 'f' + i + '.txt')
+    const res = await (handlers as Record<string, (a: never) => unknown>)['svn.fileSizes']({ paths } as never) as { ok: boolean; sizes?: Array<{ path: string; size: number | null }> }
+    expect(res.ok).toBe(true)
+    expect(res.sizes!.length).toBe(FILE_SIZES_CAP)
+  })
+
+  it('单条失败按 null：不因个别路径异常整体报错；空 paths 直接成功', async () => {
+    const { handlers } = createSvnRpc(makeDeps({ ctx: makeCtx(null, '/wc', fsMock({ failPaths: ['bad.txt'] })) }))
+    const res = await (handlers as Record<string, (a: never) => unknown>)['svn.fileSizes']({ paths: ['ok.txt', 'bad.txt', ''] } as never) as { ok: boolean; sizes?: Array<{ path: string; size: number | null }> }
+    expect(res.ok).toBe(true)
+    expect(res.sizes![0]).toEqual({ path: 'ok.txt', size: 7 })
+    expect(res.sizes![1]).toEqual({ path: 'bad.txt', size: null })
+    expect(res.sizes![2]).toEqual({ path: '', size: null })
+    const empty = await (handlers as Record<string, (a: never) => unknown>)['svn.fileSizes']({ paths: [] } as never) as { ok: boolean; sizes?: unknown[] }
+    expect(empty.ok).toBe(true)
+    expect(empty.sizes).toEqual([])
+  })
+})
+
 describe('createSvnRpc svn.diffBase', () => {
   /**
    * fs mock：resolve/processPath 保真回传路径（runSvn 会用二者把 cwd 归一成真实路径，
@@ -795,6 +838,71 @@ describe('createSvnRpc svn.revert / svn.add', () => {
   })
 })
 
+describe('createSvnRpc svn.changelist（P5 分区管理）', () => {
+  /** 记录 spawn spec 的 deps（--version/status/changelist 均成功，成功输出静默）。 */
+  function makeClDeps(over: Record<string, unknown> = {}) {
+    const specs: Array<Record<string, unknown>> = []
+    const spawn = (spec: Record<string, unknown>) => {
+      specs.push(spec)
+      return { done: Promise.resolve({ exitCode: 0 }), collected: { stdout: { readFrom: () => ({ text: '' }) }, stderr: { readFrom: () => ({ text: '' }) } } }
+    }
+    return { specs, deps: makeDeps({ ctx: makeCtx(spawn, '/wc'), findRoot: async () => '/wc', findTortoise: async () => null, ...over }) }
+  }
+
+  it('关联：argv 为 changelist <name> -- <paths>，cwd 为工作副本根', async () => {
+    const { specs, deps } = makeClDeps()
+    const { handlers } = createSvnRpc(deps)
+    const res = await (handlers as Record<string, (a: never) => unknown>)['svn.changelist']({ paths: ['a.txt', 'sub/b.txt'], name: 'my cl' } as never) as { ok: boolean }
+    expect(res.ok).toBe(true)
+    const spec = specs.find((item) => (item.argv as string[]).includes('changelist'))
+    expect(spec?.argv).toEqual(['svn', '--non-interactive', 'changelist', 'my cl', '--', 'a.txt', 'sub/b.txt'])
+    expect(spec?.cwd).toBe('/wc')
+  })
+
+  it('解除：argv 为 changelist --remove -- <paths>；remove 分支不校验分区名', async () => {
+    const { specs, deps } = makeClDeps()
+    const { handlers } = createSvnRpc(deps)
+    const res = await (handlers as Record<string, (a: never) => unknown>)['svn.changelist']({ paths: ['a.txt'], remove: true } as never) as { ok: boolean }
+    expect(res.ok).toBe(true)
+    const spec = specs.find((item) => (item.argv as string[]).includes('changelist'))
+    expect(spec?.argv).toEqual(['svn', '--non-interactive', 'changelist', '--remove', '--', 'a.txt'])
+  })
+
+  it('分区名校验：空名/`-` 开头/缺名在 spawn 前拦截', async () => {
+    const { specs, deps } = makeClDeps()
+    const { handlers } = createSvnRpc(deps)
+    const call = (handlers as Record<string, (a: never) => unknown>)['svn.changelist']
+    expect(((await call({ paths: ['a.txt'], name: '  ' } as never)) as { error?: string }).error).toContain('不能为空')
+    expect(((await call({ paths: ['a.txt'], name: '-x' } as never)) as { error?: string }).error).toContain('不能以 - 开头')
+    expect(((await call({ paths: ['a.txt'] } as never)) as { error?: string }).error).toContain('不能为空')
+    // spawn 前拦截：没有任何进程被拉起
+    expect(specs.length).toBe(0)
+  })
+
+  it('成功后作废变更缓存：下次 changes 重新 status（分组不陈旧）', async () => {
+    const specs: Array<Record<string, unknown>> = []
+    let statusRuns = 0
+    const spawn = (spec: Record<string, unknown>) => {
+      specs.push(spec)
+      const argv = spec.argv as string[]
+      if (argv.includes('--version')) return { done: Promise.resolve({ exitCode: 0 }), collected: {} }
+      if (argv.includes('status')) {
+        statusRuns += 1
+        return { done: Promise.resolve({ exitCode: 0 }), collected: { stdout: { readFrom: () => ({ text: STATUS_XML_OUT }) }, stderr: { readFrom: () => ({ text: '' }) } } }
+      }
+      return { done: Promise.resolve({ exitCode: 0 }), collected: { stdout: { readFrom: () => ({ text: '' }) }, stderr: { readFrom: () => ({ text: '' }) } } }
+    }
+    const { handlers } = createSvnRpc(makeDeps({ ctx: makeCtx(spawn, '/wc'), findRoot: async () => '/wc', findTortoise: async () => null }))
+    const call = handlers as Record<string, (a: never) => unknown>
+    await call['svn.changes']({} as never)
+    await call['svn.changes']({} as never)
+    expect(statusRuns).toBe(1)
+    await call['svn.changelist']({ paths: ['a.txt'], name: 'cl1' } as never)
+    await call['svn.changes']({} as never)
+    expect(statusRuns).toBe(2)
+  })
+})
+
 // --endregion
 
 
@@ -905,3 +1013,403 @@ describe('patchExtOf（W2-1 补丁 -x 扩展选项组合）', () => {
     expect(patchExtOf({ unified: 2.9 })).toBe('-U2')
   })
 })
+
+// --region AI 智能整理（svn.aiPlan / svn.ignore，11-ai-changelist-triage）
+
+/** llm mock（stream 单段 text-delta + finish；fail 时走 finish(error) 适配器失败形态）。 */
+function makeLlm(text: string, fail = false) {
+  return {
+    listProviders: () => [{ id: 'p1', name: 'P1' }],
+    listModels: async () => [{ provider: 'p1', id: 'm1', name: 'M1' }],
+    stream: () => ({
+      [Symbol.asyncIterator]: async function* () {
+        if (fail) {
+          yield { type: 'finish', reason: { kind: 'error', failure: { code: 'E', message: 'boom' } } }
+          return
+        }
+        yield { type: 'text-delta', index: 0, text }
+        yield { type: 'finish', reason: { kind: 'stop' } }
+      },
+    }),
+  }
+}
+
+/** 带 llm 的会话 ctx（其余与 makeCtx 同语义）。 */
+function makeAiCtx(spawn: ((spec: Record<string, unknown>) => unknown) | null, llm: unknown) {
+  const base = makeCtx(spawn, '/wc')
+  return {
+    get: (name: string) => (name === 'llm' ? llm : (base as { get: (n: string) => unknown }).get(name)),
+  }
+}
+
+describe('createSvnRpc svn.aiPlan（AI 智能整理分析）', () => {
+  /** spawn 记录 + 可控 diff/status 输出的 deps。 */
+  function makeAiDeps(llm: unknown, opts: { diffText?: string } = {}) {
+    const specs: Array<Record<string, unknown>> = []
+    let statusRuns = 0
+    const spawn = (spec: Record<string, unknown>) => {
+      specs.push(spec)
+      const argv = spec.argv as string[]
+      if (argv.includes('--version')) return { done: Promise.resolve({ exitCode: 0 }), collected: {} }
+      if (argv.includes('status')) {
+        statusRuns += 1
+        return {
+          done: Promise.resolve({ exitCode: 0 }),
+          collected: { stdout: { readFrom: () => ({ text: STATUS_XML_OUT }) }, stderr: { readFrom: () => ({ text: '' }) } },
+        }
+      }
+      return {
+        done: Promise.resolve({ exitCode: 0 }),
+        collected: { stdout: { readFrom: () => ({ text: opts.diffText ?? '' }) }, stderr: { readFrom: () => ({ text: '' }) } },
+      }
+    }
+    return {
+      specs, statusRuns: () => statusRuns,
+      deps: makeDeps({ ctx: makeAiCtx(spawn, llm), findRoot: async () => '/wc', findTortoise: async () => null }),
+    }
+  }
+
+  const PLAN_JSON = JSON.stringify({
+    groups: [{ name: 'g1', paths: ['sub/b.txt'], reason: '主题' }],
+    reverts: [{ path: 'a.txt', reason: '噪音' }],
+    ignores: [{ path: 'u.txt', reason: '生成物' }],
+  })
+
+  it('成功：方案经真实清单归一回传（含 entriesCount/diffIncluded/model）', async () => {
+    const { deps } = makeAiDeps(makeLlm(PLAN_JSON), { diffText: 'Index: a.txt' })
+    const { handlers } = createSvnRpc(deps)
+    const res = await (handlers as Record<string, (a: never) => unknown>)['svn.aiPlan']({} as never) as {
+      ok: boolean; plan?: { reverts: Array<{ path: string }>; ignores: Array<{ path: string }>; groups: Array<{ name: string; paths: string[] }> }
+      entriesCount?: number; diffIncluded?: boolean; dropped?: number; model?: string
+    }
+    expect(res.ok).toBe(true)
+    expect(res.plan?.reverts.map((i) => i.path)).toEqual(['a.txt'])
+    expect(res.plan?.ignores.map((i) => i.path)).toEqual(['u.txt'])
+    expect(res.plan?.groups[0]).toMatchObject({ name: 'g1', paths: ['sub/b.txt'] })
+    expect(res.entriesCount).toBeGreaterThan(0)
+    expect(res.diffIncluded).toBe(true)
+    expect(res.model).toContain('p1')
+  })
+
+  it('force 拉变更：两次调用各自重跑 status（不吃 TTL 缓存）', async () => {
+    const { deps, statusRuns } = makeAiDeps(makeLlm(PLAN_JSON))
+    const { handlers } = createSvnRpc(deps)
+    const call = handlers as Record<string, (a: never) => unknown>
+    await call['svn.aiPlan']({} as never)
+    await call['svn.aiPlan']({} as never)
+    expect(statusRuns()).toBe(2)
+  })
+
+  it('llm 缺失：报 llm 服务不可用且零方案', async () => {
+    const { deps } = makeAiDeps(undefined)
+    const { handlers } = createSvnRpc(deps)
+    const res = await (handlers as Record<string, (a: never) => unknown>)['svn.aiPlan']({} as never) as { ok: boolean; error?: string }
+    expect(res.ok).toBe(false)
+    expect(res.error).toContain('llm 服务不可用')
+  })
+
+  it('非法 JSON：解析失败透传（零执行）', async () => {
+    const { deps } = makeAiDeps(makeLlm('这里没有方案'))
+    const { handlers } = createSvnRpc(deps)
+    const res = await (handlers as Record<string, (a: never) => unknown>)['svn.aiPlan']({} as never) as { ok: boolean; error?: string }
+    expect(res.ok).toBe(false)
+    expect(res.error).toContain('不含 JSON 对象')
+  })
+
+  it('适配器流失败：finish(error) 转错误透传', async () => {
+    const { deps } = makeAiDeps(makeLlm('', true))
+    const { handlers } = createSvnRpc(deps)
+    const res = await (handlers as Record<string, (a: never) => unknown>)['svn.aiPlan']({} as never) as { ok: boolean; error?: string }
+    expect(res.ok).toBe(false)
+    expect(res.error).toContain('模型流失败')
+  })
+
+  it('diff 失败降级 paths-only（diffIncluded=false，分析不中断）', async () => {
+    const { deps } = makeAiDeps(makeLlm(PLAN_JSON), { diffText: '' })
+    const { handlers } = createSvnRpc(deps)
+    const res = await (handlers as Record<string, (a: never) => unknown>)['svn.aiPlan']({} as never) as { ok: boolean; diffIncluded?: boolean }
+    expect(res.ok).toBe(true)
+    expect(res.diffIncluded).toBe(false)
+  })
+
+  it('任务模型优先于补全模型（ai-task-model）：stream 路由/档位取任务配置', async () => {
+    // llm mock 捕获 stream options；settings.ai() 带 taskProvider/taskModel/taskEffort + 补全 provider/model 不同
+    const seen: Array<Record<string, unknown>> = []
+    const llm = {
+      listProviders: () => [{ id: 'p1', name: 'P1' }],
+      listModels: async () => [{ provider: 'p1', id: 'm1', name: 'M1' }],
+      stream: (options: Record<string, unknown>) => {
+        seen.push(options)
+        return {
+          [Symbol.asyncIterator]: async function* () {
+            yield { type: 'text-delta', index: 0, text: PLAN_JSON }
+            yield { type: 'finish', reason: { kind: 'stop' } }
+          },
+        }
+      },
+    }
+    const { deps } = makeAiDeps(llm, { diffText: '' })
+    deps.settings = {
+      svn: () => ({ svnPath: '', tortoisePath: '' }),
+      ai: () => ({
+        enabled: true, provider: 'pc', model: 'mc', effort: 'low',
+        taskProvider: 'pt', taskModel: 'mt', taskEffort: 'high',
+      }),
+    }
+    const { handlers } = createSvnRpc(deps)
+    const res = await (handlers as Record<string, (a: never) => unknown>)['svn.aiPlan']({} as never) as { ok: boolean; model?: string }
+    expect(res.ok).toBe(true)
+    expect(seen).toHaveLength(1)
+    expect(seen[0].provider).toBe('pt')
+    expect(seen[0].model).toBe('mt')
+    expect(seen[0].reasoningEffort).toBe('high')
+    expect(res.model).toBe('pt/mt')
+  })
+
+  it('任务模型缺省：回落补全模型（旧行为逐字一致）', async () => {
+    const seen: Array<Record<string, unknown>> = []
+    const llm = {
+      listProviders: () => [{ id: 'p1', name: 'P1' }],
+      listModels: async () => [{ provider: 'p1', id: 'm1', name: 'M1' }],
+      stream: (options: Record<string, unknown>) => {
+        seen.push(options)
+        return {
+          [Symbol.asyncIterator]: async function* () {
+            yield { type: 'text-delta', index: 0, text: PLAN_JSON }
+            yield { type: 'finish', reason: { kind: 'stop' } }
+          },
+        }
+      },
+    }
+    const { deps } = makeAiDeps(llm, { diffText: '' })
+    deps.settings = {
+      svn: () => ({ svnPath: '', tortoisePath: '' }),
+      ai: () => ({ enabled: true, provider: 'pc', model: 'mc', effort: 'low' }),
+    }
+    const { handlers } = createSvnRpc(deps)
+    await (handlers as Record<string, (a: never) => unknown>)['svn.aiPlan']({} as never)
+    expect(seen[0].provider).toBe('pc')
+    expect(seen[0].model).toBe('mc')
+    expect(seen[0].reasoningEffort).toBe('low')
+  })
+})
+
+describe('createSvnRpc svn.aiPlanSubmit / svn.aiPlanPending（混合通道收件箱）', () => {
+  /** 可控时钟 + spawn 记录的 deps（status --xml 返回 STATUS_XML_OUT）。 */
+  function makeInboxDeps() {
+    let nowMs = 1_000_000
+    const spawn = (spec: Record<string, unknown>) => {
+      const argv = spec.argv as string[]
+      if (argv.includes('--version')) return { done: Promise.resolve({ exitCode: 0 }), collected: {} }
+      return {
+        done: Promise.resolve({ exitCode: 0 }),
+        collected: { stdout: { readFrom: () => ({ text: STATUS_XML_OUT }) }, stderr: { readFrom: () => ({ text: '' }) } },
+      }
+    }
+    return {
+      now: () => nowMs,
+      advance: (ms: number) => { nowMs += ms },
+      deps: makeDeps({ ctx: makeCtx(spawn, '/wc'), findRoot: async () => '/wc', findTortoise: async () => null, now: () => nowMs }),
+    }
+  }
+
+  const AGENT_PLAN = {
+    groups: [{ name: 'g1', paths: ['sub/b.txt'], reason: '主题' }],
+    reverts: [{ path: 'a.txt', reason: '噪音' }],
+    ignores: [{ path: 'u.txt', reason: '生成物' }],
+  }
+
+  it('投递：白名单归一后入箱（幻觉路径丢弃计数）', async () => {
+    const { deps } = makeInboxDeps()
+    const { handlers } = createSvnRpc(deps)
+    const call = handlers as Record<string, (a: never) => unknown>
+    const plan = { ...AGENT_PLAN, reverts: [...AGENT_PLAN.reverts, { path: 'ghost.ts' }] }
+    const res = await call['svn.aiPlanSubmit']({ plan } as never) as { ok: boolean; accepted?: number; dropped?: number }
+    expect(res.ok).toBe(true)
+    expect(res.accepted).toBe(3)
+    expect(res.dropped).toBe(1)
+    const got = await call['svn.aiPlanPending']({ since: 0 } as never) as { plan: { reverts: Array<{ path: string }> } | null }
+    expect(got.plan?.reverts.map((i) => i.path)).toEqual(['a.txt'])
+  })
+
+  it('零接受拒收：全幻觉方案 ok:false 且不入箱', async () => {
+    const { deps } = makeInboxDeps()
+    const { handlers } = createSvnRpc(deps)
+    const call = handlers as Record<string, (a: never) => unknown>
+    const res = await call['svn.aiPlanSubmit']({ plan: { groups: [], reverts: [{ path: 'ghost.ts' }], ignores: [] } } as never) as { ok: boolean; error?: string }
+    expect(res.ok).toBe(false)
+    expect(res.error).toContain('方案为空')
+    const got = await call['svn.aiPlanPending']({ since: 0 } as never) as { plan: unknown }
+    expect(got.plan).toBeNull()
+  })
+
+  it('覆盖式入箱：新投递顶掉旧件', async () => {
+    const { deps } = makeInboxDeps()
+    const { handlers } = createSvnRpc(deps)
+    const call = handlers as Record<string, (a: never) => unknown>
+    await call['svn.aiPlanSubmit']({ plan: AGENT_PLAN } as never)
+    const next = { groups: [], reverts: [{ path: 'c.txt', reason: '误改' }], ignores: [] }
+    await call['svn.aiPlanSubmit']({ plan: next } as never)
+    const got = await call['svn.aiPlanPending']({ since: 0 } as never) as { plan: { reverts: Array<{ path: string }> } | null }
+    expect(got.plan?.reverts.map((i) => i.path)).toEqual(['c.txt'])
+  })
+
+  it('since 过滤：早于注入时刻的旧投递不算新件', async () => {
+    const { deps, now } = makeInboxDeps()
+    const { handlers } = createSvnRpc(deps)
+    const call = handlers as Record<string, (a: never) => unknown>
+    await call['svn.aiPlanSubmit']({ plan: AGENT_PLAN } as never)
+    const fresh = await call['svn.aiPlanPending']({ since: now() + 1 } as never) as { plan: unknown }
+    expect(fresh.plan).toBeNull()
+    const any = await call['svn.aiPlanPending']({ since: 0 } as never) as { plan: unknown }
+    expect(any.plan).not.toBeNull()
+  })
+
+  it('TTL 过期：AI_INBOX_TTL_MS 后取件返回 null', async () => {
+    const { deps, advance } = makeInboxDeps()
+    const { handlers } = createSvnRpc(deps)
+    const call = handlers as Record<string, (a: never) => unknown>
+    await call['svn.aiPlanSubmit']({ plan: AGENT_PLAN } as never)
+    advance(AI_INBOX_TTL_MS + 1)
+    const got = await call['svn.aiPlanPending']({ since: 0 } as never) as { plan: unknown }
+    expect(got.plan).toBeNull()
+  })
+
+  it('非法形状（plan 非对象）：按空方案拒收', async () => {
+    const { deps } = makeInboxDeps()
+    const { handlers } = createSvnRpc(deps)
+    const call = handlers as Record<string, (a: never) => unknown>
+    const res = await call['svn.aiPlanSubmit']({ plan: 'not-json' } as never) as { ok: boolean }
+    expect(res.ok).toBe(false)
+  })
+})
+
+describe('ignoreNameErrorOf（svn:ignore 名称校验）', () => {
+  it('合法：普通名/通配模式', () => {
+    expect(ignoreNameErrorOf('build.log')).toBeNull()
+    expect(ignoreNameErrorOf('*.tmp')).toBeNull()
+  })
+
+  it('非法：空/换行/路径分隔符/`-` 开头/非字符串', () => {
+    expect(ignoreNameErrorOf('')).toContain('不能为空')
+    expect(ignoreNameErrorOf('a\nb')).toContain('换行')
+    expect(ignoreNameErrorOf('a/b')).toContain('路径分隔符')
+    expect(ignoreNameErrorOf('a\\b')).toContain('路径分隔符')
+    expect(ignoreNameErrorOf('-x')).toContain('不能以 - 开头')
+    expect(ignoreNameErrorOf(42)).toContain('字符串')
+  })
+})
+
+describe('createSvnRpc svn.ignore（AI 整理 svn:ignore 写入）', () => {
+  /** spawn 记录 + propget 返回给定既有值的 deps。 */
+  function makeIgnoreDeps(existing: string, over: Record<string, unknown> = {}) {
+    const specs: Array<Record<string, unknown>> = []
+    let statusRuns = 0
+    const spawn = (spec: Record<string, unknown>) => {
+      specs.push(spec)
+      const argv = spec.argv as string[]
+      if (argv.includes('--version')) return { done: Promise.resolve({ exitCode: 0 }), collected: {} }
+      if (argv.includes('status')) {
+        statusRuns += 1
+        return {
+          done: Promise.resolve({ exitCode: 0 }),
+          collected: { stdout: { readFrom: () => ({ text: STATUS_XML_OUT }) }, stderr: { readFrom: () => ({ text: '' }) } },
+        }
+      }
+      if (argv.includes('propget')) {
+        return {
+          done: Promise.resolve({ exitCode: 0 }),
+          collected: { stdout: { readFrom: () => ({ text: existing }) }, stderr: { readFrom: () => ({ text: '' }) } },
+        }
+      }
+      return { done: Promise.resolve({ exitCode: 0 }), collected: { stdout: { readFrom: () => ({ text: '' }) }, stderr: { readFrom: () => ({ text: '' }) } } }
+    }
+    return {
+      specs, statusRuns: () => statusRuns,
+      deps: makeDeps({ ctx: makeCtx(spawn, '/wc'), findRoot: async () => '/wc', findTortoise: async () => null, ...over }),
+    }
+  }
+
+  it('propget 合并既有值后 propset（不整体覆盖）', async () => {
+    const { specs, deps } = makeIgnoreDeps('old.txt\n')
+    const { handlers } = createSvnRpc(deps)
+    const res = await (handlers as Record<string, (a: never) => unknown>)['svn.ignore']({ items: [{ dir: 'gen', names: ['b.tmp'] }] } as never) as { ok: boolean; count?: number }
+    expect(res.ok).toBe(true)
+    expect(res.count).toBe(1)
+    const get = specs.find((s) => (s.argv as string[]).includes('propget'))
+    expect(get?.argv).toEqual(['svn', '--non-interactive', 'propget', 'svn:ignore', '--', 'gen'])
+    const set = specs.find((s) => (s.argv as string[]).includes('propset'))
+    expect(set?.argv).toEqual(['svn', '--non-interactive', 'propset', 'svn:ignore', 'old.txt\nb.tmp', '--', 'gen'])
+  })
+
+  it('重名跳过：无新增不 propset，count=0', async () => {
+    const { specs, deps } = makeIgnoreDeps('b.tmp\n')
+    const { handlers } = createSvnRpc(deps)
+    const res = await (handlers as Record<string, (a: never) => unknown>)['svn.ignore']({ items: [{ dir: 'gen', names: ['b.tmp'] }] } as never) as { ok: boolean; count?: number }
+    expect(res.ok).toBe(true)
+    expect(res.count).toBe(0)
+    expect(specs.some((s) => (s.argv as string[]).includes('propset'))).toBe(false)
+  })
+
+  it('根目录（dir 为空串）归一为 `.`', async () => {
+    const { specs, deps } = makeIgnoreDeps('')
+    const { handlers } = createSvnRpc(deps)
+    await (handlers as Record<string, (a: never) => unknown>)['svn.ignore']({ items: [{ dir: '', names: ['root.log'] }] } as never)
+    const set = specs.find((s) => (s.argv as string[]).includes('propset'))
+    expect(set?.argv).toEqual(['svn', '--non-interactive', 'propset', 'svn:ignore', 'root.log', '--', '.'])
+  })
+
+  it('非法名/越界/空清单/超上限在 spawn 前拦截（不 propget/propset）', async () => {
+    const { specs, deps } = makeIgnoreDeps('')
+    const { handlers } = createSvnRpc(deps)
+    const call = (handlers as Record<string, (a: never) => unknown>)['svn.ignore']
+    expect(((await call({ items: [] } as never)) as { error?: string }).error).toContain('未选择')
+    expect(((await call({ items: [{ dir: 'g', names: ['-x'] }] } as never)) as { error?: string }).error).toContain('不能以 - 开头')
+    expect(((await call({ items: [{ dir: 'g', names: ['a\nb'] }] } as never)) as { error?: string }).error).toContain('换行')
+    expect(((await call({ items: [{ dir: '../x', names: ['a'] }] } as never)) as { error?: string }).error).toContain('路径不合法')
+    const many = Array.from({ length: 65 }, (_v, i) => 'f' + i)
+    expect(((await call({ items: [{ dir: 'g', names: many }] } as never)) as { error?: string }).error).toContain('最多')
+    expect(specs.some((s) => (s.argv as string[]).includes('propset') || (s.argv as string[]).includes('propget'))).toBe(false)
+  })
+
+  it('成功后作废变更缓存：下次 changes 重新 status（目录属性进变更清单）', async () => {
+    const { specs, deps, statusRuns } = makeIgnoreDeps('')
+    const { handlers } = createSvnRpc(deps)
+    const call = handlers as Record<string, (a: never) => unknown>
+    await call['svn.changes']({} as never)
+    await call['svn.changes']({} as never)
+    expect(statusRuns()).toBe(1)
+    await call['svn.ignore']({ items: [{ dir: 'gen', names: ['b.tmp'] }] } as never)
+    await call['svn.changes']({} as never)
+    expect(statusRuns()).toBe(2)
+    expect(specs.length).toBeGreaterThan(0)
+  })
+
+  it('propset 非零退出：整批失败透传原文尾部', async () => {
+    const specs: Array<Record<string, unknown>> = []
+    const spawn = (spec: Record<string, unknown>) => {
+      specs.push(spec)
+      const argv = spec.argv as string[]
+      if (argv.includes('--version')) return { done: Promise.resolve({ exitCode: 0 }), collected: {} }
+      if (argv.includes('status')) {
+        return {
+          done: Promise.resolve({ exitCode: 0 }),
+          collected: { stdout: { readFrom: () => ({ text: STATUS_XML_OUT }) }, stderr: { readFrom: () => ({ text: '' }) } },
+        }
+      }
+      if (argv.includes('propget')) {
+        return { done: Promise.resolve({ exitCode: 0 }), collected: { stdout: { readFrom: () => ({ text: '' }) }, stderr: { readFrom: () => ({ text: '' }) } } }
+      }
+      return {
+        done: Promise.resolve({ exitCode: 1 }),
+        collected: { stdout: { readFrom: () => ({ text: '' }) }, stderr: { readFrom: () => ({ text: 'svn: E200009: not versioned' }) } },
+      }
+    }
+    const { handlers } = createSvnRpc(makeDeps({ ctx: makeCtx(spawn, '/wc'), findRoot: async () => '/wc', findTortoise: async () => null }))
+    const res = await (handlers as Record<string, (a: never) => unknown>)['svn.ignore']({ items: [{ dir: 'gen', names: ['b.tmp'] }] } as never) as { ok: boolean; error?: string }
+    expect(res.ok).toBe(false)
+    expect(res.error).toContain('E200009')
+  })
+})
+
+// --endregion

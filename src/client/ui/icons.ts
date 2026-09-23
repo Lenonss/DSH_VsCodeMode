@@ -10,6 +10,7 @@
  */
 import React from 'react'
 import * as primitives from '@deepseek-ai/dsh-client-ui-primitives'
+import { classifyFileType, FileTypeIcon } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { EdrvIconProps } from '@deepseek-ai/dsh-client-ui-primitives'
 
 /** 图标组件形状（与垫片 EdrvIconProps 兼容）。 */
@@ -70,3 +71,21 @@ export const IconBranchOutline16 = iconOf('IconBranchOutline16', 'IconBranchOutl
 
 // 两代同名存活的原语：直通再导出（0.1.6/0.1.7 实证均在）
 export { FileTypeIcon, classifyFileType } from '@deepseek-ai/dsh-client-ui-primitives'
+
+/**
+ * 文件图标元素（官方 FileTypeIcon + classifyFileType 分类，未知类型为 other）。
+ * 文件树与 SVN 变更行共用（原为 FileExplorer 私有副本，上移共享防两处漂移）。
+ * @author ddj 2026年09月23号
+ * @param name 文件名（含扩展名；目录由调用方走目录图标）
+ * @returns 图标元素；原语缺失或分类异常返回 null
+ */
+export function fileIconEl(name: string): React.ReactElement | null {
+  if (typeof FileTypeIcon !== 'function' || typeof classifyFileType !== 'function') return null
+  try {
+    // FileTypeIcon 签名为 (props) => ReactNode（非 ReactElement），createElement 重载不认——
+    // 纯函数组件直接调用并收窄返回类型（与 FileExplorer 原 createElement 等效）。
+    return FileTypeIcon({ kind: classifyFileType(String(name ?? '')), size: 16, className: 'edrv-tree-icon' }) as React.ReactElement
+  } catch (error) {
+    return null
+  }
+}

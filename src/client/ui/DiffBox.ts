@@ -84,7 +84,7 @@ export function DiffBox(props) {
     if (otherFiles.length) {
       othersEl = React.createElement('div', { className: 'edrv-diffbox-others' },
         React.createElement('span', { className: 'edrv-diffrow-tag' }, '其他差异文件 (' + otherFiles.length + '):'),
-        otherFiles.map((f) => React.createElement('button', { key: f.path, className: 'edrv-diffrow-file', title: f.path, onClick: () => onOpenOther(f.path) },
+        otherFiles.map((f) => React.createElement('button', { key: f.path, className: 'edrv-diffrow-file', title: f.label ?? f.path, onClick: () => onOpenOther(f.path) },
           String(f.path).split(/[\\/]/).pop() + ' (' + f.pending + ')')))
     }
     bodyEl = React.createElement('div', { className: 'edrv-diffbar-body' }, ...rows, ...stale, othersEl)

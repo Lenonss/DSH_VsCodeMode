@@ -23,9 +23,13 @@
 # 变化由 Loader 就地提交（`ctx.on('loader/volatile-update')`），运行中的实例保留、
 # 不重挂载；非 volatile 字段改动仍按原逻辑触发 reload（volatile 字段还要求位于
 # 固定 object 路径，不得嵌套于 dict key / 外层 volatile 之内，app-boot 会校验）。
-# 该声明落在插件源码的 schema 上，**不是 patch 文件字段**——本插件 config 暂无
-# 自定义字段，故此处不声明；预留写法：未来给本行加 `config:` 字段时，须同步在
-# 插件 Config schema 的对应字段加 `.volatile()` 才会免重载，届时再补注释示例。
+# 该声明落在插件源码的 schema 上，**不是 patch 文件字段**。
+# ⚠️ 0.1.7 实测（2026-09-23，0.1.7-alpha.2 修复）：volatile 不只是免重载——
+# SettingsForms.describe 按 volatileForm 门槛下发 entry，**Config 全字段（12 个，
+# 见 src/fileOpenSettings.ts buildSettingsSchema 的 { volatile: true } 模式）必须标记**，
+# 漏标 = 本插件 ns 永不进 describe = 设置页「设置服务暂不可用」+ 写入抛
+# has no volatile fields；本行 config 若新增字段，同样须在 Config schema 对应字段
+# 加 `.volatile()` 才会免重载并出现在设置页。
 # 另：0.1.7 起 `dsh.bundle.patch` 支持 `patch: string | string[]`（有序列表，
 # 逐层施加），本包单文件写法保持兼容，无需改动。
 - insert:

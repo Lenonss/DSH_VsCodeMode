@@ -44,11 +44,14 @@ export const inject = ['sessions', 'fs', 'webServer', 'loader', 'tools', 'worksp
  * 字段集与 installOpenSettingsSection 的 section schema 同源（buildSettingsSchema），
  * 全字段带默认值——undefined/空配置经 schemastery 校验自动填充（rc/alpha 两代
  * cordis 均读该导出，实测 4.0.0-rc.8 与 0.1.7 行为一致，校验必过）。
- * 运行时解析：@deepseek-ai/schemastery 经插件自身 node_modules（link/dev/npm 安装
- * 三形态均在 peer/dev 依赖面内，先于宿主树命中）。
- * @author ddj 2026年09月22号
+ * volatile: true —— 0.1.7 的 SettingsForms.describe 只下发含 volatile 字段的 entry
+ * （volatileForm 门槛），漏标则 ns 不出现 → client configForms 恒 unavailable →
+ * 设置页「设置服务暂不可用」；同时 volatile 字段由 Loader 就地提交免重载。
+ * 运行时解析：@deepseek-ai/schemastery 经插件自身 dependencies（link/dev/npm 安装
+ * 三形态一致，钉 ~3.18.4 —— 3.18.1 起才有 .volatile()，低版本经 markVolatile 守卫降级）。
+ * @author ddj 2026年09月22号（2026年09月23号 增补 volatile 标记）
  */
-export const Config = buildSettingsSchema(z as unknown as SettingsDeps['z'])
+export const Config = buildSettingsSchema(z as unknown as SettingsDeps['z'], { volatile: true })
 
 /**
  * 装配插件：挂事件监听、注册路由、安装兼容层。

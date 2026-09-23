@@ -91,3 +91,22 @@ describe('summarize', () => {
     expect(s.pendingFiles[0].pending).toBe(1)
   })
 })
+
+describe('summarize label（issue #7 远端展示路径）', () => {
+  it('displayPath 作为 label，分组键仍为 path', () => {
+    const s = summarize([
+      rec({ path: '/mirror/a.ts', displayPath: '/home/u/proj/a.ts', decisions: { call: 'pending', perHunk: ['pending'] } }),
+      rec({ callId: 'c2', path: '/mirror/a.ts' }),
+    ])
+    expect(s.files).toHaveLength(1)
+    expect(s.files[0].path).toBe('/mirror/a.ts')
+    expect(s.files[0].label).toBe('/home/u/proj/a.ts')
+    expect(s.files[0].recs).toHaveLength(2)
+    expect(s.pendingFiles[0].label).toBe('/home/u/proj/a.ts')
+  })
+
+  it('无 displayPath 时 label 等于 path（本地会话回归）', () => {
+    const s = summarize([rec({})])
+    expect(s.files[0].label).toBe(s.files[0].path)
+  })
+})

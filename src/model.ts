@@ -32,7 +32,8 @@ export function normalizeRecord(raw: unknown): DiffRecord | null {
       }
     })
     : []
-  const toolName: DiffRecord['toolName'] = r.toolName === 'write' ? 'write' : 'edit'
+  // 白名单保留已知工具名，未知/缺失回退 'edit'（旧 sidecar 语义不变）
+  const toolName: DiffRecord['toolName'] = r.toolName === 'write' || r.toolName === 'remote_ssh_write' ? r.toolName : 'edit'
   const rawDecisions = r.decisions && typeof r.decisions === 'object' ? r.decisions as Record<string, unknown> : {}
   const call = rawDecisions.call === 'accepted' || rawDecisions.call === 'rejected' ? rawDecisions.call : 'pending'
   const rawPerHunk = Array.isArray(rawDecisions.perHunk) ? rawDecisions.perHunk : []

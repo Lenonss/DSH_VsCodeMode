@@ -264,6 +264,138 @@ export interface CtxLike {
   get: (name: string) => unknown
 }
 
+/** 新建会话结果（ok=false 供调用方降级回当前对话注入）。 */
+export interface DraftSessionResult {
+  ok: boolean
+  /** 新会话 id（ok=true 时存在；投递命令按它内嵌）。 */
+  id?: string
+}
+
+/** apiproxy wire 端点（POST /api/<method>；浏览器同源 fetch 自带 cookie 鉴权；实证 401=未鉴权而非 404）。 */
+const SESSION_CREATE_PATH = '/api/session/create'
+/** apiproxy wire 端点：发送任务（session/prompt；点击即发送方案）。 */
+const SESSION_PROMPT_PATH = '/api/session/prompt'
+
+/** mint RPC 请求 id（RpcId 品牌类型运行时即普通字符串）。 */
+function mintRpcId(): string {
+  try {
+    return globalThis.crypto?.randomUUID?.() ?? ('rpc-' + Date.now())
+  } catch {
+    return 'rpc-' + Date.now()
+  }
+}
+
+/**
+ * RPC 返回解析（照官方 dsh-client-runtime 调用形态：`const { result } = await api.sessions.create(...)`）。
+ * 官方 api.sessions 面返回**信封** `{ rpcId, result: RpcResult }`——须解 .result；
+ * 兼容裸 RpcResult 形态（个别补丁面直接回 {ok, value}）。
+ * @author ddj 2026年09月23号
+ * @param res 信封或裸 RpcResult
+ * @returns 归一后的 { ok, value }
+ */
+function rpcOk(res: unknown): { ok: boolean; value?: unknown } {
+  const envelope = (res as { result?: unknown } | null)?.result
+  const r = (envelope ?? res) as { ok?: boolean; value?: unknown } | null
+  return { ok: r?.ok === true, value: r?.value }
+}
+
+/**
+ * wire 直调 session/create（主路径）：ClientRequest 信封 → ServerResponse.result（RpcResult 形态）。
+ * 契约以当前安装版 dsh-host-apiproxy 为准（api/sessions.d.ts「Method signatures are the
+ * source of truth」）：`create({cwd}) → {sessionId}`；信封 = `{type:'client-request', rpcId,
+ * method, payload}` → `{result: {ok:true, value:{sessionId}} | {ok:false, error}}`。
+ * @author ddj 2026年09月23号
+ * @param cwd 新会话工作区目录
+ * @returns 新会话 id（失败空串）
+ */
+async function apiSessionCreate(cwd: string | undefined): Promise<string> {
+  const res = await fetch(SESSION_CREATE_PATH, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      type: 'client-request',
+      rpcId: mintRpcId(),
+      method: 'session/create',
+      payload: cwd ? { cwd } : {},
+    }),
+  })
+  const json = await res.json().catch(() => null) as { result?: { ok?: boolean; value?: { sessionId?: unknown } } } | null
+  const id = json?.result?.value?.sessionId
+  return json?.result?.ok === true && typeof id === 'string' ? id : ''
+}
+
+/**
+ * wire 直发 session/prompt（点击即发送方案）：任务文本投给目标会话 agent。
+ * 契约 = 当前安装树 SessionsApi.prompt：`{sessionId, mode:'queue', content:[{type:'text',text}]}`。
+ * 发送成功会话即有内容 → 不再被 blank 隐藏（列表可见）。
+ * @author ddj 2026年09月23号
+ * @param sessionId 目标会话 id（新会话）
+ * @param text 任务文本
+ * @returns 是否受理
+ */
+export async function apiSessionPrompt(sessionId: string, text: string): Promise<boolean> {
+  try {
+    const res = await fetch(SESSION_PROMPT_PATH, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        type: 'client-request',
+        rpcId: mintRpcId(),
+        method: 'session/prompt',
+        payload: { sessionId, mode: 'queue', content: [{ type: 'text', text }] },
+      }),
+    })
+    const json = await res.json().catch(() => null) as { result?: { ok?: boolean } } | null
+    return json?.result?.ok === true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * 新建独立会话承载旁路任务（02-deep-session-prompt：深度分析不污染当前对话）。
+ * 主路径 = apiproxy wire 直调（不依赖 service 面形态猜测）；回落 remote.session.create
+ * 与旧 sessions.create 两代 service 面（宽松解析）。任一步不符返回 ok:false，调用方降级。
+ * @author ddj 2026年09月23号
+ * @param ctx 客户端服务上下文（remote.session + sessions，仅回落用）
+ * @param cwd 新会话工作区目录（与当前会话同工作区）
+ * @returns 新会话结果（含 id）
+ */
+export async function newDraftSession(ctx: CtxLike, cwd: string | undefined): Promise<DraftSessionResult> {
+  // 主路径：wire 直调
+  try {
+    const id = await apiSessionCreate(cwd)
+    if (id) return { ok: true, id }
+  } catch { /* wire 不可用：回落 service 面 */ }
+  try {
+    // 回落 1：remote.session service 面（官方返回信封 {rpcId, result}，见 rpcOk；实参双形态兼容）
+    const remote = ctx.get('remote.session') as {
+      create?: (req: unknown) => Promise<unknown>
+    } | undefined
+    if (typeof remote?.create === 'function') {
+      const payload = cwd ? { cwd } : {}
+      for (const arg of [payload, { rpcId: mintRpcId(), payload }]) {
+        const r = rpcOk(await remote.create(arg))
+        const id = r.value as { sessionId?: unknown } | undefined
+        if (r.ok && typeof id?.sessionId === 'string') return { ok: true, id: id.sessionId }
+      }
+    }
+    // 回落 2：旧版 client store 形态（id / {id} / {sessionId} / {session:{id}} 四解）
+    const sessions = ctx.get('sessions') as { create?: (opts?: { cwd?: string }) => unknown } | undefined
+    if (typeof sessions?.create === 'function') {
+      const created = await sessions.create(cwd ? { cwd } : undefined)
+      const id = typeof created === 'string' && created ? created
+        : typeof (created as { id?: unknown } | null)?.id === 'string' ? (created as { id: string }).id
+        : typeof (created as { sessionId?: unknown } | null)?.sessionId === 'string' ? (created as { sessionId: string }).sessionId
+        : typeof (created as { session?: { id?: unknown } } | null)?.session?.id === 'string'
+          ? (created as { session: { id: string } }).session.id
+          : ''
+      if (id) return { ok: true, id }
+    }
+  } catch { /* 全部失败：调用方降级 */ }
+  return { ok: false }
+}
+
 /** 注入器产物：给 EditorView 用的动作集合。 */
 export interface AddToConversation {
   /** 追加文件/文件夹引用 chip（@path [Lstart-end]）；忙态自动降级纯文本。 */
@@ -273,6 +405,12 @@ export interface AddToConversation {
     range?: RefRange,
     appearance?: RefAppearance,
   ): Promise<AddOutcome>
+  /** 追加纯文本（AI 深度分析任务等长文本注入；插到当前光标，失败不整篇重建）。 */
+  appendText(sessionId: string | undefined, text: string): Promise<AddOutcome>
+  /** 新建独立会话并切换（旁路任务隔离；失败 ok:false 供降级回当前对话）。 */
+  startDraftSession(cwd?: string): Promise<DraftSessionResult>
+  /** 发送任务给目标会话 agent（点击即发送；失败 false 供降级）。 */
+  sendTask(sessionId: string | undefined, text: string): Promise<boolean>
 }
 
 /**
@@ -392,5 +530,69 @@ export function createAddToConversation(ctx: CtxLike): AddToConversation {
     return 'failed'
   }
 
-  return { appendReference }
+  /**
+   * 追加纯文本（AI 深度分析任务注入）：走官方 plain-text 通道插到当前光标。
+   * 失败语义与 appendReference 一致：宁可不写也不整篇重建（保护既有 chip）。
+   * @author ddj 2026年09月23号
+   * @param sessionId 会话 id
+   * @param text 待注入文本
+   * @returns 注入结果（ok / unavailable / failed）
+   */
+  const appendText: AddToConversation['appendText'] = async (sessionId, text) => {
+    const input = inputFor(ctx, sessionId)
+    if (!input) return 'unavailable'
+    const cur = draftCursor(input)
+    if (!cur) return 'unavailable'
+    const at = insertOffsetOf(caretOf(input), detectEndOf(cur))
+    const span: TokenSpanLike = { start: at, end: at, draftRev: cur.draftRev }
+    return safeInsertText(input, text, span) ? 'ok' : 'failed'
+  }
+
+  /**
+   * 新建独立会话（02-deep-session-prompt：旁路任务不污染当前对话）。
+   * 闭包持有真服务 ctx（面板 SidebarCtx 无 .get，会话操作必须经此门面）；
+   * 创建后尽力 `sessions.open(id)` 切换视图（缺失不致命，草稿仍可写入）。
+   * @author ddj 2026年09月23号
+   * @param cwd 新会话工作区目录（与当前会话同工作区）
+   * @returns 新会话结果（失败供降级）
+   */
+  const startDraftSession: AddToConversation['startDraftSession'] = async (cwd) => {
+    const result = await newDraftSession(ctx, cwd)
+    if (result.ok && result.id) {
+      // 尽力切换到新会话（缺失/异常不影响结果——仅视图不切换）
+      try {
+        const sessions = ctx.get('sessions') as { open?: (id: string) => void } | undefined
+        sessions?.open?.(result.id)
+      } catch { /* 切换失败仅视图停留 */ }
+    }
+    return result
+  }
+
+  /**
+   * 发送任务给目标会话 agent（点击即发送方案：任务落地会话即非 blank，列表可见）。
+   * 主路径 wire 直发 session/prompt；回落 remote.session.prompt service 面。
+   * @author ddj 2026年09月23号
+   * @param sessionId 目标会话 id
+   * @param text 任务文本
+   * @returns 是否受理
+   */
+  const sendTask: AddToConversation['sendTask'] = async (sessionId, text) => {
+    if (!sessionId) return false
+    try {
+      if (await apiSessionPrompt(sessionId, text)) return true
+    } catch { /* 回落 service 面 */ }
+    try {
+      const remote = ctx.get('remote.session') as { prompt?: (req: unknown) => Promise<unknown> } | undefined
+      if (typeof remote?.prompt === 'function') {
+        // 官方 api.sessions.prompt(request) 返回信封（rpcOk 解 .result）；实参双形态兼容
+        const payload = { sessionId, mode: 'queue', content: [{ type: 'text', text }] }
+        for (const arg of [payload, { rpcId: mintRpcId(), payload }]) {
+          if (rpcOk(await remote.prompt(arg)).ok) return true
+        }
+      }
+    } catch { /* 全失败 */ }
+    return false
+  }
+
+  return { appendReference, appendText, startDraftSession, sendTask }
 }

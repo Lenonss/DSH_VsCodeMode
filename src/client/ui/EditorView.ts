@@ -16,6 +16,7 @@ import { isMarkdownPath } from '../markdownPreview.js'
 import { MarkdownPanel } from '../md/mdPanel.js'
 import { base64ToBytes, bytesToBase64, isPdfPath } from '../pdfPreview.js'
 import { inNativePath, tryNativeOpen } from '../nativeOpenStore.js'
+import { clearPendingNav, putPendingNav, readPendingNav } from '../pendingNav.js'
 import { readBinaryPreview } from '../../shared/rpc.js'
 import {
   clearBaseline,
@@ -2257,6 +2258,12 @@ export function EditorView(props) {
   // 「已就绪」会提前定位；随后真实内容到达触发 model 重设/内容写入，Monaco 会重置光标，
   // 落点丢失且 pendingFocus 已消费，最终停在 {1,1}。实测（v0.4.6，Ctrl+点击枚举成员）：
   // opener 正确派发 line=349，落地后编辑器实际停在 1:1 且无高亮；同文件跳转不换内容故不复现。
+  //
+  // ⚠️ 第三次事故（2026-09-23 实测取证）：并行改码触发插件 client HMR 热重载
+  // （保留 console 装配日志重复 6-7 轮为证）→ 本组件被重挂载 → 挂载级 pendingFocusRef
+  // 随旧实例销毁 → 「首开只打开文件不落行、热重载平息后第二次才正常」。
+  // 修复：openFileAt 同步写 window.__edrvPendingNav__ 槽（跨热重载存活），本 effect 取
+  // ref || 槽、成功落点后一并清；并加模型身份守卫（模型不是目标文件时不清、等重跑）。
   React.useEffect(() => {
     const ed = editorRef.current
     if (!ed || !contentReady) return
@@ -2274,11 +2281,24 @@ export function EditorView(props) {
       ed.focus()
       return
     }
-    const pf = pendingFocusRef.current
+    // 快路径 = 挂载级 ref；交接路径 = window 槽（热重载重挂载后 ref 已丢、槽仍在）
+    const refPf = pendingFocusRef.current
+    const slotNav = refPf ? null : readPendingNav()
+    const pf = refPf || (slotNav
+      ? { path: slotNav.path, region: null, line: slotNav.line ?? null, column: slotNav.column ?? 1, endLine: slotNav.endLine ?? null, endColumn: slotNav.endColumn ?? null }
+      : null)
     if (!pf || !sameFile(pf.path, active)) return
-    if (pf.line != null) {
-      // 搜索命中 / LSP 跳转：直接定位到行/列（不依赖差异区域）并高亮目标区域
+    // 单一清除点：ref 与 window 槽一并处理，防残留二次跳
+    const dropPending = () => {
       pendingFocusRef.current = null
+      if (pf.line != null) clearPendingNav()
+    }
+    // 模型身份守卫：编辑器模型必须已是目标文件才落点；不匹配则保留 pending（不清），
+    // 依赖变化后的下一次运行再落（model 同步 effect 声明在本 effect 之前、同帧先执行）。
+    if (pf.line != null) {
+      if (!sameFile(modelPathOf(ed), pf.path)) return
+      // 搜索命中 / LSP 跳转：直接定位到行/列（不依赖差异区域）并高亮目标区域
+      dropPending()
       const line = Math.max(1, pf.line)
       const column = Math.max(1, pf.column ?? 1)
       ed.revealLineInCenter(line)
@@ -2289,7 +2309,8 @@ export function EditorView(props) {
     }
     const target = pf.region || pendingRegions[0]
     if (!target) return
-    pendingFocusRef.current = null
+    if (!sameFile(modelPathOf(ed), pf.path)) return
+    dropPending()
     ed.revealLineInCenter(Math.max(1, target.start ?? 1))
     ed.setPosition({ lineNumber: Math.max(1, target.start ?? 1), column: 1 })
     ed.focus()
@@ -3122,6 +3143,9 @@ export function EditorView(props) {
     const normalized = addTabNorm(path, true)
     if (!normalized) return
     pendingFocusRef.current = { path: normalized, region: null, line: line ?? null, column: column ?? 1, endLine: endLine ?? null, endColumn: endColumn ?? null }
+    // 第三次事故（2026-09-23）：插件 HMR 热重载会重挂载本组件、挂载级 ref 随旧实例销毁 →
+    // 落点意图丢失。同步落 window 槽（跨热重载存活）做交接，落点成功后与 ref 一并清。
+    putPendingNav({ path: normalized, line: line ?? null, column: column ?? 1, endLine: endLine ?? null, endColumn: endColumn ?? null })
     setFocusRequest((value) => value + 1)
   }
 
@@ -3525,6 +3549,10 @@ export function EditorView(props) {
     : null
 
   const sidebarPanels = props.sidebarPanels
+  // SVN 变更查表（文件树徽标 O(1) 查表用）：O(n) 建表只随数据/作用域变化重算，
+  // 不再随编辑区每轮渲染重建（条目多时每帧新建几千键的 Record 徒增 GC 压力）。
+  // @author ddj 2026年09月23号
+  const svnChangeMapMemo = React.useMemo(() => svnChangeMapOf(scope), [scope, svnChanges])
   const sidebarCtx = {
     sessionId,
     // 当前会话工作区（反应式 cwd；规则面板项目 Tab 自动匹配）
@@ -3544,7 +3572,7 @@ export function EditorView(props) {
     svn: svnStatus,
     // SVN 变更：面板列表 + 文件树徽标查表（客户端合成，不改 listDir 契约）
     svnChanges,
-    svnChangeMap: svnChangeMapOf(scope),
+    svnChangeMap: svnChangeMapMemo,
     openSvnDiff: (p) => runSvnDiffBase(p),
     openSvnLocalPair: runSvnDiffLocalPair,
     refreshSvnChanges: () => refreshSvnChanges(sessionId, scope),

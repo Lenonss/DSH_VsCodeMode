@@ -19,7 +19,7 @@ import type { RuleInfo, RuleProject, RuleRefInput, RuleSaveInput } from './rules
 import type { SnippetEntry, SnippetInfo, SnippetProject, SnippetRefInput, SnippetSaveInput } from './snippets.js'
 import type { LspCompletionItem, LspCompletionList, LspEnvInstallState, LspExtInfo, LspExtUpdate, LspHover, LspLocation, LspMarketItem, LspPosition, LspSemanticTokens, LspServerStatus, LspSignatureHelp, LspSymbol } from './lsp.js'
 import type { AiConfigPatch, AiConfigView, AiDirectoryView, AiInlineRequest, AiInlineResult } from './ai.js'
-import type { SvnAction, SvnChangeEntry, SvnConflictArtifact, SvnDiffRevResult, SvnLogEntry, SvnRemoteOutdatedEntry, SvnStatusPayload, SvnSumEntry, SvnUpdateResult } from './svn.js'
+import type { SvnAction, SvnAiPlan, SvnChangeEntry, SvnConflictArtifact, SvnDiffRevResult, SvnIgnoreItem, SvnLogEntry, SvnRemoteOutdatedEntry, SvnStatusPayload, SvnSumEntry, SvnUpdateResult } from './svn.js'
 import type { DapAction, DapAdapterInfo, DapBreakpointAck, DapBreakpointInput, DapConfigSnippet, DapConfigSource, DapDebugConfig, DapFrameView, DapPhase, DapPollResult, DapProcessInfo, DapScopeView, DapVariableView } from './dap.js'
 import { DAP_ACTIONS } from './dap.js'
 import type { LoggerLevel } from './logger.js'
@@ -439,6 +439,7 @@ export interface RpcRequestMap {
   'svn.diffBase': { sessionId?: string; path: string }
   'svn.revert': { sessionId?: string; paths: string[] }
   'svn.add': { sessionId?: string; paths: string[] }
+  'svn.changelist': { sessionId?: string; paths: string[]; name?: string; remove?: boolean }
   'svn.log': { sessionId?: string; path?: string; limit?: number; stopOnCopy?: boolean; startRev?: number; endRev?: number; showMerged?: boolean }
   'svn.diffRev': { sessionId?: string; path: string; revision: number }
   'svn.diffPair': { sessionId?: string; path: string; revA: number; revB: number }
@@ -453,6 +454,14 @@ export interface RpcRequestMap {
   'svn.conflictArtifacts': { sessionId?: string; path: string }
   'svn.diffLocalPair': { sessionId?: string; left: string; right: string }
   'svn.fileSizes': { sessionId?: string; paths: string[] }
+  /** AI 智能整理：只读分析全部变更，产出分组/还原/忽略三段方案（不写工作副本）。 */
+  'svn.aiPlan': { sessionId?: string }
+  /** AI 智能整理执行段：按目录合并写入 svn:ignore 属性（propget 合并，不整体覆盖）。 */
+  'svn.ignore': { sessionId?: string; items: SvnIgnoreItem[] }
+  /** 混合通道投递口：会话 agent 深度分析后把方案 POST 回面板收件箱（免鉴权本地 RPC）。 */
+  'svn.aiPlanSubmit': { sessionId?: string; plan: unknown }
+  /** 混合通道取件口：面板轮询取收件箱方案（since = 注入时刻，早于它的旧投递不算新件）。 */
+  'svn.aiPlanPending': { sessionId?: string; since?: number }
   'edrv.dap.configs': { workspacePath: string }
   'edrv.dap.snippets': {}
   'edrv.dap.processes': { processName?: string }
@@ -578,6 +587,7 @@ export interface RpcOkMap {
   'svn.diffBase': { base: string | null; working: string; reason?: string; error?: string; binary?: boolean; encodingHint?: boolean }
   'svn.revert': { count: number; summary: string; output: string }
   'svn.add': { count: number; summary: string; output: string }
+  'svn.changelist': { count: number; summary: string; output: string }
   'svn.log': { entries: SvnLogEntry[]; truncated: boolean; target: string; limit?: number }
   'svn.diffRev': SvnDiffRevResult
   'svn.diffPair': SvnDiffRevResult
@@ -592,6 +602,11 @@ export interface RpcOkMap {
   'svn.conflictArtifacts': { artifacts: SvnConflictArtifact[] }
   'svn.diffLocalPair': SvnDiffRevResult
   'svn.fileSizes': { sizes: Array<{ path: string; size: number | null }> }
+  'svn.aiPlan': { plan: SvnAiPlan; entriesCount: number; diffIncluded: boolean; dropped: number; model?: string }
+  'svn.ignore': { count: number; summary: string; output: string }
+  /** accepted = 归一后三段总路径数（0 = ok:false 拒收）；dropped = 幻觉/落选丢弃数。 */
+  'svn.aiPlanSubmit': { accepted: number; dropped: number }
+  'svn.aiPlanPending': { plan: SvnAiPlan | null; dropped: number; at: number }
   'edrv.dap.configs': { configs: DapDebugConfig[]; adapters: DapAdapterInfo[]; source: DapConfigSource }
   'edrv.dap.snippets': { snippets: DapConfigSnippet[] }
   'edrv.dap.processes': { items: DapProcessInfo[] }

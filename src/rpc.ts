@@ -44,6 +44,7 @@ import { findProfileDir, readDevForm, setDevForm } from './devForm.js'
 import { normalizeRel } from './tree.js'
 import { baseNameOf, checkNewName, checkRenameName, isSubPath, joinRelPath, parentRelOf } from './shared/fsNames.js'
 import { invalidateIndex, listDirCached } from './treeIndex.js'
+import { findRemoteWs, remoteDisplayOf, type RemoteWs } from './remoteWorkspace.js'
 import { revealInExplorer } from './reveal.js'
 import { dshHome, debugLogFile, pluginLogRoot } from './paths.js'
 import { clearDebugLog, debugRecord, isDebugLogName, listDebugLogs, readDebugLog } from './debugLog.js'
@@ -56,8 +57,8 @@ const staleCheckedAt = new Map<string, number>()
 /** stale 自动清理最小间隔。 */
 const STALE_CHECK_MIN_MS = 10_000
 
-/** 记录 → 客户端视图（不含 before 全文，仅长度）。 */
-function recView(record: DiffRecord): RecordView {
+/** 记录 → 客户端视图（不含 before 全文，仅长度）；远程工作区附远端展示路径（issue #7）。 */
+function recView(record: DiffRecord, ws: RemoteWs | null = null): RecordView {
   return {
     callId: record.callId,
     toolName: record.toolName,
@@ -75,6 +76,7 @@ function recView(record: DiffRecord): RecordView {
     conflict: record.conflict === true,
     legacy: record.legacy === true,
     at: record.at,
+    ...(ws ? { displayPath: remoteDisplayOf(record.path, ws) ?? undefined } : {}),
   }
 }
 
@@ -232,6 +234,7 @@ async function applyDecisions(
 ): Promise<DecideResult[]> {
   const results: DecideResult[] = []
   const resolved: DiffRecord[] = []
+  const ws = findRemoteWs(cwd)
   let changed = false
   for (const item of items) {
     const record = bucket.get(item.callId)
@@ -255,7 +258,7 @@ async function applyDecisions(
     markDecision(record, item.scope ?? 'call', item.hunkIndex, item.decision)
     changed = true
     if (!wasResolved && recordResolved(record)) resolved.push(record)
-    const result: DecideResult = { callId: item.callId, ok: true, record: recView(record) }
+    const result: DecideResult = { callId: item.callId, ok: true, record: recView(record, ws) }
     if (revertedStale) result.stale = true
     results.push(result)
   }
@@ -434,11 +437,12 @@ export function buildHandlers(
         }
       }
       const out: RecordView[] = []
+      const ws = findRemoteWs(sc.cwd)
       for (const rec of bucket.values()) {
         // 面板全量查询过滤已归档；聊天条按 callId 查询保留（状态徽章仍需正确显示）
         if (!want && rec.archived) continue
         if (want && !want.has(rec.callId)) continue
-        out.push(recView(rec))
+        out.push(recView(rec, ws))
       }
       out.sort((a, b) => (a.at < b.at ? -1 : 1))
       return { ok: true, records: out }
@@ -610,6 +614,7 @@ export function buildHandlers(
       const sc = await requireSession(ctx, args.sessionId)
       if ('err' in sc) return { ok: false, error: sc.err }
       const batches = parseArchive(await readArchiveText(ctx, sc.cwd)).filter((b) => b.cwd === sc.cwd)
+      const ws = findRemoteWs(sc.cwd)
       const entries = batches.map((b) => {
         const recs = Array.isArray(b.records) ? b.records : []
         const sum = recs.reduce((s, r) => {
@@ -620,7 +625,16 @@ export function buildHandlers(
           if (sm.superseded) s.superseded++
           return s
         }, { accepted: 0, rejected: 0, pending: 0, superseded: 0 })
-        return { at: b.at, lastAt: b.lastAt || b.at, path: b.path, batch: b.batch ?? null, reason: b.reason ?? null, nRecords: recs.length, summary: sum }
+        return {
+          at: b.at,
+          lastAt: b.lastAt || b.at,
+          path: b.path,
+          ...(ws ? { displayPath: remoteDisplayOf(b.path, ws) ?? undefined } : {}),
+          batch: b.batch ?? null,
+          reason: b.reason ?? null,
+          nRecords: recs.length,
+          summary: sum,
+        }
       })
       entries.sort((a, b) => (Number(b.batch ?? -1) - Number(a.batch ?? -1)) || (a.at < b.at ? 1 : -1))
       return { ok: true, entries }

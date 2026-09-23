@@ -12,7 +12,10 @@ export type Status = 'pending' | 'accepted' | 'rejected'
 
 /** 记录视图摘要（按文件分组）。 */
 export interface FileSummary {
+  /** 功能路径（分组/打开口径，恒为记录 path）。 */
   path: string
+  /** 展示标签：远程工作区为远端路径，其余等于 path（issue #7）。 */
+  label: string
   recs: RecordView[]
   pending: number
 }
@@ -86,7 +89,10 @@ export function summarize(records: RecordView[]): Summary {
     byPath.get(r.path)!.push(r)
   }
   const files: FileSummary[] = []
-  for (const [path, recs] of byPath) files.push({ path, recs, pending: pendingCount(recs) })
+  for (const [path, recs] of byPath) {
+    const label = recs.find((r) => !!r.displayPath)?.displayPath ?? path
+    files.push({ path, label, recs, pending: pendingCount(recs) })
+  }
   files.sort((a, b) => (a.path < b.path ? -1 : 1))
   const pendingFiles = files.filter((f) => f.pending > 0)
   return { files, pendingFiles, totalFiles: pendingFiles.length }

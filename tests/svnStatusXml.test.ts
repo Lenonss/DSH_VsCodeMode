@@ -15,9 +15,12 @@ import {
   changeNameMatch,
   contentGuardOf,
   isSvnDiffable,
+  nameMatcherOf,
   pairMissingWithUnversioned,
   svnBadgeOf,
   svnBadgeTitle,
+  svnChangelistNameErrorOf,
+  svnChunksOf,
   svnVisibleChanges,
 } from '../src/shared/svn.js'
 import type { SvnChangeEntry, SvnItemStatus } from '../src/shared/svn.js'
@@ -225,6 +228,24 @@ describe('状态表与消费纯函数', () => {
     expect(changeNameMatch('a.txt', undefined)).toBe(true)
   })
 
+  it('nameMatcherOf：预编译匹配器与 changeNameMatch 语义等价（性能版，解析只做一次）', () => {
+    const hit = nameMatcherOf('a/*.cs*')
+    expect(hit('a/one.cs')).toBe(true)
+    expect(hit('a/one.cs.meta')).toBe(true)
+    expect(hit('b/two.lua')).toBe(false)
+    // 同一匹配器可重复调用（闭包持正则，循环内零构造）
+    expect(hit('a/one.cs')).toBe(true)
+    // 空/空白/缺省 = 全命中
+    expect(nameMatcherOf('  ')('x/y.txt')).toBe(true)
+    expect(nameMatcherOf(undefined)('x/y.txt')).toBe(true)
+    // 子串回落与正则元字符转义语义不变
+    expect(nameMatcherOf('aSSETS')('Assets/a.cs')).toBe(true)
+    expect(nameMatcherOf('a+b.*')('a+b.txt')).toBe(true)
+    expect(nameMatcherOf('a+b.*')('aab.txt')).toBe(false)
+    expect(nameMatcherOf('x(*).cs')('x(1).cs')).toBe(true)
+    expect(nameMatcherOf('foo?bar.txt')('foo/bar.txt')).toBe(true)
+  })
+
   it('svnBadgeOf/svnBadgeTitle：normal 与 external 不出徽标', () => {
     expect(svnBadgeOf(entry('a', 'normal'))).toBe('')
     expect(svnBadgeOf(entry('a', 'external'))).toBe('')
@@ -293,5 +314,29 @@ describe('pairMissingWithUnversioned（W2-5 疑似改名配对）', () => {
     expect(pairMissingWithUnversioned(multi, sizes)).toEqual([
       { missingPath: 'a/X.lua', unversionedPath: 'b/X.lua' },
     ])
+  })
+})
+
+describe('svnChangelistNameErrorOf / svnChunksOf（P5 分区管理纯函数）', () => {
+  it('分区名校验：空/`-` 开头/超长报错，合法返回 null', () => {
+    expect(svnChangelistNameErrorOf('')).toBe('分区名不能为空')
+    expect(svnChangelistNameErrorOf('   ')).toBe('分区名不能为空')
+    expect(svnChangelistNameErrorOf('-cl')).toBe('分区名不能以 - 开头')
+    expect(svnChangelistNameErrorOf('x'.repeat(65))).toContain('最长')
+    expect(svnChangelistNameErrorOf('my cl')).toBe(null)
+    expect(svnChangelistNameErrorOf('中文分区')).toBe(null)
+  })
+
+  it('svnChunksOf：按上限分块保序；空入参/未超上限/非法 cap', () => {
+    expect(svnChunksOf([], 64)).toEqual([])
+    expect(svnChunksOf(['a', 'b'], 64)).toEqual([['a', 'b']])
+    const many = Array.from({ length: 150 }, (_v, i) => 'f' + i)
+    const chunks = svnChunksOf(many, 64)
+    expect(chunks.map((chunk) => chunk.length)).toEqual([64, 64, 22])
+    expect(chunks.flat()).toEqual(many)
+    // cap 非法（0/负数/NaN）按不分块整包处理
+    expect(svnChunksOf(['a', 'b'], 0)).toEqual([['a', 'b']])
+    expect(svnChunksOf(['a', 'b'], -1)).toEqual([['a', 'b']])
+    expect(svnChunksOf(['a', 'b'], Number.NaN)).toEqual([['a', 'b']])
   })
 })

@@ -11,8 +11,10 @@ import { basename, dirname, join } from 'node:path'
 import { tmpdir } from 'node:os'
 import type { Ctx, Session } from './store.js'
 import { cwdOf, sessionOf } from './registry.js'
-import type { SvnAction, SvnChangeEntry, SvnConflictArtifact, SvnFeature, SvnItemStatus, SvnLogEntry, SvnRemoteOutdatedEntry, SvnStatusPayload, SvnSumEntry } from './shared/svn.js'
-import { SVN_CLI_DEFAULT, TORTOISE_EXE, contentGuardOf, tortoiseLaunchArgv } from './shared/svn.js'
+import type { SvnAction, SvnAiPlan, SvnChangeEntry, SvnConflictArtifact, SvnFeature, SvnIgnoreItem, SvnItemStatus, SvnLogEntry, SvnRemoteOutdatedEntry, SvnStatusPayload, SvnSumEntry } from './shared/svn.js'
+import { AI_PLAN_DIFF_CAP, AI_PLAN_PATHS_CAP, BATCH_PATHS_CAP, FILE_SIZES_CAP, SVN_CLI_DEFAULT, TORTOISE_EXE, contentGuardOf, normalizeAiPlan, svnChangelistNameErrorOf, tortoiseLaunchArgv } from './shared/svn.js'
+import type { AiConfigView } from './shared/ai.js'
+import { buildAiPrompt, svnAiPlanOf } from './ai/svnTriage.js'
 import { attrOf, numAttrOf, scanXmlTags, textOf, unescapeXml } from './svnXml.js'
 import { TEXT_OUTPUT_CAP, batchResultOf, tailOfText, updateResultOf } from './svnText.js'
 import { LOG_CAP, LOG_DEFAULT_LIMIT, SVN_LOG_SHOW_ALL_CAP, parseLogXml, parseSvnInfoRevision } from './svnLog.js'
@@ -46,8 +48,9 @@ const OUTPUT_CAP = TEXT_OUTPUT_CAP
 const LOG_OUTPUT_CAP = 64 * 1024 * 1024
 /** 变更条目上限（防超大工作副本撑爆载荷）。 */
 export const CHANGES_CAP = 4000
-/** 批量动作路径数上限（revert/add 单次操作目标数）。 */
-export const BATCH_PATHS_CAP = 64
+/** 混合通道收件箱 TTL（毫秒）：agent 投递方案 30 分钟未取即过期（防陈旧方案误执行）。 */
+export const AI_INBOX_TTL_MS = 30 * 60 * 1000
+// 批量动作路径数上限（BATCH_PATHS_CAP）改由 shared/svn.ts 持有，revert/add/changelist 客户端分块同源对齐。
 /** `svn status --xml` 超时（大工作副本留足预算）。 */
 const STATUS_GRACE_MS = 120_000
 /** 其他只读子命令（cat/info）超时。 */
@@ -73,8 +76,7 @@ const SUM_OUTPUT_CAP = 8 * 1024 * 1024
 const REMOTE_GRACE_MS = 15_000
 /** W2-2 summarize 服务器往返预算（大目录长区间可能较慢）。 */
 const SUM_GRACE_MS = 60_000
-/** W2-5 fileSizes 单次查询路径上限（配对候选是少数条目，防滥用）。 */
-export const FILE_SIZES_CAP = 200
+// W2-5 fileSizes 单次查询路径上限（FILE_SIZES_CAP）改由 shared/svn.ts 持有，host/client 同源防漂移。
 
 /** 文件存在性探测（可注入替身）。 */
 export type ExistsFn = (path: string) => Promise<boolean>
@@ -148,6 +150,25 @@ export async function findTortoiseProc(
 /** 设置里 SVN 路径的最小读取面（setupOpenSettings 提供）。 */
 export interface SvnSettingsLike {
   svn: () => { svnPath: string; tortoisePath: string }
+  /** AI 配置读取面（svn.aiPlan 模型路由；缺省自动选首个 provider/model）。 */
+  ai?: () => AiConfigView
+}
+
+/**
+ * svn:ignore 名称合法性校验（host 权威；防换行注入 propset 值与路径穿越）。
+ * 规则：去空白后非空、无换行、无路径分隔符、不以 `-` 开头（防被 svn 当选项解析）。
+ * @author ddj 2026年09月23号
+ * @param name 待写入的忽略名（basename / 通配模式）
+ * @returns 错误文案；合法为 null
+ */
+export function ignoreNameErrorOf(name: unknown): string | null {
+  if (typeof name !== 'string') return '忽略名必须是字符串'
+  const trimmed = name.trim()
+  if (!trimmed) return '忽略名不能为空'
+  if (/[\r\n]/.test(trimmed)) return '忽略名不能包含换行'
+  if (trimmed.includes('/') || trimmed.includes('\\')) return '忽略名不能包含路径分隔符'
+  if (trimmed.startsWith('-')) return '忽略名不能以 - 开头'
+  return null
 }
 
 /**
@@ -459,6 +480,8 @@ export function createSvnRpc(deps: SvnRpcDeps): { handlers: Record<string, unkno
   const statusCache = new Map<string, { at: number; payload: SvnStatusPayload }>()
   /** 变更清单缓存（键 = 工作副本根；TTL 短，仅合并同一轮 UI 的多处拉取）。 */
   const changesCache = new Map<string, { at: number; value: { entries: SvnChangeEntry[]; truncated: boolean } }>()
+  /** 混合通道方案收件箱（key = 工作副本根；覆盖式入箱 + TTL，见 svn.aiPlanSubmit/Pending）。 */
+  const planInbox = new Map<string, { plan: SvnAiPlan; dropped: number; at: number }>()
   /** 工作副本根 relative-url 缓存（日志路径映射用；探测失败也缓存空串避免反复 spawn）。 */
   const urlCache = new Map<string, { at: number; value: string }>()
   let cliProbe: { at: number; exe: string; ok: boolean } | null = null
@@ -806,6 +829,54 @@ export function createSvnRpc(deps: SvnRpcDeps): { handlers: Record<string, unkno
     return merged.binary || merged.encodingHint ? merged : {}
   }
 
+  /**
+   * svn:ignore 写入执行（AI 整理执行段③）：逐目录 `propget` 读既有值 → 合并去重 → `propset`。
+   * 不整体覆盖（保留团队既有 ignore）；逐目录失败收集不中断，全部失败才 ok:false。
+   * @author ddj 2026年09月23号
+   * @param wcRoot 工作副本根
+   * @param items 目录聚合写入项（dir 已归一，根为 '.'）
+   * @returns 新增计数/摘要/原文
+   */
+  const ignoreApplyOf = async (
+    wcRoot: string,
+    items: Array<{ dir: string; names: string[] }>,
+  ): Promise<{ ok: boolean; count: number; summary: string; output: string }> => {
+    let count = 0
+    const notes: string[] = []
+    const failures: string[] = []
+    for (const item of items) {
+      const getOutcome = await runSvn(wcRoot, ['propget', 'svn:ignore', '--', item.dir], READ_GRACE_MS)
+      if (getOutcome.code !== 0) {
+        failures.push(item.dir + ' 读取失败：' + tailOfText(getOutcome.stderr || getOutcome.stdout))
+        continue
+      }
+      const existing = getOutcome.stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
+      const merged = [...existing]
+      let added = 0
+      for (const name of item.names) {
+        if (merged.includes(name)) continue
+        merged.push(name)
+        added++
+      }
+      if (!added) {
+        notes.push(item.dir + '：无新增（已在忽略列表）')
+        continue
+      }
+      const setOutcome = await runSvn(wcRoot, ['propset', 'svn:ignore', merged.join('\n'), '--', item.dir], MUTATE_GRACE_MS)
+      if (setOutcome.code !== 0) {
+        failures.push(item.dir + ' 写入失败：' + tailOfText(setOutcome.stderr || setOutcome.stdout))
+        continue
+      }
+      count += added
+      notes.push(item.dir + '：新增 ' + added + ' 项')
+    }
+    const ok = failures.length < items.length
+    const summary = failures.length
+      ? 'svn:ignore 写入 ' + count + ' 项；失败 ' + failures.length + ' 个目录'
+      : count > 0 ? 'svn:ignore 写入 ' + count + ' 项' : '无新增忽略项'
+    return { ok, count, summary, output: [...notes, ...failures].join('\n') }
+  }
+
   const handlers = {
     'svn.status': async (args: { sessionId?: string; force?: boolean }) => {
       const sc = await requireSvnSession(ctx, args.sessionId)
@@ -864,6 +935,28 @@ export function createSvnRpc(deps: SvnRpcDeps): { handlers: Record<string, unkno
     },
     'svn.add': async (args: { sessionId?: string; paths?: string[] }) => {
       return mutate('加入版本控制', ['add'], args.sessionId, args.paths)
+    },
+    /**
+     * 分区（changelist）批量操作：关联或解除工作副本条目的 changelist 登记。
+     * 复用 mutate 全套护栏（路径白名单 / BATCH_PATHS_CAP / 超时 / 变更缓存作废）；
+     * 分区名 host 权威校验（`-` 开头会被 svn 当成选项解析），remove 分支不需要名字。
+     * @author ddj 2026年09月23号
+     * @param args.paths 工作区相对路径列表
+     * @param args.name 目标分区名（remove 时忽略）
+     * @param args.remove true = 移出分区（`changelist --remove`）
+     * @returns 批量动作结果
+     */
+    'svn.changelist': async (args: { sessionId?: string; paths?: string[]; name?: string; remove?: boolean }) => {
+      if (args.remove !== true) {
+        const nameError = svnChangelistNameErrorOf(String(args.name ?? ''))
+        if (nameError) return { ok: false as const, error: nameError }
+      }
+      return mutate(
+        args.remove === true ? '移出分区' : '分区',
+        args.remove === true ? ['changelist', '--remove'] : ['changelist', String(args.name ?? '').trim()],
+        args.sessionId,
+        args.paths,
+      )
     },
     'svn.log': async (args: { sessionId?: string; path?: string; limit?: number; stopOnCopy?: boolean; startRev?: number; endRev?: number; showMerged?: boolean }) => {
       const sc = await requireSvnSession(ctx, args.sessionId)
@@ -1084,19 +1177,148 @@ export function createSvnRpc(deps: SvnRpcDeps): { handlers: Record<string, unkno
         stat?: (t: unknown) => Promise<{ type?: string; size?: number } | null>
       } | null | undefined
       if (!fs?.resolve || !fs?.stat) return { ok: false as const, error: '缺少 fs' }
-      const sizes: Array<{ path: string; size: number | null }> = []
-      for (const raw of list) {
+      // 单条 stat（异常回 null，语义与旧串行版一致）
+      const sizeOne = async (raw: string): Promise<{ path: string; size: number | null }> => {
         const rel = safeRel(raw)
-        if (rel === null || rel === '') { sizes.push({ path: String(raw ?? ''), size: null }); continue }
+        if (rel === null || rel === '') return { path: String(raw ?? ''), size: null }
         try {
-          const resolved = await fs.resolve(rel, { cwd: sc.cwd })
-          const info = await fs.stat(resolved)
-          sizes.push({ path: rel, size: info && info.type === 'file' ? (info.size ?? null) : null })
+          const resolved = await fs.resolve!(rel, { cwd: sc.cwd })
+          const info = await fs.stat!(resolved)
+          return { path: rel, size: info && info.type === 'file' ? (info.size ?? null) : null }
         } catch {
-          sizes.push({ path: rel, size: null })
+          return { path: rel, size: null }
         }
       }
+      // 分批并发（批 16）：上限 200 条时旧串行版要 400 次往返 await，批量并发显著缩短尾巴；
+      // 结果顺序按输入还原（并发不改变载荷语义）。
+      const sizes: Array<{ path: string; size: number | null }> = []
+      const BATCH = 16
+      for (let start = 0; start < list.length; start += BATCH) {
+        sizes.push(...await Promise.all(list.slice(start, start + BATCH).map(sizeOne)))
+      }
       return { ok: true as const, sizes }
+    },
+    /**
+     * AI 智能整理分析（只读）：拉最新变更 → 附 diff 上下文（超限降级 paths-only）→
+     * LLM 流式产出 JSON → normalizeAiPlan 以真实清单白名单归一。任何失败零执行只报错。
+     * @author ddj 2026年09月23号
+     * @param args.sessionId 会话 id
+     * @returns 三段方案 + 分析元信息（条目数/是否含 diff/丢弃数/模型）
+     */
+    'svn.aiPlan': async (args: { sessionId?: string }) => {
+      const sc = await requireSvnSession(ctx, args.sessionId)
+      if ('err' in sc) return { ok: false as const, error: sc.err }
+      const status = await statusOf(sc.cwd)
+      if (!status.managed || !status.wcRoot) return { ok: false as const, error: '当前工作区不受 SVN 管理' }
+      if (!status.svnCli) return { ok: false as const, error: 'svn 命令不可用（可在设置页配置 svn 路径）' }
+      try {
+        // 方案必须基于最新清单：强制重查，不吃 TTL 缓存
+        const { entries } = await changesOf(status.wcRoot, true)
+        // diff 上下文：单次 spawn（-x -U0 零上下文行压缩载荷）；失败/近上限（收集器超限留尾，
+        // 按长度近似判超限）降级 paths-only，不阻塞分析
+        let diffText: string | null = null
+        try {
+          const outcome = await runSvn(status.wcRoot, ['diff', '-x', '-U0'], READ_GRACE_MS, AI_PLAN_DIFF_CAP)
+          if (outcome.code === 0 && outcome.stdout.trim() && outcome.stdout.length < AI_PLAN_DIFF_CAP) diffText = outcome.stdout
+        } catch { /* 降级 paths-only */ }
+        // 条目上限：超 AI_PLAN_PATHS_CAP 只喂前缀并标记截断，diff 不再附带
+        const capped = entries.length > AI_PLAN_PATHS_CAP
+        const used = capped ? entries.slice(0, AI_PLAN_PATHS_CAP) : entries
+        const diffIncluded = diffText !== null && !capped
+        const prompt = buildAiPrompt(used, diffIncluded ? diffText : null, capped)
+        const cfg = settings.ai ? settings.ai() : { enabled: true, provider: '', model: '', effort: '' }
+        const result = await svnAiPlanOf(ctx, cfg, prompt)
+        const { plan, dropped } = normalizeAiPlan(result.raw, entries)
+        return { ok: true as const, plan, entriesCount: entries.length, diffIncluded, dropped, model: result.model }
+      } catch (error) {
+        return { ok: false as const, error: String(error instanceof Error ? error.message : error) }
+      }
+    },
+    /**
+     * AI 智能整理执行段③：按目录合并写入 svn:ignore 属性（propget 合并，不整体覆盖）。
+     * 复用受管理/svnCli 校验与变更缓存作废语义（对齐 mutate）。
+     * @author ddj 2026年09月23号
+     * @param args.items 目录聚合写入项（dir + 该目录下新增忽略名）
+     * @returns 新增计数/摘要/原文
+     */
+    'svn.ignore': async (args: { sessionId?: string; items?: SvnIgnoreItem[] }) => {
+      const sc = await requireSvnSession(ctx, args.sessionId)
+      if ('err' in sc) return { ok: false as const, error: sc.err }
+      const items = Array.isArray(args.items) ? args.items : []
+      if (!items.length) return { ok: false as const, error: '未选择任何路径' }
+      const clean: Array<{ dir: string; names: string[] }> = []
+      let total = 0
+      for (const item of items) {
+        const rel = safeRel(item?.dir)
+        if (rel === null) return { ok: false as const, error: '路径不合法' }
+        const names = Array.isArray(item?.names) ? item.names : []
+        if (!names.length) return { ok: false as const, error: '忽略名列表为空' }
+        const checked: string[] = []
+        for (const name of names) {
+          const nameError = ignoreNameErrorOf(name)
+          if (nameError) return { ok: false as const, error: nameError }
+          checked.push(String(name).trim())
+        }
+        total += checked.length
+        if (total > BATCH_PATHS_CAP) return { ok: false as const, error: '一次最多处理 ' + BATCH_PATHS_CAP + ' 个路径' }
+        clean.push({ dir: rel === '' ? '.' : rel, names: checked })
+      }
+      const status = await statusOf(sc.cwd)
+      if (!status.managed || !status.wcRoot) return { ok: false as const, error: '当前工作区不受 SVN 管理' }
+      if (!status.svnCli) return { ok: false as const, error: 'svn 命令不可用（可在设置页配置 svn 路径）' }
+      try {
+        const result = await ignoreApplyOf(status.wcRoot, clean)
+        // 写属性改动工作副本属性状态（目录进变更清单）：作废缓存
+        changesCache.delete(status.wcRoot)
+        if (!result.ok) return { ok: false as const, error: result.summary + (result.output ? '\n' + tailOfText(result.output) : '') }
+        return { ok: true as const, count: result.count, summary: result.summary, output: result.output }
+      } catch (error) {
+        return { ok: false as const, error: 'svn:ignore 写入失败：' + String(error) }
+      }
+    },
+    /**
+     * 混合通道投递口（01-hybrid-deep-analysis）：会话 agent 深度分析后 POST 方案入收件箱。
+     * 只读 + 内存态：经 normalizeAiPlan 以最新变更清单白名单归一（幻觉路径丢弃计数），
+     * 零接受拒收（防 agent 空转误报成功）；覆盖式入箱（新投递顶掉旧件）。
+     * @author ddj 2026年09月23号
+     * @param args.plan agent 产出的方案 JSON（形状宽松，归一兜底）
+     * @returns 接受路径数与丢弃数
+     */
+    'svn.aiPlanSubmit': async (args: { sessionId?: string; plan?: unknown }) => {
+      const sc = await requireSvnSession(ctx, args.sessionId)
+      if ('err' in sc) return { ok: false as const, error: sc.err }
+      const status = await statusOf(sc.cwd)
+      if (!status.managed || !status.wcRoot) return { ok: false as const, error: '当前工作区不受 SVN 管理' }
+      if (!status.svnCli) return { ok: false as const, error: 'svn 命令不可用（可在设置页配置 svn 路径）' }
+      try {
+        const { entries } = await changesOf(status.wcRoot, true)
+        const { plan, dropped } = normalizeAiPlan(args.plan, entries)
+        const accepted = plan.reverts.length + plan.ignores.length + plan.groups.reduce((n, group) => n + group.paths.length, 0)
+        if (!accepted) return { ok: false as const, error: '方案为空：无任何路径通过白名单校验（丢弃 ' + dropped + ' 项）' }
+        planInbox.set(status.wcRoot, { plan, dropped, at: now() })
+        return { ok: true as const, accepted, dropped }
+      } catch (error) {
+        return { ok: false as const, error: '方案投递失败：' + String(error) }
+      }
+    },
+    /**
+     * 混合通道取件口：面板轮询取收件箱方案。
+     * since = 注入时刻——早于它的旧投递不算新件（防上一轮残留被误认为本轮结果）；
+     * TTL 过期返回 plan:null。非破坏性读取（重复取到同一份由 client 侧取件即停消化）。
+     * @author ddj 2026年09月23号
+     * @param args.since 注入时刻时间戳（缺省 0 = 取任意件）
+     * @returns 方案与元信息（无新件 plan 为 null）
+     */
+    'svn.aiPlanPending': async (args: { sessionId?: string; since?: number }) => {
+      const sc = await requireSvnSession(ctx, args.sessionId)
+      if ('err' in sc) return { ok: false as const, error: sc.err }
+      const status = await statusOf(sc.cwd)
+      if (!status.managed || !status.wcRoot) return { ok: false as const, error: '当前工作区不受 SVN 管理' }
+      const hit = planInbox.get(status.wcRoot)
+      const since = Number(args.since) || 0
+      const stale = !hit || hit.at < since || now() - hit.at > AI_INBOX_TTL_MS
+      if (stale) return { ok: true as const, plan: null, dropped: 0, at: 0 }
+      return { ok: true as const, plan: hit.plan, dropped: hit.dropped, at: hit.at }
     },
     'svn.wcRev': async (args: { sessionId?: string; path?: string }) => {
       const sc = await requireSvnSession(ctx, args.sessionId)

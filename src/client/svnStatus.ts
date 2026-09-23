@@ -8,7 +8,7 @@
  * 动作：svnUpdate / svnTortoise / svnRevert / svnAdd / svnDiffBase 统一执行与反馈文案。
  * 作者 ddj 2026年09月16号
  */
-import type { SvnAction, SvnChangeEntry, SvnItemStatus, SvnStatusPayload, SvnUpdateEntry } from '../shared/svn.js'
+import type { SvnAction, SvnAiPlan, SvnChangeEntry, SvnIgnoreItem, SvnItemStatus, SvnStatusPayload, SvnUpdateEntry } from '../shared/svn.js'
 import { SVN_TORTOISE_LABELS, SVN_UPDATE_LABEL } from '../shared/svn.js'
 import { svnActionOn, svnActionsFor } from '../shared/svnActions.js'
 import type { SvnActionContext } from '../shared/svnActions.js'
@@ -273,6 +273,211 @@ export async function svnAdd(sessionId: string | undefined, paths: string[]): Pr
     return { ok: false, message: '加入版本控制失败：' + String(error) }
   }
 }
+
+/**
+ * 分区（changelist）批量操作：关联或解除工作副本条目的 changelist 登记。
+ * `svn changelist` 成功时输出静默（host count 为 0），反馈计数以客户端 paths.length 为准；
+ * 上限分块由面板层（svnChunksOf）负责，本包装单次直发。
+ * @author ddj 2026年09月23号
+ * @param sessionId 会话 id
+ * @param paths 工作区相对路径列表
+ * @param name 目标分区名；null = 移出当前分区
+ * @returns 执行结果与反馈文案
+ */
+export async function svnChangelist(
+  sessionId: string | undefined,
+  paths: string[],
+  name: string | null,
+): Promise<SvnActionOutcome> {
+  const count = paths.length
+  const remove = name === null
+  try {
+    const res = await rpc('svn.changelist', remove ? { sessionId, paths, remove: true } : { sessionId, paths, name: name ?? undefined })
+    if (!res.ok) return { ok: false, message: '分区操作失败：' + res.error }
+    return {
+      ok: true,
+      message: remove ? '已移出分区（' + count + ' 项）' : '已移入分区「' + name + '」（' + count + ' 项）',
+    }
+  } catch (error) {
+    return { ok: false, message: '分区操作失败：' + String(error) }
+  }
+}
+
+// --region AI 智能整理（11-ai-changelist-triage）
+
+/** AI 分析结果（plan + 元信息；失败 message 已含前缀可直接 notify）。 */
+export interface SvnAiPlanOutcome {
+  ok: boolean
+  /** 三段方案（ok=true 时存在）。 */
+  plan?: SvnAiPlan
+  /** 分析所依据的变更条目总数。 */
+  entriesCount?: number
+  /** 是否附带 diff 上下文（false = paths-only 降级）。 */
+  diffIncluded?: boolean
+  /** AI 被丢弃的候选路径数（幻觉/状态不符/互斥落选）。 */
+  dropped?: number
+  /** 实际使用的模型标识。 */
+  model?: string
+  /** 反馈文案（失败含原因）。 */
+  message: string
+}
+
+/**
+ * AI 智能整理分析（host `svn.aiPlan`；只读，LLM 一次性调用最长约 120s）。
+ * @author ddj 2026年09月23号
+ * @param sessionId 会话 id
+ * @returns 三段方案与分析元信息
+ */
+export async function svnAiPlan(sessionId: string | undefined): Promise<SvnAiPlanOutcome> {
+  try {
+    const res = await rpc('svn.aiPlan', { sessionId })
+    if (!res.ok) return { ok: false, message: 'AI 分析失败：' + res.error }
+    return {
+      ok: true,
+      plan: res.plan,
+      entriesCount: res.entriesCount,
+      diffIncluded: res.diffIncluded,
+      dropped: res.dropped,
+      model: res.model,
+      message: 'AI 分析完成',
+    }
+  } catch (error) {
+    return { ok: false, message: 'AI 分析失败：' + String(error) }
+  }
+}
+
+/**
+ * AI 整理执行段③：按目录合并写入 svn:ignore 属性（host `svn.ignore`）。
+ * @author ddj 2026年09月23号
+ * @param sessionId 会话 id
+ * @param items 目录聚合写入项
+ * @returns 执行结果与反馈文案
+ */
+export async function svnIgnore(sessionId: string | undefined, items: SvnIgnoreItem[]): Promise<SvnActionOutcome> {
+  try {
+    const res = await rpc('svn.ignore', { sessionId, items })
+    if (!res.ok) return { ok: false, message: 'SVN 忽略失败：' + res.error }
+    return { ok: true, message: res.summary }
+  } catch (error) {
+    return { ok: false, message: 'SVN 忽略失败：' + String(error) }
+  }
+}
+
+/** 混合通道取件结果（plan 为空 = 尚无新投递）。 */
+export interface SvnAiPendingOutcome {
+  ok: boolean
+  /** 收件箱方案（无新件为 null）。 */
+  plan?: SvnAiPlan | null
+  /** 幻觉/落选丢弃数。 */
+  dropped?: number
+  /** 投递时刻时间戳。 */
+  at?: number
+  /** 反馈文案（失败含原因）。 */
+  message: string
+}
+
+/**
+ * 混合通道取件（host `svn.aiPlanPending`）：轮询取会话 agent 投递的方案。
+ * @author ddj 2026年09月23号
+ * @param sessionId 会话 id
+ * @param since 注入时刻时间戳（早于它的旧投递不算新件）
+ * @returns 取件结果
+ */
+export async function svnAiPlanPending(sessionId: string | undefined, since: number): Promise<SvnAiPendingOutcome> {
+  try {
+    const res = await rpc('svn.aiPlanPending', { sessionId, since })
+    if (!res.ok) return { ok: false, message: '取件失败：' + res.error }
+    return { ok: true, plan: res.plan, dropped: res.dropped, at: res.at, message: res.plan ? '方案已送达' : '暂无方案' }
+  } catch (error) {
+    return { ok: false, message: '取件失败：' + String(error) }
+  }
+}
+
+/** 执行引擎单步（label = 进度/日志文案；kind/n 供汇总分段计数）。 */
+export interface SvnPlanStep {
+  /** 步骤展示文案。 */
+  label: string
+  /** 汇总分类（还原/分组/忽略）。 */
+  kind: 'revert' | 'group' | 'ignore'
+  /** 本步动作条目数（汇总计数用）。 */
+  n: number
+  /** 汇总去重键（kind='group' 时为组名；跨块同组只计一次）。 */
+  key?: string
+  /** 步骤执行（RPC 封装）。 */
+  run: () => Promise<SvnActionOutcome>
+}
+
+/** 执行引擎控制面（paused/cancelled 标志 + 步骤边界等待）。 */
+export interface SvnPlanCtl {
+  /** 是否请求暂停（步骤边界生效）。 */
+  paused: () => boolean
+  /** 是否请求取消剩余。 */
+  cancelled: () => boolean
+  /** 暂停点等待（paused 且未 cancelled 时挂起，直至外部恢复/取消）。 */
+  wait: () => Promise<void>
+}
+
+/** 执行引擎进度快照（每次步骤前后回调，驱动 UI 重渲）。 */
+export interface SvnPlanTick {
+  /** 已完成步数。 */
+  done: number
+  /** 总步数。 */
+  total: number
+  /** 当前步骤文案（done 步之后的下一步；末尾为空串）。 */
+  cur: string
+  /** 逐步日志（✓/✗ + 文案）。 */
+  log: Array<{ ok: boolean; text: string }>
+}
+
+/** 执行引擎结果（逐步日志 + 是否被取消）。 */
+export interface SvnPlanResult {
+  log: Array<{ ok: boolean; text: string }>
+  cancelled: boolean
+}
+
+/**
+ * 可暂停执行引擎（AI 整理执行段编排）：顺序执行步骤队列。
+ * - 暂停只在**步骤边界**生效（svn 子进程不可安全中断）：每步前 `ctl.wait()`；
+ * - 取消后不再取步（已执行不回滚）；
+ * - 单步失败（ok=false 或抛错）记日志后**继续**后续步骤。
+ * @author ddj 2026年09月23号
+ * @param steps 步骤队列（执行顺序即数组顺序）
+ * @param ctl 暂停/取消控制面
+ * @param onTick 进度回调（步骤前后各一次）
+ * @returns 逐步日志与取消标记
+ */
+export async function runPlanSteps(
+  steps: readonly SvnPlanStep[],
+  ctl: SvnPlanCtl,
+  onTick?: (tick: SvnPlanTick) => void,
+): Promise<SvnPlanResult> {
+  const log: Array<{ ok: boolean; text: string }> = []
+  const tick = (done: number) => onTick?.({
+    done,
+    total: steps.length,
+    cur: done < steps.length ? steps[done].label : '',
+    log: [...log],
+  })
+  let cancelled = false
+  tick(0)
+  for (let index = 0; index < steps.length; index++) {
+    if (ctl.cancelled()) { cancelled = true; break }
+    await ctl.wait()
+    if (ctl.cancelled()) { cancelled = true; break }
+    const step = steps[index]
+    let outcome: SvnActionOutcome
+    try {
+      outcome = await step.run()
+    } catch (error) {
+      outcome = { ok: false, message: String(error) }
+    }
+    log.push({ ok: outcome.ok, text: step.label + '：' + outcome.message })
+    tick(index + 1)
+  }
+  return { log, cancelled }
+}
+
+// --endregion
 
 // --region W2 差异管理补全（补丁/目录对比/远端检查/冲突/配对）
 

@@ -1,9 +1,11 @@
 /**
  * dsh-vscode-mode 设置安装自适应层测试：legacy / service / none 三策略分支，
- * 以及依赖解析链（schema 包改名 / dsh-settings 可选）。
- * 作者 ddj 2026-09-02 / 2026-09-18
+ * 依赖解析链（schema 包改名 / dsh-settings 可选）、Config volatile 标记（0.1.7 语义）
+ * 与 volatile 引用解包（unref/configField）。
+ * 作者 ddj 2026-09-02 / 2026-09-18 / 2026-09-23
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import realZ from '@deepseek-ai/schemastery'
 import {
   pickSchema,
   loadSettingsDeps,
@@ -16,19 +18,31 @@ import {
   settingsInstallStrategy,
   updateSection,
   buildSettingsSchema,
+  configVolatileState,
+  resetConfigVolatileState,
+  unref,
+  configField,
 } from '../src/fileOpenSettings.js'
 
 const NS = 'dsh-vscode-mode'
 const hooks = { setSource: () => {}, onChange: () => {} }
 
-/** 最小 schemastery z 桩（只构造不校验）。 */
-function zStub() {
+/** 最小 schemastery z 桩（只构造不校验；能力开关控制 default 链结果是否带 .volatile()）。 */
+function zStub(options?: { volatile?: boolean }) {
+  const field = (payload: Record<string, unknown>): Record<string, unknown> =>
+    options?.volatile ? { ...payload, volatile: () => ({ ...payload, volatileMarked: true }) } : payload
   return {
-    object: (shape: unknown) => ({ default: (value: unknown) => ({ shape, value }) }),
-    string: () => ({ default: (value: unknown) => value }),
-    boolean: () => ({ default: (value: unknown) => value }),
-    number: () => ({ default: (value: unknown) => value }),
+    object: (shape: unknown) => ({ default: (value: unknown) => field({ shape, value }) }),
+    string: () => ({ default: (value: unknown) => field({ value }) }),
+    boolean: () => ({ default: (value: unknown) => field({ value }) }),
+    number: () => ({ default: (value: unknown) => field({ value }) }),
   }
+}
+
+/** 取 Config/section 构建结果的顶层字段表。 */
+function shapeOf(schema: unknown): Record<string, Record<string, unknown>> {
+  const wrapped = schema as { default: (value: Record<string, unknown>) => { shape: Record<string, Record<string, unknown>> } }
+  return wrapped.default({}).shape
 }
 
 describe('loadSettingsDeps 解析链', () => {
@@ -259,12 +273,104 @@ describe('updateSection 冲突自愈写入', () => {
 describe('buildSettingsSchema 字段全集', () => {
   it('与设置键逐字一致（Config 声明与 section 安装同源）', () => {
     // zStub 的 z.object(shape) 返回 {default} 包装：取 shape 须经 .default() 展开
-    const wrapped = buildSettingsSchema(zStub()) as { default: (value: Record<string, unknown>) => { shape: Record<string, unknown> } }
-    const keys = Object.keys(wrapped.default({}).shape).sort()
+    const keys = Object.keys(shapeOf(buildSettingsSchema(zStub()))).sort()
     expect(keys).toEqual([
       'aiEffort', 'aiInline', 'aiModel', 'aiProvider',
+      'aiTaskEffort', 'aiTaskModel', 'aiTaskProvider',
       'fileOpenTool', 'integrationBaseUrl', 'keybindings', 'maxOpenEditors',
       'nativeOpenExts', 'sidebarMinWidth', 'svnPath', 'tortoisePath',
     ].sort())
+  })
+})
+
+describe('buildSettingsSchema volatile（0.1.7 Config 语义）', () => {
+  beforeEach(() => resetConfigVolatileState())
+
+  it('Config 模式：15 个顶层字段全部标记，观测态记 15/15', () => {
+    const shape = shapeOf(buildSettingsSchema(zStub({ volatile: true }), { volatile: true }))
+    const fields = Object.entries(shape)
+    expect(fields).toHaveLength(15)
+    for (const [name, field] of fields) {
+      expect(field.volatileMarked, name).toBe(true)
+    }
+    expect(configVolatileState()).toEqual({ requested: true, marked: 15, total: 15 })
+  })
+
+  it('keybindings 整个 object 标记、子键不标（volatile 路径约束）', () => {
+    const shape = shapeOf(buildSettingsSchema(zStub({ volatile: true }), { volatile: true }))
+    const keybindings = shape.keybindings
+    expect(keybindings.volatileMarked).toBe(true)
+    const children = Object.values(keybindings.shape as Record<string, Record<string, unknown>>)
+    expect(children.length).toBeGreaterThan(0)
+    for (const child of children) {
+      expect(child.volatileMarked).toBeUndefined()
+    }
+  })
+
+  it('section 模式（默认）：不标记也不请求观测（legacy/service 路径保持原语义）', () => {
+    const shape = shapeOf(buildSettingsSchema(zStub({ volatile: true })))
+    for (const field of Object.values(shape)) {
+      expect(field.volatileMarked).toBeUndefined()
+    }
+    expect(configVolatileState()).toEqual({ requested: false, marked: 0, total: 0 })
+  })
+
+  it('z 无 .volatile()（旧 schemastery）：降级不抛错，观测记 0/15', () => {
+    expect(() => buildSettingsSchema(zStub(), { volatile: true })).not.toThrow()
+    expect(configVolatileState()).toEqual({ requested: true, marked: 0, total: 15 })
+  })
+
+  it('.volatile() 抛错时保持原字段（模块加载绝不炸）', () => {
+    const explosive = {
+      object: (shape: unknown) => ({ default: (value: unknown) => ({ shape, value }) }),
+      string: () => ({ default: () => ({ volatile: () => { throw new Error('boom') } }) }),
+      boolean: () => ({ default: () => ({ volatile: () => { throw new Error('boom') } }) }),
+      number: () => ({ default: () => ({ volatile: () => { throw new Error('boom') } }) }),
+    }
+    expect(() => buildSettingsSchema(explosive as never, { volatile: true })).not.toThrow()
+    expect(configVolatileState()).toEqual({ requested: true, marked: 0, total: 15 })
+  })
+
+  it('真实 schemastery：字段 meta.volatile + cordis 校验路径产出引用可解包、未知键保留', () => {
+    const cfg = buildSettingsSchema(realZ as never, { volatile: true }) as Record<string, unknown> & {
+      dict: Record<string, { meta: { volatile?: boolean } }>
+      '~standard': { validate: (value: unknown) => { value?: Record<string, unknown>; issues?: unknown } }
+    }
+    const fields = Object.values(cfg.dict)
+    expect(fields).toHaveLength(15)
+    expect(fields.every((field) => field.meta.volatile === true)).toBe(true)
+    // 复刻 cordis resolveConfig 的标准校验路径：空配置 → 默认值字段被包成 volatile 引用
+    const result = cfg['~standard'].validate({ imageDir: '/icons' })
+    expect(result.issues).toBeUndefined()
+    const resolved = result.value as Record<string, unknown>
+    expect(unref(resolved.fileOpenTool)).toBe('auto')
+    expect(configField(resolved, 'fileOpenTool')).toBe('auto')
+    // schema 未声明的键（imageDir/languageServers 等）必须保留
+    expect(resolved.imageDir).toBe('/icons')
+    // section 安装模式同源但不标 volatile
+    const section = buildSettingsSchema(realZ as never) as { dict: Record<string, { meta: { volatile?: boolean } }> }
+    expect(Object.values(section.dict).some((field) => field.meta.volatile === true)).toBe(false)
+  })
+})
+
+describe('unref / configField（volatile 引用解包）', () => {
+  const WRITE = Symbol.for('cosmokit.volatile.write')
+
+  it('带写协议符号的引用解包为快照（跨拷贝同协议）', () => {
+    const ref = { get: () => 'auto', [WRITE]: () => {} }
+    expect(unref(ref)).toBe('auto')
+    expect(configField({ fileOpenTool: ref }, 'fileOpenTool')).toBe('auto')
+  })
+
+  it('普通值与无写符号对象直传，缺失/空配置安全', () => {
+    expect(unref('plain')).toBe('plain')
+    expect(unref(42)).toBe(42)
+    expect(unref(null)).toBeNull()
+    expect(unref(undefined)).toBeUndefined()
+    const lookalike = { get: () => 'x' }
+    expect(unref(lookalike)).toBe(lookalike)
+    expect(configField({ svnPath: 'D:/svn' }, 'svnPath')).toBe('D:/svn')
+    expect(configField({}, 'absent')).toBeUndefined()
+    expect(configField(null, 'k')).toBeUndefined()
   })
 })

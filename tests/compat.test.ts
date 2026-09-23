@@ -1,6 +1,6 @@
-/** host 兼容层测试：身份常量 / 探测 / 护栏 / 报告。作者 ddj 2026年08月24号 / 2026年09月18号 */
+/** host 兼容层测试：身份常量 / 探测 / 护栏 / 报告。作者 ddj 2026年08月24号 / 2026年09月18号 / 2026年09月23号 */
 import { describe, expect, it } from 'vitest'
-import { loadSettingsDeps, resetSettingsDeps } from '../src/fileOpenSettings.js'
+import { buildSettingsSchema, loadSettingsDeps, resetSettingsDeps, resetConfigVolatileState, configVolatileState } from '../src/fileOpenSettings.js'
 import {
   LEGACY_PROJECT_PREFIX,
   MCP_PACKAGE,
@@ -16,6 +16,7 @@ import {
   noteOwnRoute,
   resetOwnRoutes,
   routeConflict,
+  versionAdapters,
 } from '../src/compat.js'
 
 describe('identity constants', () => {
@@ -155,5 +156,64 @@ describe('detectGuards / buildReport', () => {
     expect(report.warnings.some((w) => w.includes('dsh-settings'))).toBe(true)
     expect(report.warnings.some((w) => w.includes('/edrv'))).toBe(true)
     expect(report.warnings.some((w) => w.includes('cordis.patch.yml'))).toBe(true)
+  })
+})
+
+describe('版本上界与 Config volatile 告警', () => {
+  const ctx = {
+    get: (name: string) => {
+      if (name === 'webServer') return { exact: new Map(), prefixes: new Map() }
+      if (name === 'loader') return { entries: () => [{ options: { name: PLUGIN_NAME } }] }
+      return undefined
+    },
+  } as never
+
+  /** 无 .volatile() 能力的 z 桩（复刻旧 schemastery 3.18.1）。 */
+  const zLegacy = {
+    object: (shape: unknown) => ({ default: (value: unknown) => ({ shape, value }) }),
+    string: () => ({ default: (value: unknown) => value }),
+    boolean: () => ({ default: (value: unknown) => value }),
+    number: () => ({ default: (value: unknown) => value }),
+  }
+  /** 有 .volatile() 能力的 z 桩（复刻 3.18.4）。 */
+  const zCapable = {
+    lift: (field: Record<string, unknown>) => ({ ...field, volatile: () => ({ ...field, volatileMarked: true }) }),
+    object(shape: unknown) { return { default: (value: unknown) => this.lift({ shape, value }) } },
+    string() { return { default: (value: unknown) => this.lift({ value }) } },
+    boolean() { return { default: (value: unknown) => this.lift({ value }) } },
+    number() { return { default: (value: unknown) => this.lift({ value }) } },
+  }
+
+  it('0.1.7-alpha.2 不再报「高于已实测版本」；alpha.3 报且带上界新值', async () => {
+    resetConfigVolatileState()
+    const ok = await buildReport(ctx, { depsAvailable: true, version: '9.9.9', dshVersion: '0.1.7-alpha.2' })
+    expect(ok.warnings.some((w) => w.includes('高于已实测版本'))).toBe(false)
+    const next = await buildReport(ctx, { depsAvailable: true, version: '9.9.9', dshVersion: '0.1.7-alpha.3' })
+    expect(next.warnings.some((w) => w.includes('0.1.7-alpha.2'))).toBe(true)
+  })
+
+  it('volatile 标记不完整且在 0.1.7 线 → 显式告警 + 适配行红', async () => {
+    resetConfigVolatileState()
+    buildSettingsSchema(zLegacy as never, { volatile: true })
+    expect(configVolatileState()).toEqual({ requested: true, marked: 0, total: 15 })
+    const report = await buildReport(ctx, { depsAvailable: true, version: '9.9.9', dshVersion: '0.1.7-alpha.2' })
+    expect(report.warnings.some((w) => w.includes('volatile'))).toBe(true)
+    const row = versionAdapters('0.1.7-alpha.2').find((item) => item.name.includes('volatile'))
+    expect(row?.active).toBe(false)
+    // 旧线（section 安装语义）不告警
+    const old = await buildReport(ctx, { depsAvailable: true, version: '9.9.9', dshVersion: '0.1.6-alpha.2' })
+    expect(old.warnings.some((w) => w.includes('volatile'))).toBe(false)
+  })
+
+  it('volatile 全量标记 → 无告警 + 适配行绿；未请求时不出该行', async () => {
+    resetConfigVolatileState()
+    buildSettingsSchema(zCapable as never, { volatile: true })
+    const report = await buildReport(ctx, { depsAvailable: true, version: '9.9.9', dshVersion: '0.1.7-alpha.2' })
+    expect(report.warnings.some((w) => w.includes('volatile'))).toBe(false)
+    const row = versionAdapters('0.1.7-alpha.2').find((item) => item.name.includes('volatile'))
+    expect(row?.active).toBe(true)
+    expect(row?.note).toContain('15/15')
+    resetConfigVolatileState()
+    expect(versionAdapters('0.1.7-alpha.2').some((item) => item.name.includes('volatile'))).toBe(false)
   })
 })

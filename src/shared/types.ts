@@ -38,7 +38,7 @@ export interface Decisions {
 /** 审查记录（host 内部存储与传给 client 的视图共用核心字段）。 */
 export interface RecordBase {
   callId: string
-  toolName: 'edit' | 'write'
+  toolName: 'edit' | 'write' | 'remote_ssh_write'
   path: string
   create: boolean
   callHunk: CallHunk | null
@@ -68,6 +68,8 @@ export interface DiffRecord extends RecordBase {
 /** 发往 client 的记录视图（不含 before 全文，仅长度）。 */
 export interface RecordView extends RecordBase {
   beforeLen: number
+  /** 展示路径（远程工作区为远端路径；运行时计算，不持久化）。 */
+  displayPath?: string
 }
 
 /** 归档条目内单条记录的存档视图。 */
@@ -109,6 +111,8 @@ export interface ArchiveEntry {
   at: string
   lastAt: string
   path: string
+  /** 展示路径（远程工作区为远端路径；运行时计算，不持久化）。 */
+  displayPath?: string
   batch: number | null
   reason: string | null
   nRecords: number

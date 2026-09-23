@@ -42,7 +42,7 @@ export function resetAiDirCache(): void {
  * @param ctx DSH 上下文
  * @returns llm 运行时或 null
  */
-function llmOf(ctx: Ctx): LlmRuntimeLike | null {
+export function llmOf(ctx: Ctx): LlmRuntimeLike | null {
   try {
     const llm = ctx.get('llm') as LlmRuntimeLike | undefined
     return llm && typeof llm.stream === 'function' ? llm : null
@@ -58,7 +58,7 @@ function llmOf(ctx: Ctx): LlmRuntimeLike | null {
  * @param cfg AI 配置
  * @returns 路由（provider/model）；不可路由返回 null
  */
-async function routeOf(llm: LlmRuntimeLike, cfg: AiConfigView): Promise<{ provider: string; model: string } | null> {
+export async function routeOf(llm: LlmRuntimeLike, cfg: AiConfigView): Promise<{ provider: string; model: string } | null> {
   if (cfg.provider && cfg.model) return { provider: cfg.provider, model: cfg.model }
   const providers = llm.listProviders()
   if (!providers.length) return null
@@ -66,6 +66,23 @@ async function routeOf(llm: LlmRuntimeLike, cfg: AiConfigView): Promise<{ provid
   const models = await llm.listModels(provider).catch(() => [])
   if (!models.length) return null
   return { provider, model: models[0].id }
+}
+
+/**
+ * AI 任务模型路由（非补全场景如 AI 智能整理）：任务配置优先，空则回落补全配置链。
+ * 回落序：taskProvider/taskModel 双非空直用 → routeOf（补全配置 → 自动首个）；
+ * effort 同序：taskEffort 非空用之，否则 cfg.effort（空串 = 不携带）。
+ * @author ddj 2026年09月23号
+ * @param llm llm 运行时
+ * @param cfg AI 配置（含可选任务模型字段）
+ * @returns 路由（provider/model/effort）；不可路由返回 null
+ */
+export async function taskRouteOf(llm: LlmRuntimeLike, cfg: AiConfigView): Promise<{ provider: string; model: string; effort: string } | null> {
+  const effort = cfg.taskEffort || cfg.effort || ''
+  if (cfg.taskProvider && cfg.taskModel) return { provider: cfg.taskProvider, model: cfg.taskModel, effort }
+  const base = await routeOf(llm, cfg)
+  if (!base) return null
+  return { ...base, effort }
 }
 
 /**

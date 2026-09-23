@@ -49,8 +49,8 @@ export function DiffLauncher(props) {
   if (tab === 'pending') {
     body = (sum.pendingFiles.length === 0
       ? React.createElement('div', { className: 'edrv-search-empty' }, '暂无待处理差异（已全部处理）')
-      : sum.pendingFiles.map((f) => React.createElement('div', { key: f.path, className: 'edrv-launch-row', title: '打开并跳转到差异 ' + f.path, onClick: () => onOpenFile(f.path) },
-          React.createElement('span', { className: 'edrv-launch-path' }, f.path),
+      : sum.pendingFiles.map((f) => React.createElement('div', { key: f.path, className: 'edrv-launch-row', title: '打开并跳转到差异 ' + (f.label ?? f.path), onClick: () => onOpenFile(f.path) },
+          React.createElement('span', { className: 'edrv-launch-path' }, f.label ?? f.path),
           React.createElement('span', { className: 'edrv-launch-cnt' }, '待处理 ' + f.pending + ' 处'),
           React.createElement('button', { className: 'edrv-btn-mini edrv-btn-keep', onClick: (e) => { e.stopPropagation(); onOpenFile(f.path) } }, '打开'))))
   } else {
@@ -78,7 +78,9 @@ export function DiffLauncher(props) {
               const sm = rec.summary || { accepted: 0, rejected: 0, pending: 0, superseded: false }
               return React.createElement('div', { key: rec.callId, style: { padding: '5px 8px', borderTop: '1px solid var(--dsw-alias-border-l1,#333)' } },
                 React.createElement('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', fontSize: 11, marginBottom: 2 } },
-                  React.createElement('span', { style: { color: 'var(--dsw-alias-label-primary,#ddd)', fontWeight: 600 } }, rec.toolName === 'write' ? (rec.create ? '新建' : '写入') : '编辑'),
+                  React.createElement('span', { style: { color: 'var(--dsw-alias-label-primary,#ddd)', fontWeight: 600 } },
+                    rec.toolName === 'remote_ssh_write' ? (rec.create ? '远端新建' : '远端写入')
+                      : rec.toolName === 'write' ? (rec.create ? '新建' : '写入') : '编辑'),
                   React.createElement('span', { style: { color: 'var(--dsw-alias-state-success-primary,#2e9e44)' } }, '采纳 ' + sm.accepted),
                   React.createElement('span', { style: { color: 'var(--dsw-alias-state-error-primary,#d9534f)' } }, '拒绝 ' + sm.rejected),
                   (rec.superseded ? React.createElement('span', { style: { color: 'var(--dsw-alias-state-warn-primary,#b7791f)' } }, '被覆盖') : null),
@@ -90,7 +92,7 @@ export function DiffLauncher(props) {
         }
         return React.createElement('div', { key: e.at + e.path, style: { border: '1px solid var(--dsw-alias-border-l1,#333)', borderRadius: 8, overflow: 'hidden' } },
           React.createElement('div', { style: { display: 'flex', gap: 8, alignItems: 'center', padding: '6px 8px', background: 'var(--dsw-alias-bg-layer-1,transparent)', cursor: 'pointer', flexWrap: 'wrap' }, onClick: () => { if (open) { setArchivePath(null); setArchiveDetail(null) } else { setArchivePath(e.path); loadArchiveDetail(e.path) } } },
-            React.createElement('span', { style: { flex: 1, fontSize: 12, color: 'var(--dsw-alias-label-primary,#ddd)', wordBreak: 'break-all' } }, e.path),
+            React.createElement('span', { style: { flex: 1, fontSize: 12, color: 'var(--dsw-alias-label-primary,#ddd)', wordBreak: 'break-all' } }, e.displayPath ?? e.path),
             (e.batch != null ? React.createElement('span', { style: { fontSize: 11, color: 'var(--dsw-alias-label-tertiary,#888)' } }, '批次 ' + e.batch) : null),
             (e.reason ? React.createElement('span', { style: { fontSize: 11, color: 'var(--dsw-alias-state-warn-primary,#b7791f)' } }, e.reason) : null),
             React.createElement('span', { style: { fontSize: 11, color: 'var(--dsw-alias-label-tertiary,#888)' } }, new Date(e.at).toLocaleString()),

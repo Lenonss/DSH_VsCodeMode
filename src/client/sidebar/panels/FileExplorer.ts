@@ -10,7 +10,7 @@
  * 作者 ddj 2026-08-26 / 2026-08-27 / 2026-08-31 / 2026-09-10 / 2026-09-16
  */
 import React from 'react'
-import { FileTypeIcon, IconFolderClose16, IconFolderOpen16, IconRefreshOutline16, classifyFileType } from '../../ui/icons.js'
+import { IconFolderClose16, IconFolderOpen16, IconRefreshOutline16, fileIconEl } from '../../ui/icons.js'
 import { rpc } from '../../rpc.js'
 import { ContextMenu } from '../../ui/ContextMenu.js'
 import { buildTreeMenu } from '../contextMenu.js'
@@ -48,20 +48,7 @@ function dirIconEl(isOpen) {
   return React.createElement(Icon, { size: 16, className: 'edrv-tree-icon' })
 }
 
-/**
- * 文件图标元素（官方 FileTypeIcon + classifyFileType 分类，未知类型为 other）。
- * @author ddj 2026年09月10号
- * @param name 文件名（含扩展名）
- * @returns 图标元素；原语缺失或分类异常返回 null
- */
-function fileIconEl(name) {
-  if (typeof FileTypeIcon !== 'function' || typeof classifyFileType !== 'function') return null
-  try {
-    return React.createElement(FileTypeIcon, { kind: classifyFileType(String(name ?? '')), size: 16, className: 'edrv-tree-icon' })
-  } catch (error) {
-    return null
-  }
-}
+// 文件图标元素（fileIconEl）已上移 icons.ts 共享（SVN 变更行同用），此处直接引用。
 
 /**
  * 行图标分派：目录 → 文件夹图标，文件 → 官方类型图标。

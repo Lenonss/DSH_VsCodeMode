@@ -6,6 +6,20 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
 # dsh-vscode-mode 开发/发布经验集（自我更新型技能）
 
 > updated: 2026-09-23 · 维护者：ddj（AI 会话按文末协议追加，保持精炼、去重）
+- 2026-09-23 坑（0.1.7-alpha.2 实测，**设置页 P0，两次截图证据**）：**0.1.7 的
+  `SettingsForms.describe` 按 `volatileForm(schema)` 门槛下发 entry——Config schema
+  无任何 `.volatile()` 字段 = 整条 entry 被跳过**，ns 不进 describe → client
+  `configForms` 恒 `status='unavailable'` → 设置页「设置服务暂不可用，当前使用自动选择」
+  + 控件禁用，host 写入抛 `has no volatile fields`（alpha.1 即存在，E2E 未闭环未暴露）。
+  修法三件套：① Config 全字段 `.volatile()`（`buildSettingsSchema(z,{volatile:true})`，
+  section 安装 schema **不标**——旧线无门槛且避免 `scope.get()` 引用污染）+ 能力守卫
+  （缺方法/抛错降级，模块加载不炸）；② **依赖移入 dependencies 钉 `~3.18.4`**
+  （3.18.1 无 `.volatile()` 方法！peer + 3.18.x 开区间会解析到任意旧版，重演 v0.5.2
+  「用户端解析不到」教训）；③ 配置读点收敛 `configField/unref`——cordis `resolveConfig`
+  把 volatile 字段解析成稳定引用（`Symbol.for('cosmokit.volatile.write')` 判据），
+  不解引用则回退值全落默认。规矩：**插件自带「无自定义 config 字段」类注释必须随
+  schema 字段实况复核**（cordis.patch.yml 曾因此漏声明）；兼容性页新增「Config volatile
+  字段」行 + 条件告警，同类静默失败以后可在报告直接看见。
 - 2026-09-23 实录（v0.8.0 发布，DSH 0.1.7 适配 P0×3 + 文件树原生打开；**dapFakeAdapter:234 连续第二次
   首跑抖动**）：三门本地全绿（typecheck 0 / **1843 passed · 11 skipped · 141 文件** / tsdown 双面）；
   `build` 首跑 41s 挂 `tests/dapFakeAdapter.test.ts:234 waitFor 超时`（与 v0.7.0 首跑逐字同款；判据三分
@@ -253,6 +267,11 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
 
 ## 差异审查（DiffBox / 旁车）设计口径
 
+- 2026-09-23 事实（issue #7）：dsh-remote-ssh 远程工作区 cwd = **本机镜像**（根含 `.remote-ssh.json {profileId,host,user,remotePath}`，向上 ≤8 层判定，与上游 findMirrorRoot 同判据）；agent
+  `remote_ssh_write` 直写远端不落镜像 → `capture.ts` 已扩展捕获（before=镜像快照 / after=args.content，before===after 不产记录）并以 **node:fs 写穿镜像**——勿走 ctx.fs，否则触发上游 2.4.14 写桥把相同内容
+  再推回远端（重复 SSH 往返 + 补丁次序）；展示走 `RecordView.displayPath`（`recView(record, ws)` 运行时算、**不落盘**），client 一律渲染 `displayPath ?? path`，分组/打开仍用 `path`。
+- 2026-09-23 坑（测试）：断言记录 `hunks` 用 `toEqual` 必须带上 `annotateHunks` 写入的 `afterStart/afterEnd`
+  （如 `{oldText:'old',newText:'new',afterStart:0,afterEnd:3}`）——这是既有标注行为，漏了会 deep-equal 失败，不是回归。
 - 2026-09-15 坑：`recordIsStale` 对「pending hunk 的 newText 已不在文件中」的记录**不归档**（只置 `conflict=true` 留在待处理列表供复核），
   而单文件 Keep/Undo 原先只认 `pendingRegions`（可定位差异）→ 这类文件恒留在差异栏、按钮置灰，全局 Keep All/Undo All 却是亮的（幽灵条目）。
   规矩：**给某类差异「可见性」时必须同时给「可操作性」**——`canDecideFile(pending, stale)` 决定按钮可用性、单文件决策作用域 = `pendingRegions + staleRegions`、
@@ -364,6 +383,9 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
 
 ## DSH host 环境约束
 
+- 2026-09-23 坑：workspace-write 审批模式下 pwsh 工具启动可能报 `SetNamedSecurityInfoW failed (Win32 5): grantWrite(<工作区>)`——
+  沙箱给工作区挂写 ACL 被拒，**任何** pwsh 命令（含只读 ls）都起不来，非命令本身问题；处置 = 对**同一条命令**一次性升 danger-full-access
+  重跑（审批策略为 never、升权也被拒时只能等策略切换），本会话 typecheck/vitest/build 均如此跑通。
 - `ctx.subprocess.spawn` 的 stdio **必须** `{ stdout: 'inherit', stderr: 'inherit', stdin: 'ignore' }`；
   管道收集模式（`{ maxBytes }`）在受管环境报 `spawn EPERM`。只需退出码的命令（reg/csc）用
   inherit；`handle.done` 成功解析为 `{ exitCode, signal }`（非 `{code}`）。
