@@ -11,6 +11,12 @@
 
 import { log } from './log.js'
 import { setEnsureSideEditor } from './sidebarBridge.js'
+import { OFFICE_EXT, BLIND_EXT, suffixOf } from '../shared/nativeOpen.js'
+import { inNativePath } from './nativeOpenStore.js'
+
+// 让位清单与 CSV/TSV 决策（可编辑性优先，同 avif 例外）已抽至双面契约 shared/nativeOpen.ts
+//（host 的 Config schema 默认原生打开范围与本模块共用同一事实源）；此处 re-export 保持旧 import 路径。
+export { OFFICE_EXT, BLIND_EXT }
 
 /** 官方 Tab 类型注册表服务名（ctx.get 用；不进 inject——旧版 DSH 无此包，inject 会停等）。 */
 export const OFFICIAL_TABS_SERVICE = 'sidebarRightTabs'
@@ -33,55 +39,14 @@ export const OFFICIAL_FILE_TAB_ID = 'dsh-vscode-mode/file'
 /** file 资源类型的 kind（与页类型 edrvEditor 区分：同 kind 只允许一份 extension）。 */
 export const OFFICIAL_FILE_KIND = 'edrvEditorFile'
 
-/**
- * Office 文档后缀：官方 `dsh-client-ui-sidebar-documentpreview` 的 Office 渲染器
- * 声明 `doc/docx/xls/xlsx/ppt/pptx`，并在 alpha.2 起提供侧栏 Office 预览。
- * 本插件让位官方（不认领），否则会把这些文件路由进 Monaco 而丢掉 Office 预览。
- */
-export const OFFICE_EXT: readonly string[] = ['doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'odt', 'ods', 'odp', 'pages', 'numbers']
-
-/**
- * 官方「不可预览二进制容器」清单（`UNVIEWABLE_BINARY_EXTENSIONS`，逐项取自
- * `dsh-client-ui-sidebar-documentpreview/lib/client.js` 的 `UNVIEWABLE_BINARY_EXTENSIONS`）。
- * 这些后缀官方会给出「无法预览」提示；本插件让位官方，避免把二进制当文本读成乱码。
- *
- * ⚠️ 刻意例外：官方清单含 `avif`，但本插件 {@link IMAGE_MIME} 支持 avif 图片预览
- * （浏览器原生解码），故从本表**移除** `avif` —— 保留本插件的图片预览优于官方的「不可预览」。
- * @author ddj 2026年09月18号
- */
-export const BLIND_EXT: readonly string[] = [
-  // 媒体
-  'mp4', 'mov', 'avi', 'mkv', 'webm', 'flv', 'wmv', 'm4v', 'mp3', 'wav', 'flac', 'ogg', 'm4a', 'aac', 'wma', 'opus',
-  // 归档
-  'zip', 'gz', 'tgz', 'bz2', 'xz', 'zst', '7z', 'rar', 'tar', 'jar',
-  // 可执行与库
-  'exe', 'dll', 'so', 'dylib', 'bin', 'o', 'class', 'pyc', 'wasm',
-  // 字体
-  'ttf', 'otf', 'woff', 'woff2', 'eot',
-  // 磁盘映像
-  'dmg', 'iso', 'img',
-  // 数据库与设计文件
-  'sqlite', 'db', 'psd', 'ai', 'sketch', 'tiff', 'tif', 'heic', 'heif',
-]
-
 /** 让位判定用后缀集合（模块级构建一次；小写、无前导点）。 */
 const DEFER_EXT_SET: Set<string> = new Set([...OFFICE_EXT, ...BLIND_EXT])
 
 /**
- * 取 path 的 basename 后缀（小写、无点）；无后缀/隐藏文件返回 ''。
- * @author ddj 2026年09月18号
- * @param path 文件路径（`/` 或 `\` 分隔均可）
- * @returns 小写后缀或 ''
- */
-function suffixOf(path: unknown): string {
-  const base = String(path ?? '').replace(/\\/g, '/').split('/').pop() ?? ''
-  const dot = base.lastIndexOf('.')
-  return dot > 0 ? base.slice(dot + 1).toLowerCase() : ''
-}
-
-/**
  * 该路径是否应让位官方查看器（Office 文档 + 官方不可预览的二进制容器）。
  * 命中即不认领 `dsh-resource://file/**`，回落官方预览/提示。
+ * 注：用户经设置 nativeOpenExts 追加的范围不走本函数，由 claim 的 canOpen 与
+ * 文件树 openFile 叠加 nativeOpenStore 判定（见 registerOfficialFileClaim）。
  * @author ddj 2026年09月18号
  * @param path 文件路径（工作区相对或绝对）
  * @returns 是否让位官方
@@ -374,11 +339,12 @@ export function registerOfficialFileClaim(options: {
       kind: OFFICIAL_FILE_KIND,
       patterns: [OFFICIAL_FILE_PATTERN],
       priority: 'extension',
-      // 畸形/解码失败地址否决 + Office/不可预览后缀让位官方：回落官方查看器，不产生白屏 Tab
+      // 畸形/解码失败地址否决 + Office/不可预览后缀让位官方 + 用户配置的原生打开范围
+      //（nativeOpenExts）同步让位——否则认领会把 openResource 又转发回本插件（原生打开失效）
       canOpen: (address: string) => {
         const parsed = parseOfficialFileAddress(address)
         if (parsed === null) return false
-        return !deferToOfficial(parsed.path)
+        return !deferToOfficial(parsed.path) && !inNativePath(parsed.path)
       },
       title: (address: string) => officialFileTitle(address),
     })

@@ -1,0 +1,4 @@
+{
+  "title": "VSCodeMode",
+  "description": "VSCode-like coding on DSH: Monaco editor with tabs and QuickOpen, command palette, agent edit review, SVN integration, and LSP smartness."
+}

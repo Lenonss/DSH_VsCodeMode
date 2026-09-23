@@ -42,6 +42,36 @@ const LUA_SRC = [
   '',
 ].join('\n')
 
+/**
+ * 补全专用文档（独立于 LUA_SRC，避免扰动既有按行号定位的断言）。
+ *
+ * 构造要点：`---@class` + `---@field` 注解 + 带 `---@type` 实例化，
+ * 使得在 `p.` 处请求补全时，EmmyLua 必须从**注释索引**里解析出 id/name 两个字段。
+ * 第 9 行（0-based）= `    p.`，光标在第 6 列（`.` 之后）。
+ */
+const COMPLETION_SRC = [
+  '---@class FriendProfile',   // 0
+  '---@field id number',       // 1
+  '---@field name string',     // 2
+  '',                          // 3
+  'local M = {}',              // 4
+  '',                          // 5
+  '---@return FriendProfile',  // 6
+  'function M.get() end',      // 7
+  '',                          // 8
+  'function M.go()',           // 9
+  '    ---@type FriendProfile',// 10
+  '    local p = M.get()',     // 11
+  '    p.',                    // 12
+  'end',                       // 13
+  '',                          // 14
+  'return M',                  // 15
+].join('\n')
+
+/** COMPLETION_SRC 中 `    p.` 的 0-based 光标位置。 */
+const COMPLETION_POS = { line: 12, character: 6 }
+
+
 /** 等待条件成立（LuaLS 索引/就绪）。 */
 async function waitFor(check: () => boolean | Promise<boolean>, ms = 15_000, step = 200): Promise<void> {
   const start = Date.now()
@@ -153,4 +183,56 @@ skip('lsp 端到端（真实 LuaLS）', () => {
     // 定义 + M.go 内调用
     expect(locations.length).toBeGreaterThanOrEqual(2)
   }, 30_000)
+
+  it('capabilities 声明了 completion / signatureHelp（能力协商成功）', () => {
+    expect(server.capabilities.completion).toBe(true)
+    expect(server.capabilities.signatureHelp).toBe(true)
+  })
+
+  it('completion 在 `p.` 处返回注解索引出的成员（含 ---@field 字段）', async () => {
+    // 补全用独立文档：同一 server 可开多文档，按 path 区分
+    const completionPath = 'completion.lua'
+    server.sync(completionPath, COMPLETION_SRC, 1)
+    let labels: string[] = []
+    // EmmyLua 首次索引该文档后才有成员，故轮询
+    await waitFor(async () => {
+      const list = await server.completion(
+        completionPath,
+        COMPLETION_POS.line,
+        COMPLETION_POS.character,
+        { triggerKind: 2, triggerCharacter: '.' },
+      )
+      labels = (list?.items ?? []).map((item) => item.label)
+      return labels.includes('id') && labels.includes('name')
+    }, 30_000)
+    // 两个 ---@field 字段必须出现（注释辅助索引的核心诉求）
+    expect(labels).toContain('id')
+    expect(labels).toContain('name')
+  }, 40_000)
+
+  it('completion 条目带 LSP kind（供 client 映射图标）', async () => {
+    const list = await server.completion('completion.lua', COMPLETION_POS.line, COMPLETION_POS.character, { triggerKind: 2 })
+    const field = (list?.items ?? []).find((item) => item.label === 'id')
+    expect(field).toBeDefined()
+    // 实测 EmmyLua 0.25.1：`---@field id number` 注解成员归类为 Variable(6) 而非 Field(5)
+    // （EmmyLua 把表字段建模为变量）。断言取实测值 —— client 侧经 LSP_COMPLETION_KIND_NAMES
+    // 名称表映射，任一协议编号都能落到正确的 Monaco 枚举，故此处只锁「有合法 kind」。
+    expect(field!.kind).toBe(6)
+    expect(field!.kind).toBeGreaterThan(0)
+  }, 30_000)
+
+  it('signatureHelp 在函数实参处返回签名与参数', async () => {
+    const doc = ['local M = {}', '', '--- 求和', 'function M.add(a, b)', '    return a + b', 'end', '', 'M.add(', ''].join('\n')
+    const docPath = 'signature.lua'
+    server.sync(docPath, doc, 1)
+    // `M.add(` 之后（第 7 行，0-based；列在 '(' 之后）
+    const pos = { line: 7, character: 6 }
+    let signatures: number = 0
+    await waitFor(async () => {
+      const help = await server.signatureHelp(docPath, pos.line, pos.character)
+      signatures = help?.signatures.length ?? 0
+      return signatures > 0
+    }, 30_000)
+    expect(signatures).toBeGreaterThan(0)
+  }, 40_000)
 })

@@ -45,6 +45,7 @@ function fakeMonaco() {
         CompletionItemKind: { Snippet: 1 },
         CompletionItemInsertTextRule: { InsertAsSnippet: 4 },
         registerCompletionItemProvider: make('completion'),
+        registerSignatureHelpProvider: make('signature'),
         registerInlineCompletionsProvider: make('inline'),
         registerDefinitionProvider: make('definition'),
         registerReferenceProvider: make('reference'),
@@ -173,6 +174,32 @@ describe('LSP provider 卸载（G4）', () => {
     mod.disposeLspProviders()
     expect(a.disposed.length).toBe(a.registeredProviders.length)
     expect((globalThis as Record<string, unknown>)['__edrvLspProvidersRegistered__']).toBeUndefined()
+  })
+
+  it('逐语言补全 provider 的注销器被逐个处置（数组不得整体压入）', async () => {
+    clearGlobals()
+    vi.resetModules()
+    const mod = await import('../src/client/monaco/lsp/providers.js')
+    const a = fakeMonaco()
+    mod.registerLspProviders(a.monaco)
+    // 补全按语言注册（lua + csharp）→ 两个注销器都必须可被 dispose 处理；
+    // 若实现把注册结果数组整体压入，会静默漏注销 → 重载后补全叠加
+    const completions = a.registeredProviders.filter((k) => k === 'completion').length
+    expect(completions).toBe(2)
+    mod.disposeLspProviders()
+    expect(a.disposed.filter((k) => k === 'completion').length).toBe(completions)
+  })
+
+  it('注销器列表无 undefined 占位（withCapability 不得写在 push 参数里）', async () => {
+    clearGlobals()
+    vi.resetModules()
+    const mod = await import('../src/client/monaco/lsp/providers.js')
+    const a = fakeMonaco()
+    mod.registerLspProviders(a.monaco)
+    // 注册项数与注销数必须严格相等：若有 undefined 占位（把 withCapability 放进
+    // disposables.push(...) 参数列表会压入 undefined），dispose 会少注销
+    mod.disposeLspProviders()
+    expect(a.disposed.length).toBe(a.registeredProviders.length)
   })
 
   it('跨重载再次注册被跳过（不重复叠加 provider）', async () => {

@@ -29,9 +29,10 @@ import { installOpenPathRouter, vscodeOpener, autoValue } from './openPathRouter
 import { patchRemoteOpen, probeRemoteOpen } from './remoteOpenRouter.js'
 import { setupExtOpen } from './externalOpen.js'
 import { SettingsContext } from './settingsContext.js'
-import { SIDEBAR_PLUGIN, pickSettingsBinder, registerSlotSafely } from './compat.js'
+import { SIDEBAR_PLUGIN, registerSlotSafely, settingsBridge } from './compat.js'
 import { detectSidebarService, installSideEditor, setEnsureSideEditor, SIDEBAR_INSTALL_CMD } from './sidebarBridge.js'
-import { detectOfficial, installOfficial, registerOfficialFileClaim, OFFICIAL_TAB_KIND, OFFICIAL_TAB_TITLE, isEditorTabActive, restoreEditorTab } from './officialSidebar.js'
+import { detectOfficial, installOfficial, registerOfficialFileClaim, OFFICIAL_TAB_KIND, OFFICIAL_TAB_TITLE, isEditorTabActive, restoreEditorTab, buildFileAddress } from './officialSidebar.js'
+import { setNativeCsv, setNativeOpenHandler, resetNativeOpen } from './nativeOpenStore.js'
 import { SideEditorTab } from './ui/SideEditorTab.js'
 import { OfficialSideTab } from './ui/OfficialSideTab.js'
 import { createClaimRouter } from './ui/ClaimRouter.js'
@@ -64,7 +65,9 @@ import type { CompatAdapter } from '../shared/compat.js'
 // ⚠️ inject 只列必需服务：webUiSettings 是 @linxin666/dsh-client-ui-web-ui-settings 提供的
 // 可选兼容桥（非官方服务），列入 inject 会让未装该桥的部署启动时 entry 永久 pending，
 // web boot 直接失败（'1 entry did not activate'）。兼容层用 ctx.get 运行时探测 + 降级，不靠 inject。
-export const inject = ['slots', 'timer', 'locale', 'connection', 'remote', 'workspaces', 'sessions', 'conversation', 'settingsScope']
+// 设置桥服务同理不进 inject（DSH 0.1.7 移除 settingsScope、新增 configForms，0.1.6 反之；
+// 写死任一桥名都会在另一版本停等）——设置桥由 compat.pickSettingsBinder 运行时探测三级降级。
+export const inject = ['slots', 'timer', 'locale', 'connection', 'remote', 'workspaces', 'sessions', 'conversation']
 
 /** 指令桥装配幂等标记（同一 document 重复 apply 只装配一次，避免重复键位监听）。 */
 let commandsMounted = false
@@ -155,8 +158,9 @@ export function apply(ctx: any): void {
     return subscribeScope(ctx, () => schedule(check, 0))
   }, 'vscode-mode: editor tab restore')
   const originalOpenPath = workspaces?.openPath
-  const binder = pickSettingsBinder(ctx)
-  const settings = binder.scope
+  // 设置桥：服务不进 inject（0.1.6 settingsScope / 0.1.7 configForms 桥名互斥，写死任一
+  // 都会在另一版本停等）→ compat.settingsBridge 探测 + 晚到 15×2s 有界重试，命中后重挂同步
+  const bridge = settingsBridge(ctx, { schedule, attempts: 15, intervalMs: 2000 })
   let selected = autoValue('auto')
   /** 0.1.3+ 会话文件链接路由（remote.session.openWorkspacePath）是否已安装（compatSummary 展示用）。 */
   let remoteOpenInstalled = false
@@ -175,7 +179,7 @@ export function apply(ctx: any): void {
 
   /** 客户端侧兼容摘要（与 host 报告合并展示；惰性求值保证 HMR 后仍新鲜）。 */
   const compatSummary = (): CompatAdapter[] => [
-    { name: '设置桥', active: settings !== undefined, note: settings !== undefined ? '使用 ' + binder.service + ' 桥' : '未绑定设置服务（fileOpenTool 持久化不可用）' },
+    { name: '设置桥', active: bridge.scope() !== undefined, note: bridge.scope() !== undefined ? '使用 ' + bridge.service() + ' 桥' : '未绑定设置服务（fileOpenTool 持久化不可用，晚到重试窗口内自愈）' },
     { name: '文件打开路由（workspaces.openPath）', active: Boolean(workspaces?.openPath), note: 'vscode 打开器优先，失败回退系统打开（0.1.2 及更早 DSH 的对话文件链接主路径）' },
     { name: '会话文件链接路由（remote.session.openWorkspacePath）', active: remoteOpenInstalled, note: '0.1.3+ 对话文件引用/产物打开优先走插件打开器，失败回退系统打开' },
     { name: '侧边栏打开器（' + SIDEBAR_PLUGIN + '）', active: registry.get(SIDEBAR_PLUGIN) !== undefined, note: registry.get(SIDEBAR_PLUGIN) !== undefined ? '已注册（优先级 80）' : '未检测到侧边栏打开能力' },
@@ -241,35 +245,47 @@ export function apply(ctx: any): void {
       claimDisposer = null
     }
   }
-  ctx.effect(() => {
-    if (!settings) return undefined
-    const sync = (): void => {
-      const snapshot = settings.getSnapshot()
-      if (snapshot.status === 'loading') return
-      selected = autoValue(snapshot.value?.fileOpenTool)
-      syncFileClaim()
-      window.dispatchEvent(new CustomEvent('edrv:file-open-tool-change', { detail: { value: selected } }))
-    }
-    sync()
-    return settings.subscribe(sync)
-  }, 'vscode-mode: file opener setting sync')
-  // 快捷键配置同步：设置提交后立即刷新键位匹配（编辑器/QuickOpen 按事件时读取）
-  // 同一订阅里顺带同步侧边栏最小宽度（sidebarMinWidth）→ 派发 edrv:sidebar-min-width 通知编辑器重夹
-  // 以及页签上限（maxOpenEditors）→ 派发 edrv:max-open-editors 通知编辑器复算淘汰
-  ctx.effect(() => {
-    if (!settings) return undefined
-    const sync = (): void => {
-      const snapshot = settings.getSnapshot()
-      if (snapshot.status === 'loading') return
-      keybindingsApply(snapshot.value?.keybindings)
-      const minW = sidebarMinApply(snapshot.value?.sidebarMinWidth)
-      window.dispatchEvent(new CustomEvent('edrv:sidebar-min-width', { detail: { value: minW } }))
-      const limit = editorLimitApply(snapshot.value?.maxOpenEditors)
-      window.dispatchEvent(new CustomEvent('edrv:max-open-editors', { detail: { value: limit } }))
-    }
-    sync()
-    return settings.subscribe(sync)
-  }, 'vscode-mode: keybindings setting sync')
+  // 设置同步（fileOpenTool / 快捷键 / 侧宽 / 页签上限）：桥可能晚于本插件 apply 就绪
+  // （设置桥服务不进 inject），首次命中即挂两条 effect；晚到经 bridge.whenReady 重挂一次
+  // （settingsBridge 15×2s 有界重试内命中才会触发，用尽后保持旧行为不轮询）。
+  let settingsSyncMounted = false
+  const mountSettingsSyncs = (): void => {
+    if (settingsSyncMounted) return
+    const scope = bridge.scope()
+    if (!scope) return
+    settingsSyncMounted = true
+    ctx.effect(() => {
+      const sync = (): void => {
+        const snapshot = scope.getSnapshot()
+        if (snapshot.status === 'loading') return
+        selected = autoValue(snapshot.value?.fileOpenTool)
+        syncFileClaim()
+        window.dispatchEvent(new CustomEvent('edrv:file-open-tool-change', { detail: { value: selected } }))
+      }
+      sync()
+      return scope.subscribe(sync)
+    }, 'vscode-mode: file opener setting sync')
+    // 快捷键配置同步：设置提交后立即刷新键位匹配（编辑器/QuickOpen 按事件时读取）
+    // 同一订阅里顺带同步侧边栏最小宽度（sidebarMinWidth）→ 派发 edrv:sidebar-min-width 通知编辑器重夹
+    // 以及页签上限（maxOpenEditors）→ 派发 edrv:max-open-editors 通知编辑器复算淘汰
+    ctx.effect(() => {
+      const sync = (): void => {
+        const snapshot = scope.getSnapshot()
+        if (snapshot.status === 'loading') return
+        keybindingsApply(snapshot.value?.keybindings)
+        const minW = sidebarMinApply(snapshot.value?.sidebarMinWidth)
+        window.dispatchEvent(new CustomEvent('edrv:sidebar-min-width', { detail: { value: minW } }))
+        const limit = editorLimitApply(snapshot.value?.maxOpenEditors)
+        window.dispatchEvent(new CustomEvent('edrv:max-open-editors', { detail: { value: limit } }))
+        // 原生打开范围同拍推送（nativeOpenStore 解析缓存；旧版无该字段 → 保持默认集）
+        setNativeCsv(snapshot.value?.nativeOpenExts)
+      }
+      sync()
+      return scope.subscribe(sync)
+    }, 'vscode-mode: keybindings setting sync')
+  }
+  mountSettingsSyncs()
+  if (!settingsSyncMounted) ctx.effect(() => bridge.whenReady(mountSettingsSyncs), 'vscode-mode: settings bridge wait')
   if (workspaces?.openPath) {
     ctx.effect(() => installOpenPathRouter({
       workspaces,
@@ -371,6 +387,17 @@ export function apply(ctx: any): void {
     // 官方打开器（下拉「官方侧边栏」选项，动态出现；openResource 能力缺失时跳过）+ 按当前设置同步 file 地址认领
     if (typeof official.service.openResource === 'function') {
       ctx.effect(() => registry.register(officialSidebarOpener(official.service)), 'vscode-mode: official sidebar opener')
+      // 原生打开 handler：文件树 openFile 命中 nativeOpenExts 时经 openResource 落官方渲染器
+      //（claim 的 canOpen 同步让位该范围，否则地址又被认领转发回本插件）；形态撤下时解绑
+      ctx.effect(() => {
+        setNativeOpenHandler((path) => {
+          const scope = readSessionScope(ctx)
+          if (!scope.sessionId) return false
+          official.service.openResource?.(buildFileAddress(path, scope.sessionId))
+          return typeof official.service.openResource === 'function'
+        })
+        return () => setNativeOpenHandler(null)
+      }, 'vscode-mode: native open handler')
     }
     syncFileClaim()
   }
@@ -449,7 +476,7 @@ export function apply(ctx: any): void {
     id: 'vscode-mode',
     order: 30,
     label: 'VSCodeMode',
-  }, () => React.createElement(SettingsContext.Provider, { value: settings }, React.createElement(McpSettings, { openerRegistry: registry, compatSummary })))
+  }, () => React.createElement(SettingsContext.Provider, { value: bridge.scope() }, React.createElement(McpSettings, { openerRegistry: registry, compatSummary })))
 
   // 卸载收尾（G4，DSH 0.1.6-alpha.2 起支持运行时卸载/重载）：
   // 注销挂在存活的 window.monaco 上的全部 Monaco provider 并复位模块状态。
@@ -459,5 +486,7 @@ export function apply(ctx: any): void {
     try { disposeLaunchJson() } catch { /* 同上 */ }
     try { disposeAiInline() } catch { /* 同上 */ }
     try { disposeLsp() } catch { /* 同上 */ }
+    // 原生打开范围复位回默认集（handler 解绑已由其自身 ctx.effect disposer 承担）
+    try { resetNativeOpen() } catch { /* 同上 */ }
   }, 'vscode-mode: monaco providers teardown')
 }

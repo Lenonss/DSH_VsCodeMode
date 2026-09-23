@@ -80,7 +80,7 @@ export function registerRoutes(
   ctx.effect(() => guarded({
     kind: 'exact',
     path: RPC_PATH,
-    handler: async (req: unknown, res: { statusCode?: number; setHeader: (k: string, v: string) => void; end: (b?: string) => void }) => {
+    handler: async (req: unknown, res: { statusCode?: number; setHeader: (k: string, v: string) => void; end: (b?: string | Uint8Array) => void }) => {
       try {
         const chunks: Uint8Array[] = []
         for await (const chunk of req as AsyncIterable<Uint8Array>) chunks.push(chunk)
@@ -92,6 +92,18 @@ export function registerRoutes(
         }
         const method = (typeof input.method === 'string' ? input.method : '') as RpcMethod
         const result = await handleRpc(method, (input.args ?? {}) as never)
+        // 二进制预览信封（edrv.readBinary）：octet-stream + 元数据头直出原始字节，
+        // 省 base64 ~33% 体积；错误与其余方法仍走下方 JSON 分支（client 侧据此识别并回退）
+        const bin = (result as { ok?: boolean; binary?: { bytes?: Uint8Array; mime?: string; size?: number; version?: string } } | null)?.binary
+        if (result && (result as { ok?: boolean }).ok === true && bin?.bytes instanceof Uint8Array) {
+          res.statusCode = 200
+          res.setHeader('content-type', 'application/octet-stream')
+          res.setHeader('x-edrv-mime', String(bin.mime ?? ''))
+          res.setHeader('x-edrv-version', String(bin.version ?? ''))
+          res.setHeader('x-edrv-size', String(bin.size ?? bin.bytes.byteLength))
+          res.end(Buffer.from(bin.bytes))
+          return
+        }
         res.statusCode = 200
         res.setHeader('content-type', 'application/json')
         res.end(JSON.stringify(result))

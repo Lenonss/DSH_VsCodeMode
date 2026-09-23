@@ -12,6 +12,7 @@ import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/p
 import { dirname, join, resolve, sep } from 'node:path'
 import { parseSidecar } from './store.js'
 import { recSummary } from './model.js'
+import { log } from './log.js'
 import { SIDECAR, SIDECAR_ARCHIVE, dshHome, sessionIdSegment, sessionWorkspaceKey, sessionsRoot } from './paths.js'
 import type { PerfMoveFailure, PerfMoveItem, PerfSession, PerfTotals, PerfWorkspace, SidecarPerfSummary } from './shared/rpc.js'
 import type { Ctx } from './store.js'
@@ -112,13 +113,76 @@ export async function scanSessionInventory(home = dshHome(), archive = sessionsA
   return { workspaces, sessions, totals: { workspaces: workspaces.length, sessions: totalCount, totalBytes } }
 }
 
-/** 标记活跃会话（live id 与目录段名双向匹配，兼容编码差异）。 */
-export function markActiveSessions(sessions: PerfSession[], activeIds: Iterable<string>): void {
-  const raw = new Set(activeIds)
+/** id 双向匹配器：原始 id 与编码段名任一命中（兼容编码差异）。 */
+function idMatcher(ids: Iterable<string>): (id: string) => boolean {
+  const raw = new Set(ids)
   const encoded = new Set<string>()
   for (const id of raw) encoded.add(sessionIdSegment(id))
+  return (id) => raw.has(id) || encoded.has(id)
+}
+
+/** 标记活跃会话（live id 与目录段名双向匹配，兼容编码差异）。 */
+export function markActiveSessions(sessions: PerfSession[], activeIds: Iterable<string>): void {
+  const match = idMatcher(activeIds)
   for (const s of sessions) {
-    if (raw.has(s.sessionId) || encoded.has(s.sessionId)) s.active = true
+    if (match(s.sessionId)) s.active = true
+  }
+}
+
+/** 官方归档/置顶标志 id 集合（registry 缺服务/缺字段时为空集）。 */
+interface OfficialFlagIds {
+  archived: Set<string>
+  pinned: Set<string>
+}
+
+/** 空标志集合（服务/字段缺失的统一降级返回值）。 */
+function emptyFlagIds(): OfficialFlagIds {
+  return { archived: new Set(), pinned: new Set() }
+}
+
+/** 任意值 → id 字符串集合（非数组或非字符串元素一律丢弃）。 */
+function toIdSet(ids: unknown): Set<string> {
+  if (!Array.isArray(ids)) return new Set()
+  return new Set(ids.filter((id): id is string => typeof id === 'string'))
+}
+
+/**
+ * 一次读取 workspaceRegistry 的官方归档/置顶 id 集合（摊到盘点各行使用）。
+ * 服务缺失、字段缺失或非数组（DSH 0.1.6 及更旧没有）一律视为空集，绝不抛错。
+ * @author ddj 2026年09月22号
+ * @param ctx DSH 上下文
+ * @returns archived/pinned 两组 id 集合（缺失即空集）
+ */
+export function registryFlags(ctx: Ctx): OfficialFlagIds {
+  try {
+    const registry = ctx.get('workspaceRegistry')
+    if (!registry) return emptyFlagIds()
+    return { archived: toIdSet(registry.archivedSessionIds), pinned: toIdSet(registry.pinnedSessionIds) }
+  } catch (error) {
+    log.debug('registryFlags 跳过（服务缺失或读取失败）：' + String(error))
+    return emptyFlagIds()
+  }
+}
+
+/**
+ * 给盘点行附官方归档/置顶标志（best-effort：仅命中附 true，缺失/未命中不附字段），
+ * 让 PerfSettings 会话行能看到官方侧栏的归档/置顶状态。id 匹配复用 markActiveSessions
+ * 的双向（原始 id / 编码段名）口径；服务/字段缺失不附字段、绝不抛错（旧 host 兼容降级）。
+ * @author ddj 2026年09月22号
+ * @param sessions 盘点会话行（就地附加 archived/pinned）
+ * @param ctx DSH 上下文
+ */
+export function markOfficialFlags(sessions: PerfSession[], ctx: Ctx): void {
+  try {
+    const flags = registryFlags(ctx)
+    const archived = idMatcher(flags.archived)
+    const pinned = idMatcher(flags.pinned)
+    for (const s of sessions) {
+      if (archived(s.sessionId)) s.archived = true
+      if (pinned(s.sessionId)) s.pinned = true
+    }
+  } catch (error) {
+    log.debug('markOfficialFlags 跳过（读取失败，保持无标志）：' + String(error))
   }
 }
 
@@ -236,6 +300,28 @@ export async function restoreSession(home: string, archive: string, workspaceKey
     return { ok: true }
   } catch (error) {
     return { ok: false, error: String(error) }
+  }
+}
+
+/**
+ * 恢复后对齐官方归档标志（best-effort）：官方 archive 是 workspaceRegistry 的
+ * archivedSessionIds 持久标志（只藏 UI/拦模型步骤，不搬目录；dsh-workspace 源码注明
+ * unarchiveSession 对未归档与未知 id 均为无写入 no-op、对失踪会话也容忍）。
+ * 插件把目录搬回后若该会话曾被官方归档，官方侧栏会继续隐藏它、0.1.7 的
+ * archived-session-gate 会继续拦它的模型步骤——这里探测 host 的 workspaceRegistry
+ * 服务做一次幂等清除；服务缺失、id 编码差异未命中或调用抛错一律静默跳过
+ * （保持现状，不加猜的行为）。有效期：仅恢复成功后触发一次，不轮询不重试。
+ * @author ddj 2026年09月22号
+ * @param ctx DSH 上下文
+ * @param sessionId 恢复的会话 id（目录段名与原始 id 同形时可命中官方标志）
+ */
+export async function unarchiveOfficial(ctx: Ctx, sessionId: string): Promise<void> {
+  try {
+    const registry = ctx.get('workspaceRegistry')
+    if (!registry || typeof registry.unarchiveSession !== 'function') return
+    await registry.unarchiveSession(sessionId)
+  } catch (error) {
+    log.debug('unarchiveOfficial 跳过（服务缺失或调用失败，保持现状）：' + String(error))
   }
 }
 

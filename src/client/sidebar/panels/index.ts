@@ -6,7 +6,7 @@
  * 作者 ddj 2026-08-26 / 2026-09-03 / 2026-09-10 / 2026-09-16
  */
 import React from 'react'
-import { IconBranchOutline16, IconFolderOpenOutline16, IconListPenOutline16, IconSearchOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
+import { IconBranchOutline16, IconFolderOpenOutline16, IconListPenOutline16, IconSearchOutline16 } from '../../ui/icons.js'
 import { dapStore } from '../../dap/store.js'
 import { FileExplorer } from './FileExplorer.js'
 import { SearchPanel } from './SearchPanel.js'

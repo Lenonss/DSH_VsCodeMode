@@ -1,10 +1,17 @@
 /** client 兼容层测试：设置桥优先序 / slot 安全注册 / openPath 链式补丁 / accessor 感知补丁。作者 ddj 2026年08月24号 */
 import { describe, expect, it, vi } from 'vitest'
-import { PLUGIN_NAME, SIDEBAR_PLUGIN, patchAccessor, patchMethod, pickSettingsBinder, registerSlotSafely } from '../src/client/compat.js'
+import { PLUGIN_NAME, SIDEBAR_PLUGIN, patchAccessor, patchMethod, pickSettingsBinder, registerSlotSafely, settingsBridge } from '../src/client/compat.js'
 
 describe('pickSettingsBinder', () => {
   const binderOf = (scope) => ({ bind: vi.fn(() => scope) })
   const ctxOf = (services) => ({ get: (name) => services[name] })
+  /** 造 DSH 0.1.7 ConfigForm 替身（getSnapshot/subscribe/set 最小面）。 */
+  const formOf = (overrides = {}) => ({
+    getSnapshot: vi.fn(() => ({ status: 'ready', value: { fileOpenTool: 'auto' }, writable: true, revision: 3, mode: 'host' })),
+    subscribe: vi.fn((listener) => { listener(); return () => {} }),
+    set: vi.fn(async () => true),
+    ...overrides,
+  })
 
   it('webUiSettings 兼容桥优先于官方 settingsScope', () => {
     const webUi = binderOf({ getSnapshot: () => ({}) })
@@ -33,6 +40,119 @@ describe('pickSettingsBinder', () => {
     const official = binderOf({ getSnapshot: () => ({}) })
     const out = pickSettingsBinder(ctxOf({ webUiSettings: webUi, settingsScope: official }))
     expect(out.service).toBe('settingsScope')
+  })
+
+  it('configForms（0.1.7 官方新桥）优先命中，旧两级不被触碰', () => {
+    const forms = { get: vi.fn(() => formOf()) }
+    const webUi = binderOf({ getSnapshot: () => ({}) })
+    const official = binderOf({ getSnapshot: () => ({}) })
+    const out = pickSettingsBinder(ctxOf({ configForms: forms, webUiSettings: webUi, settingsScope: official }))
+    expect(out.service).toBe('configForms')
+    expect(out.scope).toBeDefined()
+    expect(forms.get).toHaveBeenCalledWith(PLUGIN_NAME)
+    expect(webUi.bind).not.toHaveBeenCalled()
+    expect(official.bind).not.toHaveBeenCalled()
+  })
+
+  it('configForms 适配器透传 status/value/writable，subscribe 直通，set 丢弃 boolean', async () => {
+    const form = formOf({ set: vi.fn(async () => false) })
+    const out = pickSettingsBinder(ctxOf({ configForms: { get: () => form } }))
+    const snap = out.scope.getSnapshot()
+    expect(snap.status).toBe('ready')
+    expect(snap.value).toEqual({ fileOpenTool: 'auto' })
+    expect(snap.writable).toBe(true)
+    let notified = 0
+    const off = out.scope.subscribe(() => { notified += 1 })
+    expect(notified).toBe(1)
+    off()
+    // set 返回 false（未生效）也不 reject：boolean 被丢弃，错误通道保持 form.set 自身 reject 的既有语义
+    await expect(out.scope.set('fileOpenTool', 'vscode')).resolves.toBeUndefined()
+    expect(form.set).toHaveBeenCalledWith('fileOpenTool', 'vscode')
+  })
+
+  it('configForms 服务缺失（0.1.6）时落回原两级，行为不变', () => {
+    const official = binderOf({ getSnapshot: () => ({}) })
+    const out = pickSettingsBinder(ctxOf({ configForms: undefined, settingsScope: official }))
+    expect(out.service).toBe('settingsScope')
+    expect(official.bind).toHaveBeenCalledWith({ namespace: PLUGIN_NAME })
+  })
+
+  it('ctx.get 探测 configForms 抛错时降级到下一级', () => {
+    const webUi = binderOf({ getSnapshot: () => ({}) })
+    const services = { webUiSettings: webUi }
+    const ctx = { get: (name) => { if (name === 'configForms') throw new Error('no such service'); return services[name] } }
+    const out = pickSettingsBinder(ctx)
+    expect(out.service).toBe('webUiSettings')
+  })
+
+  it('configForms.get 抛错或形状不符时降级到下一级', () => {
+    const official = binderOf({ getSnapshot: () => ({}) })
+    const thrown = pickSettingsBinder(ctxOf({ configForms: { get: () => { throw new Error('boom') } }, settingsScope: official }))
+    expect(thrown.service).toBe('settingsScope')
+    const malformed = pickSettingsBinder(ctxOf({ configForms: { get: () => ({}) }, settingsScope: official }))
+    expect(malformed.service).toBe('settingsScope')
+  })
+
+  it('form.set 自身 reject 仍向调用方传导', async () => {
+    const form = formOf({ set: vi.fn(async () => { throw new Error('write refused') }) })
+    const out = pickSettingsBinder(ctxOf({ configForms: { get: () => form } }))
+    await expect(out.scope.set('keybindings', {})).rejects.toThrow('write refused')
+  })
+})
+
+describe('settingsBridge 晚到有界重试', () => {
+  const binderOf = (scope) => ({ bind: vi.fn(() => scope) })
+  /** 收集假调度器的待执行任务（测试手动驱动节拍）。 */
+  function fakeSchedule() {
+    const queue: Array<() => void> = []
+    return { queue, schedule: (fn: () => void, _ms: number) => { queue.push(fn) } }
+  }
+
+  it('构造即命中：whenReady 立即回调，不排队重试', () => {
+    const scope = { getSnapshot: () => ({}), subscribe: () => () => {}, set: async () => {} }
+    const { queue, schedule } = fakeSchedule()
+    const bridge = settingsBridge({ get: (name) => (name === 'settingsScope' ? binderOf(scope) : undefined) }, { schedule, attempts: 15 })
+    expect(bridge.scope()).toBe(scope)
+    expect(bridge.service()).toBe('settingsScope')
+    const ready = vi.fn()
+    bridge.whenReady(ready)
+    expect(ready).toHaveBeenCalledTimes(1)
+    expect(queue).toHaveLength(0)
+  })
+
+  it('晚到：重试节拍内命中后通知 whenReady 且 scope 可取', () => {
+    let late: unknown
+    const scope = { getSnapshot: () => ({}), subscribe: () => () => {}, set: async () => {} }
+    const { queue, schedule } = fakeSchedule()
+    const ctx = { get: (name) => (name === 'settingsScope' ? binderOf(late) : undefined) }
+    const bridge = settingsBridge(ctx, { schedule, attempts: 15, intervalMs: 1 })
+    expect(bridge.scope(), '构造时未就绪').toBeUndefined()
+    const ready = vi.fn()
+    bridge.whenReady(ready)
+    expect(ready).not.toHaveBeenCalled()
+    // 第 2 拍服务到位
+    late = scope
+    while (queue.length && !bridge.scope()) queue.shift()!()
+    expect(bridge.scope()).toBe(scope)
+    expect(ready).toHaveBeenCalledTimes(1)
+  })
+
+  it('重试用尽保持未就绪：不再排队、不通知（与旧行为一致，不无限轮询）', () => {
+    const { queue, schedule } = fakeSchedule()
+    const bridge = settingsBridge({ get: () => undefined }, { schedule, attempts: 2 })
+    while (queue.length) queue.shift()!()
+    expect(queue).toHaveLength(0)
+    expect(bridge.scope()).toBeUndefined()
+    const ready = vi.fn()
+    const off = bridge.whenReady(ready)
+    expect(ready).not.toHaveBeenCalled()
+    off()
+  })
+
+  it('未提供 schedule 时不重试（等价旧行为）', () => {
+    const bridge = settingsBridge({ get: () => undefined }, { attempts: 15 })
+    expect(bridge.scope()).toBeUndefined()
+    expect(bridge.service()).toBe('none')
   })
 })
 

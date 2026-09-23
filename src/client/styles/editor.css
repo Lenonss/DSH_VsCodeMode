@@ -71,9 +71,11 @@
 [data-edrv-view] .edrv-imgview { flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 [data-edrv-view] .edrv-imgview-bar { display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 10px; flex-shrink: 0; border-bottom: 1px solid var(--dsw-alias-border-l1, #e0e6e8); background: var(--dsw-alias-bg-layer-1, transparent); }
 [data-edrv-view] .edrv-imgview-meta { font-size: 11px; color: var(--dsw-alias-label-tertiary, #9aa5b1); white-space: nowrap; }
-[data-edrv-view] .edrv-imgview-stage { flex: 1 1 auto; min-height: 0; display: flex; align-items: center; justify-content: center; overflow: auto; padding: 14px; background-color: var(--dsw-alias-bg-layer-1, #f0f4f4); background-image: conic-gradient(rgba(128,128,128,.14) 25%, transparent 0 50%, rgba(128,128,128,.14) 0 75%, transparent 0); background-size: 16px 16px; }
-[data-edrv-view] .edrv-imgview-img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 4px; box-shadow: 0 2px 12px rgba(31,41,51,.18); }
-[data-edrv-view] .edrv-imgview-broken { display: flex; flex-direction: column; align-items: center; gap: 10px; font-size: 13px; color: var(--dsw-alias-label-tertiary, #777); }
+/* 图片预览：居中交给子项 margin:auto（auto 外边距优先吃正向空闲空间；溢出时空闲为负 → 外边距归 0、
+   flex-start 起点对齐 → 放大后四边均可滚动到达，规避 justify-content:center 双侧溢出不可达问题） */
+[data-edrv-view] .edrv-imgview-stage { flex: 1 1 auto; min-height: 0; display: flex; overflow: auto; padding: 14px; background-color: var(--dsw-alias-bg-layer-1, #f0f4f4); background-image: conic-gradient(rgba(128,128,128,.14) 25%, transparent 0 50%, rgba(128,128,128,.14) 0 75%, transparent 0); background-size: 16px 16px; }
+[data-edrv-view] .edrv-imgview-img { max-width: 100%; max-height: 100%; flex-shrink: 0; margin: auto; align-self: flex-start; object-fit: contain; border-radius: 4px; box-shadow: 0 2px 12px rgba(31,41,51,.18); }
+[data-edrv-view] .edrv-imgview-broken { display: flex; flex-direction: column; align-items: center; gap: 10px; font-size: 13px; color: var(--dsw-alias-label-tertiary, #777); margin: auto; }
 [data-edrv-view] .edrv-pdf-host { flex: 1 1 auto; min-width: 0; min-height: 0; position: relative; overflow: hidden; }
 [data-edrv-view] .edrv-pdf-host > .edrv-pdf { position: absolute; inset: 0; }
 [data-edrv-view] .edrv-pdf { min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }

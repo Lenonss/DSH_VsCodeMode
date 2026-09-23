@@ -11,10 +11,12 @@ import React from 'react'
 import { dbg, rpc } from '../rpc.js'
 import { emitFileChanged, emitRefresh } from '../events.js'
 import { langOf, loadMonaco, snippetLanguageOf } from '../monaco/loader.js'
-import { dataUrlOf, isImagePath, isSvgPath } from '../imagePreview.js'
+import { clampZoom, clearZoomMem, dataUrlOf, isImagePath, isSvgPath, recallZoom, rememberZoom, zoomKeyOf, zoomStepOf } from '../imagePreview.js'
 import { isMarkdownPath } from '../markdownPreview.js'
 import { MarkdownPanel } from '../md/mdPanel.js'
-import { base64ToBytes, isPdfPath } from '../pdfPreview.js'
+import { base64ToBytes, bytesToBase64, isPdfPath } from '../pdfPreview.js'
+import { inNativePath, tryNativeOpen } from '../nativeOpenStore.js'
+import { readBinaryPreview } from '../../shared/rpc.js'
 import {
   clearBaseline,
   clearReadVersion,
@@ -121,6 +123,22 @@ function dirOfRel(relPath) {
 /** 跳转目标高亮的保留时长（LSP/搜索跳转落地后给用户的位置提示，到期自动清除）。 */
 const NAV_FLASH_MS = 1200
 
+/** 二进制通道回退日志的一次性闸（整页仅报一次，避免每次读图/读 PDF 刷屏）。 */
+let binFallbackLogged = false
+
+/**
+ * 二进制通道回退的一次性诊断日志：readBinaryPreview 本次尝试过新通道并失败时上报。
+ * 有效期：随页面生命周期仅一条；dbg 本身受诊断开关控制（关=零输出零落盘）。
+ * @author ddj 2026年09月22号
+ * @param sid 会话 id
+ * @param out readBinaryPreview 统一结果（带 probed 才说明本次尝试过新通道）
+ */
+const noteBinFallback = (sid, out) => {
+  if (binFallbackLogged || !out?.probed) return
+  binFallbackLogged = true
+  dbg(sid, 'edrv.readBinary 不可用（host 未接线/旧版或网络失败），已回退 base64', 'debug')
+}
+
 /**
  * 从 Monaco 语言目录取可选语言 id 列表（代码片段新建时的语言下拉来源）。
  * 旧版 Monaco / 目录不可读时返回 undefined，由调用方回落 shared 的内置常量。
@@ -197,6 +215,8 @@ export function EditorView(props) {
   const [imageSrc, setImageSrc] = React.useState(null) // 图片预览 data URL（图片 tab 专用，文本 tab 恒为 null）
   const [imgSize, setImgSize] = React.useState(null) // 图片自然尺寸 { w, h }（路径栏 meta）
   const [imgBroken, setImgBroken] = React.useState(false) // 图片解码失败（onError），显示占位与重试
+  const [imgZoom, setImgZoom] = React.useState(null) // 图片缩放比例（null=适应宽度；会话+路径级记忆，见 imagePreview.zoomKeyOf）
+  const imgElRef = React.useRef(null) // 预览 <img> 元素（适应宽度态下步进取实测缩放基准）
   const svgTextRef = React.useRef(new Set()) // 强制以文本打开的 SVG 路径集合（toggleSvgText 维护）
   const mdPreviewRef = React.useRef(new Set()) // 处于预览态的 Markdown 路径集合（toggleMdPreview 维护；不持久化）
   const [pdfBytes, setPdfBytes] = React.useState(null) // 当前 PDF tab 的原始字节（null=加载中/非 PDF）
@@ -828,26 +848,36 @@ export function EditorView(props) {
     setImgSize(null)
     setImgBroken(false)
     setLoadStage({ progress: monaco ? 72 : 12, message: '读取图片…' })
-    rpc('edrv.read', { sessionId: sid, path, encoding: 'base64' }).then((res) => {
+    readBinaryPreview(rpc, { sessionId: sid, path }).then((out) => {
       if (seq !== loadSeqRef.current || path !== active) return
-      if (res && res.ok && res.encoding === 'base64') {
-        if (!res.mime) {
+      if (out.ok && out.via === 'binary') {
+        // 新通道：原始字节本地组 data URL（线上省 base64，本地编码为 img src 所需不可省）
+        recordBaseline(scope, path, out.version || version)
+        clearReadVersion(scope, path) // 刚读过内容：已读版本台账失效，下一轮按新版本比对
+        setImageSrc(dataUrlOf(bytesToBase64(out.bytes), out.mime))
+        setLoadStage({ progress: 100, message: '图片已就绪' })
+        setStatus('已加载')
+        return
+      }
+      noteBinFallback(sid, out)
+      if (out.ok && out.via === 'base64') {
+        if (!out.mime) {
           setLoadError('host 版本过旧：图片响应缺少 mime')
           setError('host 版本过旧：图片响应缺少 mime')
           setStatus('读取失败')
           return
         }
-        const imgVersion = res.version ?? version
+        const imgVersion = out.version ?? version
         recordBaseline(scope, path, imgVersion)
         clearReadVersion(scope, path) // 刚读过内容：已读版本台账失效，下一轮按新版本比对
-        setImageSrc(dataUrlOf(res.content, res.mime))
+        setImageSrc(dataUrlOf(out.content, out.mime))
         setLoadStage({ progress: 100, message: '图片已就绪' })
         setStatus('已加载')
         return
       }
-      const base = res?.error ? String(res.error) : '读取失败'
+      const base = out.error ? String(out.error) : '读取失败'
       // 带出 host 解析后的真实路径：跳转失败时一眼看出是路径解析错还是目标不存在
-      const message = res?.resolvedPath ? base + '：' + String(res.resolvedPath) : base
+      const message = out.resolvedPath ? base + '：' + String(out.resolvedPath) : base
       setLoadError(message)
       setError(message)
       setStatus('读取失败')
@@ -884,21 +914,34 @@ export function EditorView(props) {
       setStatus('已加载')
       return
     }
-    rpc('edrv.read', { sessionId: sid, path, encoding: 'base64' }).then((res) => {
+    readBinaryPreview(rpc, { sessionId: sid, path }).then((out) => {
       if (seq !== loadSeqRef.current || path !== active) return
-      if (res && res.ok && res.encoding === 'base64') {
-        const pdfVersion = res.version ?? version
+      if (out.ok && out.via === 'binary') {
+        const pdfVersion = out.version || version
         recordBaseline(scope, path, pdfVersion)
         clearReadVersion(scope, path) // 刚读过内容：已读版本台账失效，下一轮按新版本比对
-        cache.set(path, res.content)
+        // 缓存仍存 base64（pdfB64CacheRef 形状不变，命中路径零改动）；字节直通面板省一次解码
+        cache.set(path, bytesToBase64(out.bytes))
         while (cache.size > 6) cache.delete(cache.keys().next().value)
-        setPdfBytes(base64ToBytes(res.content))
+        setPdfBytes(out.bytes)
         setLoadStage({ progress: 100, message: 'PDF 已就绪' })
         setStatus('已加载')
         return
       }
-      const base = res?.error ? String(res.error) : '读取失败'
-      const message = res?.resolvedPath ? base + '：' + String(res.resolvedPath) : base
+      noteBinFallback(sid, out)
+      if (out.ok && out.via === 'base64') {
+        const pdfVersion = out.version ?? version
+        recordBaseline(scope, path, pdfVersion)
+        clearReadVersion(scope, path) // 刚读过内容：已读版本台账失效，下一轮按新版本比对
+        cache.set(path, out.content)
+        while (cache.size > 6) cache.delete(cache.keys().next().value)
+        setPdfBytes(base64ToBytes(out.content))
+        setLoadStage({ progress: 100, message: 'PDF 已就绪' })
+        setStatus('已加载')
+        return
+      }
+      const base = out.error ? String(out.error) : '读取失败'
+      const message = out.resolvedPath ? base + '：' + String(out.resolvedPath) : base
       setLoadError(message)
       setError(message)
       setStatus('读取失败')
@@ -1369,6 +1412,10 @@ export function EditorView(props) {
       if (!event?.detail?.scope || event.detail.scope === scope) setSvnStatus(getSvnStatus(scope))
     }
     window.addEventListener('edrv:svn-status', onSvnStatus)
+    // 缓存命中时 ensure 直接 return、不广播事件，须同步读回当前 scope 的载荷：
+    // 否则从非 SVN 工作区切回 SVN 工作区后，状态残留上一个工作区的 managed:false，
+    // 右键菜单/页签菜单的 SVN 组会整组消失（与下方变更清单 effect 的同步语句同理）。
+    setSvnStatus(getSvnStatus(scope))
     return () => window.removeEventListener('edrv:svn-status', onSvnStatus)
   }, [sessionId, scope])
 
@@ -1908,6 +1955,7 @@ export function EditorView(props) {
     // model 不在此销毁：跨挂载缓存按作用域存活（modelCache 切作用域时统一释放）
     for (const ctl of pdfCtlRef.current.values()) ctl.destroy()
     pdfCtlRef.current.clear()
+    clearZoomMem() // 图片缩放记忆随 EditorView 卸载清空（会话级生命周期，不持久化）
     const root = editorRef.current && editorRef.current.getDomNode ? editorRef.current.getDomNode() : null
     if (root) {
       const ov = root.querySelector('.edrv-minus-overlay')
@@ -2401,15 +2449,58 @@ export function EditorView(props) {
   }
   toggleMdPreviewRef.current = toggleMdPreview
 
+  /** 当前图片的会话+路径级缩放记忆键（页签切换回来保留同一缩放）。 */
+  const imgZoomKey = zoomKeyOf(sessionId, active)
+
+  // 页签/会话切换时恢复该图片的记忆缩放（无记忆 = 初始适应宽度，等价 PDF page-width）
+  React.useEffect(() => { setImgZoom(recallZoom(imgZoomKey)) }, [imgZoomKey])
+
   /**
-   * 图片预览面板：工具条（尺寸 meta / SVG 文本切换 / 刷新）+ 棋盘底自适应图片。
-   * @author ddj 2026年09月08号
+   * 应用图片缩放并写入页签记忆（null = 适应宽度；数值经 clampZoom 收敛 25%–400%）。
+   * @author ddj 2026年09月22号
+   * @param next 目标缩放（null = 适应宽度）
+   */
+  const applyImgZoom = (next) => {
+    const value = next === null ? null : clampZoom(next)
+    setImgZoom(value)
+    rememberZoom(imgZoomKey, value)
+  }
+
+  /**
+   * 图片缩放步进（10%/档，clamp 25%–400%）；适应宽度态先按渲染尺寸实测当前缩放作基准。
+   * @author ddj 2026年09月22号
+   * @param dir 方向：1 放大 / -1 缩小
+   */
+  const stepImgZoom = (dir) => {
+    const el = imgElRef.current
+    const measured = el && el.naturalWidth ? el.clientWidth / el.naturalWidth : 1
+    applyImgZoom(zoomStepOf(imgZoom ?? measured, dir))
+  }
+
+  /**
+   * 图片预览面板：工具条（尺寸 meta / 缩放 −＋适应宽度 / SVG 文本切换 / 刷新）+ 棋盘底图片。
+   * 初始适应宽度（等价 PDF page-width，0.1.7 官方统一缩放）；按钮样式与 PDF 工具条同款。
+   * @author ddj 2026年09月08号 / 2026年09月22号
    */
   const imagePanel = () => React.createElement('div', { className: 'edrv-imgview' },
     React.createElement('div', { className: 'edrv-imgview-bar' },
       React.createElement('span', { className: 'edrv-imgview-meta' },
         imgBroken ? '图片无法显示' : (imgSize ? imgSize.w + '×' + imgSize.h : '…')),
       React.createElement('span', { style: { flex: 1 } }),
+      React.createElement('span', { className: 'edrv-pdf-page' },
+        imgZoom === null ? '适应' : Math.round(imgZoom * 100) + '%'),
+      React.createElement('button', {
+        className: 'edrv-pill edrv-pill-ghost edrv-pdf-zoom', title: '缩小（10%/档）',
+        onClick: () => stepImgZoom(-1),
+      }, '−'),
+      React.createElement('button', {
+        className: 'edrv-pill edrv-pill-ghost edrv-pdf-zoom', title: '放大（10%/档）',
+        onClick: () => stepImgZoom(1),
+      }, '＋'),
+      React.createElement('button', {
+        className: 'edrv-pill edrv-pill-ghost', title: '恢复适应宽度',
+        disabled: imgZoom === null, onClick: () => applyImgZoom(null),
+      }, '适应宽度'),
       (isSvgPath(active) ? React.createElement('button', {
         className: 'edrv-pill edrv-pill-ghost', title: '以文本方式查看/编辑（SVG 为文本格式）',
         onClick: () => toggleSvgText(active),
@@ -2422,8 +2513,12 @@ export function EditorView(props) {
             React.createElement('button', { className: 'edrv-pill edrv-pill-ghost', onClick: () => reloadFile() }, '重试'))
         : React.createElement('img', {
             className: 'edrv-imgview-img',
+            ref: imgElRef,
             src: imageSrc,
             alt: active || '',
+            style: (imgZoom !== null && imgSize)
+              ? { width: Math.round(imgSize.w * imgZoom) + 'px', maxWidth: 'none', maxHeight: 'none' }
+              : undefined,
             onLoad: (e) => { setImgBroken(false); setImgSize({ w: e.target.naturalWidth, h: e.target.naturalHeight }) },
             onError: () => setImgBroken(true),
           }))))
@@ -2996,6 +3091,10 @@ export function EditorView(props) {
 
   const openFile = (path, focusDiff) => {
     if (!path) return
+    // 原生打开范围（nativeOpenExts 设置）：命中且非差异跳转 → 走官方渲染器
+    //（focusDiff=true 跳过：差异审查对象必为本插件编辑的文本文件，审查优先）；
+    // handler 缺失/失败（旧版无 openResource / seat 未挂）→ 回退现状页签打开，不阻断
+    if (!focusDiff && inNativePath(path) && tryNativeOpen(path)) return
     // 打开文件即离开基线差异审阅态（差异视图是「当前文件」的临时视图）
     setSvnDiff(null)
     recordNav()

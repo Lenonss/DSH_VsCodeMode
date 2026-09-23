@@ -2,10 +2,11 @@
  * dsh-vscode-mode host — 文件链接打开工具 + 快捷键的持久化设置。
  * 依赖守卫：schemastery 动态加载；@deepseek-ai/dsh-settings 仅作 legacy 探测——
  * rc 线导出 installSettingsSection free function，0.1.2-alpha 起移除（改由 settings
- * 服务的 installSection 方法承载，见 runSettingsInstall 三策略）。
+ * 服务的 installSection 方法承载），0.1.7 再移除 installSection（设置并入 profile
+ * 插件 Config schema，见 runSettingsInstall 四策略：legacy/service/forms/none）。
  * 缺失/任一策略失败时插件仍可加载（fileOpenTool 降级为配置值，compat 报告可见），
  * 全程 try/catch，不产生未捕获 rejection。
- * 作者 ddj 2026年08月24号 / 2026年08月26号 / 2026年09月02号
+ * 作者 ddj 2026年08月24号 / 2026年08月26号 / 2026年09月02号 / 2026年09月22号
  */
 import { createRequire } from 'node:module'
 import { pathToFileURL } from 'node:url'
@@ -15,6 +16,7 @@ import { EDITOR_LIMIT_DEFAULT } from './shared/editorLimit.js'
 import { INTEGRATION_BASE_DEFAULT } from './shared/integration.js'
 import { TORTOISE_DIR_DEFAULT } from './shared/svn.js'
 import type { AiConfigPatch, AiConfigView } from './shared/ai.js'
+import { DEFAULT_NATIVE_CSV } from './shared/nativeOpen.js'
 import { log } from './log.js'
 
 export const FILE_OPEN_SETTINGS_NS = 'dsh-vscode-mode'
@@ -170,11 +172,12 @@ export function loadSettingsDeps(importFn: (specifier: string) => Promise<unknow
 }
 
 /** 设置 section 安装策略（版本适配机制的观测值）。 */
-export type SettingsInstallStrategy = 'legacy' | 'service' | 'none' | 'unknown'
+export type SettingsInstallStrategy = 'legacy' | 'service' | 'forms' | 'none' | 'unknown'
 
 const INSTALL_UNMOUNTED = '设置 section 尚未装配'
 const INSTALL_LEGACY = 'rc 线：dsh-settings.installSettingsSection'
 const INSTALL_SERVICE = '0.1.2-alpha 线：settings 服务 installSection'
+const INSTALL_FORMS = '0.1.7 线：设置并入插件 Config schema（SettingsForms）'
 const INSTALL_NONE = '两路均不可用：设置持久化降级为配置值'
 
 interface ObservedInstall { strategy: SettingsInstallStrategy; note: string }
@@ -202,14 +205,53 @@ export function resetSettingsInstallObserved(): void {
 }
 
 /**
+ * 判定设置写冲突错误（0.1.7 SettingsConflictError：code 常量 / 构造器名双通道）。
+ * @author ddj 2026年09月22号
+ * @param error 捕获到的错误
+ * @returns 是否为 revision 冲突
+ */
+function isConflictError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false
+  const e = error as { code?: unknown; name?: unknown }
+  return e.code === 'SETTINGS_CONFLICT' || e.name === 'SettingsConflictError'
+}
+
+/**
+ * 0.1.7 forms 策略：订阅 settings/document-updated 事件，目标 namespace 变化时
+ * 把 describe 最新值推给 hooks（setSource + onChange），替代旧 installSection 的
+ * 变更回调；disposer 经 ctx.effect 随插件 fiber 卸载（热重载不泄漏）。
+ * @author ddj 2026年09月22号
+ * @param ctx DSH host 上下文
+ * @param provider settings 服务（SettingsForms）
+ * @param ns 目标设置命名空间
+ * @param hooks 设置源绑定与变更回调
+ */
+function watchDocUpdates(ctx: Ctx, provider: SettingsProvider, ns: string, hooks: { setSource: (source: () => unknown) => void; onChange: () => void }): void {
+  try {
+    const bus = ctx as { on?: (name: string, handler: (updatedNs: unknown, revision: unknown) => void) => unknown; effect?: (fn: () => unknown) => unknown }
+    if (typeof bus.on !== 'function') return
+    const off = bus.on('settings/document-updated', (updatedNs: unknown) => {
+      if (updatedNs !== ns) return
+      hooks.setSource(() => readSectionValue(provider, ns))
+      hooks.onChange()
+    })
+    if (typeof bus.effect === 'function' && typeof off === 'function') bus.effect(() => off)
+  } catch (error) {
+    log.warn('settings/document-updated 订阅失败：' + String(error))
+  }
+}
+
+/**
  * 设置 section 版本自适应安装（核心策略分派）。
  * legacy：dsh-settings 仍导出 installSettingsSection（rc 线）→ 原样调用，行为与旧版一致。
  * service：该导出已移除（0.1.2-alpha 起）→ 经 ctx.inject(['settings']) 走服务方法
  *          provider.installSection(owner, ns, schema, entry, hooks)（等义封装，含
- *          base 层与 fiber 卸载回退）。回调内方法缺失再降级记录 none。
+ *          base 层与 fiber 卸载回退）。
+ * forms：0.1.7 起 installSection 移除，设置并入 profile 插件 Config（SettingsForms
+ *          的 describe+update 在场即成立）→ 不装 section，改订阅 document-updated。
  * none：两条路由都不存在 → 仅记录并告警，调用方按配置值运行。
  * 全程不抛错、不产生未捕获 rejection。
- * @author ddj 2026年09月02号
+ * @author ddj 2026年09月02号（2026年09月22号 增补 forms 策略）
  * @param ctx DSH host 上下文（inject 可选探测）
  * @param ns 设置命名空间
  * @param schema schemastery schema
@@ -253,6 +295,13 @@ export async function runSettingsInstall(
       const provider = typeof sc.get === 'function' ? sc.get('settings') : sc.settings
       const install = (provider as { installSection?: unknown } | undefined)?.installSection
       if (typeof install !== 'function') {
+        // 0.1.7：installSection 已移除；SettingsForms（describe+update）在场走 forms 策略
+        const forms = provider as SettingsProvider | undefined
+        if (typeof forms?.describe === 'function' && typeof forms?.update === 'function') {
+          recordInstall('forms', INSTALL_FORMS)
+          watchDocUpdates(ctx, forms, ns, hooks)
+          return
+        }
         log.warn('settings 服务无 installSection（DSH 版本 API 变化），section ' + ns + ' 降级为配置值')
         recordInstall('none', INSTALL_NONE)
         return
@@ -284,6 +333,101 @@ function keybindingsShape(z: SettingsDeps['z']): Record<string, unknown> {
   const shape: Record<string, unknown> = {}
   for (const [id, chord] of Object.entries(KEYBINDING_DEFAULTS)) shape[id] = z.string().default(chord)
   return shape
+}
+
+/**
+ * 设置节 describe 项的形状校验：value 须为普通对象。
+ * ns 在两代语义不同（旧=自装 section 名，0.1.7=profile entry id），同名撞车时
+ * 以形状兜底防误命中非设置数据；0.1.7 下本插件 entry 的 Config 值与旧 section
+ * 值同为设置键对象，两形状天然兼容。
+ * @author ddj 2026年09月22号
+ * @param value describe 项的 value 字段
+ * @returns 是否具备设置节形状
+ */
+function isSectionShaped(value: unknown): boolean {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+/** describe 项最小形状（读写工具共用）。 */
+export interface SectionDescriptor { ns?: string; value?: unknown; revision?: number }
+
+/**
+ * 按 ns + 形状校验查找设置节（host 读路径统一入口）。
+ * @author ddj 2026年09月22号
+ * @param provider settings 服务（可空）
+ * @param ns 设置命名空间
+ * @returns 命中的 describe 项；未命中返回 undefined
+ */
+export function sectionOf(provider: SettingsProvider | undefined, ns: string): SectionDescriptor | undefined {
+  const items = provider?.describe?.({ redactSecrets: true })
+  if (!items) return undefined
+  return items.find((item) => item.ns === ns && isSectionShaped(item.value))
+}
+
+/** 读设置节存储值（未就绪/形状不符返回 undefined）。 */
+function readSectionValue(provider: SettingsProvider | undefined, ns: string): unknown {
+  return sectionOf(provider, ns)?.value
+}
+
+/** 设置写入结果（ok=false 时带原因；conflict=true 表示经冲突重试后成功）。 */
+export interface SectionWriteResult { ok: boolean; conflict?: boolean; error?: string }
+
+/**
+ * 带冲突自愈的设置写入：0.1.7 SettingsConflictError（revision 拒写）时重读
+ * revision 重试一次；其余错误与服务缺失一律结构化返回，绝不抛未捕获异常。
+ * @author ddj 2026年09月22号
+ * @param provider settings 服务（可空）
+ * @param ns 设置命名空间
+ * @param patch 写入字段
+ * @param expectedRevision 读侧携带的 revision（缺省用 describe 最新值）
+ * @returns 写入结果
+ */
+export async function updateSection(provider: SettingsProvider | undefined, ns: string, patch: object, expectedRevision?: number): Promise<SectionWriteResult> {
+  if (!provider?.update) return { ok: false, error: 'settings 服务无 update' }
+  const first = expectedRevision ?? sectionOf(provider, ns)?.revision
+  try {
+    await provider.update(ns, patch, first)
+    return { ok: true }
+  } catch (error) {
+    if (!isConflictError(error)) return { ok: false, error: String(error) }
+  }
+  const fresh = sectionOf(provider, ns)?.revision
+  try {
+    await provider.update(ns, patch, fresh)
+    return { ok: true, conflict: true }
+  } catch (error) {
+    return { ok: false, conflict: true, error: String(error) }
+  }
+}
+
+/**
+ * 构建设置 section schema（install 路径与插件 Config 声明共用，保证两代形状同源）。
+ * 字段集 = fileOpenTool/keybindings/sidebarMinWidth/maxOpenEditors/integrationBaseUrl/
+ * aiInline/aiProvider/aiModel/aiEffort/svnPath/tortoisePath/nativeOpenExts，全部带默认值
+ * （Config 启动校验在 undefined/空配置下自动填充，rc/alpha 两代 cordis 均通过）。
+ * @author ddj 2026年09月22号
+ * @param z schemastery 命名空间（静态 import 或动态加载均可）
+ * @returns schemastery object schema
+ */
+export function buildSettingsSchema(z: SettingsDeps['z']): unknown {
+  return z.object({
+    fileOpenTool: z.string().default(FILE_OPEN_DEFAULT),
+    keybindings: z.object(keybindingsShape(z)).default({ ...KEYBINDING_DEFAULTS }),
+    sidebarMinWidth: z.number().default(300),
+    // 页签数量上限（0 = 不限制；超限时淘汰最久未使用的页签，固定页签除外）
+    maxOpenEditors: z.number().default(EDITOR_LIMIT_DEFAULT),
+    integrationBaseUrl: z.string().default(INTEGRATION_BASE_DEFAULT),
+    // AI 内联补全（默认关；provider/model 空 = 自动路由；effort 空 = 跟随模型默认）
+    aiInline: z.boolean().default(AI_CONFIG_DEFAULT.enabled),
+    aiProvider: z.string().default(AI_CONFIG_DEFAULT.provider),
+    aiModel: z.string().default(AI_CONFIG_DEFAULT.model),
+    aiEffort: z.string().default(AI_CONFIG_DEFAULT.effort),
+    // SVN 能力：svn CLI 覆盖（空 = PATH）与 TortoiseSVN 目录（Windows 过渡增强）
+    svnPath: z.string().default(''),
+    tortoisePath: z.string().default(TORTOISE_DIR_DEFAULT),
+    // 原生打开范围（逗号分隔后缀；默认 = 让位清单并集，csv/tsv 决策见 shared/nativeOpen.ts）
+    nativeOpenExts: z.string().default(DEFAULT_NATIVE_CSV),
+  })
 }
 
 function normalizeValue(value: unknown): string {
@@ -337,27 +481,12 @@ export async function installOpenSettingsSection(
     /* 装载失败按缺失处理 */
   }
   if (!deps) return false
-  const schema = deps.z.object({
-    fileOpenTool: deps.z.string().default(FILE_OPEN_DEFAULT),
-    keybindings: deps.z.object(keybindingsShape(deps.z)).default({ ...KEYBINDING_DEFAULTS }),
-    sidebarMinWidth: deps.z.number().default(300),
-    // 页签数量上限（0 = 不限制；超限时淘汰最久未使用的页签，固定页签除外）
-    maxOpenEditors: deps.z.number().default(EDITOR_LIMIT_DEFAULT),
-    integrationBaseUrl: deps.z.string().default(INTEGRATION_BASE_DEFAULT),
-    // AI 内联补全（默认关；provider/model 空 = 自动路由；effort 空 = 跟随模型默认）
-    aiInline: deps.z.boolean().default(AI_CONFIG_DEFAULT.enabled),
-    aiProvider: deps.z.string().default(AI_CONFIG_DEFAULT.provider),
-    aiModel: deps.z.string().default(AI_CONFIG_DEFAULT.model),
-    aiEffort: deps.z.string().default(AI_CONFIG_DEFAULT.effort),
-    // SVN 能力：svn CLI 覆盖（空 = PATH）与 TortoiseSVN 目录（Windows 过渡增强）
-    svnPath: deps.z.string().default(''),
-    tortoisePath: deps.z.string().default(TORTOISE_DIR_DEFAULT),
-  })
+  const schema = buildSettingsSchema(deps.z)
   const strategy = await runSettingsInstall(ctx, ns, schema, entry, {
     setSource: (source) => hooks.setSource(source as () => FileOpenSettings),
     onChange: hooks.onChange,
   }, loader)
-  return strategy === 'legacy' || strategy === 'service'
+  return strategy === 'legacy' || strategy === 'service' || strategy === 'forms'
 }
 
 /** AI 配置脏值读取（settings 未就绪时回退默认）。 */
@@ -385,8 +514,7 @@ export function setupOpenSettings(ctx: Ctx, config: unknown, onChange: (value: s
   let provider: SettingsProvider | undefined
   const notify = (value: unknown): void => { current = normalizeValue(value); onChange(current) }
   const syncRevision = (): void => {
-    const descriptor = provider?.describe?.({ redactSecrets: true })?.find((item: { ns?: string }) => item.ns === FILE_OPEN_SETTINGS_NS)
-    revision = descriptor?.revision
+    revision = sectionOf(provider, FILE_OPEN_SETTINGS_NS)?.revision
   }
   const setSource = (source: () => FileOpenSettings): void => notify(source().fileOpenTool)
   const settingsChange = (): void => syncRevision()
@@ -394,8 +522,7 @@ export function setupOpenSettings(ctx: Ctx, config: unknown, onChange: (value: s
   /** AI 配置当前值（settings 未就绪回退默认）。 */
   let aiCurrent: AiConfigView = { ...AI_CONFIG_DEFAULT }
   const aiSync = (): void => {
-    const descriptor = provider?.describe?.({ redactSecrets: true })?.find((item: { ns?: string }) => item.ns === FILE_OPEN_SETTINGS_NS)
-    const stored = descriptor?.value
+    const stored = readSectionValue(provider, FILE_OPEN_SETTINGS_NS)
     aiCurrent = stored !== undefined ? aiValueOf(stored) : aiCurrent
   }
 
@@ -409,7 +536,7 @@ export function setupOpenSettings(ctx: Ctx, config: unknown, onChange: (value: s
   }
   /** 读取 settings 存储值（describe 未就绪返回 undefined）。 */
   const storedValue = (): unknown => {
-    return provider?.describe?.({ redactSecrets: true })?.find((item: { ns?: string }) => item.ns === FILE_OPEN_SETTINGS_NS)?.value
+    return readSectionValue(provider, FILE_OPEN_SETTINGS_NS)
   }
 
   void installOpenSettingsSection(ctx, FILE_OPEN_SETTINGS_NS, {
@@ -438,31 +565,27 @@ export function setupOpenSettings(ctx: Ctx, config: unknown, onChange: (value: s
     get revision() { return revision },
     update: async (value: string, expectedRevision?: number): Promise<void> => {
       const next = normalizeValue(value)
-      if (!provider?.update) { notify(next); return }
-      await provider.update(FILE_OPEN_SETTINGS_NS, { fileOpenTool: next }, expectedRevision)
-      const descriptor = provider.describe?.({ redactSecrets: true })?.find((item: { ns?: string; value?: unknown }) => item.ns === FILE_OPEN_SETTINGS_NS)
-      const stored = descriptor?.value as { fileOpenTool?: unknown } | undefined
+      const result = await updateSection(provider, FILE_OPEN_SETTINGS_NS, { fileOpenTool: next }, expectedRevision)
+      if (!result.ok) log.warn('fileOpenTool 设置写入失败：' + (result.error ?? '未知原因'))
+      const stored = readSectionValue(provider, FILE_OPEN_SETTINGS_NS) as { fileOpenTool?: unknown } | undefined
       notify(stored?.fileOpenTool ?? next)
       syncRevision()
     },
     ai: () => aiCurrent,
     svn: () => svnCurrent,
     aiUpdate: async (patch: AiConfigPatch, expectedRevision?: number): Promise<AiConfigView> => {
-      if (!provider?.update) {
-        // settings 不可用：内存态生效（重启回落默认），保持与 fileOpenTool 的降级语义一致
-        if (patch.enabled !== undefined) aiCurrent.enabled = patch.enabled
-        if (patch.provider !== undefined) aiCurrent.provider = patch.provider
-        if (patch.model !== undefined) aiCurrent.model = patch.model
-        if (patch.effort !== undefined) aiCurrent.effort = patch.effort
-        return aiCurrent
-      }
       const stored = { ...aiCurrent }
       const body: Record<string, unknown> = {}
       if (patch.enabled !== undefined) { stored.enabled = patch.enabled; body.aiInline = patch.enabled }
       if (patch.provider !== undefined) { stored.provider = patch.provider; body.aiProvider = patch.provider }
       if (patch.model !== undefined) { stored.model = patch.model; body.aiModel = patch.model }
       if (patch.effort !== undefined) { stored.effort = patch.effort; body.aiEffort = patch.effort }
-      await provider.update(FILE_OPEN_SETTINGS_NS, body, expectedRevision)
+      const result = await updateSection(provider, FILE_OPEN_SETTINGS_NS, body, expectedRevision)
+      if (!result.ok) {
+        // settings 不可用/写入失败：内存态生效（重启回落默认），与 fileOpenTool 降级语义一致
+        aiCurrent = stored
+        return aiCurrent
+      }
       aiSync()
       return aiCurrent
     },

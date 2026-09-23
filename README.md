@@ -5,7 +5,7 @@
 
 - 📝 **同屏编辑**：DSH 0.1.5+ 官方右侧 Sidebar，AI 对话与文件编辑同屏
 - 🔍 **差异审查**：Keep / Undo / 回滚 / 归档，状态持久化重启不丢
-- 🧠 **LSP 智能**：转到定义 / 查找引用 / Peek 多结果选择
+- 🧠 **LSP 智能**：转到定义 / 查找引用 / Peek 多结果选择 / 智能补全（注释索引）/ 签名帮助
 - ⌨️ **命令面板**：`Ctrl+Shift+P`，19 条命令开箱即用，可编程扩展
 
 ## 目录
@@ -106,6 +106,12 @@
 `Ctrl+hover` 可导航标识符下划线提示。v0.4.2 起统一委托完整 Monaco 原生命令：
 **多结果弹 Peek 让用户选**，单结果直跳，取不到定义自动降级「转到引用」。
 
+- **智能补全**：输入 `.` / `:` / `(` / `[` 自动弹出候选（`Ctrl+Space` 手动触发）。
+  EmmyLua 的注释索引（`---@class` / `---@field` / `---@type`）会被解析为真实的成员列表，
+  即对 `---@class` 标注的实例打 `p.` 能列出注解声明的字段/方法；候选项带类型图标、
+  弃用标记与片段展开（`${1:占位}`）。文档走 `completionItem/resolve` 惰性拉取，列表响应保持轻量。
+- **签名帮助**：函数实参处（输入 `(` / `,`）显示参数签名并按当前实参高亮；
+  多签名可切换。
 - 定义查找带降级链（definition → declaration → 引用推导）；参数 / 局部变量
   （`this`、`pTarget` 这类）同样能跳到声明。
 - 相关踩坑与修复见 [常见问题](#常见问题) 第 1–4 条。
@@ -411,13 +417,13 @@ TortoiseSVN（`TortoiseProc.exe`）仅作 Windows 过渡增强：自研能力覆
 
 ```bash
 # ① Git 安装（clone + prepare 构建；推荐打固定 tag）
-dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.7.0
+dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.8.0
 
 # ② npm 注册表（发布到 npm 后）
 dsh plugin --profile web add dsh-vscode-mode
 
 # ③ GitHub Release tgz 直装
-dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.7.0/dsh-vscode-mode-0.7.0.tgz
+dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.8.0/dsh-vscode-mode-0.8.0.tgz
 ```
 
 > `dsh plugin ...` 是 pnpm 转发器：git 安装会克隆仓库、执行该包 `prepare` 脚本
@@ -498,7 +504,8 @@ bundles 层后重启 DSH 即自动把插件行挂进 loader 树。**不要**再�
 - **代码片段**：`Ctrl+Shift+P` →「配置代码片段」编辑 `.code-snippets`；编辑代码
   时 `prefix` 自动 IntelliSense 补全，`Tab` / `Enter` 展开。
 - **LSP**：`F12` 转到定义（多结果弹 Peek 选择）、`Shift+F12` 查找引用、
-  `Ctrl+点击` 导航；取不到定义自动降级「转到引用」。
+  `Ctrl+点击` 导航；取不到定义自动降级「转到引用」。补全随输入 `.` / `:` / `(` / `[`
+  自动弹出（`Ctrl+Space` 手动触发，`Tab` / `Enter` 采纳），函数实参处显示签名帮助。
 
 ## 配置
 
@@ -577,7 +584,7 @@ src/
 ├── routes.ts         Host webServer 路由（/edrv/rpc、/edrv/assets/*、/edrv/vendor/*）
 └── client/
     ├── index.ts      Client 入口：slot 注册；官方/betterSidebar/中央页签三形态互斥分流
-    ├── compat.ts     ★ 设置桥三级降级（webUiSettings→settingsScope）、slot 安全注册
+    ├── compat.ts     ★ 设置桥四级降级+晚到重试（configForms→webUiSettings→settingsScope）、slot 安全注册
     ├── officialSidebar.ts ★ 官方右侧 Sidebar 桥（DSH 0.1.5+，唯一维护面）
     ├── sidebarBridge.ts  betterSidebar 桥（归档，仅旧版回退）
     ├── rpc.ts / events.ts / watchDecision.ts（外部改动同步纯逻辑）
@@ -614,7 +621,8 @@ pdf.js vendor + 图标 + launcher）、`skills/`（插件技能组）、`src/`�
   + `conversation.input.dock`（id `edrv-diff-dock`，唯一差异栏）。内部路由 / slot /
   事件 / CSS 前缀沿用 `edrv-*`（防回归），包身份 `dsh-vscode-mode`。
 - **兼容层**（`src/compat.ts` + `src/client/compat.ts`）：运行时探测
-  `@deepseek-ai/dsh-mcp-client`、设置桥（`webUiSettings` → `settingsScope`）、
+  `@deepseek-ai/dsh-mcp-client`、设置桥（`configForms` 0.1.7+ → `webUiSettings` →
+  `settingsScope`，含 15×2s 晚到有界重试）、
   `/edrv` 路由前缀冲突与本插件重复装配（duplicate loader entry）护栏；
   `@deepseek-ai/dsh-settings` / `schemastery` 动态加载（缺失时插件仍可加载，
   设置持久化降级）。「VSCodeMode」设置页 →「兼容性」子 Tab 或 RPC `edrv.compat`
@@ -710,6 +718,15 @@ Keep All / Undo All 却是亮的。修复：单文件 Keep / Undo 覆盖冲突�
 完整变更见 [GitHub Releases](https://github.com/Lenonss/DSH_VsCodeMode/releases)。
 近期关键版本：
 
+- **v0.8.0**：**DSH 0.1.7 兼容适配 + 文件树原生打开**——P0×3 修复（0.1.7 移除
+  `settingsScope` 致整客户端停等 → 设置桥四级探测 + 15×2s 晚到重试；`installSection`
+  移除 → `forms` 策略 + `export const Config` 与 section schema 同源；0.1.7 图标改名
+  `Icon<Name>16→Regular` 致侧栏图标全灭 → `icons.ts` 跨版本出口 + 占位兜底）；新能力：
+  文件树原生打开（`nativeOpenExts` 可配置范围，默认=让位清单，claim `canOpen` 同步让位）、
+  插件管理页 icon + `locale/` 双语声明、图片缩放（适应宽度默认/±10%/每页签记忆）与
+  PDF 百分比指示、perf 面板官方归档/置顶徽标、`edrv.readBinary` 二进制预览通道
+  （octet-stream + base64 自动回退）。设置体系迁移：settings.yaml 一次性导入 profile
+  Config，读写统一 `sectionOf/updateSection`（冲突重读重试）。
 - **v0.7.0**：**资源管理器右键菜单**——区分文件 / 文件夹 / 根空白区三套菜单：打开方式…
   （已注册打开器选择）、在文件资源管理器中显示、添加引用到对话、新建文件/文件夹
   （支持 `a/b.c` 嵌套）、在文件夹中查找（搜索面板目录过滤）、剪切·复制·粘贴（应用内

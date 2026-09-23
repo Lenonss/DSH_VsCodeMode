@@ -171,6 +171,52 @@ export async function fetchHover(path, text, position) {
   return res.hover || null
 }
 
+/**
+ * 查询补全列表（列表阶段不带 documentation，由 resolve 补全）。
+ * @author ddj 2026年09月22号
+ * @param path 工作区相对路径
+ * @param text 文档全文（未保存内容必须进服务器，否则按旧文本解析）
+ * @param position Monaco 位置（1-based）
+ * @param context LSP CompletionContext（触发类型/触发字符）
+ * @returns { items, incomplete }；失败或空时 null
+ */
+export async function fetchCompletions(path, text, position, context) {
+  await syncDoc(path, text, true)
+  const args = { path, position: monoToLsp(position.lineNumber, position.column) }
+  if (context) args.context = context
+  const res = await queryLsp('查询补全', 'edrv.lsp.completion', args)
+  if (!res || !res.completions) return null
+  return res.completions
+}
+
+/**
+ * 惰性补全单个候选项（completionItem/resolve）。
+ * @author ddj 2026年09月22号
+ * @param path 工作区相对路径
+ * @param item host 归一化的补全项（含 data）
+ * @returns 补全后的条目；失败时回落原条目
+ */
+export async function resolveCompletion(path, item) {
+  const res = await queryLsp('解析补全', 'edrv.lsp.resolveCompletion', { path, item })
+  if (!res || !res.item) return item
+  return res.item
+}
+
+/**
+ * 查询签名帮助。
+ * @author ddj 2026年09月22号
+ * @param path 工作区相对路径
+ * @param text 文档全文
+ * @param position Monaco 位置（1-based）
+ * @returns 归一化签名帮助；无签名时 null
+ */
+export async function fetchSignatureHelp(path, text, position) {
+  await syncDoc(path, text, true)
+  const res = await queryLsp('查询签名', 'edrv.lsp.signatureHelp', { path, position: monoToLsp(position.lineNumber, position.column) })
+  if (!res) return null
+  return res.signatureHelp || null
+}
+
 /** 查询当前文档的 semantic tokens（host 已归一化 legend 与 delta data）。 */
 export async function fetchSemanticTokens(path, text) {
   await syncDoc(path, text, true)

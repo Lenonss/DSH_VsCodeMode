@@ -13,7 +13,7 @@
  * 作者 ddj 2026年09月16号
  */
 import React from 'react'
-import { IconRefreshOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
+import { IconRefreshOutline16 } from '../../ui/icons.js'
 import {
   SVN_ADD_LABEL,
   SVN_DIFF_BASE_LABEL,

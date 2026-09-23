@@ -10,7 +10,7 @@
  * 作者 ddj 2026-08-26 / 2026-08-27 / 2026-08-31 / 2026-09-10 / 2026-09-16
  */
 import React from 'react'
-import { FileTypeIcon, IconFolderClose16, IconFolderOpen16, IconRefreshOutline16, classifyFileType } from '@deepseek-ai/dsh-client-ui-primitives'
+import { FileTypeIcon, IconFolderClose16, IconFolderOpen16, IconRefreshOutline16, classifyFileType } from '../../ui/icons.js'
 import { rpc } from '../../rpc.js'
 import { ContextMenu } from '../../ui/ContextMenu.js'
 import { buildTreeMenu } from '../contextMenu.js'

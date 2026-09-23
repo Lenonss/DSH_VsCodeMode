@@ -125,6 +125,82 @@ export function decodeSemanticTokens(
   return out
 }
 
+/**
+ * LSP CompletionItemKind（协议 1-based）→ Monaco CompletionItemKind 枚举名（0-based）。
+ *
+ * 为什么按**名称**而不是编号直传：两侧枚举编号并不一致 —— LSP 2=Method，而 Monaco
+ * 0=Method。若把协议编号当 Monaco 编号塞回去，草稿纸上的「只差一位」会变成全表错位
+ * （属性显示成方法图标等）。用名称映射让两侧各自的编号在各自类型系统里解析，杜绝硬编码。
+ * 索引 i 对应 LSP kind i（索引 0 占位，协议从 1 起）。
+ * @author ddj 2026年09月22号
+ */
+export const LSP_COMPLETION_KIND_NAMES = [
+  '', 'Text', 'Method', 'Function', 'Constructor', 'Field', 'Variable', 'Class',
+  'Interface', 'Module', 'Property', 'Unit', 'Value', 'Enum', 'Keyword', 'Snippet',
+  'Color', 'File', 'Reference', 'Folder', 'EnumMember', 'Constant', 'Struct',
+  'Event', 'Operator', 'TypeParameter',
+] as const
+
+/** LSP InsertTextFormat：1=PlainText，2=Snippet。 */
+export const LSP_INSERT_TEXT_FORMAT_SNIPPET = 2
+
+/**
+ * LSP 补全项文本编辑范围（单 range 或 insert/replace 双 range 形态）。
+ * 两种形态由服务器任选，必须都能解析：只认一种会让另一家服务器的补全落点错位。
+ */
+export interface LspCompletionTextEdit {
+  range?: LspRange
+  insert?: LspRange
+  replace?: LspRange
+  newText: string
+}
+
+/** 归一化后的补全项（host 归一化；client 映射为 Monaco suggestion）。 */
+export interface LspCompletionItem {
+  label: string
+  kind?: number            // LSP CompletionItemKind 原始编号（client 经名称表转 Monaco）
+  detail?: string
+  documentation?: string
+  insertText?: string
+  insertTextFormat?: number
+  textEdit?: LspCompletionTextEdit
+  additionalTextEdits?: Array<{ range: LspRange; newText: string }>
+  sortText?: string
+  filterText?: string
+  preselect?: boolean
+  commitCharacters?: string[]
+  deprecated?: boolean
+  data?: unknown           // 原样透传，completionItem/resolve 需回传
+}
+
+/** 归一化后的补全列表（incomplete：服务器要求按已输入内容重查）。 */
+export interface LspCompletionList {
+  items: LspCompletionItem[]
+  incomplete: boolean
+  truncated?: boolean
+}
+
+/** 签名帮助中的单个参数（label 可为字符串或 [start, end] 元组，原样透传）。 */
+export interface LspParameterInformation {
+  label: string | [number, number]
+  documentation?: string
+}
+
+/** 归一化后的单个签名。 */
+export interface LspSignatureInformation {
+  label: string
+  documentation?: string
+  parameters: LspParameterInformation[]
+  activeParameter?: number
+}
+
+/** 归一化后的签名帮助结果。 */
+export interface LspSignatureHelp {
+  signatures: LspSignatureInformation[]
+  activeSignature: number
+  activeParameter: number
+}
+
 /** LSP 服务器能力子集：本插件会用到的方法。 */
 export interface LspServerCapabilities {
   definition: boolean
@@ -134,6 +210,9 @@ export interface LspServerCapabilities {
   workspaceSymbol: boolean
   hover: boolean
   semanticTokens: boolean
+  completion: boolean
+  completionResolve: boolean
+  signatureHelp: boolean
   semanticTokenTypes?: string[]
   semanticTokenModifiers?: string[]
 }

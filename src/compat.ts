@@ -133,7 +133,7 @@ export function detectGuards(ctx: Ctx): CompatAdapter[] {
 }
 
 /** 已实测覆盖的最高 DSH 版本（适配矩阵上界，超过则提示，见 buildReport）。 */
-const TESTED_DSH_MAX = '0.1.6-alpha.2'
+const TESTED_DSH_MAX = '0.1.7-alpha.1'
 
 /** 版本适配机制状态行：DSH 版本探测 + 设置 section 安装策略。 */
 export function versionAdapters(dshVersion: string): CompatAdapter[] {
@@ -149,7 +149,7 @@ export function versionAdapters(dshVersion: string): CompatAdapter[] {
   const strategy = settingsInstallStrategy()
   adapters.push({
     name: '设置 section 安装（版本适配）',
-    active: strategy === 'legacy' || strategy === 'service',
+    active: strategy === 'legacy' || strategy === 'service' || strategy === 'forms',
     note: settingsInstallNote(),
   })
   return adapters

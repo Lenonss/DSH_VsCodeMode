@@ -5,7 +5,7 @@
  * 作者 ddj 2026-08-27
  */
 import React from 'react'
-import { IconCodeOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
+import { IconCodeOutline16 } from '../ui/icons.js'
 import { OutlinePanel } from './OutlinePanel.js'
 import type { SidebarPanelDef, SidebarCtx } from '../sidebar/types.js'
 

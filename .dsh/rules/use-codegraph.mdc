@@ -1,0 +1,42 @@
+---
+description: codegraph 优先探查规范。本项目查代码结构、调用链、读符号实现与评估改动影响面时，优先使用 codegraph MCP 工具，减少低效的 Read/Grep 循环。
+alwaysApply: true
+enabled: true
+updatedAt: 2026-09-22T10:08:47.000Z
+provider:
+---
+
+# codegraph 优先探查规范
+
+## 1. 适用场景与默认选择
+
+以下任务**默认走 codegraph**，不先开 Read/Grep 循环：
+
+- 理解某功能/流程如何工作、架构与模块关系 → `codegraph_explore`（一次拿回相关符号源码 + 调用路径，通常一次调用即够）。
+- 已知符号名，要读它的实现 → `codegraph_node`（file + symbol，或单独 file 读整个文件并附依赖提示）。
+- 「谁调用了它 / 改它会破坏什么」→ `codegraph_callers`（含回调注册位点，如传参、赋值、handler 表登记）。
+- 只想找符号位置（不读代码）→ `codegraph_search`（快查，不带源码）。
+- 改动前评估影响面、重构规划 → 先 `codegraph_explore` 看 Blast radius，再按需 `codegraph_callers` 拉全调用点。
+
+## 2. 选型口径
+
+- 探查/理解/改前评估 → `codegraph_explore` 优先，**单次调用替代「search + 逐个 read」链**，不要拆成多次往返。
+- 已锁定单一符号要精读 → `codegraph_node`；一串相关符号或整条流程 → `codegraph_explore`，不要对多个符号循环调 `codegraph_node`。
+- 反模式（避免）：先 grep 再 read 的循环；search 完再 explore 的二次确认——codegraph 结果来自完整 AST 解析，可信，不重复用 grep 复核。
+
+## 3. 允许回落 Read/Grep 的情况
+
+- 目标文件未被索引（工具返回 stale 提示或未收录：配置、文档、生成物、二进制旁的散文件）。
+- 只需确认某个具体行/字面量细节，explore 未覆盖。
+- 非代码文本（.md / .json / 测试快照）。
+- 回落时仍遵守：用 `read` 读文件、`grep` 搜内容（不用 shell cat/find/rg）。
+
+## 4. 未建索引时的降级
+
+- 工具明确报告项目无 `.codegraph/` 索引时：**停止对该项目继续调用 codegraph 工具**，本会话改用内置 Read/Grep，并向用户提示可自行运行 `codegraph init` 建索引；**不自行执行 init**（索引是用户决策）。
+- 索引滞后写入约 1 秒属正常：编辑后立即查询若结果偏旧，等下一次写入后重查即可，不因一次滞后放弃工具。
+
+## 5. 优先级
+
+- 本规则只约束**代码探查方式**，不豁免任何既有规则与流程：用户当前请求 > 用户级强制规则（luac 语法校验、最小测试范围、Unity Editor 副作用约束等）> 本规则 > 项目一般性建议。
+- codegraph 只是结构与调用关系的检索手段；语义正确性、编译与测试验证仍按既有验证优先级执行。

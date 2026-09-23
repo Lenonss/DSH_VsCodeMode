@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img" aria-label="dsh-vscode-mode">
+  <!-- dsh-vscode-mode 插件图标：深色圆角方块 + 浅色 </> 编辑器符号（VSCode 风格） -->
+  <rect x="8" y="8" width="112" height="112" rx="24" fill="#1e1e2e"/>
+  <path d="M46 44 L30 64 L46 84" fill="none" stroke="#7ee2b8" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M82 44 L98 64 L82 84" fill="none" stroke="#7ee2b8" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M70 40 L58 88" fill="none" stroke="#d7dce2" stroke-width="9" stroke-linecap="round"/>
+</svg>

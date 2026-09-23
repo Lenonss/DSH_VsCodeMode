@@ -436,6 +436,63 @@ export function createLspRpc(deps: LspRpcDeps): { handlers: Partial<RpcHandlerMa
       }
     },
 
+    'edrv.lsp.completion': async (args) => {
+      const lang = langOfPath(args.path)
+      if (!lang) return { ok: true, completions: undefined }
+      const sc = await rootOf(args.sessionId)
+      if ('err' in sc) return { ok: false, error: sc.err }
+      try {
+        const server = serverOf(sc.root, lang)
+        if (!server) return { ok: true, completions: undefined }
+        const completions = await server.completion(
+          wsPath(sc.root, args.path),
+          args.position.line,
+          args.position.character,
+          args.context,
+        )
+        if (!completions) return { ok: true, completions: undefined }
+        const truncated = completions.items.length > 500
+        return {
+          ok: true,
+          completions: truncated ? { ...completions, items: completions.items.slice(0, 500), truncated: true } : completions,
+        }
+      } catch (error) {
+        return { ok: false, error: 'LSP 补全查询失败：' + String(error) }
+      }
+    },
+
+    'edrv.lsp.resolveCompletion': async (args) => {
+      const lang = langOfPath(args.path)
+      if (!lang) return { ok: true, item: undefined }
+      const sc = await rootOf(args.sessionId)
+      if ('err' in sc) return { ok: false, error: sc.err }
+      try {
+        const server = serverOf(sc.root, lang)
+        if (!server) return { ok: true, item: args.item }
+        const item = await server.resolveCompletion(wsPath(sc.root, args.path), args.item)
+        return { ok: true, item: item ?? undefined }
+      } catch (error) {
+        return { ok: false, error: 'LSP 补全解析失败：' + String(error) }
+      }
+    },
+
+    'edrv.lsp.signatureHelp': async (args) => {
+      const lang = langOfPath(args.path)
+      if (!lang) return { ok: true, signatureHelp: undefined }
+      const sc = await rootOf(args.sessionId)
+      if ('err' in sc) return { ok: false, error: sc.err }
+      try {
+        const server = serverOf(sc.root, lang)
+        if (!server) return { ok: true, signatureHelp: undefined }
+        return {
+          ok: true,
+          signatureHelp: (await server.signatureHelp(wsPath(sc.root, args.path), args.position.line, args.position.character)) ?? undefined,
+        }
+      } catch (error) {
+        return { ok: false, error: 'LSP 签名帮助查询失败：' + String(error) }
+      }
+    },
+
     'edrv.lsp.semanticTokens': async (args) => {
       const lang = langOfPath(args.path)
       if (!lang) return { ok: true, tokens: undefined }

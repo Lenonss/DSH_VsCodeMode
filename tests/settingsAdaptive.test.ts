@@ -11,8 +11,11 @@ import {
   resetSettingsInstallObserved,
   runSettingsInstall,
   schemaLibName,
+  sectionOf,
   settingsInstallNote,
   settingsInstallStrategy,
+  updateSection,
+  buildSettingsSchema,
 } from '../src/fileOpenSettings.js'
 
 const NS = 'dsh-vscode-mode'
@@ -121,6 +124,57 @@ describe('runSettingsInstall 策略分派', () => {
     expect(settingsInstallNote()).toContain('降级')
   })
 
+  it('forms：0.1.7 无 installSection 但 describe+update 在场 → forms 策略', async () => {
+    const provider = { describe: () => [], update: async () => {} }
+    const ctx = {
+      on: vi.fn(() => () => {}),
+      effect: vi.fn(),
+      inject: (_services: string[], callback: (sctx: unknown) => void) => callback({ get: () => provider }),
+    }
+    const strategy = await runSettingsInstall(ctx as never, NS, {}, {}, hooks, async () => ({ z: zStub() }))
+    expect(strategy).toBe('forms')
+    expect(settingsInstallStrategy()).toBe('forms')
+    expect(settingsInstallNote()).toContain('SettingsForms')
+    // 变更通知接线：订阅 settings/document-updated 且经 effect 挂 disposer
+    expect(ctx.on).toHaveBeenCalledTimes(1)
+    expect(ctx.on.mock.calls[0][0]).toBe('settings/document-updated')
+    expect(ctx.effect).toHaveBeenCalledTimes(1)
+  })
+
+  it('forms 订阅回调：同 ns 变化推 setSource+onChange，异 ns 忽略', async () => {
+    let handler: ((ns: unknown) => void) | undefined
+    const provider = {
+      describe: () => [{ ns: NS, value: { fileOpenTool: 'vscode' }, revision: 7 }],
+      update: async () => {},
+    }
+    const ctx = {
+      on: vi.fn((_name: string, h: (ns: unknown) => void) => { handler = h; return () => {} }),
+      effect: vi.fn(),
+      inject: (_services: string[], callback: (sctx: unknown) => void) => callback({ get: () => provider }),
+    }
+    let pushed: unknown
+    let changes = 0
+    await runSettingsInstall(ctx as never, NS, {}, {}, {
+      setSource: (source) => { pushed = source() },
+      onChange: () => { changes += 1 },
+    }, async () => ({ z: zStub() }))
+    expect(handler).toBeTypeOf('function')
+    handler?.('other-ns')
+    expect(changes).toBe(0)
+    handler?.(NS)
+    expect(changes).toBe(1)
+    expect(pushed).toEqual({ fileOpenTool: 'vscode' })
+  })
+
+  it('forms 缺 describe 或 update 之一 → 仍 none 降级', async () => {
+    const ctx = {
+      inject: (_services: string[], callback: (sctx: unknown) => void) =>
+        callback({ get: () => ({ describe: () => [] }) }),
+    }
+    const strategy = await runSettingsInstall(ctx as never, NS, {}, {}, hooks, async () => ({ z: zStub() }))
+    expect(strategy).toBe('none')
+  })
+
   it('依赖缺失 / ctx 无 inject 且无 legacy → none，不抛错', async () => {
     expect(await runSettingsInstall({} as never, NS, {}, {}, hooks, async () => null)).toBe('none')
     expect(await runSettingsInstall({} as never, NS, {}, {}, hooks, async () => ({ z: zStub() }))).toBe('none')
@@ -135,5 +189,82 @@ describe('runSettingsInstall 策略分派', () => {
     const strategy = await runSettingsInstall(ctx as never, NS, {}, {}, hooks, async () => ({ installSettingsSection: legacy, z: zStub() }))
     expect(['service', 'none']).toContain(strategy)
     expect(settingsInstallStrategy()).not.toBe('unknown')
+  })
+})
+
+describe('sectionOf 形状校验读取', () => {
+  it('ns 命中且 value 为对象 → 命中（0.1.7 entry Config 值与旧 section 值同形）', () => {
+    const provider = { describe: () => [{ ns: NS, value: { fileOpenTool: 'a' }, revision: 3 }] }
+    expect(sectionOf(provider, NS)?.revision).toBe(3)
+  })
+
+  it('ns 同名但 value 非对象（数组/标量）→ 不命中（防误命中非设置数据）', () => {
+    const provider = { describe: () => [{ ns: NS, value: [1, 2] }, { ns: NS, value: 'x' }] }
+    expect(sectionOf(provider, NS)).toBeUndefined()
+  })
+
+  it('provider 缺失 / describe 缺失 / ns 未命中 → undefined 不抛错', () => {
+    expect(sectionOf(undefined, NS)).toBeUndefined()
+    expect(sectionOf({}, NS)).toBeUndefined()
+    expect(sectionOf({ describe: () => [{ ns: 'other', value: {} }] }, NS)).toBeUndefined()
+  })
+})
+
+describe('updateSection 冲突自愈写入', () => {
+  it('正常写入直接成功（带 revision 栅栏）', async () => {
+    const update = vi.fn(async () => {})
+    const provider = { describe: () => [{ ns: NS, value: {}, revision: 5 }], update }
+    const result = await updateSection(provider, NS, { fileOpenTool: 'vscode' })
+    expect(result.ok).toBe(true)
+    expect(update).toHaveBeenCalledWith(NS, { fileOpenTool: 'vscode' }, 5)
+  })
+
+  it('SettingsConflictError（code 通道）→ 重读 revision 重试一次成功', async () => {
+    let calls = 0
+    const update = vi.fn(async (_ns: string, _patch: object, revision?: number) => {
+      calls += 1
+      if (calls === 1) throw Object.assign(new Error('conflict'), { code: 'SETTINGS_CONFLICT' })
+      expect(revision, '重试须用重读到的新 revision').toBe(9)
+    })
+    // 首写带 expectedRevision=2（短路不读 describe）；冲突重试才走 describe 重读
+    const provider = { describe: () => [{ ns: NS, value: {}, revision: 9 }], update }
+    const result = await updateSection(provider, NS, { a: 1 }, 2)
+    expect(result).toEqual({ ok: true, conflict: true })
+    expect(update).toHaveBeenCalledTimes(2)
+    expect(update.mock.calls[0][2]).toBe(2)
+  })
+
+  it('构造器名通道识别冲突；非冲突错误结构化返回不抛错', async () => {
+    const conflictErr = Object.assign(new Error('x'), { name: 'SettingsConflictError' })
+    const provider = {
+      describe: () => [{ ns: NS, value: {}, revision: 1 }],
+      update: vi.fn(async () => { throw conflictErr }),
+    }
+    const conflictResult = await updateSection(provider, NS, {})
+    expect(conflictResult.ok).toBe(false)
+    expect(conflictResult.conflict).toBe(true)
+    const plainErr = { update: vi.fn(async () => { throw new Error('disk full') }) }
+    const plainResult = await updateSection(plainErr, NS, {})
+    expect(plainResult.ok).toBe(false)
+    expect(plainResult.error).toContain('disk full')
+  })
+
+  it('服务无 update → 结构化失败（调用方走内存降级）', async () => {
+    const result = await updateSection({}, NS, {})
+    expect(result.ok).toBe(false)
+    expect(result.error).toContain('update')
+  })
+})
+
+describe('buildSettingsSchema 字段全集', () => {
+  it('与设置键逐字一致（Config 声明与 section 安装同源）', () => {
+    // zStub 的 z.object(shape) 返回 {default} 包装：取 shape 须经 .default() 展开
+    const wrapped = buildSettingsSchema(zStub()) as { default: (value: Record<string, unknown>) => { shape: Record<string, unknown> } }
+    const keys = Object.keys(wrapped.default({}).shape).sort()
+    expect(keys).toEqual([
+      'aiEffort', 'aiInline', 'aiModel', 'aiProvider',
+      'fileOpenTool', 'integrationBaseUrl', 'keybindings', 'maxOpenEditors',
+      'nativeOpenExts', 'sidebarMinWidth', 'svnPath', 'tortoisePath',
+    ].sort())
   })
 })

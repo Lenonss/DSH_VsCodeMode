@@ -14,7 +14,9 @@ import { newSearcher } from './search/orchestrator.js'
 import { newContentSearcher } from './search/content.js'
 import { installIsolation } from './mcpIsolation.js'
 import { cwdOf } from './registry.js'
-import { setupOpenSettings } from './fileOpenSettings.js'
+import { setupOpenSettings, buildSettingsSchema } from './fileOpenSettings.js'
+import type { SettingsDeps } from './fileOpenSettings.js'
+import z from '@deepseek-ai/schemastery'
 import { shellMenuLifecycle } from './integrate.js'
 import { disposeIndex } from './treeIndex.js'
 import { sweepTreeCache } from './paths.js'
@@ -35,6 +37,18 @@ import type { Ctx } from './store.js'
 
 export const name = "dsh-vscode-mode"
 export const inject = ['sessions', 'fs', 'webServer', 'loader', 'tools', 'workspaceRegistry', 'agents']
+
+/**
+ * 插件 Config schema（cordis 从 module 导出读 `plugin.Config` 做启动校验；
+ * DSH 0.1.7 起设置页按此 schema 自动生成表单，设置值 = profile 插件配置）。
+ * 字段集与 installOpenSettingsSection 的 section schema 同源（buildSettingsSchema），
+ * 全字段带默认值——undefined/空配置经 schemastery 校验自动填充（rc/alpha 两代
+ * cordis 均读该导出，实测 4.0.0-rc.8 与 0.1.7 行为一致，校验必过）。
+ * 运行时解析：@deepseek-ai/schemastery 经插件自身 node_modules（link/dev/npm 安装
+ * 三形态均在 peer/dev 依赖面内，先于宿主树命中）。
+ * @author ddj 2026年09月22号
+ */
+export const Config = buildSettingsSchema(z as unknown as SettingsDeps['z'])
 
 /**
  * 装配插件：挂事件监听、注册路由、安装兼容层。

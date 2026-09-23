@@ -16,6 +16,18 @@
 #       imageDir: /path/to/icons
 # 注意：是覆盖（override），不是再 insert 一次同 id 的行，否则触发
 # duplicate loader entry id 启动失败。
+#
+# DSH 0.1.7 免重载配置字段（已实证，格式与本文件无关）：插件在自己的 Config
+# schema 字段上声明 `.volatile()`（如 `z.string().volatile()`，类型
+# `import type { Volatile } from '@deepseek-ai/cordis'`），仅 volatile 字段的
+# 变化由 Loader 就地提交（`ctx.on('loader/volatile-update')`），运行中的实例保留、
+# 不重挂载；非 volatile 字段改动仍按原逻辑触发 reload（volatile 字段还要求位于
+# 固定 object 路径，不得嵌套于 dict key / 外层 volatile 之内，app-boot 会校验）。
+# 该声明落在插件源码的 schema 上，**不是 patch 文件字段**——本插件 config 暂无
+# 自定义字段，故此处不声明；预留写法：未来给本行加 `config:` 字段时，须同步在
+# 插件 Config schema 的对应字段加 `.volatile()` 才会免重载，届时再补注释示例。
+# 另：0.1.7 起 `dsh.bundle.patch` 支持 `patch: string | string[]`（有序列表，
+# 逐层施加），本包单文件写法保持兼容，无需改动。
 - insert:
     - id: dsh-vscode-mode
       name: 'dsh-vscode-mode'

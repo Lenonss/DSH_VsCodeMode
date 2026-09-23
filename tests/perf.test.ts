@@ -1,19 +1,24 @@
-/** DSH 会话性能管理测试：路径编码 / 盘点 / 移出规划 / 移出执行 / 恢复 / patch 调优。作者 ddj 2026年09月02号 */
-import { describe, expect, it } from 'vitest'
+/** DSH 会话性能管理测试：路径编码 / 盘点 / 移出规划 / 移出执行 / 恢复 / patch 调优 / 官方归档标志对齐。作者 ddj 2026年09月02号 */
+import { describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { sessionIdSegment, sessionWorkspaceKey, sessionsRoot } from '../src/paths.js'
 import {
   markActiveSessions,
+  markOfficialFlags,
   moveOutSessions,
   planMoveOut,
+  registryFlags,
   restoreSession,
   scanSessionInventory,
   sessionSizeOf,
+  unarchiveOfficial,
   validDirName,
   withinDir,
 } from '../src/perf.js'
+import type { PerfSession } from '../src/shared/rpc.js'
+import { log } from '../src/log.js'
 import { patchHasPerfConfig, patchInsertPerfConfig, patchRemovePerfConfig } from '../src/perfPatch.js'
 
 const HOME = join(mkdtempSync(join(tmpdir(), 'dsh-perf-')), 'home')
@@ -186,6 +191,87 @@ describe('moveOutSessions / restoreSession / sessionSizeOf', () => {
     ], [])
     expect(result.failures[0]?.error).toContain('不合法')
     expect(sessionsRoot(HOME)).toBe(join(HOME, 'sessions'))
+  })
+})
+
+describe('unarchiveOfficial（官方归档标志对齐，best-effort）', () => {
+  it('服务可用时调用一次 unarchiveSession(id)', async () => {
+    const unarchiveSession = vi.fn(async () => undefined)
+    const ctx = { get: (name: string) => (name === 'workspaceRegistry' ? { unarchiveSession } : undefined) }
+    await unarchiveOfficial(ctx, 's1')
+    expect(unarchiveSession).toHaveBeenCalledTimes(1)
+    expect(unarchiveSession).toHaveBeenCalledWith('s1')
+  })
+
+  it('服务缺失时静默跳过（保持现状，不猜行为）', async () => {
+    const ctx = { get: () => undefined }
+    await expect(unarchiveOfficial(ctx, 's1')).resolves.toBeUndefined()
+  })
+
+  it('调用抛错被吞掉（不阻断恢复主流程，仅 debug 记录）', async () => {
+    const debugSpy = vi.spyOn(log, 'debug').mockImplementation(() => undefined)
+    const ctx = { get: () => ({ unarchiveSession: vi.fn(async () => { throw new Error('boom') }) }) }
+    await expect(unarchiveOfficial(ctx, 's1')).resolves.toBeUndefined()
+    expect(debugSpy).toHaveBeenCalledTimes(1)
+    debugSpy.mockRestore()
+  })
+})
+
+describe('markOfficialFlags / registryFlags（官方归档/置顶标志，best-effort）', () => {
+  /** 造一条不带标志字段的盘点行（模拟旧 host 载荷）。 */
+  const bareRow = (sessionId: string): PerfSession => ({ sessionId, workspaceKey: 'w', bytes: 1, mtime: 0, active: false })
+
+  it('服务缺失 → 视为空集，不附任何字段（0.1.6 及更旧兼容降级）', () => {
+    const rows = [bareRow('s1')]
+    const flags = registryFlags({ get: () => undefined })
+    expect(flags.archived.size).toBe(0)
+    expect(flags.pinned.size).toBe(0)
+    markOfficialFlags(rows, { get: () => undefined })
+    expect(rows[0].archived).toBeUndefined()
+    expect(rows[0].pinned).toBeUndefined()
+  })
+
+  it('字段缺失/非数组/非字符串元素 → 视为空，不附字段、不抛错', () => {
+    const rows = [bareRow('s1')]
+    markOfficialFlags(rows, { get: () => ({}) })
+    markOfficialFlags(rows, { get: () => ({ archivedSessionIds: 'nope', pinnedSessionIds: [1, null] }) })
+    expect(rows[0].archived).toBeUndefined()
+    expect(rows[0].pinned).toBeUndefined()
+  })
+
+  it('命中 → 仅命中行附 true，未命中行保持不附字段', () => {
+    const rows = [bareRow('hit'), bareRow('plain')]
+    markOfficialFlags(rows, { get: () => ({ archivedSessionIds: ['hit'], pinnedSessionIds: ['hit'] }) })
+    expect(rows[0].archived).toBe(true)
+    expect(rows[0].pinned).toBe(true)
+    expect(rows[1].archived).toBeUndefined()
+    expect(rows[1].pinned).toBeUndefined()
+  })
+
+  it('id 编码差异双向匹配：registry 存原始 id、行是编码段名也命中', () => {
+    const rows = [bareRow(sessionIdSegment('a/b')), bareRow('other')]
+    markOfficialFlags(rows, { get: () => ({ archivedSessionIds: ['a/b'], pinnedSessionIds: ['other'] }) })
+    expect(rows[0].archived).toBe(true)
+    expect(rows[1].pinned).toBe(true)
+  })
+
+  it('registry.get 抛错被吞掉（不阻断盘点主流程，仅 debug 记录）', () => {
+    const debugSpy = vi.spyOn(log, 'debug').mockImplementation(() => undefined)
+    const rows = [bareRow('s1')]
+    const ctx = { get: () => { throw new Error('boom') } }
+    expect(() => markOfficialFlags(rows, ctx)).not.toThrow()
+    expect(debugSpy).toHaveBeenCalledTimes(1)
+    expect(rows[0].archived).toBeUndefined()
+    debugSpy.mockRestore()
+  })
+
+  it('PerfSession 的 archived/pinned 为可选（类型可选性回归：旧 host 载荷可直接构造）', () => {
+    const legacy: PerfSession = { sessionId: 's1', workspaceKey: 'w', bytes: 1, mtime: 0, active: false }
+    expect(legacy.archived).toBeUndefined()
+    expect(legacy.pinned).toBeUndefined()
+    const flagged: PerfSession = { ...legacy, archived: true, pinned: true }
+    expect(flagged.archived).toBe(true)
+    expect(flagged.pinned).toBe(true)
   })
 })
 

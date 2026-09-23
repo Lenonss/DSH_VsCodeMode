@@ -28,6 +28,7 @@ import {
   OFFICIAL_TABS_SERVICE,
 } from '../src/client/officialSidebar.js'
 import { routeSideEditor, setEnsureSideEditor } from '../src/client/sidebarBridge.js'
+import { setNativeCsv, resetNativeOpen } from '../src/client/nativeOpenStore.js'
 
 /** 构造探测用 ctx：name→value 映射，可注入抛错。 */
 function ctxOf(map: Record<string, unknown>, boom = false): { get: (name: string) => unknown } {
@@ -298,6 +299,26 @@ describe('registerOfficialFileClaim', () => {
     })
     expect(dispose).toBeNull()
   })
+
+  it('用户配置 nativeOpenExts 后缀 → canOpen 同步让位（原生打开不被认领截胡）', () => {
+    resetNativeOpen()
+    const definitions: unknown[] = []
+    const tabs = { register: (d: unknown) => { definitions.push(d); return () => {} } }
+    const slots = { inject: (_n: string, register: () => unknown) => { register(); return () => {} }, register: () => () => {} }
+    const dispose = registerOfficialFileClaim({ tabs, slots, renderTab: () => null })
+    const canOpen = (definitions[0] as { canOpen: (a: string) => boolean }).canOpen
+    // 默认集外的后缀（md）：未配置 → 认领进编辑器
+    expect(canOpen('dsh-resource://file/session/s1/notes.md')).toBe(true)
+    // 用户把 md 加入原生打开范围 → 同步让位（否则 openResource 被认领转发回本插件）
+    setNativeCsv('md,mdx')
+    expect(canOpen('dsh-resource://file/session/s1/notes.md')).toBe(false)
+    expect(canOpen('dsh-resource://file/session/s1/other.mdx')).toBe(false)
+    expect(canOpen('dsh-resource://file/session/s1/a.ts')).toBe(true)
+    // 复位默认 → 恢复认领（防状态泄漏到后续用例）
+    resetNativeOpen()
+    expect(canOpen('dsh-resource://file/session/s1/notes.md')).toBe(true)
+    dispose!()
+  })
 })
 
 describe('deferToOfficial（G2：Office / 不可预览后缀让位官方）', () => {
@@ -332,6 +353,16 @@ describe('deferToOfficial（G2：Office / 不可预览后缀让位官方）', ()
   it('avif 为例外：官方列不可预览，但本插件支持图片预览故不让位', () => {
     expect(BLIND_EXT).not.toContain('avif')
     expect(deferToOfficial('a.avif')).toBe(false)
+  })
+
+  it('csv/tsv 不让位：0.1.7 官方只读表格预览 vs 本插件 Monaco 可编辑', () => {
+    expect(OFFICE_EXT).not.toContain('csv')
+    expect(OFFICE_EXT).not.toContain('tsv')
+    expect(BLIND_EXT).not.toContain('csv')
+    expect(BLIND_EXT).not.toContain('tsv')
+    expect(deferToOfficial('a.csv')).toBe(false)
+    expect(deferToOfficial('a.tsv')).toBe(false)
+    expect(deferToOfficial('dir/sub/a.CSV')).toBe(false)
   })
 
   it('清单取自官方常量（防止漏抄）：计数与去重自洽', () => {

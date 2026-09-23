@@ -10,12 +10,34 @@
 import {
   pathOfModel, syncDoc, closeDoc, findDefinition, findReferences,
   fetchDocumentSymbols, fetchHover, fetchSemanticTokens,
+  fetchCompletions, resolveCompletion, fetchSignatureHelp,
   targetOpenPath, lspStatusFor, refreshStatus,
   lspUriToAbs,
 } from './lspClient.js'
-import { LSP_SEMANTIC_TOKEN_MODIFIERS, LSP_SEMANTIC_TOKEN_TYPES } from '../../../shared/lsp.js'
+import {
+  LSP_SEMANTIC_TOKEN_MODIFIERS, LSP_SEMANTIC_TOKEN_TYPES,
+  LSP_COMPLETION_KIND_NAMES, LSP_INSERT_TEXT_FORMAT_SNIPPET,
+} from '../../../shared/lsp.js'
 
 const LSP_LANGS = ['lua', 'csharp']
+
+/**
+ * 补全触发字符（按语言）。
+ *
+ * 取 EmmyLua / DotRush 声明字符的**交集**且去掉噪声项：`"` `'` `\` `/` `#` 等在多语言里
+ * 过于聒噪（每次输入都弹列表打扰手写），故只保留「成员访问 + 调用 + 索引」三类主场景。
+ * @author ddj 2026年09月22号
+ */
+const COMPLETION_TRIGGERS = {
+  lua: ['.', ':', '(', '['],
+  csharp: ['.', ':', '(', '[', '<', '@'],
+}
+
+/** 签名帮助触发字符（与 LSP 服务器声明的 triggerCharacters 对齐）。 */
+const SIGNATURE_TRIGGERS = ['(', ',']
+
+/** 签名参数/签名文档上浮窗渲染的兜底最大长度（防超长 doc 撑爆浮窗）。 */
+const MAX_DOC_LENGTH = 4000
 const SEMANTIC_LEGEND = {
   tokenTypes: [...LSP_SEMANTIC_TOKEN_TYPES],
   tokenModifiers: [...LSP_SEMANTIC_TOKEN_MODIFIERS],
@@ -100,6 +122,19 @@ export function registerLspProviders(monaco) {
   disposables.push(() => window.removeEventListener('edrv:lsp-redetect', onRedetect))
 
   // —— 数据 provider ——
+  // 补全/签名帮助是本轮新增能力，注册前各自探能力：vendored Monaco 若缺某一 API
+  // （换了构建/被裁剪），只跳过该 provider，不能让整套 LSP（跳转/hover/语义高亮）一起挂掉。
+  // ⚠️ 必须**逐个压入**注销器：按语言注册会返回数组，整组压入会让 disposeLspProviders
+  // 既不是 function 也没有 .dispose → 静默跳过不注销 → 重载后补全 provider 叠加（重复候补）。
+  const withCapability = (register) => {
+    try {
+      const disposer = register()
+      if (Array.isArray(disposer)) disposables.push(...disposer.filter(Boolean))
+      else if (disposer) disposables.push(disposer)
+    } catch (error) {
+      /* 单个能力注册失败不影响其余 provider */
+    }
+  }
   disposables.push(
     // 原生跳转（peek 参考文献列表点击 / 原生 go to definition 等）的 edrv:// 打开兜底：
     // 目标 uri 由本插件自己定义（edrv:// 工作区相对路径），Monaco 无法自行加载，
@@ -163,6 +198,33 @@ export function registerLspProviders(monaco) {
       releaseDocumentSemanticTokens: () => {},
     }),
   )
+
+  // 新增能力走 withCapability（能力缺失只跳过自身，不影响上面已注册的 provider），
+  // 且必须在 disposables.push(...) **之外**调用 —— 放进参数列表会压入 undefined 占位。
+  // 补全：`obj.` 弹出成员列表（EmmyLua 经 ---@class/---@field 注释索引提供字段）。
+  // 逐语言注册以分别给触发字符；resolveCompletionItem 惰性取文档（列表阶段不带）。
+  withCapability(() => LSP_LANGS.map((lang) => completionsFor(monaco, lang)))
+  withCapability(() => monaco.languages.registerSignatureHelpProvider(LSP_LANGS, {
+    signatureHelpTriggerCharacters: SIGNATURE_TRIGGERS,
+    signatureHelpRetriggerCharacters: SIGNATURE_TRIGGERS,
+    provideSignatureHelp: async (model, position, token, context) => {
+      const path = pathOfModel(model)
+      if (!path) return null
+      // 取消（继续输入/移光标）时不再弹，避免过期签名覆盖新位置
+      if (token?.isCancellationRequested) return null
+      const help = await fetchSignatureHelp(path, model.getValue(), position)
+      if (!help || !help.signatures.length) return null
+      return {
+        value: {
+          signatures: help.signatures.map(toMonacoSignature),
+          activeSignature: help.activeSignature,
+          activeParameter: help.activeParameter,
+        },
+        dispose: () => {},
+      }
+    },
+  }))
+
   // 注销器落 window：window.monaco 跨插件重载存活，模块级 registered 会复位，
   // 只判 registered 会在重载后重复注册全部 LSP provider（见 disposeLspProviders）。
   if (host) host[LSP_PROVIDERS_GLOBAL] = true
@@ -272,6 +334,188 @@ export async function runFindReferences(ed) {
  * @author ddj 2026年09月02号
  */
 export function hideReferencesOverlay() {}
+
+/**
+ * 构造某语言的补全 provider（触发字符按语言区分）。
+ *
+ * 为什么有 documentPath 传递：Monaco 调 `resolveCompletionItem(item, token)` 时**不传 model**
+ * （实测 vendored 0.42 构建：`provider.resolveCompletionItem(this.completion, token)`），
+ * 因此路径必须在列表阶段随候选项带上，否则 resolve 阶段无处得知该查哪个文档。
+ * @author ddj 2026年09月22号
+ * @param monaco Monaco 实例
+ * @param lang 语言 id
+ * @returns provider 注销器
+ */
+function completionsFor(monaco, lang) {
+  return monaco.languages.registerCompletionItemProvider(lang, {
+    triggerCharacters: COMPLETION_TRIGGERS[lang] ?? ['.', ':'],
+    provideCompletionItems: async (model, position, context, token) => {
+      const path = pathOfModel(model)
+      if (!path) return { suggestions: [] }
+      const list = await fetchCompletions(path, model.getValue(), position, toLspContext(context))
+      if (!list || !list.items.length || token?.isCancellationRequested) return { suggestions: [] }
+      const word = model.getWordUntilPosition(position)
+      const fallback = {
+        startLineNumber: position.lineNumber,
+        endLineNumber: position.lineNumber,
+        startColumn: word.startColumn,
+        endColumn: word.endColumn,
+      }
+      return {
+        suggestions: list.items.map((item) => toMonoSuggestion(monaco, item, fallback, path)),
+        incomplete: list.incomplete === true,
+      }
+    },
+    resolveCompletionItem: async (item, token) => {
+      const raw = item?.__edrvRaw
+      const path = item?.__edrvPath
+      if (!raw || !path || token?.isCancellationRequested) return item
+      const resolved = await resolveCompletion(path, raw).catch(() => null)
+      if (!resolved) return item
+      return mergeResolved(monaco, item, resolved)
+    },
+  })
+}
+
+/**
+ * Monaco 补全上下文 → LSP CompletionContext。
+ *
+ * ⚠️ 两侧 triggerKind **编号不同，必须换算**（实测 vendored 0.42 与 LSP 3.17 规范）：
+ *   Monaco：0=Invoke, 1=TriggerCharacter, 2=TriggerForIncompleteCompletions
+ *   LSP  ：1=Invoked, 2=TriggerCharacter, 3=TriggerForIncomplete
+ * 恒差 1。直传会把「按字符触发」谎报成 Invoked，服务器据此可能不返回成员补全
+ * （部分服务器严格按 triggerKind 决定是否给 table 成员）。
+ * @author ddj 2026年09月22号
+ * @param context Monaco 上下文（可能缺字段）
+ * @returns LSP 上下文；无触发信息时 undefined（不占载荷）
+ */
+export function toLspContext(context) {
+  const kind = context?.triggerKind
+  if (typeof kind !== 'number' && !context?.triggerCharacter) return undefined
+  // 换算到 LSP 编号空间并夹到合法区间 [1,3]；未给 kind 时按 LSP Invoked(1) 处理
+  const lspKind = typeof kind === 'number' ? Math.min(3, Math.max(1, kind + 1)) : 1
+  const out = { triggerKind: lspKind }
+  if (typeof context?.triggerCharacter === 'string') out.triggerCharacter = context.triggerCharacter
+  return out
+}
+
+/**
+ * LSP 补全项 → Monaco suggestion。
+ * @author ddj 2026年09月22号
+ * @param monaco Monaco 实例（取枚举）
+ * @param item host 归一化补全项
+ * @param fallback 无 textEdit 时的词范围
+ * @param path 工作区相对路径（resolve 阶段回传用）
+ * @returns Monaco suggestion
+ */
+function toMonoSuggestion(monaco, item, fallback, path) {
+  const kindName = LSP_COMPLETION_KIND_NAMES[item.kind ?? 0]
+  const kinds = monaco.languages.CompletionItemKind ?? {}
+  const asSnippet = monaco.languages.CompletionItemInsertTextRule?.InsertAsSnippet
+  const suggestion = {
+    label: item.label,
+    kind: kindName && typeof kinds[kindName] === 'number' ? kinds[kindName] : (kinds.Text ?? 0),
+    insertText: textOfCompletion(item),
+    range: rangeOfCompletion(monaco, item, fallback),
+    // 非协议字段：仅本插件读取（resolve 需要文档路径与原始条目），Monaco 忽略
+    __edrvRaw: item,
+    __edrvPath: path,
+  }
+  if (item.detail) suggestion.detail = item.detail
+  if (item.documentation) suggestion.documentation = { value: clip(item.documentation) }
+  if (item.filterText) suggestion.filterText = item.filterText
+  if (item.sortText) suggestion.sortText = item.sortText
+  if (item.preselect === true) suggestion.preselect = true
+  if (item.commitCharacters) suggestion.commitCharacters = item.commitCharacters
+  if (item.deprecated === true) suggestion.tags = [monaco.languages.CompletionItemTag?.Deprecated ?? 1]
+  if (item.additionalTextEdits) suggestion.additionalTextEdits = item.additionalTextEdits.map((edit) => toMonoEdit(monaco, edit))
+  // 片段展开：LSP insertTextFormat=2 交给 Monaco 解析 ${1:占位} 语法
+  if (item.insertTextFormat === LSP_INSERT_TEXT_FORMAT_SNIPPET && typeof asSnippet === 'number') {
+    suggestion.insertTextRules = asSnippet
+  }
+  return suggestion
+}
+
+/**
+ * 取补全插入文本：`textEdit.newText` 优先于 `insertText`（协议规定 textEdit 生效时以它为准）。
+ * @author ddj 2026年09月22号
+ */
+function textOfCompletion(item) {
+  if (item.textEdit?.newText) return item.textEdit.newText
+  return item.insertText ?? item.label
+}
+
+/**
+ * 取补全替换范围（Monaco 1-based）：单 range 或 insert/replace 双 range 两种形态都映射。
+ * 无 textEdit 时回落词范围 —— 缺范围会让 Monaco 用默认范围替换，可能吃掉已输入前缀。
+ * @author ddj 2026年09月22号
+ */
+function rangeOfCompletion(monaco, item, fallback) {
+  const edit = item.textEdit
+  if (!edit) return fallback
+  if (edit.range) return toMonoRange(monaco, edit.range)
+  if (edit.insert && edit.replace) {
+    return { insert: toMonoRange(monaco, edit.insert), replace: toMonoRange(monaco, edit.replace) }
+  }
+  return fallback
+}
+
+/** LSP Range（0-based）→ Monaco Range（1-based）。 */
+function toMonoRange(monaco, range) {
+  const s = (p) => ({ lineNumber: Math.max(1, (p?.line ?? 0) + 1), column: Math.max(1, (p?.character ?? 0) + 1) })
+  const start = s(range?.start)
+  const end = s(range?.end)
+  return new monaco.Range(start.lineNumber, start.column, end.lineNumber, end.column)
+}
+
+/** LSP TextEdit → Monaco IEditOperation（additionalTextEdits 用）。 */
+function toMonoEdit(monaco, edit) {
+  return { range: toMonoRange(monaco, edit.range), text: edit.newText }
+}
+
+/**
+ * 把 resolve 结果合并进已展示的候选项（保留列表阶段的 range/kind 等 Monaco 侧字段）。
+ * @author ddj 2026年09月22号
+ * @param monaco Monaco 实例
+ * @param suggestion 原候选项
+ * @param resolved resolve 后的归一化条目
+ * @returns 合并后的候选项
+ */
+function mergeResolved(monaco, suggestion, resolved) {
+  const merged = { ...suggestion, __edrvRaw: resolved }
+  if (resolved.detail) merged.detail = resolved.detail
+  if (resolved.documentation) merged.documentation = { value: clip(resolved.documentation) }
+  if (resolved.additionalTextEdits) merged.additionalTextEdits = resolved.additionalTextEdits.map((edit) => toMonoEdit(monaco, edit))
+  return merged
+}
+
+/** 文档裁剪：超长 doc（少数服务器返回整段源码）会撑爆浮窗，截断并标注。 */
+function clip(text) {
+  const value = String(text ?? '')
+  if (value.length <= MAX_DOC_LENGTH) return value
+  return value.slice(0, MAX_DOC_LENGTH) + '\n\n…（内容过长已截断）'
+}
+
+/**
+ * LSP 签名 → Monaco SignatureInformation。
+ * 参数 label 的 `[start, end]` 元组形态**必须**转成 `[start, end]` 数组，
+ * 否则 Monaco 按字符串渲染成 `42,57` 这种字面文本（该浮窗会显示成乱码式参数）。
+ * @author ddj 2026年09月22号
+ * @param signature host 归一化签名
+ * @returns Monaco 签名
+ */
+function toMonoSignature(signature) {
+  const out = {
+    label: signature.label,
+    parameters: (signature.parameters ?? []).map((param) => {
+      const info = { label: Array.isArray(param.label) ? [param.label[0], param.label[1]] : param.label }
+      if (param.documentation) info.documentation = { value: clip(param.documentation) }
+      return info
+    }),
+  }
+  if (signature.documentation) out.documentation = { value: clip(signature.documentation) }
+  return out
+}
 
 /** 编辑器状态栏提示（复用 EditorView 的 status 通道）。 */
 function setStatus(text) {

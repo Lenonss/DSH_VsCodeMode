@@ -11,11 +11,18 @@ import { deriveDefinitionFromLocations } from './derive.js'
 import type { LspProviderSpec } from './providers.js'
 import { LSP_SEMANTIC_TOKEN_MODIFIERS, LSP_SEMANTIC_TOKEN_TYPES } from '../shared/lsp.js'
 import type {
+  LspCompletionItem,
+  LspCompletionList,
+  LspCompletionTextEdit,
   LspLocation,
+  LspParameterInformation,
+  LspRange,
   LspSemanticTokens,
   LspServerCapabilities,
   LspServerPhase,
   LspServerStatus,
+  LspSignatureHelp,
+  LspSignatureInformation,
   LspSymbol,
 } from '../shared/lsp.js'
 
@@ -34,6 +41,9 @@ export interface LspServer {
   documentSymbol(path: string): Promise<LspSymbol[]>
   workspaceSymbol(query: string): Promise<LspSymbol[]>
   hover(path: string, line: number, character: number): Promise<{ contents: string[] } | null>
+  completion(path: string, line: number, character: number, context?: unknown): Promise<LspCompletionList | null>
+  resolveCompletion(path: string, item: LspCompletionItem): Promise<LspCompletionItem | null>
+  signatureHelp(path: string, line: number, character: number): Promise<LspSignatureHelp | null>
   semanticTokens(path: string): Promise<LspSemanticTokens | null>
   dispose(): Promise<void>
 }
@@ -86,6 +96,9 @@ export function createLspServer(spec: LspProviderSpec, root: string, languageId:
     workspaceSymbol: false,
     hover: false,
     semanticTokens: false,
+    completion: false,
+    completionResolve: false,
+    signatureHelp: false,
     semanticTokenTypes: [...LSP_SEMANTIC_TOKEN_TYPES],
     semanticTokenModifiers: [...LSP_SEMANTIC_TOKEN_MODIFIERS],
   }
@@ -346,6 +359,69 @@ export function createLspServer(spec: LspProviderSpec, root: string, languageId:
       return { contents: stringifyHoverContents(result.contents) }
     },
 
+    /**
+     * 查询补全列表（textDocument/completion）。
+     *
+     * 列表阶段**剥离 documentation**：EmmyLua 把文档挂在 resolve 阶段（我方 initialize 已声明
+     * resolveSupport），但并非所有服务器都遵守；每条都带长文档会让单次 RPC 载荷暴涨。
+     * `data` 原样透传，resolve 时由服务器回认该条目。
+     * @author ddj 2026年09月22号
+     * @param path 工作区相对路径
+     * @param line 0-based 行
+     * @param character 0-based 列
+     * @param context LSP CompletionContext（触发字符/触发类型）
+     * @returns 归一化补全列表；不支持或文档未打开时 null
+     */
+    async completion(path: string, line: number, character: number, context?: unknown): Promise<LspCompletionList | null> {
+      const doc = docs.get(path)
+      if (!doc || !(await readyWait) || !capabilities.completion) return null
+      const params: Record<string, unknown> = {
+        textDocument: { uri: doc.uri },
+        position: { line, character },
+      }
+      if (context) params.context = context
+      const result = await ensureClient().request<unknown>('textDocument/completion', params)
+      return normCompletion(result)
+    },
+
+    /**
+     * 补全项惰性补全（completionItem/resolve）：按 `data` 取回 documentation/detail/additionalTextEdits。
+     *
+     * 必须回传**完整条目**（服务器按 data + label 精确匹配），只发 label/data 可能被服务器忽略。
+     * @author ddj 2026年09月22号
+     * @param path 工作区相对路径
+     * @param item 列表阶段返回的补全项
+     * @returns 补全后的条目；服务器不支持时原样返回
+     */
+    async resolveCompletion(path: string, item: LspCompletionItem): Promise<LspCompletionItem | null> {
+      if (!item || typeof item.label !== 'string') return null
+      if (!(await readyWait) || !capabilities.completionResolve) return item
+      const result = await ensureClient().request<unknown>('completionItem/resolve', toLspCompItem(item))
+      const resolved = normCompItem(result)
+      return resolved ?? item
+    },
+
+    /**
+     * 查询签名帮助（textDocument/signatureHelp）。
+     *
+     * activeSignature/activeParameter 做边界裁剪：服务器可能给越界值（多签名时按实参推进出错），
+     * Monaco 拿到越界索引会取不到签名而不渲染 —— 裁剪后至少显示首个签名。
+     * @author ddj 2026年09月22号
+     * @param path 工作区相对路径
+     * @param line 0-based 行
+     * @param character 0-based 列
+     * @returns 归一化签名帮助；无签名/不支持时 null
+     */
+    async signatureHelp(path: string, line: number, character: number): Promise<LspSignatureHelp | null> {
+      const doc = docs.get(path)
+      if (!doc || !(await readyWait) || !capabilities.signatureHelp) return null
+      const result = await ensureClient().request<unknown>(
+        'textDocument/signatureHelp',
+        { textDocument: { uri: doc.uri }, position: { line, character } },
+      )
+      return toSignatureHelp(result)
+    },
+
     /** 查询全文 semantic tokens，并将服务器 legend 归一到插件固定 legend。 */
     async semanticTokens(path: string): Promise<LspSemanticTokens | null> {
       const doc = docs.get(path)
@@ -440,8 +516,202 @@ function normalizeSymbol(item: unknown): LspSymbol | null {
   return symbol
 }
 
-/** hover contents → 文本行（MarkupContent | MarkedString | MarkedString[]）。 */
-function stringifyHoverContents(contents: unknown): string[] {
+/** hover/markdown 内容 → 纯文本（string | MarkupContent | MarkedString[] | MarkedString）。 */
+function plainText(value: unknown): string | undefined {
+  if (typeof value === 'string') return value || undefined
+  if (Array.isArray(value)) {
+    const parts = value.map(plainText).filter((part): part is string => Boolean(part))
+    return parts.length ? parts.join('\n\n') : undefined
+  }
+  if (value && typeof value === 'object') {
+    // MarkedString 对象形态：{ language, value }；MarkupContent 形态：{ kind, value }
+    const text = (value as { value?: unknown }).value
+    if (typeof text === 'string') return text || undefined
+  }
+  return undefined
+}
+
+/**
+ * 归一化补全文本编辑范围（单 range 与 insert/replace 双 range 两种形态）。
+ *
+ * 两种形态必须都认：只认一种会让采用另一种形态的服务器补全落点错位（替换范围算错，
+ * 已输入的前缀被重复插入）。双 range 时 insert 用于「保留前缀插入」，replace 用于覆盖。
+ * @author ddj 2026年09月22号
+ * @param raw 原始 textEdit
+ * @returns 归一化文本编辑；无有效范围或文本时 null
+ */
+function normalizeTextEdit(raw: unknown): LspCompletionTextEdit | null {
+  if (!raw || typeof raw !== 'object') return null
+  const obj = raw as { range?: unknown; insert?: unknown; replace?: unknown; newText?: unknown }
+  const newText = typeof obj.newText === 'string' ? obj.newText : ''
+  if (!newText) return null
+  const single = normalizeRange(obj.range)
+  if (single) return { range: single, newText }
+  const insert = normalizeRange(obj.insert)
+  const replace = normalizeRange(obj.replace)
+  if (!insert && !replace) return null
+  return { insert: insert ?? replace!, replace: replace ?? insert!, newText }
+}
+
+/** 归一化 LSP Range（缺字段返回 null，避免产出畸形范围）。 */
+function normalizeRange(raw: unknown): LspRange | null {
+  if (!raw || typeof raw !== 'object') return null
+  const r = raw as { start?: { line?: unknown; character?: unknown }; end?: { line?: unknown; character?: unknown } }
+  if (!r.start || !r.end) return null
+  return {
+    start: { line: toInt(r.start.line), character: toInt(r.start.character) },
+    end: { line: toInt(r.end.line), character: toInt(r.end.character) },
+  }
+}
+
+/**
+ * 归一化单个补全项。
+ * @author ddj 2026年09月22号
+ * @param raw 原始条目
+ * @returns 归一化条目；缺 label 时 null
+ */
+export function normCompItem(raw: unknown): LspCompletionItem | null {
+  if (!raw || typeof raw !== 'object') return null
+  const obj = raw as Record<string, unknown>
+  const label = typeof obj.label === 'string' ? obj.label : ''
+  if (!label) return null
+  const item: LspCompletionItem = { label }
+  if (typeof obj.kind === 'number') item.kind = toInt(obj.kind)
+  if (typeof obj.detail === 'string' && obj.detail) item.detail = obj.detail
+  const documentation = plainText(obj.documentation)
+  if (documentation) item.documentation = documentation
+  if (typeof obj.insertText === 'string') item.insertText = obj.insertText
+  if (typeof obj.insertTextFormat === 'number') item.insertTextFormat = toInt(obj.insertTextFormat)
+  const textEdit = normalizeTextEdit(obj.textEdit)
+  if (textEdit) item.textEdit = textEdit
+  if (obj.data !== undefined) item.data = obj.data
+  if (typeof obj.sortText === 'string') item.sortText = obj.sortText
+  if (typeof obj.filterText === 'string') item.filterText = obj.filterText
+  if (obj.preselect === true) item.preselect = true
+  if (Array.isArray(obj.commitCharacters)) {
+    const chars = obj.commitCharacters.filter((c): c is string => typeof c === 'string')
+    if (chars.length) item.commitCharacters = chars
+  }
+  // 弃用标记两处来源：顶层 deprecated（旧草案）与 tags 含 1（CompletionItemTag.Deprecated）
+  const tags = Array.isArray(obj.tags) ? obj.tags : []
+  if (obj.deprecated === true || tags.some((tag) => toInt(tag) === 1)) item.deprecated = true
+  if (Array.isArray(obj.additionalTextEdits)) {
+    const edits = obj.additionalTextEdits
+      .map((edit) => {
+        const range = normalizeRange((edit as { range?: unknown } | null)?.range)
+        const text = (edit as { newText?: unknown } | null)?.newText
+        if (!range || typeof text !== 'string') return null
+        return { range, newText: text }
+      })
+      .filter((edit): edit is { range: LspRange; newText: string } => edit !== null)
+    if (edits.length) item.additionalTextEdits = edits
+  }
+  return item
+}
+
+/**
+ * 归一化补全结果（CompletionList | CompletionItem[]）。
+ *
+ * 两种顶层形态都要认：`{ isIncomplete, items }` 与裸数组。裸数组是最常见形态，
+ * 只认 CompletionList 会让「补全列表恒为空」且无报错。
+ * @author ddj 2026年09月22号
+ * @param result 原始响应
+ * @returns 归一化列表；无效时 null
+ */
+export function normCompletion(result: unknown): LspCompletionList | null {
+  if (result == null) return null
+  const list = Array.isArray(result)
+    ? { items: result, isIncomplete: false }
+    : (result as { items?: unknown; isIncomplete?: unknown })
+  if (!Array.isArray(list.items)) return null
+  const items = list.items
+    .map(normCompItem)
+    .filter((item): item is LspCompletionItem => item !== null)
+  // 截断由 RPC 层按统一上限处理（与 definition/references 同口径），此处不下刀
+  return { items, incomplete: list.isIncomplete === true }
+}
+
+/**
+ * 补全项 → LSP 载荷（resolve 回传用）。
+ * 只回传协议字段，剔除 client 侧衍生字段；`data` 必须原样带上，服务器靠它认条目。
+ * @author ddj 2026年09月22号
+ * @param item 归一化条目
+ * @returns LSP CompletionItem 载荷
+ */
+export function toLspCompItem(item: LspCompletionItem): Record<string, unknown> {
+  const out: Record<string, unknown> = { label: item.label }
+  if (item.kind !== undefined) out.kind = item.kind
+  if (item.detail !== undefined) out.detail = item.detail
+  if (item.documentation !== undefined) out.documentation = item.documentation
+  if (item.insertText !== undefined) out.insertText = item.insertText
+  if (item.insertTextFormat !== undefined) out.insertTextFormat = item.insertTextFormat
+  if (item.data !== undefined) out.data = item.data
+  if (item.sortText !== undefined) out.sortText = item.sortText
+  if (item.filterText !== undefined) out.filterText = item.filterText
+  if (item.textEdit) out.textEdit = item.textEdit.range ? { range: item.textEdit.range, newText: item.textEdit.newText } : item.textEdit
+  if (item.additionalTextEdits) out.additionalTextEdits = item.additionalTextEdits
+  if (item.commitCharacters) out.commitCharacters = item.commitCharacters
+  return out
+}
+
+/** 归一化单个签名参数（label 支持字符串与 [start, end] 元组，两者原样透传）。 */
+function toSignatureParam(raw: unknown): LspParameterInformation | null {
+  if (!raw || typeof raw !== 'object') return null
+  const obj = raw as { label?: unknown; documentation?: unknown }
+  const tuple = Array.isArray(obj.label) && obj.label.length >= 2
+    ? [toInt(obj.label[0]), toInt(obj.label[1])] as [number, number]
+    : null
+  if (typeof obj.label !== 'string' && !tuple) return null
+  const param: LspParameterInformation = { label: typeof obj.label === 'string' ? obj.label : tuple! }
+  const documentation = plainText(obj.documentation)
+  if (documentation) param.documentation = documentation
+  return param
+}
+
+/** 归一化单个签名。 */
+function toSignature(raw: unknown): LspSignatureInformation | null {
+  if (!raw || typeof raw !== 'object') return null
+  const obj = raw as { label?: unknown; documentation?: unknown; parameters?: unknown; activeParameter?: unknown }
+  if (typeof obj.label !== 'string') return null
+  const signature: LspSignatureInformation = { label: obj.label, parameters: [] }
+  const documentation = plainText(obj.documentation)
+  if (documentation) signature.documentation = documentation
+  if (Array.isArray(obj.parameters)) {
+    signature.parameters = obj.parameters
+      .map(toSignatureParam)
+      .filter((param): param is LspParameterInformation => param !== null)
+  }
+  if (typeof obj.activeParameter === 'number') signature.activeParameter = toInt(obj.activeParameter)
+  return signature
+}
+
+/**
+ * 归一化签名帮助，并裁剪越界的 activeSignature / activeParameter。
+ *
+ * 为什么必须裁：Monaco 用这两个索引直接取签名与参数，越界时取不到签名就整个浮窗不渲染；
+ * 服务器在「实参刚敲下逗号」等边界时刻常给超前一位的索引。裁剪后至少显示首个签名/末个参数，
+ * 观感是「高亮没跟上」，而不是「参数提示整个不见」。
+ * @author ddj 2026年09月22号
+ * @param result 原始响应
+ * @returns 归一化结果；无有效签名时 null
+ */
+export function toSignatureHelp(result: unknown): LspSignatureHelp | null {
+  if (!result || typeof result !== 'object') return null
+  const obj = result as { signatures?: unknown; activeSignature?: unknown; activeParameter?: unknown }
+  if (!Array.isArray(obj.signatures)) return null
+  const signatures = obj.signatures
+    .map(toSignature)
+    .filter((signature): signature is LspSignatureInformation => signature !== null)
+  if (!signatures.length) return null
+  const activeSignature = Math.min(Math.max(0, toInt(obj.activeSignature)), signatures.length - 1)
+  const current = signatures[activeSignature]!
+  const rawActive = typeof obj.activeParameter === 'number' ? toInt(obj.activeParameter) : (current.activeParameter ?? 0)
+  const count = current.parameters.length
+  const activeParameter = count > 0 ? Math.min(Math.max(0, rawActive), count - 1) : 0
+  return { signatures, activeSignature, activeParameter }
+}
+
+/** hover contents → 文本行（MarkupContent | MarkedString | MarkedString[]）。 */function stringifyHoverContents(contents: unknown): string[] {
   if (typeof contents === 'string') return [contents]
   if (Array.isArray(contents)) return contents.map(stringifyHoverContents).flat().filter(Boolean)
   if (contents && typeof contents === 'object') {

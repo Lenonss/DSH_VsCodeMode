@@ -1,7 +1,7 @@
 // @ts-nocheck
 /**
  * dsh-vscode-mode client — PerfSettings：「性能优化」设置子页（会话卫生 + 压缩调优）。
- * - 会话盘点：全工作区/每会话体积、活跃标记，按体积排序；
+ * - 会话盘点：全工作区/每会话体积、活跃标记、官方归档/置顶徽标，按体积排序；
  * - 移出到归档（先规划→确认→执行→可恢复）与归档清除；
  * - DSH 内置压缩调优：写 profile patch（compaction-basic / tool-result-pruner 更低阈值，
  *   带备份与撤销，需重启生效）；
@@ -67,6 +67,9 @@ function SessionRow({ row, checked, disabled, onToggle }) {
     React.createElement('span', { className: 'vsm-perf-cell vsm-perf-size ' + (row.bytes >= 1024 * 1024 ? 'big' : '') }, formatBytes(row.bytes)),
     React.createElement('span', { className: 'vsm-perf-cell vsm-perf-mtime', title: new Date(row.mtime).toLocaleString() }, when),
     row.active ? React.createElement('span', { className: 'vsm-perf-cell vsm-perf-active' }, '活跃') : null,
+    // 官方侧栏归档/置顶状态徽标（旧 host 不回传字段 → undefined 按 false，不渲染；样式复用面板现有 vsm-perf-active 徽标）
+    row.archived ? React.createElement('span', { className: 'vsm-perf-cell vsm-perf-active', title: '官方侧栏已归档（持久标志位，未搬目录）' }, '已归档') : null,
+    row.pinned ? React.createElement('span', { className: 'vsm-perf-cell vsm-perf-active', title: '官方侧栏已置顶' }, '已置顶') : null,
   )
 }
 

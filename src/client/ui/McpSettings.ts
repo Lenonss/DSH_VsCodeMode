@@ -13,6 +13,7 @@ import { SettingsContext } from '../settingsContext.js'
 import { normalizeSidebarMinWidth, SIDEBAR_MIN_DEFAULT } from '../sidebarMin.js'
 import { EDITOR_LIMIT_CEIL, EDITOR_LIMIT_DEFAULT, normalizeMaxOpenEditors } from '../../shared/editorLimit.js'
 import { TORTOISE_DIR_DEFAULT } from '../../shared/svn.js'
+import { DEFAULT_NATIVE_CSV } from '../../shared/nativeOpen.js'
 import { KeybindingsPanel } from './KeybindingsPanel.js'
 import { LspSettings } from './LspSettings.js'
 import { PerfSettings } from './PerfSettings.js'
@@ -139,6 +140,8 @@ function GeneralSettings({ registry }) {
   const [minDraft, setMinDraft] = React.useState(null) // 输入草稿（null=跟随已保存值；blur/Enter 提交）
   const [limit, setLimit] = React.useState(EDITOR_LIMIT_DEFAULT)
   const [limitDraft, setLimitDraft] = React.useState(null) // 页签上限草稿（同上提交语义）
+  const [nativeSaved, setNativeSaved] = React.useState(DEFAULT_NATIVE_CSV) // 原生打开范围已保存值
+  const [nativeDraft, setNativeDraft] = React.useState(null) // 原生打开范围草稿（同上提交语义）
   const settings = React.useContext(SettingsContext)
   const snapshot = settings?.getSnapshot?.()
   const loading = !snapshot || snapshot.status === 'loading'
@@ -151,6 +154,8 @@ function GeneralSettings({ registry }) {
       if (typeof next === 'string') setTool(next)
       setMinW(normalizeSidebarMinWidth(snap?.value?.sidebarMinWidth))
       setLimit(normalizeMaxOpenEditors(snap?.value?.maxOpenEditors))
+      const native = snap?.value?.nativeOpenExts
+      setNativeSaved(typeof native === 'string' && native.trim() ? native : DEFAULT_NATIVE_CSV)
     }
     onChange()
     return settings?.subscribe?.(onChange)
@@ -190,6 +195,18 @@ function GeneralSettings({ registry }) {
     if (limitDraft === null) return
     setLimitDraft(null)
     saveLimit(limitDraft)
+  }
+  /** 提交原生打开范围（逗号分隔后缀；空串回落默认让位清单后持久化）。 */
+  const saveNative = (raw) => {
+    const next = String(raw ?? '').trim() || DEFAULT_NATIVE_CSV
+    setNativeSaved(next); setNativeDraft(null); setBusy(true); setError('')
+    if (!settings?.set) { setError('设置服务不可用'); setBusy(false); return }
+    settings.set('nativeOpenExts', next).catch((e) => setError(String(e))).finally(() => setBusy(false))
+  }
+  /** 结束输入（blur/Enter）时提交原生打开范围草稿。 */
+  const commitNative = () => {
+    if (nativeDraft === null) return
+    saveNative(nativeDraft)
   }
   const closeDevForm = () => {
     if (!window.confirm('关闭开发形态：插件将切换为正式版安装（版本依赖 + 删除工作区链接），pnpm 装配后需重启 DSH 生效。确认关闭？')) return
@@ -249,6 +266,19 @@ function GeneralSettings({ registry }) {
             onKeyDown: (event) => { if (event.key === 'Enter') commitLimit() },
           }),
           React.createElement('small', null, '0 = 不限制；超限时关闭最久未使用的页签（固定页签除外）')),
+        React.createElement('label', { className: 'vsm-general-row' },
+          React.createElement('span', null, '原生打开范围'),
+          React.createElement('input', {
+            type: 'text',
+            value: nativeDraft ?? nativeSaved,
+            disabled: loading || unavailable || notReady || busy || snapshot?.writable === false,
+            title: '逗号分隔后缀（如 doc,xlsx）：文件树点击命中时用 DSH 官方预览原生打开；留空 = 默认让位清单（Office + 不可预览二进制）',
+            placeholder: 'doc,xlsx,…（留空恢复默认）',
+            onChange: (event) => setNativeDraft(event.target.value),
+            onBlur: commitNative,
+            onKeyDown: (event) => { if (event.key === 'Enter') commitNative() },
+          }),
+          React.createElement('small', null, '逗号分隔；命中的文件用 DSH 原生预览打开，留空恢复默认（Office + 二进制，csv/tsv 需显式加入）')),
       ),
     ),
     React.createElement(SvnSettingsSection, null),

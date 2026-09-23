@@ -34,7 +34,7 @@ import { rulesList, rulesRead, rulesRemove, rulesSave, rulesToggle } from './rul
 import { isSnippetFilePath, snippetsEntries, snippetsList, snippetsRead, snippetsRemove, snippetsSave } from './snippets.js'
 import { listMcp, refreshMcp, removeMcp, saveMcp, toggleMcp } from './mcp.js'
 import { listProjects, projectRefresh, projectRemove, projectSave, projectToggle } from './mcpProject.js'
-import { normalizeFileOpenTool, FILE_OPEN_DEFAULT, FILE_OPEN_SETTINGS_NS } from './fileOpenSettings.js'
+import { normalizeFileOpenTool, FILE_OPEN_DEFAULT, FILE_OPEN_SETTINGS_NS, sectionOf, updateSection } from './fileOpenSettings.js'
 import { INTEGRATION_BASE_DEFAULT } from './shared/integration.js'
 import { shellMenuRegister, shellMenuRemove, shellMenuStatus } from './integrate.js'
 import { unityAdd, unityInstall, unityList, unityRemove } from './unityBridge.js'
@@ -47,7 +47,7 @@ import { invalidateIndex, listDirCached } from './treeIndex.js'
 import { revealInExplorer } from './reveal.js'
 import { dshHome, debugLogFile, pluginLogRoot } from './paths.js'
 import { clearDebugLog, debugRecord, isDebugLogName, listDebugLogs, readDebugLog } from './debugLog.js'
-import { markActiveSessions, moveOutSessions, planMoveOut, purgeArchive, restoreSession, scanSessionInventory, sessionsArchiveRoot, sessionSizeOf, sidecarSummaryOf } from './perf.js'
+import { markActiveSessions, markOfficialFlags, moveOutSessions, planMoveOut, purgeArchive, restoreSession, scanSessionInventory, sessionsArchiveRoot, sessionSizeOf, sidecarSummaryOf, unarchiveOfficial } from './perf.js'
 import { patchHasPerfConfig, patchInsertPerfConfig, patchRemovePerfConfig, perfConfigBlock } from './perfPatch.js'
 import type { FileVersions } from './fileVersions.js'
 
@@ -105,6 +105,57 @@ function snippetPolicy(ctx: Ctx): unknown {
  */
 function snippetTargetOf(path: string): string | null {
   return isSnippetFilePath(path) ? path.replace(/\\/g, '/') : null
+}
+
+/** readTargetOf 成功形态：解析后的目标路径、stat 信息与 fs 服务句柄。 */
+interface ReadTargetOk {
+  target: string
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  fs: any
+  info: { version?: unknown; size?: number }
+}
+
+/**
+ * 二进制/文本读取共用前置（edrv.read 与 edrv.readBinary）：解析路径 + debugRecord +
+ * stat + 文件类型校验 + 32MB 二进制上限，保证两条读通道的错误口径完全一致。
+ * @author ddj 2026年09月22号
+ * @param ctx DSH 上下文
+ * @param sc requireSession 成功结果（session + cwd）
+ * @param path 客户端请求路径
+ * @returns 成功返回解析目标与 stat；失败返回错误文案（文件不存在时附 resolvedPath）
+ */
+async function readTargetOf(
+  ctx: Ctx,
+  sc: { session: Session; cwd: string },
+  path: string,
+): Promise<ReadTargetOk | { err: string; resolvedPath?: string }> {
+  const fs = ctx.get('fs')
+  if (!fs) return { err: '缺少 fs' }
+  try {
+    const target = await resolveTarget(ctx, sc.session, path)
+    debugRecord(ctx, sc.cwd, '[DEBUG path.resolve] input=' + String(path ?? '') + ' resolved=' + fs.processPath(target), 'debug')
+    const info = await fs.stat(target)
+    if (!info || info.type !== 'file') {
+      // 带上解析后的真实路径：跳转失败时可直接看出是路径解析错还是目标本身不存在
+      return { err: '文件不存在', resolvedPath: fs.processPath(target) }
+    }
+    if ((info.size ?? 0) > BINARY_READ_CAP) return { err: '文件过大（>32MB），不支持整文件预览' }
+    return { target, fs, info }
+  } catch (error) {
+    return { err: '读取失败：' + String(error) }
+  }
+}
+
+/**
+ * readTargetOf 失败结果 → RPC 错误载荷（文件不存在时保留 resolvedPath 供诊断）。
+ * @author ddj 2026年09月22号
+ * @param prep readTargetOf 的失败分支
+ * @returns { ok:false } 形态载荷
+ */
+function targetErrOf(prep: { err: string; resolvedPath?: string }): { ok: false; error: string; resolvedPath?: string } {
+  return prep.resolvedPath !== undefined
+    ? { ok: false, error: prep.err, resolvedPath: prep.resolvedPath }
+    : { ok: false, error: prep.err }
 }
 
 /**
@@ -241,8 +292,7 @@ async function latestPatchBackup(patchPath: string): Promise<string | undefined>
 /** 读取设置中的深链基址（缺省/非法回退默认 3080）。 */
 async function integrationBaseUrlOf(ctx: Ctx): Promise<string> {
   const settings = ctx.get('settings')
-  const descriptor = settings?.describe?.({ redactSecrets: true })?.find((item: { ns?: string }) => item.ns === FILE_OPEN_SETTINGS_NS)
-  const value = descriptor?.value as { integrationBaseUrl?: unknown } | undefined
+  const value = sectionOf(settings, FILE_OPEN_SETTINGS_NS)?.value as { integrationBaseUrl?: unknown } | undefined
   const raw = typeof value?.integrationBaseUrl === 'string' ? value.integrationBaseUrl.trim() : ''
   return raw || INTEGRATION_BASE_DEFAULT
 }
@@ -433,26 +483,36 @@ export function buildHandlers(
       }
       const sc = await requireSession(ctx, args.sessionId)
       if ('err' in sc) return { ok: false, error: sc.err }
-      const fs = ctx.get('fs')
-      if (!fs) return { ok: false, error: '缺少 fs' }
+      const prep = await readTargetOf(ctx, sc, args.path)
+      if ('err' in prep) return targetErrOf(prep)
       try {
-        const target = await resolveTarget(ctx, sc.session, args.path)
-         debugRecord(ctx, sc.cwd, '[DEBUG path.resolve] input=' + String(args.path ?? '') + ' resolved=' + fs.processPath(target), 'debug')
-        const info = await fs.stat(target)
-        if (!info || info.type !== 'file') {
-          // 带上解析后的真实路径：跳转失败时可直接看出是路径解析错还是目标本身不存在
-          return { ok: false, error: '文件不存在', resolvedPath: fs.processPath(target) }
-        }
-        if ((info.size ?? 0) > BINARY_READ_CAP) return { ok: false, error: '文件过大（>32MB），不支持整文件预览' }
         if (args.encoding === 'base64') {
-          // 图片/PDF 等二进制预览：readBytes 无解码、无二进制拒绝；超上限已由上方 stat 拦截
-          const bytes = await fs.readBytes(target, undefined, BINARY_READ_CAP)
+          // 图片/PDF 等二进制预览：readBytes 无解码、无二进制拒绝；超上限已由 readTargetOf 拦截
+          const bytes = await prep.fs.readBytes(prep.target, undefined, BINARY_READ_CAP)
           const content = Buffer.from(bytes).toString('base64')
-          return { ok: true, content, size: bytes.byteLength, encoding: 'base64', mime: binaryMimeOf(args.path), version: String(info.version ?? '') }
+          return { ok: true, content, size: bytes.byteLength, encoding: 'base64', mime: binaryMimeOf(args.path), version: String(prep.info.version ?? '') }
         }
-        if ((info.size ?? 0) > READ_CAP) return { ok: false, error: '文件过大（>8MB），不支持整文件预览' }
-        const content = await fs.readText(target)
-        return { ok: true, content, size: content.length, version: String(info.version ?? '') }
+        if ((prep.info.size ?? 0) > READ_CAP) return { ok: false, error: '文件过大（>8MB），不支持整文件预览' }
+        const content = await prep.fs.readText(prep.target)
+        return { ok: true, content, size: content.length, version: String(prep.info.version ?? '') }
+      } catch (error) {
+        return { ok: false, error: '读取失败：' + String(error) }
+      }
+    },
+    'edrv.readBinary': async (args) => {
+      // 二进制直读通道（图片/PDF 预览）：与 edrv.read base64 分支共用 readTargetOf 前置，
+      // 返回 Uint8Array 信封；routes 接线后以 octet-stream + x-edrv-* 头直出，
+      // 未接线时信封被 JSON 化，由 client 探测到后自动回退 base64 路径（见 shared/rpc readBinaryPreview）。
+      const sc = await requireSession(ctx, args.sessionId)
+      if ('err' in sc) return { ok: false, error: sc.err }
+      const prep = await readTargetOf(ctx, sc, args.path)
+      if ('err' in prep) return targetErrOf(prep)
+      try {
+        const bytes = await prep.fs.readBytes(prep.target, undefined, BINARY_READ_CAP)
+        return {
+          ok: true,
+          binary: { bytes, mime: binaryMimeOf(args.path), size: bytes.byteLength, version: String(prep.info.version ?? '') },
+        }
       } catch (error) {
         return { ok: false, error: '读取失败：' + String(error) }
       }
@@ -847,22 +907,20 @@ export function buildHandlers(
     },
     'vscode.fileOpenSettingsGet': async () => {
       const settings = ctx.get('settings')
-      const descriptor = settings?.describe?.({ redactSecrets: true })?.find((item: { ns?: string }) => item.ns === FILE_OPEN_SETTINGS_NS)
-      const value = descriptor?.value as { fileOpenTool?: unknown } | undefined
-      return { ok: true, fileOpenTool: normalizeFileOpenTool(value?.fileOpenTool ?? FILE_OPEN_DEFAULT), integrationBaseUrl: await integrationBaseUrlOf(ctx), revision: descriptor?.revision }
+      const section = sectionOf(settings, FILE_OPEN_SETTINGS_NS)
+      const value = section?.value as { fileOpenTool?: unknown } | undefined
+      return { ok: true, fileOpenTool: normalizeFileOpenTool(value?.fileOpenTool ?? FILE_OPEN_DEFAULT), integrationBaseUrl: await integrationBaseUrlOf(ctx), revision: section?.revision }
     },
     'vscode.fileOpenSettingsUpdate': async (args) => {
       const settings = ctx.get('settings')
-      if (!settings?.update) return { ok: false, error: '设置服务不可用' }
-      try {
-        const patch: Record<string, unknown> = { fileOpenTool: normalizeFileOpenTool(args.fileOpenTool) }
-        if (typeof args.integrationBaseUrl === 'string' && args.integrationBaseUrl.trim()) patch.integrationBaseUrl = args.integrationBaseUrl.trim()
-        await settings.update(FILE_OPEN_SETTINGS_NS, patch, args.expectedRevision)
-        const descriptor = settings.describe?.({ redactSecrets: true })?.find((item: { ns?: string }) => item.ns === FILE_OPEN_SETTINGS_NS)
-        const value = descriptor?.value as { fileOpenTool?: unknown } | undefined
-        return { ok: true, fileOpenTool: normalizeFileOpenTool(value?.fileOpenTool), integrationBaseUrl: await integrationBaseUrlOf(ctx), revision: descriptor?.revision }
-      } catch (error) { return { ok: false, error: String(error) }
-      }
+      const patch: Record<string, unknown> = { fileOpenTool: normalizeFileOpenTool(args.fileOpenTool) }
+      if (typeof args.integrationBaseUrl === 'string' && args.integrationBaseUrl.trim()) patch.integrationBaseUrl = args.integrationBaseUrl.trim()
+      // 冲突自愈（0.1.7 SettingsConflictError 重读重试一次）与形状校验读取统一走 fileOpenSettings 工具
+      const result = await updateSection(settings, FILE_OPEN_SETTINGS_NS, patch, args.expectedRevision)
+      if (!result.ok) return { ok: false, error: result.error ?? '设置服务不可用' }
+      const section = sectionOf(settings, FILE_OPEN_SETTINGS_NS)
+      const value = section?.value as { fileOpenTool?: unknown } | undefined
+      return { ok: true, fileOpenTool: normalizeFileOpenTool(value?.fileOpenTool), integrationBaseUrl: await integrationBaseUrlOf(ctx), revision: section?.revision }
     },
     'compat': async () => ({ ok: true, report: await buildReport(ctx) }),
     'vscode.devFormGet': async () => ({ ok: true, devForm: readDevForm() }),
@@ -953,6 +1011,7 @@ export function buildHandlers(
         const inventory = await scanSessionInventory(home, sessionsArchiveRoot(home))
         const active = activeSessionIds(ctx)
         markActiveSessions(inventory.sessions, active)
+        markOfficialFlags(inventory.sessions, ctx)
         return { ok: true, ...inventory, activeIds: [...active] }
       } catch (error) {
         return { ok: false, error: '盘点失败：' + String(error) }
@@ -990,7 +1049,10 @@ export function buildHandlers(
     'edrv.perf.restore': async (args) => {
       try {
         const result = await restoreSession(dshHome(), sessionsArchiveRoot(dshHome()), args.workspaceKey, args.sessionId)
-        return result.ok ? { ok: true, restored: true } : { ok: false, error: result.error ?? '恢复失败' }
+        if (!result.ok) return { ok: false, error: result.error ?? '恢复失败' }
+        // 目录搬回后对齐官方归档标志（best-effort：服务缺失/调用失败不影响恢复结果，见 perf.unarchiveOfficial）
+        await unarchiveOfficial(ctx, args.sessionId)
+        return { ok: true, restored: true }
       } catch (error) {
         return { ok: false, error: '恢复失败：' + String(error) }
       }

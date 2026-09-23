@@ -28,6 +28,7 @@ export function createPdfPanel(deps) {
 
   let stage = null
   let pageLabel = null
+  let zoomLabel = null
   let eventBus = null
   let busAbort = null
   let editorTypes = null
@@ -50,6 +51,15 @@ export function createPdfPanel(deps) {
   const updatePageLabel = () => {
     if (!pageLabel || !pdfViewer) return
     pageLabel.textContent = pdfViewer.currentPageNumber + ' / ' + pdfViewer.pagesCount
+  }
+
+  /**
+   * 缩放百分比指示更新（scalechanging/pagesinit 事件；与图片预览的 x% 文本同款对齐）。
+   * @author ddj 2026年09月22号
+   */
+  const updateZoomLabel = () => {
+    if (!zoomLabel || !(pdfViewer && pdfViewer.currentScale > 0)) return
+    zoomLabel.textContent = Math.round(pdfViewer.currentScale * 100) + '%'
   }
 
   /** 编辑模式按钮高亮同步（annotationeditormodechanged 事件；evt.mode 为枚举数值）。 */
@@ -136,8 +146,13 @@ export function createPdfPanel(deps) {
     pageLabel.textContent = '…'
     bar.appendChild(pageLabel)
     mkBtn('▶', '下一页', () => { if (pdfViewer) pdfViewer.currentPageNumber = Math.min(pdfViewer.pagesCount, pdfViewer.currentPageNumber + 1) })
+    // 缩放语义与图片预览对齐（0.1.7 官方统一缩放）：初始 page-width、edrv-pill 步进按钮与百分比指示同款
     mkBtn('−', '缩小', () => { try { pdfViewer.decreaseScale() } catch { /* 缩放失败忽略 */ } }, 'edrv-pill edrv-pill-ghost edrv-pdf-zoom')
     mkBtn('＋', '放大', () => { try { pdfViewer.increaseScale() } catch { /* 缩放失败忽略 */ } }, 'edrv-pill edrv-pill-ghost edrv-pdf-zoom')
+    zoomLabel = document.createElement('span')
+    zoomLabel.className = 'edrv-pdf-page'
+    zoomLabel.textContent = '…'
+    bar.appendChild(zoomLabel)
     bar.appendChild(document.createElement('span')).className = 'edrv-pdf-sep'
     const modes = {}
     modes.freetext = mkBtn('✎ 文本框', '插入文本框注释', () => applyMode('freetext'))
@@ -190,9 +205,11 @@ export function createPdfPanel(deps) {
       })
       linkService.setViewer(pdfViewer)
       onBus('pagechanging', updatePageLabel)
+      onBus('scalechanging', updateZoomLabel)
       onBus('pagesinit', () => {
         try { pdfViewer.currentScaleValue = 'page-width' } catch { /* 初始缩放失败用默认值 */ }
         updatePageLabel()
+        updateZoomLabel()
       })
       onBus('annotationeditormodechanged', (evt) => syncModeButtons(evt?.mode))
 
@@ -233,6 +250,7 @@ export function createPdfPanel(deps) {
     pdfDocument = null
     loadingTask = null
     modeButtons = null
+    zoomLabel = null
   }
 
   return { mount, destroy, savePdf, isDirty }

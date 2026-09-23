@@ -177,3 +177,54 @@ describe('edrv.read base64 mime', () => {
     if (res.ok) expect(res.mime).toBe('image/png')
   })
 })
+
+describe('edrv.readBinary（二进制直读信封）', () => {
+  it('pdf 返回 bytes/mime/size/version 信封', async () => {
+    const fs = fakeFs()
+    const { handlers } = makeHandlers(fs)
+    const res = await handlers['edrv.readBinary']({ sessionId: 's1', path: 'doc.pdf' })
+    expect(res.ok).toBe(true)
+    if (!res.ok || !('binary' in res)) throw new Error('期望成功信封')
+    expect(res.binary.mime).toBe('application/pdf')
+    expect(res.binary.size).toBe(4)
+    expect(Array.from(res.binary.bytes).join(',')).toBe('37,80,68,70')
+    expect(res.binary.version).toBe('')
+  })
+
+  it('png 返回 image/png，原始字节不经 base64', async () => {
+    const fs = fakeFs()
+    fs.stat = vi.fn(async (target: string) => (target === CWD + '/logo.png' ? { type: 'file', size: 4 } : undefined))
+    const { handlers } = makeHandlers(fs)
+    const res = await handlers['edrv.readBinary']({ sessionId: 's1', path: 'logo.png' })
+    expect(res.ok).toBe(true)
+    if (!res.ok || !('binary' in res)) throw new Error('期望成功信封')
+    expect(res.binary.mime).toBe('image/png')
+    expect(res.binary.bytes).toBeInstanceOf(Uint8Array)
+  })
+
+  it('目标不存在：错误带 resolvedPath（诊断路径解析 vs 目标缺失）', async () => {
+    const fs = fakeFs()
+    const { handlers } = makeHandlers(fs)
+    const res = await handlers['edrv.readBinary']({ sessionId: 's1', path: 'missing.png' })
+    expect(res.ok).toBe(false)
+    if (!res.ok) expect(res.error).toContain('文件不存在')
+    expect((res as { resolvedPath?: string }).resolvedPath).toBe(CWD + '/missing.png')
+  })
+
+  it('超过 32MB 上限拒绝', async () => {
+    const fs = fakeFs()
+    fs.stat = vi.fn(async (target: string) => (target === CWD + '/big.pdf' ? { type: 'file', size: BINARY_READ_CAP + 1 } : undefined))
+    const { handlers } = makeHandlers(fs)
+    const res = await handlers['edrv.readBinary']({ sessionId: 's1', path: 'big.pdf' })
+    expect(res.ok).toBe(false)
+    if (!res.ok) expect(res.error).toContain('过大')
+  })
+
+  it('会话不存在拒绝', async () => {
+    const fs = fakeFs()
+    const { handlers } = makeHandlers(fs)
+    const res = await handlers['edrv.readBinary']({ sessionId: 'missing', path: 'doc.pdf' })
+    expect(res.ok).toBe(false)
+    if (!res.ok) expect(res.error).toContain('会话不存在')
+  })
+})

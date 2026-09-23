@@ -62,6 +62,9 @@ export function createLspClient(
     workspaceSymbol: false,
     hover: false,
     semanticTokens: false,
+    completion: false,
+    completionResolve: false,
+    signatureHelp: false,
     semanticTokenTypes: [],
     semanticTokenModifiers: [],
   }
@@ -164,6 +167,8 @@ export function createLspClient(
           documentSymbolProvider?: unknown
           workspaceSymbolProvider?: unknown
           hoverProvider?: unknown
+          completionProvider?: { resolveProvider?: unknown; triggerCharacters?: unknown }
+          signatureHelpProvider?: { triggerCharacters?: unknown; retriggerCharacters?: unknown }
           semanticTokensProvider?: {
             legend?: { tokenTypes?: unknown; tokenModifiers?: unknown }
           }
@@ -185,6 +190,22 @@ export function createLspClient(
             references: { dynamicRegistration: false },
             documentSymbol: { dynamicRegistration: false },
             hover: { dynamicRegistration: false },
+            // 补全能力声明：snippetSupport 让服务器回 InsertAsSnippet 片段；
+            // resolveSupport.properties 声明我方支持 completionItem/resolve 惰性补全
+            // （EmmyLua 据此把 documentation 挪到 resolve 阶段，列表载荷显著变小）。
+            completion: {
+              dynamicRegistration: false,
+              contextSupport: true,
+              completionItem: {
+                snippetSupport: true,
+                documentationFormat: ['markdown', 'plaintext'],
+                resolveSupport: { properties: ['documentation', 'detail', 'additionalTextEdits'] },
+              },
+            },
+            signatureHelp: {
+              dynamicRegistration: false,
+              signatureInformation: { documentationFormat: ['markdown', 'plaintext'] },
+            },
             semanticTokens: {
               dynamicRegistration: false,
               requests: { range: false, full: { delta: false } },
@@ -205,6 +226,9 @@ export function createLspClient(
         workspaceSymbol: Boolean(caps.workspaceSymbolProvider),
         hover: Boolean(caps.hoverProvider),
         semanticTokens: Boolean(caps.semanticTokensProvider),
+        completion: Boolean(caps.completionProvider),
+        completionResolve: Boolean(caps.completionProvider?.resolveProvider),
+        signatureHelp: Boolean(caps.signatureHelpProvider),
         semanticTokenTypes: Array.isArray(legend?.tokenTypes)
           ? legend.tokenTypes.filter((item): item is string => typeof item === 'string')
           : [...LSP_SEMANTIC_TOKEN_TYPES],

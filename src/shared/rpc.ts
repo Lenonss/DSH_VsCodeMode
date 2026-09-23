@@ -17,7 +17,7 @@ import type { CompatReport, DevFormInfo } from './compat.js'
 import type { ShellIntegrationStatus, UnityListPayload, UnityProjectEntry } from './integration.js'
 import type { RuleInfo, RuleProject, RuleRefInput, RuleSaveInput } from './rules.js'
 import type { SnippetEntry, SnippetInfo, SnippetProject, SnippetRefInput, SnippetSaveInput } from './snippets.js'
-import type { LspEnvInstallState, LspExtInfo, LspExtUpdate, LspHover, LspLocation, LspMarketItem, LspPosition, LspSemanticTokens, LspServerStatus, LspSymbol } from './lsp.js'
+import type { LspCompletionItem, LspCompletionList, LspEnvInstallState, LspExtInfo, LspExtUpdate, LspHover, LspLocation, LspMarketItem, LspPosition, LspSemanticTokens, LspServerStatus, LspSignatureHelp, LspSymbol } from './lsp.js'
 import type { AiConfigPatch, AiConfigView, AiDirectoryView, AiInlineRequest, AiInlineResult } from './ai.js'
 import type { SvnAction, SvnChangeEntry, SvnConflictArtifact, SvnDiffRevResult, SvnLogEntry, SvnRemoteOutdatedEntry, SvnStatusPayload, SvnSumEntry, SvnUpdateResult } from './svn.js'
 import type { DapAction, DapAdapterInfo, DapBreakpointAck, DapBreakpointInput, DapConfigSnippet, DapConfigSource, DapDebugConfig, DapFrameView, DapPhase, DapPollResult, DapProcessInfo, DapScopeView, DapVariableView } from './dap.js'
@@ -73,6 +73,139 @@ export function binaryMimeOf(path: string): string {
   return imageMimeOf(path)
 }
 
+// --region 二进制预览通道（edrv.readBinary：响应侧原始字节，省 ~33% base64 编码开销）
+
+/** 二进制读成功响应头（octet-stream 携带元数据；同源请求可直接读取自定义头）。 */
+export const BINARY_READ_HEADERS = {
+  mime: 'x-edrv-mime',
+  size: 'x-edrv-size',
+  version: 'x-edrv-version',
+} as const
+
+/** edrv.readBinary 成功载荷（host Uint8Array 信封；routes 接线后以 octet-stream 原样直出）。 */
+export interface BinaryReadPayload {
+  bytes: Uint8Array
+  mime: string
+  size: number
+  version: string
+}
+
+/** 普通 JSON RPC 调用签名（回退通道复用；shared 不反向依赖 client 包装）。 */
+export type RpcJsonCall = <M extends RpcMethod>(method: M, args: RpcRequestMap[M]) => Promise<RpcResult<M>>
+
+/** 二进制预览读取统一结果：binary=新通道原始字节，base64=回退通道，probed=本次尝试过新通道。 */
+export type PreviewRead =
+  | ({ ok: true; via: 'binary' } & BinaryReadPayload)
+  | { ok: true; via: 'base64'; content: string; size: number; encoding?: 'base64'; mime?: string; version?: string; probed?: boolean }
+  | { ok: false; error: string; resolvedPath?: string; probed?: boolean }
+
+/** 通道探测状态：unknown=按次尝试；unwired=host 有 handler 但 routes 仍强制 JSON（本页不再尝试）。 */
+let binaryTransport: 'unknown' | 'unwired' = 'unknown'
+
+/**
+ * 二进制预览读取（edrv.readBinary，失败自动回退 edrv.read base64 现有路径）。
+ * 降级链：非 200 / 非 octet-stream / 元数据头缺失或长度不符 / 网络错 / host 未接线
+ * 把信封 JSON 化 → 一律立即回退 base64 路径，功能不降级；
+ * 其中「信封被 JSON 化」判定为未接线，探测一次后本页生命周期内不再尝试新通道
+ * （避免每次读图都付一次无效往返与大响应序列化）；其余失败不关停通道（瞬时故障可自愈）。
+ * @author ddj 2026年09月22号
+ * @param rpcJson 类型化 JSON RPC 调用（调用方传入 client rpc 包装）
+ * @param args edrv.readBinary 请求参数
+ * @returns 统一读取结果（via 标记实际通道；probed 供调用方做一次性回退日志）
+ */
+export async function readBinaryPreview(
+  rpcJson: RpcJsonCall,
+  args: RpcRequestMap['edrv.readBinary'],
+): Promise<PreviewRead> {
+  const attempted = binaryTransport !== 'unwired'
+  if (attempted) {
+    const direct = await tryBinaryRead(args)
+    if (direct) return direct
+  }
+  return fallbackRead(rpcJson, args, attempted)
+}
+
+/**
+ * 新通道单次尝试：响应完全符合约定才返回二进制结果，否则返回 null 触发回退。
+ * @author ddj 2026年09月22号
+ * @param args edrv.readBinary 请求参数
+ * @returns 二进制读取结果或 null（null=回退 base64）
+ */
+async function tryBinaryRead(args: RpcRequestMap['edrv.readBinary']): Promise<PreviewRead | null> {
+  try {
+    const res = await fetch(RPC_PATH, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ method: 'edrv.readBinary', args }),
+    })
+    if (!res.ok) return null
+    const type = res.headers.get('content-type') ?? ''
+    if (!type.includes('application/octet-stream')) return noteJsonBody(res)
+    const size = Number(res.headers.get(BINARY_READ_HEADERS.size))
+    const bytes = new Uint8Array(await res.arrayBuffer())
+    // 元数据头长度必须与实际字节数一致，否则视为非本插件响应（防御中间层/代理）
+    if (!Number.isFinite(size) || size !== bytes.byteLength) return null
+    return {
+      ok: true,
+      via: 'binary',
+      bytes,
+      mime: res.headers.get(BINARY_READ_HEADERS.mime) || binaryMimeOf(args.path),
+      size: bytes.byteLength,
+      version: res.headers.get(BINARY_READ_HEADERS.version) || '',
+    }
+  } catch (error) {
+    return null // 网络错按瞬时故障处理：回退但不关停通道
+  }
+}
+
+/**
+ * 非 octet-stream 响应体判定：host 已有 edrv.readBinary 但 routes 尚未接线时，
+ * 二进制信封会被 JSON 序列化成 {bytes:{0:..}} 普通对象——识别到该形态即标记
+ * 「未接线」（本页不再尝试）；其余 JSON（错误响应/未知方法）仅本次回退不关停。
+ * @author ddj 2026年09月22号
+ * @param res JSON 形态的响应
+ * @returns 恒为 null（统一由调用方回退）
+ */
+async function noteJsonBody(res: Response): Promise<null> {
+  try {
+    const body = (await res.json()) as { ok?: unknown; binary?: { bytes?: unknown } } | null
+    if (body && body.ok === true && body.binary && typeof body.binary === 'object' && body.binary.bytes != null) {
+      binaryTransport = 'unwired'
+    }
+  } catch (error) {
+    /* 非 JSON（代理页/空体）：不判定，仅本次回退 */
+  }
+  return null
+}
+
+/**
+ * base64 回退读取（现有 edrv.read JSON 通道，载荷形状与历史实现一致）。
+ * @author ddj 2026年09月22号
+ * @param rpcJson 类型化 JSON RPC 调用
+ * @param args 请求参数
+ * @param attempted 本次是否尝试过新通道（回带给调用方做一次性日志）
+ * @returns 统一读取结果（调用失败转错误结果，不向上抛）
+ */
+async function fallbackRead(
+  rpcJson: RpcJsonCall,
+  args: RpcRequestMap['edrv.readBinary'],
+  attempted: boolean,
+): Promise<PreviewRead> {
+  const probed = attempted ? { probed: true } : {}
+  try {
+    const res = await rpcJson('edrv.read', { sessionId: args.sessionId, path: args.path, encoding: 'base64' })
+    if (!res.ok) {
+      const legacy = res as { ok: false; error: string; resolvedPath?: string }
+      return { ok: false, error: legacy.error, ...probed, ...(legacy.resolvedPath !== undefined ? { resolvedPath: legacy.resolvedPath } : {}) }
+    }
+    if (res.encoding !== 'base64') return { ok: false, error: '读取失败', ...probed }
+    return { ok: true, via: 'base64', content: res.content, size: res.size, encoding: res.encoding, mime: res.mime, version: res.version, ...probed }
+  } catch (error) {
+    return { ok: false, error: 'read异常:' + String(error), ...probed }
+  }
+}
+// --endregion
+
 /** 决策作用域：call=整条记录，hunk=单个差异块。 */
 export type RpcScope = 'call' | 'hunk'
 
@@ -101,6 +234,10 @@ export interface PerfSession {
   bytes: number
   mtime: number
   active: boolean
+  /** 官方侧栏已归档（0.1.7+ workspaceRegistry.archivedSessionIds 持久位；旧 host 不回传 → undefined，按 false 渲染）。 */
+  archived?: boolean
+  /** 官方侧栏已置顶（0.1.7+ workspaceRegistry.pinnedSessionIds 持久位；旧 host 不回传 → undefined，按 false 渲染）。 */
+  pinned?: boolean
 }
 
 /** 一个工作区的会话聚合（edrv.perf.inventory）。 */
@@ -200,6 +337,7 @@ export interface RpcRequestMap {
   'edrv.reject': { sessionId?: string; callId: string; scope?: RpcScope; hunkIndex?: number }
   'edrv.decideBatch': { sessionId?: string; items: DecideItem[] }
   'edrv.read': { sessionId?: string; path: string; encoding?: 'base64' }
+  'edrv.readBinary': { sessionId?: string; path: string }
   'edrv.versions': { sessionId?: string; paths: string[] }
   'edrv.original': { sessionId?: string; path: string }
   'edrv.save': { sessionId?: string; path: string; content: string; rev?: string }
@@ -258,6 +396,9 @@ export interface RpcRequestMap {
   'edrv.lsp.workspaceSymbol': { sessionId?: string; query: string }
   'edrv.lsp.hover': { sessionId?: string; path: string; position: LspPosition }
   'edrv.lsp.semanticTokens': { sessionId?: string; path: string }
+  'edrv.lsp.completion': { sessionId?: string; path: string; position: LspPosition; context?: { triggerKind?: number; triggerCharacter?: string } }
+  'edrv.lsp.resolveCompletion': { sessionId?: string; path: string; item: LspCompletionItem }
+  'edrv.lsp.signatureHelp': { sessionId?: string; path: string; position: LspPosition }
   'edrv.lsp.redetect': { languageId: string }
   'edrv.lsp.envInstall': { languageId: string; id: string }
   'edrv.lsp.envState': {}
@@ -335,6 +476,7 @@ export interface RpcOkMap {
   'edrv.reject': { record: RecordView }
   'edrv.decideBatch': { results: DecideResult[] }
   'edrv.read': { content: string; size: number; encoding?: 'base64'; mime?: string; version?: string }
+  'edrv.readBinary': { binary: BinaryReadPayload }
   'edrv.versions': { items: FileVersionItem[] }
   'edrv.original': { content: string; size: number; stale: StaleHunk[]; fallback: boolean }
   'edrv.save': { rev?: string; conflict?: boolean }
@@ -393,6 +535,9 @@ export interface RpcOkMap {
   'edrv.lsp.workspaceSymbol': { symbols: LspSymbol[]; truncated?: boolean }
   'edrv.lsp.hover': { hover?: LspHover }
   'edrv.lsp.semanticTokens': { tokens?: LspSemanticTokens }
+  'edrv.lsp.completion': { completions?: LspCompletionList }
+  'edrv.lsp.resolveCompletion': { item?: LspCompletionItem }
+  'edrv.lsp.signatureHelp': { signatureHelp?: LspSignatureHelp }
   'edrv.lsp.redetect': { servers: LspServerStatus[] }
   'edrv.lsp.envInstall': { started: boolean }
   'edrv.lsp.envState': { states: LspEnvInstallState[] }

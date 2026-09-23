@@ -90,7 +90,12 @@ export function createSvnStore<M extends RpcMethod, T>(config: SvnStoreConfig<M,
 
   const ensure = (sessionId: string | undefined, key: string | null | undefined, force = false, extra?: Record<string, unknown>): void => {
     if (!key || inFlight.has(key)) return
-    if (!force && cache.has(key)) return
+    if (!force && cache.has(key)) {
+      // 缓存命中也要把跨 scope 镜像切回该 key：否则从非 SVN 工作区切回后，
+      // latest()（命令栏 svnCurrentStatus 等只读判定的数据源）仍残留上一个工作区的载荷
+      latestValue = cache.get(key) as T
+      return
+    }
     const fixed = config.args ? config.args(key) : {}
     const task = rpc(config.method, { ...fixed, ...extra, sessionId, force: force || undefined } as RpcRequestMap[M])
       .then((res) => {
