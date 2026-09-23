@@ -5,7 +5,14 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
 
 # dsh-vscode-mode 开发/发布经验集（自我更新型技能）
 
-> updated: 2026-09-22 · 维护者：ddj（AI 会话按文末协议追加，保持精炼、去重）
+> updated: 2026-09-23 · 维护者：ddj（AI 会话按文末协议追加，保持精炼、去重）
+- 2026-09-23 实录（v0.8.0 发布，DSH 0.1.7 适配 P0×3 + 文件树原生打开；**dapFakeAdapter:234 连续第二次
+  首跑抖动**）：三门本地全绿（typecheck 0 / **1843 passed · 11 skipped · 141 文件** / tsdown 双面）；
+  `build` 首跑 41s 挂 `tests/dapFakeAdapter.test.ts:234 waitFor 超时`（与 v0.7.0 首跑逐字同款；判据三分
+  全中：失败文件不在本次 diff + 本地全绿 + 前次 CI 绿）→ `gh run rerun <run-id> --failed` **53s 绿**；
+  `release` 一次过 **5m30s**（含 Verify，无第三结局）。四向闭环：registry `0.8.0` 200、
+  `dist-tags.latest=0.8.0`、`gitHead==4abf0f7`（release commit）、tag 同 commit + Release 挂 tgz。
+  **该用例已连续两次发布首跑抖动——后续发布遇它直接 `rerun --failed`，勿再查代码**。
 - 2026-09-22 实录（v0.7.0 发布，资源管理器右键菜单；**经历首跑失败→重跑→第三结局**，四向闭环仍一次对齐）：
   三门本地全绿（typecheck 0 err / **1745 passed · 7 skipped · 137 文件 · 19.7s** / build 双面绿）；`build` job 37s success。
   **首跑 `release` 35 秒即挂**：`tests/dapFakeAdapter.test.ts:234` 握手用例 `waitFor 超时`——该文件与 `src/dap/*`
