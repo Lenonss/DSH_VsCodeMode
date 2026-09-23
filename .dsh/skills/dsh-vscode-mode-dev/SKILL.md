@@ -6,6 +6,19 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
 # dsh-vscode-mode 开发/发布经验集（自我更新型技能）
 
 > updated: 2026-09-23 · 维护者：ddj（AI 会话按文末协议追加，保持精炼、去重）
+- 2026-09-23 实录 + 坑（v0.9.0 发布，远端差异审查 issue #7 + SVN 变更 AI 智能分组 +
+  0.1.7-alpha.2 适配 + Ctrl+点击首开落点修复；**Release 首跑直接绿**）：三门本地全绿
+  （typecheck 0 / **1974 passed · 11 skipped · 147 文件 · 17.63s** / lockfile
+  `pnpm install --frozen-lockfile --lockfile-only` 供应链自检过 + tsdown 双面）；
+  `release` run 35852383226 job 全绿、本轮无 dapFakeAdapter 抖动，四向闭环一次对齐
+  （registry 0.9.0 的 gitHead==c441359、latest=0.9.0、tag 同 commit、Release 挂 tgz）。
+  **新坑（跳转第三次回归的根因）**：并行改码触发 client HMR 热重载（判据 = 保留
+  console 里插件装配三行日志重复出现的轮次）→ React entry 重挂载 → **挂载级 ref
+  （pendingFocusRef 等）随旧实例销毁、意图静默丢失** → 跨热重载必须保留的状态一律落
+  `window.__*__` 挂点（修复 = `window.__edrvPendingNav__` 槽 TTL 30s、落点才清 + 落点前
+  模型身份守卫；43 单测 + 首开/交接注入/同文件/搜索入口四轮现场复测）。规矩：**并行会话
+  改码期间不要做跳转类现场复测**（HMR 风暴会伪造回归）；平静态复测才是有效证据。
+  issue #7 已回评（含 host 侧改动、升级后须重启 DSH 的提醒）。
 - 2026-09-23 坑（0.1.7-alpha.2 实测，**设置页 P0，两次截图证据**）：**0.1.7 的
   `SettingsForms.describe` 按 `volatileForm(schema)` 门槛下发 entry——Config schema
   无任何 `.volatile()` 字段 = 整条 entry 被跳过**，ns 不进 describe → client
