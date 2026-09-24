@@ -5,7 +5,15 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
 
 # dsh-vscode-mode 开发/发布经验集（自我更新型技能）
 
-> updated: 2026-09-23 · 维护者：ddj（AI 会话按文末协议追加，保持精炼、去重）
+> updated: 2026-09-24 · 维护者：ddj（AI 会话按文末协议追加，保持精炼、去重）
+- 2026-09-24 实录（v0.10.0 发布，SVN AI 深度分析发送链路重构；**dapFakeAdapter:234 连续第三次
+  首跑抖动**）：三门本地全绿（typecheck 0 / **1974 passed · 11 skipped · 147 文件 · 11.19s** /
+  tsdown 双面）；`build` 54s 绿；`release` 首跑 **48s 即挂** `tests/dapFakeAdapter.test.ts:234
+  waitFor 超时`（判据三分全中：不在本次 diff + 本地全绿 + 前次 CI 绿）→ `gh run rerun <run-id>
+  --failed` **4m38s 绿**（本轮连 Verify 一次过，无第三结局）。四向闭环一次对齐：registry 0.10.0
+  HTTP 200 且 `gitHead==909df00`（release commit）、`dist-tags.latest=0.10.0`、tag v0.10.0 同
+  commit、Release 挂 tgz（digest sha256:b051563e…）。规矩不变：该用例已**连续三次**发布首跑抖动，
+  遇之直接 `rerun --failed` 勿查代码。
 - 2026-09-23 实录 + 坑（v0.9.0 发布，远端差异审查 issue #7 + SVN 变更 AI 智能分组 +
   0.1.7-alpha.2 适配 + Ctrl+点击首开落点修复；**Release 首跑直接绿**）：三门本地全绿
   （typecheck 0 / **1974 passed · 11 skipped · 147 文件 · 17.63s** / lockfile
