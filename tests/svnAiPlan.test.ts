@@ -296,7 +296,19 @@ describe('newDraftSession', () => {
     json: async () => ({ type: 'server-response', rpcId: 'x', result: { ok: true, value: { sessionId } } }),
   })
 
-  it('主路径 wire 直调：POST /api/session/create，解析 result.value.sessionId', async () => {
+  it('主路径 sessions.create（manager 面，官方 connectWorkspace 同链路；store upsert 使 open 可用）', async () => {
+    const calls: Array<{ cwd?: string } | undefined> = []
+    const sessions = {
+      create: async (opts?: { cwd?: string }) => { calls.push(opts); return 's-store' },
+      open: (_id: string) => {},
+    }
+    const res = await newDraftSession(ctxOf({ sessions }), 'D:/wc')
+    expect(res).toEqual({ ok: true, id: 's-store' })
+    expect(calls).toEqual([{ cwd: 'D:/wc' }])
+    vi.unstubAllGlobals()
+  })
+
+  it('store 面缺失/失败回落 wire 直调（POST /api/session/create，解析 result.value.sessionId）', async () => {
     const calls: Array<{ url: string; body: unknown }> = []
     vi.stubGlobal('fetch', async (url: string, init: { body: string }) => {
       calls.push({ url, body: JSON.parse(init.body) })
@@ -309,18 +321,21 @@ describe('newDraftSession', () => {
     vi.unstubAllGlobals()
   })
 
-  it('wire 失败回落 remote.session.create（官方信封形态 {rpcId, result} 解析）', async () => {
+  it('wire 失败回落 remote.session.create（具名槽 {args:{request}} 形态解析）', async () => {
     vi.stubGlobal('fetch', async () => { throw new Error('offline') })
-    const calls: unknown[] = []
+    const calls: Array<Record<string, unknown>> = []
     const remote = {
       create: async (arg: unknown) => {
-        calls.push(arg)
+        calls.push(arg as Record<string, unknown>)
         return { rpcId: 'x', result: { ok: true, value: { sessionId: 's-remote' } } }
       },
     }
     expect(await newDraftSession(ctxOf({ 'remote.session': remote }), 'D:/wc'))
       .toEqual({ ok: true, id: 's-remote' })
-    expect(calls[0]).toEqual({ cwd: 'D:/wc' })
+    // 具名槽形态优先：首参 {args:{request:{rpcId,payload}}}，payload 携 cwd
+    const slot = calls[0].args as { request: { rpcId?: string; payload?: Record<string, unknown> } }
+    expect(slot.request).toHaveProperty('rpcId')
+    expect(slot.request.payload).toEqual({ cwd: 'D:/wc' })
     vi.unstubAllGlobals()
   })
 
@@ -329,18 +344,6 @@ describe('newDraftSession', () => {
     const remote = { create: async () => ({ ok: true, value: { sessionId: 's-bare' } }) }
     expect(await newDraftSession(ctxOf({ 'remote.session': remote }), 'D:/wc'))
       .toEqual({ ok: true, id: 's-bare' })
-    vi.unstubAllGlobals()
-  })
-
-  it('wire/remote 皆败回落 sessions.create（旧形态四解）', async () => {
-    vi.stubGlobal('fetch', async () => { throw new Error('offline') })
-    const remote = { create: async () => ({ rpcId: 'x', result: { ok: false } }) }
-    const sessions = { create: async () => ({ sessionId: 's-old' }) }
-    expect(await newDraftSession(ctxOf({ 'remote.session': remote, sessions }), undefined))
-      .toEqual({ ok: true, id: 's-old' })
-    const sessionsStr = { create: async () => 's-str' }
-    expect(await newDraftSession(ctxOf({ sessions: sessionsStr }), 'D:/wc'))
-      .toEqual({ ok: true, id: 's-str' })
     vi.unstubAllGlobals()
   })
 
@@ -355,17 +358,20 @@ describe('newDraftSession', () => {
 })
 
 describe('apiSessionPrompt（点击即发送 wire 投递）', () => {
-  it('POST /api/session/prompt，payload 含 sessionId/mode:queue/文本块', async () => {
+  it('POST /api/session/prompt，payload 为具名槽 {args:{request:{rpcId,payload}}}（gateway 铁证形态）', async () => {
     const calls: Array<{ url: string; body: { type?: string; method?: string; payload?: Record<string, unknown> } }> = []
     vi.stubGlobal('fetch', async (url: string, init: { body: string }) => {
       calls.push({ url, body: JSON.parse(init.body) })
-      return { json: async () => ({ result: { ok: true, value: { accepted: true } } }) }
+      return { status: 200, json: async () => ({ result: { ok: true, value: { accepted: true } } }) }
     })
     expect(await apiSessionPrompt('s-1', '深度分析任务')).toBe(true)
     expect(calls[0].url).toBe('/api/session/prompt')
     expect(calls[0].body.type).toBe('client-request')
     expect(calls[0].body.method).toBe('session/prompt')
-    expect(calls[0].body.payload).toMatchObject({
+    // 具名槽：payload.args.request.payload = 业务载荷
+    const slot = calls[0].body.payload as { args?: { request?: { rpcId?: string; payload?: Record<string, unknown> } } }
+    expect(slot.args?.request).toHaveProperty('rpcId')
+    expect(slot.args?.request?.payload).toMatchObject({
       sessionId: 's-1',
       mode: 'queue',
       content: [{ type: 'text', text: '深度分析任务' }],
@@ -382,18 +388,22 @@ describe('apiSessionPrompt（点击即发送 wire 投递）', () => {
     vi.unstubAllGlobals()
   })
 
-  it('wire 失败时 sendTask 门面回落 remote.prompt（官方信封形态）', async () => {
+  it('sendTask 门面主路径 remote.prompt（具名槽 {args:{request}} 形态优先 + 各形态容错）', async () => {
     vi.stubGlobal('fetch', async () => { throw new Error('offline') })
     const calls: Array<Record<string, unknown>> = []
     const remote = {
       prompt: async (arg: Record<string, unknown>) => {
         calls.push(arg)
+        if (!('args' in arg)) throw new Error('bad-request: slot required') // 非具名槽形态抛错不得中断后续形态
         return { rpcId: 'x', result: { ok: true, value: { accepted: true } } }
       },
     }
     const facade = createAddToConversation(ctxOf({ 'remote.session': remote }) as never)
     expect(await facade.sendTask('s-1', '任务')).toBe(true)
-    expect(calls[0]).toMatchObject({ sessionId: 's-1', mode: 'queue', content: [{ type: 'text', text: '任务' }] })
+    // 具名槽形态优先：首参 {args:{request:{rpcId,payload}}}
+    const slot = calls[0].args as { request: { rpcId?: string; payload?: Record<string, unknown> } }
+    expect(slot.request).toHaveProperty('rpcId')
+    expect(slot.request.payload).toMatchObject({ sessionId: 's-1', mode: 'queue', content: [{ type: 'text', text: '任务' }] })
     vi.unstubAllGlobals()
   })
 })

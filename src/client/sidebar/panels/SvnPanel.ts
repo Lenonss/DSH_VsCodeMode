@@ -859,7 +859,7 @@ export function SvnPanel(props) {
       if (!id || typeof add.sendTask !== 'function') { degrade(prompt); return }
       void add.sendTask(id, prompt).then((sent) => {
         if (sent) {
-          live?.notify?.('已在新会话发起深度分析（任务已自动发送），请在会话列表查看')
+          live?.notify?.('已在新会话「AI 深度分析」发起任务并自动发送，请在左侧会话列表点开查看进度')
           startDeepPoll(since)
         } else {
           degrade(prompt)

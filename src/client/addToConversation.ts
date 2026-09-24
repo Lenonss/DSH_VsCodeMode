@@ -286,6 +286,17 @@ function mintRpcId(): string {
 }
 
 /**
+ * wire 槽实参组装（gateway `invoke` 铁证：`request.args[parameter.wire]` 具名槽，
+ * `session/prompt` 的槽名 = "request"，值 = RpcRequest `{rpcId, payload}`）。
+ * @author ddj 2026年09月24号
+ * @param payload 业务载荷
+ * @returns 具名槽实参 `{ args: { request: RpcRequest } }`
+ */
+function slotArg(payload: object): { args: { request: { rpcId: string; payload: object } } } {
+  return { args: { request: { rpcId: mintRpcId(), payload } } }
+}
+
+/**
  * RPC 返回解析（照官方 dsh-client-runtime 调用形态：`const { result } = await api.sessions.create(...)`）。
  * 官方 api.sessions 面返回**信封** `{ rpcId, result: RpcResult }`——须解 .result；
  * 兼容裸 RpcResult 形态（个别补丁面直接回 {ok, value}）。
@@ -335,6 +346,7 @@ async function apiSessionCreate(cwd: string | undefined): Promise<string> {
  */
 export async function apiSessionPrompt(sessionId: string, text: string): Promise<boolean> {
   try {
+    const payload = { sessionId, mode: 'queue', content: [{ type: 'text', text }] }
     const res = await fetch(SESSION_PROMPT_PATH, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -342,7 +354,7 @@ export async function apiSessionPrompt(sessionId: string, text: string): Promise
         type: 'client-request',
         rpcId: mintRpcId(),
         method: 'session/prompt',
-        payload: { sessionId, mode: 'queue', content: [{ type: 'text', text }] },
+        payload: slotArg(payload),
       }),
     })
     const json = await res.json().catch(() => null) as { result?: { ok?: boolean } } | null
@@ -362,25 +374,10 @@ export async function apiSessionPrompt(sessionId: string, text: string): Promise
  * @returns 新会话结果（含 id）
  */
 export async function newDraftSession(ctx: CtxLike, cwd: string | undefined): Promise<DraftSessionResult> {
-  // 主路径：wire 直调
+  // 主路径：client store manager 面（官方 connectWorkspace 同链路）——create 自带 store upsert，
+  // 「on resolution the child is in the list store and open() can target it」；
+  // wire 直调虽能建会话但 store 无感，故只作最后兜底。
   try {
-    const id = await apiSessionCreate(cwd)
-    if (id) return { ok: true, id }
-  } catch { /* wire 不可用：回落 service 面 */ }
-  try {
-    // 回落 1：remote.session service 面（官方返回信封 {rpcId, result}，见 rpcOk；实参双形态兼容）
-    const remote = ctx.get('remote.session') as {
-      create?: (req: unknown) => Promise<unknown>
-    } | undefined
-    if (typeof remote?.create === 'function') {
-      const payload = cwd ? { cwd } : {}
-      for (const arg of [payload, { rpcId: mintRpcId(), payload }]) {
-        const r = rpcOk(await remote.create(arg))
-        const id = r.value as { sessionId?: unknown } | undefined
-        if (r.ok && typeof id?.sessionId === 'string') return { ok: true, id: id.sessionId }
-      }
-    }
-    // 回落 2：旧版 client store 形态（id / {id} / {sessionId} / {session:{id}} 四解）
     const sessions = ctx.get('sessions') as { create?: (opts?: { cwd?: string }) => unknown } | undefined
     if (typeof sessions?.create === 'function') {
       const created = await sessions.create(cwd ? { cwd } : undefined)
@@ -392,6 +389,25 @@ export async function newDraftSession(ctx: CtxLike, cwd: string | undefined): Pr
           : ''
       if (id) return { ok: true, id }
     }
+  } catch { /* 回落下一通道 */ }
+  try {
+    // 回落 1：api.sessions service 面（返回信封 {rpcId, result}，见 rpcOk；多形态容错）
+    const remote = ctx.get('remote.session') as { create?: (req: unknown) => Promise<unknown> } | undefined
+    if (typeof remote?.create === 'function') {
+      const payload = cwd ? { cwd } : {}
+      for (const arg of [slotArg(payload), { request: { rpcId: mintRpcId(), payload } }, { rpcId: mintRpcId(), payload }, payload]) {
+        try {
+          const r = rpcOk(await remote.create(arg))
+          const id = r.value as { sessionId?: unknown } | undefined
+          if (r.ok && typeof id?.sessionId === 'string') return { ok: true, id: id.sessionId }
+        } catch { /* 单形态失败试下一形态 */ }
+      }
+    }
+  } catch { /* 回落 wire */ }
+  // 回落 2：wire 直调（创建成功但 store 无感，open 切换不保证；任务发送仍可用）
+  try {
+    const id = await apiSessionCreate(cwd)
+    if (id) return { ok: true, id }
   } catch { /* 全部失败：调用方降级 */ }
   return { ok: false }
 }
@@ -559,11 +575,21 @@ export function createAddToConversation(ctx: CtxLike): AddToConversation {
   const startDraftSession: AddToConversation['startDraftSession'] = async (cwd) => {
     const result = await newDraftSession(ctx, cwd)
     if (result.ok && result.id) {
-      // 尽力切换到新会话（缺失/异常不影响结果——仅视图不切换）
       try {
-        const sessions = ctx.get('sessions') as { open?: (id: string) => void } | undefined
-        sessions?.open?.(result.id)
-      } catch { /* 切换失败仅视图停留 */ }
+        // 主动铸造 scope（scope 对新会话惰性铸造，inputFor/composer 面依赖它）
+        const sessions = ctx.get('sessions') as {
+          materializeScope?: (id: string) => unknown
+          manager?: { select?: (id: string) => void; rename?: (id: string, title: string) => void }
+          open?: (id: string) => void
+        } | undefined
+        sessions?.materializeScope?.(result.id)
+        // 命名醒目标题（manager.rename 在面实证）：会话列表一眼可见、点击即入
+        const title = 'AI 深度分析 · ' + (String(cwd ?? '').split(/[\\/]/).pop() || 'SVN 变更')
+        void sessions?.manager?.rename?.(result.id, title)
+        // 切换尝试（open/select 未对插件暴露时静默跳过：rename 已保证可见性）
+        void sessions?.manager?.select?.(result.id)
+        void sessions?.open?.(result.id)
+      } catch { /* 面能力缺失不致命：任务发送不受影响 */ }
     }
     return result
   }
@@ -578,18 +604,38 @@ export function createAddToConversation(ctx: CtxLike): AddToConversation {
    */
   const sendTask: AddToConversation['sendTask'] = async (sessionId, text) => {
     if (!sessionId) return false
+    // 主路径：**官方 composer 发送链路**（InputLike setDraft + submit —— UI「发送」的内部路径）。
+    // inputFor 依赖 sessions.scope(id)：新会话铸造有时延，重试 3 次后再降级。
+    const composerOnce = async (): Promise<boolean> => {
+      const input = inputFor(ctx, sessionId) as { setDraft?: (t: string) => void; submit?: (mode?: unknown) => void } | undefined
+      if (input && typeof input.setDraft === 'function' && typeof input.submit === 'function') {
+        input.setDraft(text)
+        input.submit()
+        return true
+      }
+      return false
+    }
     try {
-      if (await apiSessionPrompt(sessionId, text)) return true
-    } catch { /* 回落 service 面 */ }
+      for (let attempt = 3; attempt > 0; attempt--) {
+        if (await composerOnce()) return true
+        if (attempt > 1) await new Promise((resolve) => setTimeout(resolve, 500))
+      }
+    } catch { /* 降级下一通道 */ }
+    // 兜底 1：remote.session service 面（多形态容错）
     try {
       const remote = ctx.get('remote.session') as { prompt?: (req: unknown) => Promise<unknown> } | undefined
       if (typeof remote?.prompt === 'function') {
-        // 官方 api.sessions.prompt(request) 返回信封（rpcOk 解 .result）；实参双形态兼容
         const payload = { sessionId, mode: 'queue', content: [{ type: 'text', text }] }
-        for (const arg of [payload, { rpcId: mintRpcId(), payload }]) {
-          if (rpcOk(await remote.prompt(arg)).ok) return true
+        for (const arg of [slotArg(payload), { request: { rpcId: mintRpcId(), payload } }, { rpcId: mintRpcId(), payload }, payload]) {
+          try {
+            if (rpcOk(await remote.prompt(arg)).ok) return true
+          } catch { /* 单形态失败试下一形态 */ }
         }
       }
+    } catch { /* 降级下一通道 */ }
+    // 兜底 2：HTTP wire
+    try {
+      return await apiSessionPrompt(sessionId, text)
     } catch { /* 全失败 */ }
     return false
   }

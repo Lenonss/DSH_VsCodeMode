@@ -417,13 +417,13 @@ TortoiseSVN（`TortoiseProc.exe`）仅作 Windows 过渡增强：自研能力覆
 
 ```bash
 # ① Git 安装（clone + prepare 构建；推荐打固定 tag）
-dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.9.0
+dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.10.0
 
 # ② npm 注册表（发布到 npm 后）
 dsh plugin --profile web add dsh-vscode-mode
 
 # ③ GitHub Release tgz 直装
-dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.9.0/dsh-vscode-mode-0.9.0.tgz
+dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.10.0/dsh-vscode-mode-0.10.0.tgz
 ```
 
 > `dsh plugin ...` 是 pnpm 转发器：git 安装会克隆仓库、执行该包 `prepare` 脚本
@@ -718,6 +718,15 @@ Keep All / Undo All 却是亮的。修复：单文件 Keep / Undo 覆盖冲突�
 完整变更见 [GitHub Releases](https://github.com/Lenonss/DSH_VsCodeMode/releases)。
 近期关键版本：
 
+- **v0.10.0**：**SVN AI 深度分析发送链路重构**——① 发送主路径切换为**官方 composer
+  链路**（`inputFor` setDraft + submit，即 UI「发送」内部路径，带 scope 铸造时延 3 次
+  重试），`remote.session` 具名槽 RPC（`{args:{request:{rpcId,payload}}}`，gateway
+  `invoke` 铁证形态）多形态容错为兜底、HTTP wire 直调降为最后兜底；② 新会话创建
+  主路径改为 **client store manager 面**（`sessions.create`，官方 connectWorkspace
+  同链路，create 自带 store upsert → `open` 切换可用），wire 直调虽能建会话但 store
+  无感故只作兜底；③ 新会话**主动铸造 scope + 命名「AI 深度分析 · \<目录\>」**
+  （`materializeScope` + `manager.rename`），会话列表一眼可见、点击即入；
+  ④ SvnPanel 通知文案同步更新，34 个 svnAiPlan 用例对齐新形态。
 - **v0.9.0**：**远端工作区差异审查（issue #7）+ SVN 变更 AI 智能分组**——① 支持
   ssh remote 插件打开的**远端项目**做交互式差异审查：按工作区根 `.remote-ssh.json`
   识别镜像根（向上 ≤8 层，与官方 findMirrorRoot 同判据），agent 写远端后以 `node:fs`
