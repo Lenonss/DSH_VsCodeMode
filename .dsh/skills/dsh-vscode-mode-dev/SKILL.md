@@ -6,6 +6,26 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
 # dsh-vscode-mode 开发/发布经验集（自我更新型技能）
 
 > updated: 2026-09-28 · 维护者：ddj（AI 会话按文末协议追加，保持精炼、去重）
+- 2026-09-28 实录（v0.13.1 发布：**快捷键入口收敛到官方弹窗**；基线 `v0.13.0` @ `75dd3d8`）：
+  三门本地全绿（typecheck 0 / **175 文件通过 + 2 跳过；2326 通过 + 12 跳过**，连续两次一致 /
+  `node --test tests/nativeOpen.test.mjs` 9/9 / tsdown 双面：host 726.52 kB、client 1.47 MB）；
+  `release` 一次过 **6m34s**（含 npm publish + Verify）。四向闭环一次对齐：registry 0.13.1
+  `gitHead==c8d9843`、`dist-tags.latest=0.13.1`、tag 同 commit、Release 挂 tgz（7,194,379 B，
+  sha256:55239fc7…）。改动 = 删除独立「快捷键」设置区（`ui/ShortcutSettings.ts`）与随其失业的
+  `src/client/shortcutRecorder.ts` + 其单测，VSCodeMode 通用页新增「打开官方快捷键配置」按钮
+  （`openOfficialShortcuts()` → `registry.invoke('shortcuts.open')`，入口缺失/失败回退 `Ctrl+/` 文案）。
+  **删页面前先 `git grep` 确认消费者**：`vsm-kb-*` 与 recorder 只被该页引用，才可一并清掉；
+  同理 `client/keybindings.ts` 的 `COMMANDS`、`shortcutsOfficial.resetPluginKeys` 至此仅测试引用（可后续清）。
+  **坑（并行会话 / 落后基线，代价最高）**：本地 `main` 可能落后 origin —— 本会话落后 2 个提交
+  （= 另一个会话已发布并 npm 上线的 0.13.0），若把基于旧基线的改动直接提交推送会**整包回退别人的发布**。
+  处置：先 `git fetch` + `git log HEAD..origin/main` 看清差异，`git stash push -u` 保护本地改动 →
+  `git merge --ff-only origin/main` → 在新基线上重建改动（不要硬 pop 旧 stash，冲突面大且会带回旧内容）。
+  **坑（依赖同步）**：基线前移后必须 `pnpm install --frozen-lockfile`（0.13.0 新增的 `semver`
+  devDependency 未装会让 `tests/peerDeps.test.ts` 报 `Cannot find package 'semver'`，
+  看起来像自己改坏了）。
+  **坑（老抖动不再「一次即过」）**：`tests/dapFakeAdapter.test.ts:26` `waitFor 超时` 在
+  `457750f` 的独立 main CI 上**连挂两次**（第一次 `gh run rerun --failed` 仍挂），第二次重跑才绿；
+  遇到它别只重跑一次就下结论、也别去改那个测试。
 - 2026-09-28 实录（v0.13.0 发布：官方 Desktop 适配——/edrv 接官方认证与有界请求体、
   应用基址兼容反代子路径与 `dsh-app:`、项目 MCP 按 agent 三面隔离、profile 用运行上下文、
   快捷键 normalized/录制收尾、私有 OPEN/lease ACK 外部打开、SVN 会话工具投递；
