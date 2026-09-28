@@ -6,6 +6,26 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
 # dsh-vscode-mode 开发/发布经验集（自我更新型技能）
 
 > updated: 2026-09-28 · 维护者：ddj（AI 会话按文末协议追加，保持精炼、去重）
+- 2026-09-28 实录（v0.13.0 发布：官方 Desktop 适配——/edrv 接官方认证与有界请求体、
+  应用基址兼容反代子路径与 `dsh-app:`、项目 MCP 按 agent 三面隔离、profile 用运行上下文、
+  快捷键 normalized/录制收尾、私有 OPEN/lease ACK 外部打开、SVN 会话工具投递；
+  **release 首跑挂 `tests/treeIndex.test.ts:195`**）：三门本地全绿（typecheck 0 /
+  **2341 passed · 13 skipped · 175 文件** + `node --test tests/nativeOpen.test.mjs` 9/9 ·
+  11.97s / tsdown 724.67kB + 1.49MB）；`release` 首跑挂「后台自愈：失效 3s 后索引自动更新」
+  （`expected null not to be null`，fake timers + 真实 fs IO），**同 commit 的 CI 流水线绿**
+  → 判据三分全中，`gh run rerun --failed` 一次过（typecheck/test/build/pack/Release/npm/Verify 全绿）。
+  四向闭环一次对齐：registry 0.13.0 `gitHead==75dd3d8`、`dist-tags.latest=0.13.0`、tag 同 commit、
+  Release 挂 tgz（7,216,347 B，sha256:088b65f5…）。**新坑（外部打开队列，务必先查）**：host 用
+  `profileContext.dir`（反斜杠）写入 metadata 并做**严格字符串比较**，任何工具/手写用正斜杠写请求
+  都会被**静默丢弃**（请求文件照样被删、不写 ACK、投递方只能等到 TTL 超时）——修法 = 按物理路径身份
+  比较（win32 折叠分隔符 + 大小写，POSIX 保持大小写敏感），并给被拒请求补失败 ACK；测试必须**显式
+  传平台**（否则 Windows 全绿、ubuntu 挂）。**新坑（Windows ACL）**：继承的 `PSModulePath` 会让
+  `Get-Acl`/`Set-Acl` 自动加载失败，队列权限检查改用 .NET Framework
+  `Directory/File.GetAccessControl` 直调；`SetOwner` 需特权，只设 DACL（当前 SID + OI/CI）即可。
+  **新坑（官方 Desktop 隔离验证）**：packaged 启动**无条件** `setAsDefaultProtocolClient('dsh')`，
+  无开关/env 可禁，只能运行时抑制（inspector 暂停替换）或换独立 OS/VM；且首次引导会**改写**私有
+  profile 的 `cordis.patch.yml`（`[]` → 默认插件配置），验证驱动必须有「复用已初始化 profile」开关。
+  **事实**：客户端 bundle `rev` 可用来确认 GUI 是否真的加载了新构建。
 - 2026-09-28 实录（v0.11.0 发布：原生 SVN 更新窗口 + LSP 补全增强 + 设置文件就地打开 + 日志弹窗
   视觉重做；**首跑 CI 两个 job 同挂于新测试的平台陷阱**）：三门本地全绿（typecheck 0 /
   **2051 passed · 11 skipped · 156 文件 · 10.21s** / tsdown 双面）；`release` 首跑 **1.5min 即挂**
