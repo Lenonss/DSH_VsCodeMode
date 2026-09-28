@@ -5,7 +5,22 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
 
 # dsh-vscode-mode 开发/发布经验集（自我更新型技能）
 
-> updated: 2026-09-24 · 维护者：ddj（AI 会话按文末协议追加，保持精炼、去重）
+> updated: 2026-09-28 · 维护者：ddj（AI 会话按文末协议追加，保持精炼、去重）
+- 2026-09-28 实录（v0.11.0 发布：原生 SVN 更新窗口 + LSP 补全增强 + 设置文件就地打开 + 日志弹窗
+  视觉重做；**首跑 CI 两个 job 同挂于新测试的平台陷阱**）：三门本地全绿（typecheck 0 /
+  **2051 passed · 11 skipped · 156 文件 · 10.21s** / tsdown 双面）；`release` 首跑 **1.5min 即挂**
+  `tests/settingsDocPath.test.ts:7`「returns the absolute settings document path for an exact match」
+  与 `:12`「compares paths case-insensitively on Windows」——Windows 形状 fixture
+  （`C:/Users/test/.dsh/cordis.patch.yml`）在 ubuntu 被 host `path.resolve` 当相对路径拼上 runner
+  cwd（Received `/home/runner/work/DSH_VsCodeMode/DSH_VsCodeMode/C:/Users/test/.dsh/cordis.patch.yml`），
+  `build` job 同断言同挂。修法 = `src/settingsDocPath.ts` 按 `platform` 参数选 `win32`/`posix`
+  resolve（生产只传 process.platform，语义不变；win32 分支在 Linux CI 也能被真实覆盖）+ 补 POSIX
+  大小写敏感用例；重发布按老规矩：删远端 tag → push 修复 `6a53f78` → 重打 tag → CI 全绿
+  （release 7m30s / build 1m30s）。四向闭环一次对齐：registry 0.11.0 `gitHead==6a53f78`（release
+  commit）、`dist-tags.latest=0.11.0`、tag 同 commit、Release 挂 tgz（7,076,539 B，
+  digest sha256:955c0c0829…）。**坑（新测试上 CI 的判据）**：本地 Windows 全绿 ≠ CI 绿——断言里只要
+  出现盘符/反斜杠形状，先自问「ubuntu 上同一输入经 host `path.resolve` 会得到什么」；能用显式平台
+  参数消解就不要加 skip（skip 会让该分支在 CI 永远无覆盖）。
 - 2026-09-24 实录（v0.10.0 发布，SVN AI 深度分析发送链路重构；**dapFakeAdapter:234 连续第三次
   首跑抖动**）：三门本地全绿（typecheck 0 / **1974 passed · 11 skipped · 147 文件 · 11.19s** /
   tsdown 双面）；`build` 54s 绿；`release` 首跑 **48s 即挂** `tests/dapFakeAdapter.test.ts:234
