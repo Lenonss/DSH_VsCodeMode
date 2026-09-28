@@ -12,6 +12,12 @@ describe('settingsDocPath', () => {
       .toBe('C:\\Users\\test\\.dsh\\config.yml')
   })
 
+  it('resolves and compares POSIX paths case-sensitively off Windows', () => {
+    expect(settingsDocPath('/home/test/.dsh/config.yml', '/home/test/.dsh/config.yml', 'linux'))
+      .toBe('/home/test/.dsh/config.yml')
+    expect(settingsDocPath('/home/test/.dsh/config.yml', '/home/test/.dsh/CONFIG.yml', 'linux')).toBeNull()
+  })
+
   it('rejects any other path and an absent provider path', () => {
     expect(settingsDocPath('C:/Users/test/.dsh/config.yml', 'C:/Users/test/.dsh/other.yml', 'win32')).toBeNull()
     expect(settingsDocPath(undefined, 'C:/Users/test/.dsh/config.yml', 'win32')).toBeNull()
