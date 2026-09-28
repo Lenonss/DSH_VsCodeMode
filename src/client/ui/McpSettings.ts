@@ -1,7 +1,8 @@
 // @ts-nocheck
 /**
  * dsh-vscode-mode client — VSCodeMode 设置区：通用 / MCP 管理 / 语言服务器 / 性能优化 / 兼容性。
- * （快捷键管理已迁出为独立顶层设置区 ui/ShortcutSettings.ts，与 VSCodeMode 平级。）
+ * （快捷键统一由 DSH 官方快捷键机制管理：通用页只提供「打开官方快捷键配置」跳转入口，
+ *   插件不再自建录键编辑器，也不再注册独立「快捷键」设置区。）
  * MCP 管理 Tab 下含三个子页签：我的 MCP（profile 全局）/ 项目 MCP（各项目 .mcp.json）/ MCP 市场（占位）。
  * 作者 ddj 2026年08月22号 / 2026年08月26号 / 2026年08月27号 / 2026年10月
  */
@@ -11,6 +12,7 @@ import type { MpcProject, MpcServer } from '../../shared/mcp.js'
 import '../styles/mcp.css'
 import { availableOpeners, AUTO_OPEN_TOOL } from '../fileOpeners.js'
 import { SettingsContext } from '../settingsContext.js'
+import { openOfficialShortcuts } from '../shortcutsOfficial.js'
 import { normalizeSidebarMinWidth, SIDEBAR_MIN_DEFAULT } from '../sidebarMin.js'
 import { EDITOR_LIMIT_CEIL, EDITOR_LIMIT_DEFAULT, normalizeMaxOpenEditors } from '../../shared/editorLimit.js'
 import { TORTOISE_DIR_DEFAULT } from '../../shared/svn.js'
@@ -131,8 +133,8 @@ function ProjectGroup({ project, busy, onAdd, onRefresh, onToggle, onRemove }) {
   return React.createElement('section', { className: 'vsm-project' }, head, body)
 }
 
-/** 通用设置：选择当前对话文件链接的打开器 + 开发形态开关 + 编辑器布局（侧边栏最小宽度）。 */
-function GeneralSettings({ registry }) {
+/** 通用设置：选择当前对话文件链接的打开器 + 开发形态开关 + 编辑器布局（侧边栏最小宽度）+ 官方快捷键入口。 */
+function GeneralSettings({ registry, getShortcuts }) {
   const [tool, setTool] = React.useState(AUTO_OPEN_TOOL)
   const [busy, setBusy] = React.useState(false)
   const [error, setError] = React.useState('')
@@ -145,6 +147,7 @@ function GeneralSettings({ registry }) {
   const [limitDraft, setLimitDraft] = React.useState(null) // 页签上限草稿（同上提交语义）
   const [nativeSaved, setNativeSaved] = React.useState(DEFAULT_NATIVE_CSV) // 原生打开范围已保存值
   const [nativeDraft, setNativeDraft] = React.useState(null) // 原生打开范围草稿（同上提交语义）
+  const [kbMessage, setKbMessage] = React.useState('') // 打开官方快捷键弹窗的失败说明（空 = 未失败）
   const settings = React.useContext(SettingsContext)
   const snapshot = settings?.getSnapshot?.()
   const loading = !snapshot || snapshot.status === 'loading'
@@ -221,6 +224,14 @@ function GeneralSettings({ registry }) {
       setDevMessage(result.restart ? '已切换为正式版，重启 DSH 后生效。' : '已关闭开发形态。')
     }).catch((e) => setDevMessage('关闭失败：' + String(e))).finally(() => setDevBusy(false))
   }
+  /**
+   * 唤起官方快捷键弹窗（键位统一归官方机制；入口不可用时展示手动打开方式）。
+   * @author ddj 2026年09月28号
+   */
+  const openShortcuts = () => {
+    const probe = typeof getShortcuts === 'function' ? getShortcuts : () => null
+    setKbMessage(openOfficialShortcuts(probe()))
+  }
   const options = [{ id: AUTO_OPEN_TOOL, label: '自动选择', description: '按当前已注册工具自动选择' }, ...availableOpeners(registry).map((item) => ({ id: item.id, label: item.label, description: item.description }))]
   const currentOption = options.some((item) => item.id === tool) ? tool : AUTO_OPEN_TOOL
   const devFormRow = devForm?.enabled ? React.createElement('div', { className: 'vsm-general-row' },
@@ -283,6 +294,16 @@ function GeneralSettings({ registry }) {
           }),
           React.createElement('small', null, '逗号分隔；命中的文件用 DSH 原生预览打开，留空恢复默认（Office + 二进制，csv/tsv 需显式加入）')),
       ),
+    ),
+    React.createElement('section', { className: 'vsm-panel' },
+      React.createElement('h3', { className: 'vsm-panel-title' }, '快捷键'),
+      React.createElement('div', { className: 'vsm-panel-body' },
+        React.createElement('label', { className: 'vsm-general-row' },
+          React.createElement('span', null, '键位配置',
+            React.createElement('small', { className: 'vsm-devform-note' },
+              '插件命令（edrv.*）与 DSH 官方命令的键位统一由官方快捷键机制管理：录键、冲突校验、按平台默认值、恢复默认都在官方弹窗内完成；本插件不再单独提供录键编辑器。')),
+          React.createElement('button', { onClick: openShortcuts }, '打开官方快捷键配置')),
+        kbMessage && React.createElement('small', { className: 'vsm-devform-msg' }, kbMessage)),
     ),
     React.createElement(SvnSettingsSection, null),
     React.createElement(IntegrationSettings, null),
@@ -496,6 +517,7 @@ function McpManagePanel({ servers, projects, busy, draft, edit, resetDraft, refr
 export function McpSettings(props) {
   const openerRegistry = props?.openerRegistry ?? { list: () => [] }
   const compatSummary = props?.compatSummary ?? (() => [])
+  const getShortcuts = props?.getShortcuts ?? (() => null)
   const [servers, setServers] = React.useState<MpcServer[]>([])
   const [projects, setProjects] = React.useState<MpcProject[]>([])
   const [loading, setLoading] = React.useState(true)
@@ -583,7 +605,7 @@ export function McpSettings(props) {
   const resetDraft = () => setDraft(EMPTY)
   let body
   if (loading) body = React.createElement('div', { className: 'vsm-mcp-empty' }, '正在读取 MCP 服务…')
-  else if (tab === 'general') body = React.createElement(GeneralSettings, { registry: openerRegistry })
+  else if (tab === 'general') body = React.createElement(GeneralSettings, { registry: openerRegistry, getShortcuts })
   else if (tab === 'mcp') body = React.createElement(McpManagePanel, { servers, projects, busy, draft, edit, resetDraft,
     saveGlobal: (close) => saveGlobal(close), saveProject: (workspacePath, close) => saveProject(workspacePath, close),
     refreshGlobal, toggleGlobal, removeGlobal, refreshProject, toggleProject, removeProject })

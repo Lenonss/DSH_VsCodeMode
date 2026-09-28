@@ -10,7 +10,7 @@
 
 ## 1. 一句话模型
 
-**一条命令 = 一条注册数据**（`CommandDef`）。命令栏、快捷键设置页、全局键位派发、
+**一条命令 = 一条注册数据**（`CommandDef`）。命令栏、官方快捷键目录、全局键位派发、
 Monaco 右键菜单入口全部从同一份目录读取，新增能力只需追加一条定义。
 
 ```
@@ -37,7 +37,8 @@ React 状态**：编辑器未挂载时装配、卸载后依然安全。
 ## 3. 命令栏（Ctrl+Shift+P / F1）
 
 - 默认键位：`Ctrl+Shift+P`（主候选）与 `F1`（VS Code 同款第二候选），由共享表
-  `shared/keybindings.ts` 提供，可在「设置 → VSCodeMode → 快捷键」里改绑或解绑。
+  `shared/keybindings.ts` 提供；改绑/解绑走 DSH 官方快捷键配置（设置 → VSCodeMode →
+  通用 →「打开官方快捷键配置」，或 `Ctrl+/`）。
 - 交互：输入即过滤（大小写不敏感、空格分词 AND、中文子串可命中）、`↑/↓` 选择、
   `Enter` 执行、`Esc` 或点击遮罩关闭；每行显示「命令名 · 分类 · 当前键位」。
 - 过滤排序（`commandSearch.ts` 纯函数）：命中字段权重（label < id < category）→ 目录序 →
@@ -78,7 +79,8 @@ React 状态**：编辑器未挂载时装配、卸载后依然安全。
 3. **接住事件**（`ui/EditorView.ts` 的「指令系统接线」`handlers` 表追加一条字面事件名）；
    测试会静态校验「目录 ↔ 接线」双向一致。
 
-设置页命令列表（`client/keybindings.ts` 的 `COMMANDS`）由目录派生，无需手动登记。
+键位改绑与目录总览都在 DSH 官方快捷键弹窗里；插件不再维护设置页命令列表
+（`client/keybindings.ts` 的 `COMMANDS` 目录快照目前仅测试引用，新命令无需在其中登记）。
 
 ### 4.1 实例：`edrv.closeTab`（关闭当前页签）
 

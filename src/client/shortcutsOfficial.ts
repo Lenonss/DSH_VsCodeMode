@@ -308,6 +308,32 @@ export function bindCatalogChords(service: ShortcutsServiceLike, onChange: (chor
   return service.catalog.subscribe(sync)
 }
 
+/**
+ * 唤起官方快捷键弹窗（VSCodeMode 通用页的跳转入口用；插件不再自建录键界面）。
+ * 官方入口不可用（旧版 DSH / registry 缺失）或唤起失败时返回可读说明，
+ * 供设置页原样展示：不抛错、不阻断设置渲染。
+ * @author ddj 2026年09月28号
+ * @param service 官方 shortcuts 服务（可为 null：运行时探测未就绪）
+ * @returns 空串 = 已成功唤起；否则为给用户看的失败说明
+ */
+export function openOfficialShortcuts(service: ShortcutsServiceLike | null): string {
+  const manual = '可按 Ctrl+/ 或到 DSH 设置 → 通用 → 快捷键 打开'
+  if (!service || !service.registry || typeof service.registry.invoke !== 'function') {
+    return '官方快捷键弹窗入口不可用（当前 DSH 版本或外壳未提供）：' + manual
+  }
+  try {
+    service.registry.invoke('shortcuts.open', {
+      region: 'page',
+      modal: null,
+      target: typeof document === 'undefined' ? null : document.activeElement,
+    })
+    return ''
+  } catch (error) {
+    bridgeLog.warn('打开官方快捷键弹窗失败：' + String(error))
+    return '打开官方快捷键弹窗失败：' + String(error) + '；' + manual
+  }
+}
+
 //#region 旧设置迁移
 
 /** 旧设置 scope 最小形状（compat settingsBridge 绑定产物的最小面，结构与 SettingsScopeLike 兼容）。 */

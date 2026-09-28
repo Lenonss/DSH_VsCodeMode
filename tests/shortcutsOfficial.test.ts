@@ -9,6 +9,7 @@ import {
   installLegacyKeys,
   migrateLegacyKeybindings,
   officialCommandOf,
+  openOfficialShortcuts,
   registerOfficialShortcuts,
   resetPluginKeys,
   safeRegister,
@@ -388,5 +389,28 @@ describe('migrateLegacyKeybindings 旧设置迁移', () => {
     expect(await migrateLegacyKeybindings(service, scope)).toEqual({ imported: 0, skipped: 0, done: false })
     expect(service.edit).toHaveBeenCalledTimes(1)
     expect(setCalls).toHaveLength(0)
+  })
+})
+
+describe('openOfficialShortcuts 跳转官方弹窗', () => {
+  it('invoke 成功返回空串并带 page 上下文', () => {
+    const invoke = vi.fn((_id: string, _context: unknown) => undefined)
+    const service = mockService({ registry: { invoke } })
+    expect(openOfficialShortcuts(service)).toBe('')
+    expect(invoke).toHaveBeenCalledWith('shortcuts.open', { region: 'page', modal: null, target: null })
+  })
+
+  it('服务缺失 / registry 缺失时给出手动打开方式', () => {
+    expect(openOfficialShortcuts(null)).toContain('入口不可用')
+    expect(openOfficialShortcuts(mockService())).toContain('Ctrl+/')
+  })
+
+  it('invoke 抛错不向外抛，返回带原因的说明', () => {
+    const invoke = vi.fn(() => {
+      throw new Error('no registry entry')
+    })
+    const message = openOfficialShortcuts(mockService({ registry: { invoke } }))
+    expect(message).toContain('no registry entry')
+    expect(message).toContain('Ctrl+/')
   })
 })

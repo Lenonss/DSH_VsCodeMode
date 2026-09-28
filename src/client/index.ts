@@ -56,7 +56,6 @@ import type { CommandBridge } from './commandBridge.js'
 import { REGISTRY_GLOBAL } from './commandGlobals.js'
 import { awaitShortcutsService, bindCatalogChords, detectShortcuts, installLegacyKeys, migrateLegacyKeybindings, registerOfficialShortcuts } from './shortcutsOfficial.js'
 import { SHORTCUT_PROFILES, defaultKeybindings, normalizeKeybindings } from '../shared/keybindings.js'
-import { ShortcutSettings } from './ui/ShortcutSettings.js'
 import { sidebarMinApply } from './sidebarMin.js'
 import { editorLimitApply } from './editorLimit.js'
 import { log } from './log.js'
@@ -575,16 +574,13 @@ export function apply(ctx: any): void {
     id: 'vscode-mode',
     order: 30,
     label: 'VSCodeMode',
-  }, () => React.createElement(SettingsContext.Provider, { value: bridge.scope() }, React.createElement(McpSettings, { openerRegistry: registry, compatSummary })))
-
-  // 独立「快捷键」设置区（与 VSCodeMode 平级）：官方快捷键子页 + 插件快捷键子页。
-  // 服务经 getShortcuts 运行时探测（自愈），组件内部自带就绪重试。
-  registerSlotSafely(ctx, {
-    name: 'settings.section',
-    id: 'vscode-mode-shortcuts',
-    order: 31,
-    label: '快捷键',
-  }, () => React.createElement(ShortcutSettings, { getShortcuts: () => detectShortcuts(ctx) }))
+  }, () => React.createElement(SettingsContext.Provider, { value: bridge.scope() }, React.createElement(McpSettings, {
+    openerRegistry: registry,
+    compatSummary,
+    // 快捷键统一走 DSH 官方配置：通用页只提供「打开官方快捷键配置」入口。
+    // 服务运行时探测（自愈）：旧版 DSH 无该服务时按钮给出手动打开方式。
+    getShortcuts: () => detectShortcuts(ctx),
+  })))
 
   // 卸载收尾（G4，DSH 0.1.6-alpha.2 起支持运行时卸载/重载）：
   // 注销挂在存活的 window.monaco 上的全部 Monaco provider 并复位模块状态。

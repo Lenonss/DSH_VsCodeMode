@@ -65,8 +65,9 @@
 分类 / 当前键位；需要打开文件的命令在空编辑器时自动隐藏。
 
 - **单一数据源**：命令目录（`ui/commandCatalog`）驱动命令栏和官方快捷键目录；
-  设置 →「快捷键」可查看官方目录与编辑插件命令，绑定经 DSH 官方服务保存。旧版 DSH
-  没有该服务时继续使用原有窗口按键派发，旧 `keybindings` 设置仍可生效。
+  键位查看/改绑统一走 DSH 官方快捷键配置（设置 → VSCodeMode → 通用 →
+  「打开官方快捷键配置」，或 `Ctrl+/`），插件不再自建录键界面，绑定由官方服务持久化。
+  旧版 DSH 没有该服务时继续使用原有窗口按键派发，旧 `keybindings` 设置仍可生效。
 - **开放注册表**：`window.__edrvCommands__` 暴露 `register()` 注册命令；插件
   不再提供独立的运行时键位注册，改用 DSH 官方 shortcuts 配置。
 - **开箱 20 条命令**：保存 / 快速打开 / 在文件浏览器中打开 / 显示所有命令 /
@@ -431,13 +432,13 @@ profile 请替换为实际目标，不要把示例目录当成当前运行 profi
 
 ```bash
 # ① Git 安装（clone + prepare 构建；推荐打固定 tag）
-dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.13.0
+dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.13.1
 
 # ② npm 注册表（发布到 npm 后）
 dsh plugin --profile web add dsh-vscode-mode
 
 # ③ GitHub Release tgz 直装
-dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.13.0/dsh-vscode-mode-0.13.0.tgz
+dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.13.1/dsh-vscode-mode-0.13.1.tgz
 ```
 
 > `dsh plugin ...` 是 pnpm 转发器：git 安装会克隆仓库、执行该包 `prepare` 脚本
@@ -481,7 +482,9 @@ bundles 层后重启 DSH 即自动把插件行挂进 loader 树。**不要**再�
 ### 快捷键速查
 
 以下是桌面端常见默认键位；Web / Linux 的浏览器或系统保留键可能不绑定。
-实际生效键位以「设置 → 快捷键」为准；旧版 DSH 无官方 shortcuts 时沿用原有键位。
+实际生效键位以 **DSH 官方快捷键配置**为准：设置 → VSCodeMode → 通用 →「打开官方
+快捷键配置」（或 `Ctrl+/`）。插件命令与官方命令同表展示、由官方统一校验冲突；
+旧版 DSH 无官方 shortcuts 时沿用原有键位。
 
 | 快捷键 | 功能 |
 |---|---|
@@ -526,23 +529,25 @@ bundles 层后重启 DSH 即自动把插件行挂进 loader 树。**不要**再�
 
 ## 配置
 
-设置 →「快捷键」页：官方目录总览和插件快捷键录制、逐项恢复；编辑通过官方
-shortcuts 服务持久化（Desktop：`userData/keybindings.json`；Web：
-`localStorage` 的 `dsh.keybindings.v1`）。旧版插件 `keybindings` 配置的单候选自定义值
-按当前平台一次性尝试迁入官方存储；旧配置始终保留供其他平台及人工恢复，
-多候选、冲突、不支持或未绑定的旧值不会被部分迁入或删除。
+键位配置统一走 DSH 官方快捷键：设置 → VSCodeMode → 通用 →「打开官方快捷键配置」
+（等价 `Ctrl+/`；官方入口不可用时按钮就地给出手动打开方式）。录键、冲突校验、
+按平台默认值、恢复默认都在官方弹窗内完成，插件不再自建录键页面。键位持久化由官方
+服务负责（Desktop：`userData/keybindings.json`；Web：`localStorage` 的
+`dsh.keybindings.v1`）。旧版插件 `keybindings` 配置的单候选自定义值按当前平台
+一次性尝试迁入官方存储；旧配置始终保留供其他平台及人工恢复，多候选、冲突、
+不支持或未绑定的旧值不会被部分迁入或删除。
 
 v0.13.0 在 0.12 官方接管的基础上修正真实 `normalized` 绑定与物理 Control/Meta
-的转换；录制先进入官方 recording 状态，并在确认、取消、失败、失焦及卸载等退出
-路径收尾，避免原生快捷键拦截长期停用。首次打开命令面板/QuickOpen 等入口按当前
-会话 scope 路由，不要求编辑器先挂载。Web 工作区搜索使用官方当前平台允许的
-三修饰符组合，最终显示与冲突判断以官方目录为准。
+的转换；首次打开命令面板/QuickOpen 等入口按当前会话 scope 路由，不要求编辑器先挂载。
+Web 工作区搜索使用官方当前平台允许的三修饰符组合，最终显示与冲突判断以官方目录为准。
+v0.13.1 起插件不再自建录键界面（原独立「快捷键」设置页与共享录制模块已移除），
+改由通用页的「打开官方快捷键配置」入口直达官方弹窗。
 
 设置 →「VSCodeMode」页：
 
 | 分区 | 说明 |
 |---|---|
-| 通用 | 编辑器宽度（180–560）等 / 系统集成卡片 / 文件链接使用工具 / 开发形态开关 |
+| 通用 | 编辑器宽度（180–560）等 / 系统集成卡片 / 文件链接使用工具 / 开发形态开关 / 官方快捷键配置入口 |
 | 我的 MCP / 项目 MCP | MCP 服务器可视化管理（stdio / streamable-http） |
 | 性能优化 | 会话盘点 / 移出归档 / 压缩调优 / 侧车摘要指引 |
 | 兼容性 | 兼容性报告（外部插件探测、路由 / 重复装配护栏）、插件技能组装载状态、旧版形态引导 |
@@ -763,6 +768,11 @@ Keep All / Undo All 却是亮的。修复：单文件 Keep / Undo 覆盖冲突�
 完整变更见 [GitHub Releases](https://github.com/Lenonss/DSH_VsCodeMode/releases)。
 近期关键版本：
 
+- **v0.13.1**：**快捷键入口收敛到官方弹窗**——移除插件自建的独立「快捷键」设置页
+  （含行内录键编辑器与共享录制模块 `shortcutRecorder.ts`），改在 VSCodeMode → 通用页
+  提供「打开官方快捷键配置」一键跳转（`openOfficialShortcuts()`；官方入口不可用时
+  就地给出手动打开方式）。键位查看、录键、冲突校验与恢复默认全部由 DSH 官方弹窗承担，
+  避免同一套录键逻辑两处维护；0.13.0 的绑定转换修复与 Web 三修饰符默认值不变。
 - **v0.13.0**：**Host 鉴权与 Desktop 适配、项目 MCP 三面隔离、外部打开回执**——
   `/edrv` 路由接入官方认证与有界请求体读取，URL 保留应用子路径并支持 `dsh-app:`；
   项目 MCP 改为每 agent 挂载，隔离工具/资源/指令，新增配置态、未验证状态与实例数；
