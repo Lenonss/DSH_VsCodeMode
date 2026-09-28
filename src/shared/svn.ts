@@ -99,6 +99,44 @@ export interface SvnUpdateResult {
   output: string
 }
 
+/** 原生更新窗口的真实执行阶段。 */
+export type SvnUpdatePhase = 'starting' | 'running' | 'cancelling' | 'completed' | 'failed' | 'cancelled'
+
+/** 流式更新行；relPath 仅在目标位于当前工作区内时可操作。 */
+export interface SvnUpdateRow {
+  seq: number
+  action: SvnUpdateAction | null
+  path: string
+  relPath: string | null
+  label: string
+  raw: string
+}
+
+/** 分类数量按 svn 输出中的条目行计，不猜文件总数或网络字节。 */
+export type SvnUpdateCounts = Record<SvnUpdateAction, number>
+
+/** 更新任务快照（窗口第一次连接和每次增量 poll 共用）。 */
+export interface SvnUpdateState {
+  jobId: string
+  target: string
+  phase: SvnUpdatePhase
+  counts: SvnUpdateCounts
+  revision: number | null
+  elapsedMs: number
+  error: string
+  rawTail: string
+  truncated: boolean
+  nextSeq: number
+}
+
+/** 增量读取结果：rows 只含 since 之后的一页，offset 表示目前可重放的首条序号。 */
+export interface SvnUpdatePoll extends SvnUpdateState {
+  rows: SvnUpdateRow[]
+  offset: number
+  /** 当前后台总序号；nextSeq 仅是本次前端已经拿到的最后一条。 */
+  totalSeq: number
+}
+
 /** revert/add 等批量动作结果（计数 + 摘要 + 原文）。 */
 export interface SvnActionResult {
   /** 处理条目数（宽松计数）。 */

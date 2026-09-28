@@ -70,7 +70,24 @@ const UPDATE_ACTION_LABEL: Record<string, string> = {
 }
 
 /** update 结果行：行首若干空白 + 单字母 + 空白 + 路径（路径可含空格，取整段）。 */
-const UPDATE_LINE_RE = /^([ADGCEUR]|\s{3})\s{2,}(\S.*)$/
+const UPDATE_LINE_RE = /^([A-Z_ ]{1,4})\s{2,}(\S.*)$/
+
+/**
+ * 解析 update 的单行状态（正文/摘要不匹配）。属性列 U/C 也按该条目状态处理。
+ * @author ddj 2026年09月24号
+ * @param line 原始输出行
+ * @returns 可识别条目或 null
+ */
+export function updateLineOf(line: string): SvnUpdateEntry | null {
+  const hit = UPDATE_LINE_RE.exec(line)
+  if (!hit) return null
+  const status = hit[1].replace(/[ _]/g, '')
+  if (!status || /[^ADGCEUR]/.test(status)) return null
+  const action = status.includes('C') ? 'C' : status[0]
+  const path = hit[2].trim()
+  if (!path) return null
+  return { action: action as SvnUpdateEntry['action'], path, label: UPDATE_ACTION_LABEL[action] ?? action }
+}
 
 /**
  * 解析 `svn update` 文本输出为**条目级**结构化结果（附冲突清单与一行摘要）。
@@ -95,18 +112,10 @@ export function updateResultOf(stdout: string, stderr: string, code: number | nu
   const conflicts: string[] = []
   for (const line of output.split(/\r?\n/)) {
     // 条目行（`U    a.txt` / `C    conf.txt` / `A    new.txt`）
-    const hit = UPDATE_LINE_RE.exec(line)
-    if (hit) {
-      const action = hit[1].trim()
-      const path = hit[2].trim()
-      if (path && entries.length < TEXT_ENTRY_CAP) {
-        entries.push({
-          action: action as SvnUpdateEntry['action'],
-          path,
-          label: UPDATE_ACTION_LABEL[action] ?? action,
-        })
-      }
-      if (action === 'C' && conflicts.length < TEXT_CONFLICT_CAP) conflicts.push(path)
+    const entry = updateLineOf(line)
+    if (entry) {
+      if (entries.length < TEXT_ENTRY_CAP) entries.push(entry)
+      if (entry.action === 'C' && conflicts.length < TEXT_CONFLICT_CAP) conflicts.push(entry.path)
       continue
     }
     // 兼容 P1 的宽松口径：属性列冲突（` M C  f` 等）也算冲突

@@ -205,4 +205,14 @@ describe('执行器表与动作目录一致（防「点了没反应」）', () =
     const orphans = Object.keys(SVN_ACTION_RUNNERS).filter((id) => !known.has(id))
     expect(orphans).toEqual([])
   })
+
+  it('SVN 更新经统一窗口回调；缺回调时反馈错误且不执行隐藏更新', async () => {
+    const { runSvnAction } = await import('../src/client/svnActions.js')
+    const paths: string[] = []
+    const notes: string[] = []
+    runSvnAction(SVN_ACTION_BY_ID.update, { path: 'src', openSvnUpdate: (path) => paths.push(path) })
+    runSvnAction(SVN_ACTION_BY_ID.update, { path: 'other', notify: (message) => notes.push(message) })
+    expect(paths).toEqual(['src'])
+    expect(notes).toEqual(['SVN 更新窗口不可用'])
+  })
 })

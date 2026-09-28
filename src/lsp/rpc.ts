@@ -10,6 +10,7 @@ import { searchRoot } from '../search/ripgrep.js'
 import { sessionOf, cwdOf } from '../registry.js'
 import { resolveProviderSpec, langOfPath, configFromPlugin, mergeConfig, sanitizeLang, LSP_LANGUAGES, type LspConfig, type LspLangConfig } from './config.js'
 import { clearProviderCache, candidatesFor } from './providers.js'
+import { capCompletions } from './completionCap.js'
 import { onRuntimeProvisioned, envInstallStates } from './dotnetProvision.js'
 import { envRequirementsFor, installRequirement } from './envRequirements.js'
 import type { LspManager } from './manager.js'
@@ -451,11 +452,13 @@ export function createLspRpc(deps: LspRpcDeps): { handlers: Partial<RpcHandlerMa
           args.context,
         )
         if (!completions) return { ok: true, completions: undefined }
-        const truncated = completions.items.length > 500
-        return {
-          ok: true,
-          completions: truncated ? { ...completions, items: completions.items.slice(0, 500), truncated: true } : completions,
-        }
+        // 前缀感知截断：超限时按当前输入前缀分桶，保证正在打的符号不被挤出上限
+        // （本仓库上万个 CS_* 绑定桩会把 ECommon 等项目全局顶到 500 条之外）。
+        const capped = capCompletions(completions.items, args.prefix)
+        const payload = { ...completions, items: capped.items }
+        if (capped.truncated) payload.truncated = true
+        else delete payload.truncated
+        return { ok: true, completions: payload }
       } catch (error) {
         return { ok: false, error: 'LSP 补全查询失败：' + String(error) }
       }

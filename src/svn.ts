@@ -7,7 +7,7 @@
  * 作者 ddj 2026年09月16号
  */
 import { readdir, stat } from 'node:fs/promises'
-import { basename, dirname, join } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import type { Ctx, Session } from './store.js'
 import { cwdOf, sessionOf } from './registry.js'
@@ -18,6 +18,8 @@ import { buildAiPrompt, svnAiPlanOf } from './ai/svnTriage.js'
 import { attrOf, numAttrOf, scanXmlTags, textOf, unescapeXml } from './svnXml.js'
 import { TEXT_OUTPUT_CAP, batchResultOf, tailOfText, updateResultOf } from './svnText.js'
 import { LOG_CAP, LOG_DEFAULT_LIMIT, SVN_LOG_SHOW_ALL_CAP, parseLogXml, parseSvnInfoRevision } from './svnLog.js'
+import { SvnUpdateJobs } from './svnUpdateJob.js'
+import type { UpdateProcess } from './svnUpdateJob.js'
 export { batchResultOf, commitResultOf, updateResultOf } from './svnText.js'
 export { mapRepoPath, parseLogXml } from './svnLog.js'
 
@@ -387,6 +389,7 @@ interface SvnRunOutcome { code: number | null; stdout: string; stderr: string }
 /** subprocess 产句柄最小结构面（done 载荷对齐 revert.ts 的 exitCode/code 双读）。 */
 interface SpawnedHandle {
   done: Promise<{ exitCode?: number; code?: number } | undefined>
+  terminate?: () => void
   collected?: {
     stdout?: { readFrom: (n: number) => { text: string } }
     stderr?: { readFrom: (n: number) => { text: string } }
@@ -467,17 +470,34 @@ function safeRel(raw: unknown): string | null {
 }
 
 /**
+ * 会话根可在 SVN 工作副本的子目录；CLI 在 wcRoot 执行时必须换算目标坐标。
+ * @author ddj 2026年09月24号
+ * @param cwd 当前会话目录
+ * @param wcRoot SVN 工作副本根
+ * @param rel 会话相对目标
+ * @returns SVN 根相对目标；越界返回 null
+ */
+export function svnPathOf(cwd: string, wcRoot: string, rel: string): string | null {
+  if (safeRel(rel) === null) return null
+  const wcRel = relative(wcRoot, resolve(cwd, rel || '.'))
+  if (isAbsolute(wcRel) || wcRel === '..' || wcRel.startsWith('../') || wcRel.startsWith('..\\')) return null
+  return wcRel.replace(/\\/g, '/') || '.'
+}
+
+/**
  * 创建 svn.* RPC handlers（缓存随装配生命周期；lsp/ai 同模式并入 buildHandlers）。
  * @author ddj 2026年09月16号
  * @param deps ctx + 设置读取面 + 可注入时钟
  * @returns handlers（Partial<RpcHandlerMap> 形状）
  */
-export function createSvnRpc(deps: SvnRpcDeps): { handlers: Record<string, unknown> } {
+export function createSvnRpc(deps: SvnRpcDeps): { handlers: Record<string, unknown>; dispose: () => void } {
   const { ctx, settings } = deps
   const now = deps.now ?? (() => Date.now())
   const findRoot = deps.findRoot ?? ((cwd: string) => findSvnRoot(cwd))
   const findTortoise = deps.findTortoise ?? ((dir: string) => findTortoiseProc(dir))
   const statusCache = new Map<string, { at: number; payload: SvnStatusPayload }>()
+  /** 运行中更新按会话目录复用工作副本根；TTL 到期才重新扫描 .svn。 */
+  const updateRootCache = new Map<string, { at: number; root: string }>()
   /** 变更清单缓存（键 = 工作副本根；TTL 短，仅合并同一轮 UI 的多处拉取）。 */
   const changesCache = new Map<string, { at: number; value: { entries: SvnChangeEntry[]; truncated: boolean } }>()
   /** 混合通道方案收件箱（key = 工作副本根；覆盖式入箱 + TTL，见 svn.aiPlanSubmit/Pending）。 */
@@ -485,6 +505,11 @@ export function createSvnRpc(deps: SvnRpcDeps): { handlers: Record<string, unkno
   /** 工作副本根 relative-url 缓存（日志路径映射用；探测失败也缓存空串避免反复 spawn）。 */
   const urlCache = new Map<string, { at: number; value: string }>()
   let cliProbe: { at: number; exe: string; ok: boolean } | null = null
+  const updateJobs = new SvnUpdateJobs(
+    () => ctx.get('subprocess') as UpdateProcess | null,
+    deps.platform ?? process.platform,
+    now,
+  )
 
   const subprocess = (): SpawnFn | null => {
     const sub = ctx.get('subprocess') as { spawn?: unknown } | null | undefined
@@ -499,6 +524,9 @@ export function createSvnRpc(deps: SvnRpcDeps): { handlers: Record<string, unkno
     let ok = false
     const spawn = subprocess()
     if (spawn) {
+      const controller = new AbortController()
+      const deadline = setTimeout(() => controller.abort(new Error('SVN CLI 探测超时')), CLI_GRACE_MS)
+      deadline.unref?.()
       try {
         const handle = spawn({
           argv: [exe, '--version', '--quiet'],
@@ -507,11 +535,20 @@ export function createSvnRpc(deps: SvnRpcDeps): { handlers: Record<string, unkno
           cwd: tmpdir(),
           stdio: { stdout: 'inherit', stderr: 'inherit', stdin: 'ignore' },
           graceMs: CLI_GRACE_MS,
+          signal: controller.signal,
         })
-        const outcome = await handle.done
+        const expired = new Promise<never>((_, reject) => {
+          controller.signal.addEventListener('abort', () => {
+            try { handle.terminate?.() } catch { /* 返回探测超时即可 */ }
+            reject(controller.signal.reason)
+          }, { once: true })
+        })
+        const outcome = await Promise.race([handle.done, expired])
         ok = (outcome?.exitCode ?? outcome?.code) === 0
       } catch {
         ok = false
+      } finally {
+        clearTimeout(deadline)
       }
     }
     cliProbe = { at, exe, ok }
@@ -541,6 +578,28 @@ export function createSvnRpc(deps: SvnRpcDeps): { handlers: Record<string, unkno
     }
     statusCache.set(cwd, { at, payload })
     return payload
+  }
+
+  /**
+   * 验证更新请求属于当前会话的工作副本；取消/轮询不依赖 CLI 仍可用。
+   * @author ddj 2026年09月24号
+   * @param sessionId 当前会话 id
+   * @param needCli 仅真正启动更新时才探测 SVN 客户端
+   * @returns 已校验的目录和状态，或错误
+   */
+  const updateScope = async (sessionId?: string, needCli = false) => {
+    const sc = await requireSvnSession(ctx, sessionId)
+    if ('err' in sc) return { err: sc.err }
+    if (!needCli) {
+      const cached = updateRootCache.get(sc.cwd)
+      const root = cached && now() - cached.at < STATUS_TTL_MS ? cached.root : await findRoot(sc.cwd)
+      if (root && (!cached || now() - cached.at >= STATUS_TTL_MS)) updateRootCache.set(sc.cwd, { at: now(), root })
+      return root ? { cwd: sc.cwd, root, exe: '', cli: false } : { err: '当前工作区不受 SVN 管理' }
+    }
+    const status = await statusOf(sc.cwd)
+    if (!status.managed || !status.wcRoot) return { err: '当前工作区不受 SVN 管理' }
+    updateRootCache.set(sc.cwd, { at: now(), root: status.wcRoot })
+    return { cwd: sc.cwd, root: status.wcRoot, exe: status.svnPath, cli: status.svnCli }
   }
 
   /**
@@ -966,8 +1025,10 @@ export function createSvnRpc(deps: SvnRpcDeps): { handlers: Record<string, unkno
       const status = await statusOf(sc.cwd)
       if (!status.managed || !status.wcRoot) return { ok: false as const, error: '当前工作区不受 SVN 管理' }
       if (!status.svnCli) return { ok: false as const, error: 'svn 命令不可用（可在设置页配置 svn 路径）' }
+      const svnTarget = svnPathOf(sc.cwd, status.wcRoot, rel)
+      if (svnTarget === null) return { ok: false as const, error: '日志路径不在 SVN 工作副本内' }
       try {
-        const result = await logOf(status.wcRoot, rel, args.limit ?? LOG_DEFAULT_LIMIT, {
+        const result = await logOf(status.wcRoot, svnTarget === '.' ? '' : svnTarget, args.limit ?? LOG_DEFAULT_LIMIT, {
           stopOnCopy: args.stopOnCopy === true,
           showMerged: args.showMerged === true,
           range: args.startRev && args.endRev
@@ -1026,6 +1087,8 @@ export function createSvnRpc(deps: SvnRpcDeps): { handlers: Record<string, unkno
       const status = await statusOf(sc.cwd)
       if (!status.managed || !status.wcRoot) return { ok: false as const, error: '当前工作区不受 SVN 管理' }
       if (!status.svnCli) return { ok: false as const, error: 'svn 命令不可用（可在设置页配置 svn 路径）' }
+      const svnRel = svnPathOf(sc.cwd, status.wcRoot, rel)
+      if (!svnRel) return { ok: false as const, error: '比较路径不在 SVN 工作副本内' }
       const fs = ctx.get('fs') as {
         resolve?: (p: string, o: object) => Promise<unknown>
         stat?: (t: unknown) => Promise<{ type?: string; size?: number } | null>
@@ -1039,7 +1102,7 @@ export function createSvnRpc(deps: SvnRpcDeps): { handlers: Record<string, unkno
         if ((info.size ?? 0) > READ_CAP) return { ok: false as const, error: '文件过大（>8MB），不支持与工作副本比较' }
         const working = await fs.readText(resolved)
         // 左侧 = 该版本内容；cat 失败按「该版本尚无此文件」处理（新增语义，非错误）
-        const leftOutcome = await runSvn(status.wcRoot, ['cat', '-r', String(Math.floor(revision)), '--', rel], READ_GRACE_MS)
+        const leftOutcome = await runSvn(status.wcRoot, ['cat', '-r', String(Math.floor(revision)), '--', svnRel], READ_GRACE_MS)
         if (leftOutcome.code !== 0) {
           const text = (leftOutcome.stderr || leftOutcome.stdout).trim()
           return { ok: true as const, left: null, right: working, reason: 'not-exist', error: tailOfText(text), ...guardSides(null, working) }
@@ -1363,13 +1426,45 @@ export function createSvnRpc(deps: SvnRpcDeps): { handlers: Record<string, unkno
       if (!status.managed) return { ok: false as const, error: '当前工作区不受 SVN 管理' }
       if (!status.svnCli) return { ok: false as const, error: 'svn 命令不可用（可在设置页配置 svn 路径）' }
       try {
-        const outcome = await runSvn(sc.cwd, ['update', rel || '.'], UPDATE_GRACE_MS)
+        const outcome = await runSvn(sc.cwd, ['update', '--', rel || '.'], UPDATE_GRACE_MS)
         const result = updateResultOf(outcome.stdout, outcome.stderr, outcome.code)
         if (outcome.code !== 0) return { ok: false as const, error: '更新失败：' + tailOfText(result.output) }
         return { ok: true as const, ...result }
       } catch (error) {
         return { ok: false as const, error: '更新失败：' + String(error) }
       }
+    },
+    'svn.updateStart': async (args: { sessionId?: string; path?: string }) => {
+      const scope = await updateScope(args.sessionId, true)
+      if ('err' in scope) return { ok: false as const, error: scope.err }
+      if (!scope.cli) return { ok: false as const, error: 'svn 命令不可用（可在设置页配置 svn 路径）' }
+      const rel = safeRel(args.path)
+      if (rel === null) return { ok: false as const, error: '路径不合法' }
+      try {
+        const fs = ctx.get('fs') as { resolve?: (p: string, o: object) => Promise<unknown>; processPath?: (t: unknown) => string } | undefined
+        const cwd = fs?.resolve && fs?.processPath
+          ? fs.processPath(await fs.resolve(scope.cwd, {})) : scope.cwd
+        return { ok: true as const, ...updateJobs.start({ cwd, root: scope.root, path: rel, exe: scope.exe }) }
+      } catch (error) {
+        return { ok: false as const, error: '启动 SVN 更新失败：' + String(error) }
+      }
+    },
+    'svn.updatePoll': async (args: { sessionId?: string; jobId: string; since: number }) => {
+      const scope = await updateScope(args.sessionId)
+      if ('err' in scope) return { ok: false as const, error: scope.err }
+      try { return { ok: true as const, ...updateJobs.poll(scope.root, args.jobId, args.since) } }
+      catch (error) { return { ok: false as const, error: String(error) } }
+    },
+    'svn.updateCancel': async (args: { sessionId?: string; jobId: string }) => {
+      const scope = await updateScope(args.sessionId)
+      if ('err' in scope) return { ok: false as const, error: scope.err }
+      try { return { ok: true as const, ...updateJobs.cancel(scope.root, args.jobId) } }
+      catch (error) { return { ok: false as const, error: String(error) } }
+    },
+    'svn.updateActive': async (args: { sessionId?: string }) => {
+      const scope = await updateScope(args.sessionId)
+      if ('err' in scope) return { ok: false as const, error: scope.err }
+      return { ok: true as const, job: updateJobs.active(scope.root) }
     },
     'svn.tortoise': async (args: { sessionId?: string; action?: SvnAction; path?: string }) => {
       const sc = await requireSvnSession(ctx, args.sessionId)
@@ -1397,5 +1492,5 @@ export function createSvnRpc(deps: SvnRpcDeps): { handlers: Record<string, unkno
       }
     },
   }
-  return { handlers }
+  return { handlers, dispose: () => { updateJobs.dispose(); updateRootCache.clear() } }
 }

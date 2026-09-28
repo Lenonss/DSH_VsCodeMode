@@ -504,6 +504,7 @@ function treeRunCtx(target: TreeMenuTarget, ctx: SidebarCtx): SvnActionRunCtx {
     path: target.path,
     notify: (message) => ctx.notify?.(message),
     openSvnDiff: (p) => ctx.openSvnDiff?.(p),
+    openSvnUpdate: (p) => ctx.openSvnUpdate?.(p),
     openSvnLog: ctx.openSvnLog,
     refreshChanges: ctx.refreshSvnChanges,
     // 确认对话框可注入（测试/宿主可替换；缺省走 window.confirm）

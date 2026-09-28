@@ -110,6 +110,12 @@
   EmmyLua 的注释索引（`---@class` / `---@field` / `---@type`）会被解析为真实的成员列表，
   即对 `---@class` 标注的实例打 `p.` 能列出注解声明的字段/方法；候选项带类型图标、
   弃用标记与片段展开（`${1:占位}`）。文档走 `completionItem/resolve` 惰性拉取，列表响应保持轻量。
+- **关键字与注解类型补全**（v0.11.0）：LSP 服务器没有返回候选时补齐 Lua 保留字
+  （`local` / `function` …，`luaReservedWords`）；`---@type` / `---@param` 等注释内的基础类型
+  （`number` / `string` …）即使在运行中 `quickSuggestions.comments='off'` 也会自动弹出；
+  是否请求补全候选按适配器能力位裁决（`completionCap`）。
+- **成员回退补全**（v0.11.0）：EmmyLua 没给出成员列表时按当前作用域推导可用成员
+  （`memberScope`），补全不再空白。
 - **签名帮助**：函数实参处（输入 `(` / `,`）显示参数签名并按当前实参高亮；
   多签名可切换。
 - 定义查找带降级链（definition → declaration → 引用推导）；参数 / 局部变量
@@ -353,6 +359,13 @@ TortoiseSVN（`TortoiseProc.exe`）仅作 Windows 过渡增强：自研能力覆
   文件树行尾同步显示状态徽标。
 - **动作**：更新、刷新变更、与基线比较、加入版本控制、还原（**破坏性动作均带确认**）、
   清理工作副本（默认只清锁）；未覆盖的项回落 TortoiseSVN。
+- **更新窗口**（v0.11.0）：`SVN 更新` 打开插件内窗口——实时逐文件列表与动作着色（A/U/D/G/C/E/R）、
+  完成汇总（版本号 / 计数 / 耗时 / 截断告警）、按右键目标限定**路径作用域**（只更新该子目录）、
+  命令栏 / 文件树 / 页签 / 编辑区右键四入口一致、可取消；运行中任务按工作副本根**去重**且刷新或
+  重开弹窗时**重挂附着**同一任务（不重复启动）；被中断的 svn 操作锁住工作副本时识别
+  `E155037` 并给出「执行清理」引导（调 `svn.cleanup`，**不自动重跑更新**）。
+- **日志弹窗视觉**（v0.11.0）：信息层级、修订序列签名元素、动作语义色归位重做，
+  过滤 / 排序 / 多选 / 键盘 / 右键 / 拖拽行为不变。
 - **日志弹窗**（对标 TortoiseSVN Revision Log Dialog）：过滤语法（空格=AND / `-` 排除 /
   `+` 纳入 / `!` 取反 / `"短语"` / 正则）、From-To 日期区间、列头排序 + 复位、
   上中下三段布局（列表 / 提交信息 / 变更路径，边界可拖拽）、Actions 徽标、
@@ -366,7 +379,8 @@ TortoiseSVN（`TortoiseProc.exe`）仅作 Windows 过渡增强：自研能力覆
 - **诊断日志**：统一日志器 + `edrv.dlog.*` RPC + 命令栏「查看诊断日志」，
   排查白屏 / 加载失败时先看它。
 - **RPC**：`svn.status / changes / diffBase / revert / add / log / diffRev / diffPair /
-  diffWorking / wcRev / cleanup / update / tortoise`。
+  diffWorking / wcRev / cleanup / update / tortoise`；更新窗口新增 `svn.updateStart /
+  updatePoll / updateCancel / updateActive`（`svn.update` 保留兼容）。
 
 > 说明：`plans/`（含对标蓝图与实测结论）为本地开发资料，不入库。
 
@@ -417,13 +431,13 @@ TortoiseSVN（`TortoiseProc.exe`）仅作 Windows 过渡增强：自研能力覆
 
 ```bash
 # ① Git 安装（clone + prepare 构建；推荐打固定 tag）
-dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.10.0
+dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.11.0
 
 # ② npm 注册表（发布到 npm 后）
 dsh plugin --profile web add dsh-vscode-mode
 
 # ③ GitHub Release tgz 直装
-dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.10.0/dsh-vscode-mode-0.10.0.tgz
+dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.11.0/dsh-vscode-mode-0.11.0.tgz
 ```
 
 > `dsh plugin ...` 是 pnpm 转发器：git 安装会克隆仓库、执行该包 `prepare` 脚本
@@ -718,6 +732,22 @@ Keep All / Undo All 却是亮的。修复：单文件 Keep / Undo 覆盖冲突�
 完整变更见 [GitHub Releases](https://github.com/Lenonss/DSH_VsCodeMode/releases)。
 近期关键版本：
 
+- **v0.11.0**：**原生 SVN 更新窗口（逐文件实时反馈）+ LSP 补全增强 + 设置文件就地打开**——① 「SVN 更新」
+  从窄结果条升级为**插件内更新窗口**（`SvnUpdateDialog` + `svnUpdateJob`）：任务启动窗口即出现，实时
+  逐文件列表（虚拟化 + 仅贴近底部时自动跟随）、动作着色（A/U/D/G/C/E/R）、完成后汇总版本号 / 计数 /
+  耗时 / 截断告警；命令栏、文件树、页签、Monaco 右键四个入口一致，并按右键目标做**路径作用域**
+  （只更新该子目录）；② 运行中任务按工作副本根去重、可**重挂附着**（刷新或重开弹窗接续同一任务，
+  不重复启动），取消走 `svn.updateCancel`；被中断的 svn 操作会锁住工作副本——失败终态识别
+  `E155037` 并给出**橙字锁定提示 + 「执行清理」按钮**（确认后调 `svn.cleanup`，绝不自动重跑更新）；
+  ③ 新增 RPC `svn.updateStart / updatePoll / updateCancel / updateActive`（保留 `svn.update` 兼容），
+  宿主先以只读 `svn --version --quiet` 探测通过才真启动，输出按行分页并有界缓存；
+  ④ **LSP 补全增强**：补齐 Lua 保留字与 `---@type` 注解基础类型补全（运行中
+  `quickSuggestions.comments` 为 `off` 时也能自动弹出）、Emmylua 成员列表的**回退补全**
+  （注解缺失时给可用成员），并按适配器能力位决定是否请求补全候选；
+  ⑤ **设置配置文件就地打开**：设置页「打开配置文件」不再调系统文本编辑器，改由插件从 host
+  settings service 取文档路径、经插件 RPC 路由到内置编辑器；
+  ⑥ **SVN 日志弹窗视觉重做**（信息层级、修订序列签名元素、动作语义色归位；过滤/排序/多选/键盘/
+  右键/拖拽行为不变）。
 - **v0.10.0**：**SVN AI 深度分析发送链路重构**——① 发送主路径切换为**官方 composer
   链路**（`inputFor` setDraft + submit，即 UI「发送」内部路径，带 scope 铸造时延 3 次
   重试），`remote.session` 具名槽 RPC（`{args:{request:{rpcId,payload}}}`，gateway

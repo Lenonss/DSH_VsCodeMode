@@ -18,6 +18,7 @@ import {
   LSP_SEMANTIC_TOKEN_MODIFIERS, LSP_SEMANTIC_TOKEN_TYPES,
   LSP_COMPLETION_KIND_NAMES, LSP_INSERT_TEXT_FORMAT_SNIPPET,
 } from '../../../shared/lsp.js'
+import { luaKeywordsAt, luaTypesAt, mergeKeywords } from './keywords.js'
 
 const LSP_LANGS = ['lua', 'csharp']
 
@@ -352,18 +353,27 @@ function completionsFor(monaco, lang) {
     provideCompletionItems: async (model, position, context, token) => {
       const path = pathOfModel(model)
       if (!path) return { suggestions: [] }
-      const list = await fetchCompletions(path, model.getValue(), position, toLspContext(context))
-      if (!list || !list.items.length || token?.isCancellationRequested) return { suggestions: [] }
       const word = model.getWordUntilPosition(position)
+      // 前缀必须上报：host 在条目上限处按前缀分桶截断，否则项目全局
+      // （ECommon 等）会被 xLua 绑定桩（上万个 CS_*）挤出上限且无法恢复。
+      const list = await fetchCompletions(path, model.getValue(), position, toLspContext(context), word.word)
+      if (token?.isCancellationRequested) return { suggestions: [] }
+      if (lang !== 'lua' && (!list || !list.items.length)) return { suggestions: [] }
       const fallback = {
         startLineNumber: position.lineNumber,
         endLineNumber: position.lineNumber,
         startColumn: word.startColumn,
         endColumn: word.endColumn,
       }
+      const serverItems = (list?.items ?? []).map((item) => toMonoSuggestion(monaco, item, fallback, path))
       return {
-        suggestions: list.items.map((item) => toMonoSuggestion(monaco, item, fallback, path)),
-        incomplete: list.incomplete === true,
+        suggestions: lang === 'lua'
+          ? mergeKeywords(serverItems, [
+            ...luaKeywordsAt(monaco, model, position, fallback),
+            ...luaTypesAt(monaco, model, position, fallback),
+          ])
+          : serverItems,
+        incomplete: list?.incomplete === true,
       }
     },
     resolveCompletionItem: async (item, token) => {

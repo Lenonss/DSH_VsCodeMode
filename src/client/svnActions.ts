@@ -23,6 +23,8 @@ export interface SvnActionRunCtx {
   path?: string
   /** 反馈（状态栏/notify）。 */
   notify?: (message: string) => void
+  /** 打开原生 SVN 更新窗口（唯一允许触发更新的 UI 入口）。 */
+  openSvnUpdate?: (path: string) => void
   /** 打开基线差异视图（diff-base 动作）。 */
   openSvnDiff?: (path: string) => void
   /** 打开版本差异视图（日志条目差异）。 */
@@ -69,10 +71,8 @@ function afterWrite(ctx: SvnActionRunCtx, promise: Promise<{ ok: boolean; messag
  */
 export const SVN_ACTION_RUNNERS: Record<string, SvnActionRunner> = {
   update: (ctx) => {
-    void svnUpdate(ctx.sessionId, ctx.path ?? '').then((outcome) => {
-      ctx.notify?.(outcome.message)
-      if (outcome.ok) ctx.refreshChanges?.()
-    })
+    if (!ctx.openSvnUpdate) { ctx.notify?.('SVN 更新窗口不可用'); return }
+    ctx.openSvnUpdate(ctx.path ?? '')
   },
   'refresh-changes': (ctx) => {
     ctx.refreshChanges?.()

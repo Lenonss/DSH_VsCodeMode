@@ -12,11 +12,13 @@ interface Entry {
   server: LspServer
   refs: number
   failures: number
+  readyAt: number
   restartTimer: ReturnType<typeof setTimeout> | null
 }
 
 const BACKOFF_MS = [1000, 5000, 30000]
 const MAX_FAILURES = 3
+const STABLE_MS = 60000
 
 export interface LspManager {
   /** 获取（或惰性创建）某工作区+语言的服务器；refs+1。 */
@@ -51,6 +53,19 @@ export function createLspManager(logger?: (line: string) => void): LspManager {
 
   const log = (line: string): void => logger?.('[lsp-manager] ' + line)
 
+  /**
+   * 重试耗尽后保留退出根因，并让 UI 不再误报“未启动”。
+   * @author ddj 2026年09月24号
+   * @param entry 服务器条目
+   * @returns 当前可见状态
+   */
+  const statusOf = (entry: Entry): LspServerStatus => {
+    const status = entry.server.status()
+    return entry.failures >= MAX_FAILURES
+      ? { ...status, phase: 'unavailable', reason: (status.reason ?? '服务器已退出') + '（已停止自动重试）' }
+      : status
+  }
+
   /** 同步摘除注册表项并后台回收（refs 归零/工作区清理用；statusAll 立即可见归零）。 */
   const dropEntry = (entry: Entry): void => {
     if (entry.restartTimer) {
@@ -62,20 +77,22 @@ export function createLspManager(logger?: (line: string) => void): LspManager {
   }
 
   const scheduleRestart = (entry: Entry): void => {
-    if (entry.restartTimer) return
+    if (entry.restartTimer || entry.refs === 0 || entries.get(entry.key) !== entry) return
     if (entry.failures >= MAX_FAILURES) {
       log('unavailable after ' + entry.failures + ' failures: ' + entry.key)
+      manager.onStatusChange?.(statusOf(entry))
       return
     }
-    const delay = BACKOFF_MS[Math.min(entry.failures, BACKOFF_MS.length - 1)]
+    const delay = BACKOFF_MS[Math.min(Math.max(entry.failures - 1, 0), BACKOFF_MS.length - 1)]
     entry.restartTimer = setTimeout(() => {
       entry.restartTimer = null
-      if (!entries.has(entry.key)) return
+      if (entries.get(entry.key) !== entry || entry.refs === 0) return
       void (async () => {
         const ok = await entry.server.start()
-        if (!ok) entry.failures++
-        else entry.failures = 0
-        if (!ok && entries.has(entry.key)) scheduleRestart(entry)
+        if (!ok && entries.get(entry.key) === entry && !entry.restartTimer) {
+          entry.failures++
+          scheduleRestart(entry)
+        }
       })()
     }, delay)
   }
@@ -87,13 +104,28 @@ export function createLspManager(logger?: (line: string) => void): LspManager {
       if (!entry) {
         const spec = resolveSpec(languageId)
         const server = createLspServer(spec, root, languageId, log)
-        server.onStateChange = (status) => manager.onStatusChange?.(status)
-        entry = { key, server, refs: 0, failures: 0, restartTimer: null }
+        entry = { key, server, refs: 0, failures: 0, readyAt: 0, restartTimer: null }
         entries.set(key, entry)
+        server.onStateChange = (status) => {
+          const live = entries.get(key)
+          if (live?.server === server) {
+            if (status.phase === 'ready' && live.readyAt === 0) live.readyAt = Date.now()
+            if (status.phase === 'idle' && status.reason?.startsWith('服务器已退出')) {
+              if (live.readyAt && Date.now() - live.readyAt >= STABLE_MS) live.failures = 0
+              live.failures++
+              live.readyAt = 0
+              scheduleRestart(live)
+            }
+          }
+          manager.onStatusChange?.(live?.server === server ? statusOf(live) : status)
+        }
         // 惰性启动：若 spec ready 才启动，否则保持 idle（供 status 展示 reason）
         if (spec.ready) {
           void server.start().then((ok) => {
-            if (!ok && entries.has(key)) entry!.failures++
+            if (!ok && entries.get(key) === entry && server.phase === 'idle' && !entry!.restartTimer) {
+              entry!.failures++
+              scheduleRestart(entry!)
+            }
           })
         }
       }
@@ -126,7 +158,7 @@ export function createLspManager(logger?: (line: string) => void): LspManager {
     },
 
     statusAll(): LspServerStatus[] {
-      return [...entries.values()].map((entry) => entry.server.status())
+      return [...entries.values()].map(statusOf)
     },
 
     peek(root: string, languageId: string): LspServer | undefined {

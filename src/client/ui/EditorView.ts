@@ -56,6 +56,7 @@ import { statusOfAdd } from '../addToConversation.js'
 import { setSearchScope, setSearchSeed } from '../searchSeed.js'
 import { CACHE_KEY } from '../paths.js'
 import { runGoToDefinition, runFindReferences, hideReferencesOverlay } from '../monaco/lsp/providers.js'
+import { isLuaTypeSlot } from '../monaco/lsp/keywords.js'
 import { bindLspUnderline } from '../monaco/lsp/underline.js'
 import { onLspProgress, refreshStatus, setSession as setLspSession } from '../monaco/lsp/index.js'
 import { setupAiInline, trackAiEditor, aiInlineEnabled } from '../ai/inlineProvider.js'
@@ -69,7 +70,7 @@ import {
 } from '../tabActions.js'
 import { getMaxOpenEditors } from '../editorLimit.js'
 import { buildTabMenu } from '../tabMenu.js'
-import { ensureSvnChanges, ensureSvnStatus, getSvnChanges, getSvnStatus, refreshSvnChanges, svnAdd, svnChangeMapOf, svnDiffBase, svnDiffLocalPair, svnEditorActions, svnRevert, svnTortoise, svnUpdate } from '../svnStatus.js'
+import { ensureSvnChanges, ensureSvnStatus, getSvnChanges, getSvnStatus, refreshSvnChanges, svnAdd, svnChangeMapOf, svnDiffBase, svnDiffLocalPair, svnEditorActions, svnRevert, svnTortoise } from '../svnStatus.js'
 import { ensureSvnLog, getSvnLog, refreshSvnLog, svnDiffPair, svnDiffRev, svnDiffWorking, svnLogKeyOf, svnLogLoadedLimit, svnLogTruncated, svnWcRev, SVN_LOG_SHOW_ALL_LIMIT } from '../svnLog.js'
 import { runSvnAction } from '../svnActions.js'
 import { dshTrace } from '../svnStore.js'
@@ -82,6 +83,9 @@ import { promptName } from './PromptDialog.js'
 import { openWithDialog } from '../openWithDialog.js'
 import { copyText as copyClipText } from '../copyText.js'
 import { SvnLogDialog } from './SvnLogDialog.js'
+import { SvnUpdateDialog } from './SvnUpdateDialog.js'
+import { sameUpdateOwner, updateDone } from './svnUpdateModel.js'
+import { IconRefreshOutline16 } from './icons.js'
 import { SvnPatchDialog } from './SvnPatchDialog.js'
 import { SvnSumDialog } from './SvnSumDialog.js'
 import { LogDialog } from './LogDialog.js'
@@ -94,6 +98,23 @@ import { buildBpMenu } from '../dap/bpMenu.js'
 import { clampToolbarPosition, loadToolbarPosition, saveToolbarPosition } from '../dap/toolbarDrag.js'
 import { editorModelPathOf } from '../dap/modelPath.js'
 import { dapTrace } from '../dap/trace.js'
+
+/**
+ * 只在 Lua 注解类型槽开启注释自动建议；跨文件/离开类型槽立即恢复默认。
+ * @author ddj 2026年09月24号
+ * @param ed 当前 Monaco 编辑器
+ * @param monaco Monaco API（读取 quickSuggestions 枚举）
+ */
+function syncTypeSuggest(ed, monaco) {
+  const model = ed.getModel()
+  const position = ed.getPosition()
+  const typeSlot = model?.getLanguageId() === 'lua' && position
+    && isLuaTypeSlot(model, position, model.getWordUntilPosition(position))
+  const options = ed.getOption(monaco.editor.EditorOption.quickSuggestions)
+  const comments = typeSlot ? 'on' : 'off'
+  if (options.comments === comments) return
+  ed.updateOptions({ quickSuggestions: { ...options, comments } })
+}
 
 /** 日志弹窗每次加载条数（「加载更多」按此步长递增；上限由 host 的 SVN_LOG_SHOW_ALL_CAP 约束）。 */
 const SVN_LOG_PAGE = 100
@@ -252,7 +273,30 @@ export function EditorView(props) {
   const [svnLogError, setSvnLogError] = React.useState('') // 日志错误文案
   const [svnLogWcRev, setSvnLogWcRev] = React.useState(null) // P1-9：文件目标的工作副本版号（null = 不加粗）
   const [dlogOpen, setDlogOpen] = React.useState(false) // 诊断日志弹窗（自取数据，null 语义无需状态层）
-  const [svnUpdateResult, setSvnUpdateResult] = React.useState(null) // update 条目级结果条（null=不显示）
+  const [svnUpdateDialog, setSvnUpdateDialog] = React.useState(null) // {path,sessionId,scope,resumeJobId?}；窗口内自取增量
+  const [svnUpdateReturn, setSvnUpdateReturn] = React.useState(null) // 从日志/差异返回时恢复同一 job
+  const [recentUpdate, setRecentUpdate] = React.useState(null) // {jobId,path,sessionId,scope}；只读恢复入口
+  const [updateOpenWith, setUpdateOpenWith] = React.useState(false) // 二级弹窗 Esc 不联动关闭父窗口
+  const svnUpdateDoneRef = React.useRef(new Set()) // job 终态刷新一次，往返日志/差异不重复刷新
+  // @author ddj 2026年09月24号：切换作用域只关闭窗口，不取消旧工作副本中已启动的任务
+  React.useEffect(() => {
+    setSvnUpdateDialog(null)
+    setSvnUpdateReturn(null)
+    setRecentUpdate(null)
+    setUpdateOpenWith(false)
+  }, [sessionId, scope])
+  // @author ddj 2026年09月24号：只读恢复原工作区的活动更新，不调用 updateStart
+  React.useEffect(() => {
+    if (!sessionId || svnStatus?.managed !== true) return undefined
+    let alive = true
+    void rpc('svn.updateActive', { sessionId }).then((outcome) => {
+      if (!alive || !outcome.ok || !outcome.job) return
+      const recovered = { path: outcome.job.target, sessionId, scope, resumeJobId: outcome.job.jobId }
+      if (updateDone(outcome.job.phase)) setRecentUpdate(recovered)
+      else setSvnUpdateDialog((current) => current ?? recovered)
+    }).catch(() => {})
+    return () => { alive = false }
+  }, [sessionId, scope, svnStatus?.managed])
   const [sidebarOn, setSidebarOn] = React.useState(layout !== 'side') // 侧边栏显隐（侧栏形态默认收起）
   const [sidebarW, setSidebarW] = React.useState(() => getSidebarMinWidth()) // 侧边栏宽度（初值 = 最小宽度，默认 300）
   const [activePanel, setActivePanel] = React.useState('explorer') // 激活面板 id
@@ -1727,6 +1771,7 @@ export function EditorView(props) {
             sessionId,
             scope,
             path: def.id === 'update' ? (relPath ?? '') : relPath,
+            openSvnUpdate: (p) => runSvnUpdate(p),
             notify: (message) => setStatus(message),
             openSvnDiff: (p) => runSvnDiffBase(p),
             openSvnLocalPair: runSvnDiffLocalPair,
@@ -1904,6 +1949,7 @@ export function EditorView(props) {
     const ed = editorRef.current
     const model = getModel(active, content)
     if (ed.getModel() !== model) ed.setModel(model)
+    syncTypeSuggest(ed, monaco)
     restoreViewState(active)
     setLoadStage((prev) => ({ progress: Math.max(96, prev.progress), message: '创建编辑器视图…' }))
   }, [monaco, active, content, contentReady, mdPreviewing])
@@ -1997,9 +2043,11 @@ export function EditorView(props) {
     // 保存改由窗口级快捷键监听执行（键位可配置；见上方 edrv.save 监听）
     ed.onDidChangeModelContent(() => {
       if (!ed.getModel() || programmaticRef.current) return
+      syncTypeSuggest(ed, m)
       onEditRef.current?.()
     })
     ed.onDidChangeCursorPosition((e) => {
+      syncTypeSuggest(ed, m)
       setCursor('Ln ' + e.position.lineNumber + ', Col ' + e.position.column)
       // 整行移动（↓↑）刚定位时保留期望列；其余光标移动（点击/打字/方向键）清空期望列
       if (rowNavMoveRef.current) rowNavMoveRef.current = false
@@ -2740,17 +2788,15 @@ export function EditorView(props) {
 
   // 供 Monaco 原生右键菜单 addAction 读取的最新动作闭包（空依赖回调不随渲染重建）
   /**
-   * SVN 更新（CLI，全平台）：页签菜单/命令面板/编辑区右键共用；path 缺省 = 工作区根。
-   * P3：结果含条目级明细，成功后展示可关闭的结果条（冲突红字高亮）。
+   * 四入口共用的更新窗口：仅显式点击触发，不在背景静默更新。
+   * @author ddj 2026年09月24号
+   * @param relPath 工作区相对目标；空串代表根
    */
   const runSvnUpdate = (relPath) => {
-    void svnUpdate(sessionId, relPath ?? '').then((o) => {
-      setStatus(o.message)
-      // 更新会改工作副本状态：成功后重查变更清单（徽标/面板跟随）
-      if (o.ok) refreshSvnChanges(sessionId, scope)
-      // P3：有条目级明细时展示结果条（无变化则清空，不留旧结果）
-      setSvnUpdateResult(o.ok ? { summary: o.message, entries: o.entries ?? [], conflicts: o.conflicts ?? [] } : null)
-    })
+    closeCommandPalette()
+    setSvnUpdateReturn(null)
+    setRecentUpdate(null)
+    setSvnUpdateDialog({ path: relPath ?? '', sessionId, scope })
   }
   /** 强制重查 SVN 变更清单（命令栏「SVN 刷新变更」）。 */
   const runSvnReload = () => {
@@ -2857,8 +2903,9 @@ export function EditorView(props) {
    * @param relPath 目标工作区相对路径
    * @param revision 左侧版本
    * @param logTarget 来自日志弹窗时的日志目标（不传 = 非日志入口）
+   * @param onOpened 差异视图成功打开后触发（更新结果返回用）
    */
-  const runSvnDiffWorking = (relPath, revision, logTarget) => {
+  const runSvnDiffWorking = (relPath, revision, logTarget, onOpened) => {
     if (!relPath) { setStatus('仅文件目标支持与工作副本比较'); return }
     setStatus('读取 r' + revision + ' ↔ 工作副本 差异…')
     void svnDiffWorking(sessionId, relPath, revision).then((outcome) => {
@@ -2877,6 +2924,7 @@ export function EditorView(props) {
         logTarget,
       })
       setStatus('已打开 r' + revision + ' ↔ 工作副本 差异')
+      onOpened?.()
     })
   }
 
@@ -3032,6 +3080,7 @@ export function EditorView(props) {
         sessionId,
         scope,
         path,
+        openSvnUpdate: (p) => runSvnUpdate(p),
         notify: (message) => setStatus(message),
         openSvnDiff: (p) => runSvnDiffBase(p),
         openSvnLocalPair: runSvnDiffLocalPair,
@@ -3239,6 +3288,12 @@ export function EditorView(props) {
   const pathBar = React.createElement('div', { className: 'edrv-pathbar', title: active || '' },
     React.createElement('span', { className: 'edrv-pb-name' }, active ? String(active).split(/[\\/]/).pop() : '未打开文件'),
     React.createElement('span', { className: 'edrv-pb-full' }, active || '使用右上搜索框 (' + (chordOf('edrv.quickOpen') ?? 'Ctrl+P') + ') 打开文件'),
+    (recentUpdate && !svnUpdateDialog && sameUpdateOwner(recentUpdate, sessionId, scope)
+      ? React.createElement('button', {
+          className: 'edrv-pb-update', type: 'button', title: '查看最近 SVN 更新结果（不重新更新）',
+          onClick: () => setSvnUpdateDialog(recentUpdate),
+        }, React.createElement(IconRefreshOutline16, { size: 14 }), '最近更新')
+      : null),
     // Markdown 预览/源码切换（需求 4）：仅 .md 文件出现；命令栏与 Ctrl+Shift+V 为同一动作
     (isMdActive ? React.createElement('button', {
       className: 'edrv-pill edrv-pill-ghost edrv-pb-mdbtn',
@@ -3406,7 +3461,13 @@ export function EditorView(props) {
       leftLabel: svnDiff.leftLabel,
       rightLabel: svnDiff.rightLabel,
       onBack: svnDiff.logTarget !== undefined ? backToSvnLog : undefined,
-      onClose: () => setSvnDiff(null),
+      onClose: () => {
+        setSvnDiff(null)
+        if (svnUpdateReturn?.from === 'diff') {
+          setSvnUpdateDialog(svnUpdateReturn.dialog)
+          setSvnUpdateReturn(null)
+        }
+      },
     })
   } else if (!monaco && !monacoErr) {
     body = loadingBody(loadStage.message, loadStage.progress)
@@ -3574,6 +3635,7 @@ export function EditorView(props) {
     svnChanges,
     svnChangeMap: svnChangeMapMemo,
     openSvnDiff: (p) => runSvnDiffBase(p),
+    openSvnUpdate: (p) => runSvnUpdate(p),
     openSvnLocalPair: runSvnDiffLocalPair,
     refreshSvnChanges: () => refreshSvnChanges(sessionId, scope),
     openSvnLog: (p) => openSvnLog(p),
@@ -3726,49 +3788,11 @@ export function EditorView(props) {
         React.createElement('button', { className: 'edrv-pill edrv-pill-ghost', title: '复制安装命令', onClick: copyInstallCmd }, '复制命令'),
         React.createElement('button', { className: 'edrv-side-hint-close', title: '关闭提示', 'aria-label': '关闭提示', onClick: dismissHint }, '×'))
     : null
-  /**
-   * SVN 更新结果条（P3）：逐条展示 update 的条目级状态，冲突红字高亮，可关闭。
-   * 只在本次 update 有条目明细时渲染（无明细/失败时不占用编辑区高度）。
-   * @author ddj 2026年09月16号
-   * @returns 结果条元素或 null
-   */
-  const svnResultBar = () => {
-    const result = svnUpdateResult
-    if (!result || !result.entries.length) return null
-    const conflicts = new Set(result.conflicts ?? [])
-    return React.createElement('div', { className: 'edrv-svnres' },
-      React.createElement('span', { className: 'edrv-svnres-head' }, 'SVN 更新'),
-      React.createElement('div', { className: 'edrv-svnres-list' },
-        result.entries.map((entry, idx) => React.createElement('span', {
-          key: entry.path + ':' + idx,
-          className: 'edrv-svnres-item' + (conflicts.has(entry.path) ? ' edrv-svnres-conflict' : ''),
-          title: entry.label + ' ' + entry.path,
-        }, entry.action + ' ' + entry.path))),
-      React.createElement('span', { style: { flex: 1 } }),
-      (conflicts.size
-        ? React.createElement('button', {
-            className: 'edrv-svn-act',
-            title: '在工作区中显示第一个冲突文件',
-            onClick: () => {
-              const first = [...conflicts][0]
-              const hit = result.entries.find((entry) => entry.path === first)
-              if (hit?.path) openFile(hit.path, false)
-            },
-          }, '查看冲突文件')
-        : null),
-      React.createElement('button', {
-        className: 'edrv-svn-act',
-        title: '关闭结果条',
-        onClick: () => setSvnUpdateResult(null),
-      }, '✕'))
-  }
-
   const mainCol = React.createElement('div', { className: 'edrv-main-col', style: { flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' } },
     pathBar,
     tabRow,
     sideHintEl,
     diskBanner(),
-    svnResultBar(),
     editorArea,
     statusBar)
   // 编辑器根节点按 composer 顶部边界动态限高，底部对话区域继续由 DSH 原生渲染。
@@ -3856,7 +3880,61 @@ export function EditorView(props) {
         onComparePair: (revA, revB) => { setSvnLog(null); runSvnDiffPair(svnLog.target || '', revA, revB, svnLog.target || '') },
         onCompareWorking: (revision) => { setSvnLog(null); runSvnDiffWorking(svnLog.target || '', revision, svnLog.target || '') },
         onOpenFile: (relPath) => { setSvnLog(null); openFile(relPath, false) },
-        onClose: () => { setSvnLog(null); setSvnLogError('') },
+        onClose: () => {
+          setSvnLog(null)
+          setSvnLogError('')
+          if (svnUpdateReturn?.from === 'log') {
+            setSvnUpdateDialog(svnUpdateReturn.dialog)
+            setSvnUpdateReturn(null)
+          }
+        },
+      })
+    : null
+  /**
+   * 更新终态只刷新一次目录树与变更缓存，切到日志再返回不重复执行。
+   * @author ddj 2026年09月24号
+   * @param result 已结束的更新任务
+   */
+  const onSvnUpdateDone = (result) => {
+    if (svnUpdateDoneRef.current.has(result.jobId)) return
+    svnUpdateDoneRef.current.add(result.jobId)
+    const message = result.phase === 'completed' ? 'SVN 更新完成'
+      : result.phase === 'cancelled' ? 'SVN 更新已取消（可能部分完成）' : 'SVN 更新失败：' + result.error
+    setStatus(message)
+    setRecentUpdate({ path: result.target, sessionId, scope, resumeJobId: result.jobId })
+    refreshSvnChanges(sessionId, scope)
+    emitRefresh()
+  }
+  const svnUpdateEl = sameUpdateOwner(svnUpdateDialog, sessionId, scope)
+    ? React.createElement(SvnUpdateDialog, {
+        key: 'edrv-svn-update:' + svnUpdateDialog.path + ':' + (svnUpdateDialog.resumeJobId || ''),
+        sessionId, cwd, path: svnUpdateDialog.path, resumeJobId: svnUpdateDialog.resumeJobId,
+        childOverlay: updateOpenWith,
+        onDone: onSvnUpdateDone, onNote: (message) => setStatus(message),
+        onClose: () => setSvnUpdateDialog(null),
+        onShowLog: (target, jobId) => {
+          setSvnUpdateReturn({ from: 'log', dialog: { ...svnUpdateDialog, resumeJobId: jobId } })
+          setSvnUpdateDialog(null)
+          openSvnLog(target)
+        },
+        onCompare: (path, revision, jobId) => runSvnDiffWorking(path, revision, undefined, () => {
+          setSvnUpdateReturn({ from: 'diff', dialog: { ...svnUpdateDialog, resumeJobId: jobId } })
+          setSvnUpdateDialog(null)
+        }),
+        onOpenFile: (path) => openFile(path, false),
+        onOpenWith: (path) => {
+          if (!props.fileOpeners) { setStatus('打开方式不可用'); return }
+          setUpdateOpenWith(true)
+          openWithDialog(props.fileOpeners, { sessionId, cwd: cwd ?? undefined }, path, (opener) => {
+            setUpdateOpenWith(false)
+            if (opener) setStatus('已用「' + opener.label + '」打开：' + baseNameOf(path))
+          })
+        },
+        onOpenParent: (path) => {
+          void revealPathInExplorer(sessionId, path).then((outcome) => {
+            setStatus(outcome.ok ? '已打开父目录' : '打开父目录失败：' + (outcome.error ?? '未知错误'))
+          })
+        },
       })
     : null
   // W2-1 补丁对话框 / W2-2 目录对比对话框：portal 到 body，与日志弹窗同一挂载方式
@@ -3954,6 +4032,7 @@ export function EditorView(props) {
         tabMenuEl,
         paletteEl,
         svnLogEl,
+        svnUpdateEl,
         patchDialogEl,
         sumDialogEl,
         dlogEl,
@@ -3965,6 +4044,7 @@ export function EditorView(props) {
         tabMenuEl,
         paletteEl,
         svnLogEl,
+        svnUpdateEl,
         patchDialogEl,
         sumDialogEl,
         dlogEl,

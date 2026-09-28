@@ -45,6 +45,8 @@ export interface SidebarCtx {
   openSvnLocalPair?: (left: string, right: string, leftLabel: string, rightLabel: string, title: string) => void
   /** 重查 SVN 变更清单（CLI 更新/还原/加入版本控制后由菜单动作调用）。 */
   refreshSvnChanges?: () => void
+  /** 打开 SVN 更新窗口（树菜单与其它入口共用）。 */
+  openSvnUpdate?: (path: string) => void
   /** 打开 SVN 日志弹窗（P3；菜单/命令栏「查看日志」）。 */
   openSvnLog?: (path?: string) => void
   /** 确认对话框（破坏性动作守卫；缺省走 window.confirm，测试可注入）。 */

@@ -51,6 +51,7 @@ import { clearDebugLog, debugRecord, isDebugLogName, listDebugLogs, readDebugLog
 import { markActiveSessions, markOfficialFlags, moveOutSessions, planMoveOut, purgeArchive, restoreSession, scanSessionInventory, sessionsArchiveRoot, sessionSizeOf, sidecarSummaryOf, unarchiveOfficial } from './perf.js'
 import { patchHasPerfConfig, patchInsertPerfConfig, patchRemovePerfConfig, perfConfigBlock } from './perfPatch.js'
 import type { FileVersions } from './fileVersions.js'
+import { settingsDocPath } from './settingsDocPath.js'
 
 /** cwd → 上次 stale 自动清理时间：全量轮询（EditorView/DiffBadge/Dock 各自 5s）节流，避免每轮都读文件算指纹。 */
 const staleCheckedAt = new Map<string, number>()
@@ -107,6 +108,23 @@ function snippetPolicy(ctx: Ctx): unknown {
  */
 function snippetTargetOf(path: string): string | null {
   return isSnippetFilePath(path) ? path.replace(/\\/g, '/') : null
+}
+
+
+/**
+ * 返回与当前 settings provider 文档路径精确匹配的授权目标。
+ * @author ddj 2026年10月02号
+ * @param ctx DSH host 上下文
+ * @param path 编辑器请求路径
+ * @returns provider 当前配置文档的绝对路径；未匹配返回 null
+ */
+function settingsTargetOf(ctx: Ctx, path: string): string | null {
+  try {
+    const settings = ctx.get('settings') as { documentPath?: unknown } | undefined
+    return settingsDocPath(settings?.documentPath, path)
+  } catch {
+    return null
+  }
 }
 
 /** readTargetOf 成功形态：解析后的目标路径、stat 信息与 fs 服务句柄。 */
@@ -473,6 +491,18 @@ export function buildHandlers(
       return { ok: true, results }
     },
     'edrv.read': async (args) => {
+      const settingsTarget = settingsTargetOf(ctx, args.path)
+      if (settingsTarget && args.encoding !== 'base64') {
+        try {
+          const info = await stat(settingsTarget)
+          if (!info.isFile()) return { ok: false, error: '设置配置文件不存在' }
+          if (info.size > READ_CAP) return { ok: false, error: '设置配置文件过大（>8MB）' }
+          const content = await readFile(settingsTarget, 'utf8')
+          return { ok: true, content, size: content.length, version: fileVersionOf(info) }
+        } catch (error) {
+          return { ok: false, error: '读取设置配置文件失败：' + String(error), resolvedPath: settingsTarget }
+        }
+      }
       // 全局片段文件（~/.dsh/snippets/*.code-snippets）在工作区之外：直读，不走会话 cwd 解析
       const snippetTarget = snippetTargetOf(args.path)
       if (snippetTarget && args.encoding !== 'base64') {
@@ -522,9 +552,26 @@ export function buildHandlers(
       }
     },
     'edrv.versions': async (args) => {
-      // 外部改动检测：批量返回已打开文件的磁盘版本（观察器同时失效变化的目录树）
+      // 工作区外的 settings 文档按同一精确授权路径直接观察，其余路径保持工作区版本服务策略。
+      const items = []
+      const regularPaths: string[] = []
+      for (const path of args.paths) {
+        const target = settingsTargetOf(ctx, path)
+        if (!target) {
+          regularPaths.push(path)
+          continue
+        }
+        try {
+          const info = await stat(target)
+          items.push({ path, version: fileVersionOf(info), size: info.size, type: 'file' as const })
+        } catch (error) {
+          items.push({ path, version: '', type: 'missing' as const, error: String(error) })
+        }
+      }
+      if (regularPaths.length === 0) return { ok: true, items }
       if (!fileVersions) return { ok: false, error: '文件版本观察器未装配' }
-      return fileVersions.versions(args)
+      const regular = await fileVersions.versions({ ...args, paths: regularPaths })
+      return { ...regular, items: [...items, ...regular.items] }
     },
     'edrv.original': async (args) => {
       // 重建"本批次修改前"内容：DiffEditor 原始侧。仅反解 pending 块；
@@ -553,6 +600,20 @@ export function buildHandlers(
       }
     },
     'edrv.save': async (args) => {
+      const settingsTarget = settingsTargetOf(ctx, args.path)
+      if (settingsTarget) {
+        try {
+          const info = await stat(settingsTarget)
+          const currentRev = fileVersionOf(info)
+          if (args.rev && args.rev !== currentRev) return { ok: false, conflict: true, error: '设置配置文件已被外部修改，请先重新加载' }
+          if (settingsTargetOf(ctx, args.path) !== settingsTarget) return { ok: false, error: '设置配置文件路径已变化，拒绝保存' }
+          await writeFile(settingsTarget, args.content, 'utf8')
+          const saved = await stat(settingsTarget).catch(() => null)
+          return { ok: true, rev: fileVersionOf(saved) || currentRev }
+        } catch (error) {
+          return { ok: false, error: '保存设置配置文件失败：' + String(error) }
+        }
+      }
       // 全局片段文件：直写（工作区外），且不进差异审查（片段变更不是 agent 编辑产物）
       const snippetTarget = snippetTargetOf(args.path)
       if (snippetTarget) {
@@ -924,6 +985,17 @@ export function buildHandlers(
       const section = sectionOf(settings, FILE_OPEN_SETTINGS_NS)
       const value = section?.value as { fileOpenTool?: unknown } | undefined
       return { ok: true, fileOpenTool: normalizeFileOpenTool(value?.fileOpenTool ?? FILE_OPEN_DEFAULT), integrationBaseUrl: await integrationBaseUrlOf(ctx), revision: section?.revision }
+    },
+    'vscode.settingsDocumentPath': async () => {
+      try {
+        const settings = ctx.get('settings') as { prepareDocument?: () => Promise<string> } | undefined
+        if (typeof settings?.prepareDocument !== 'function') return { ok: false, error: '设置配置文件不可用' }
+        const path = await settings.prepareDocument()
+        if (typeof path !== 'string' || !path.trim()) return { ok: false, error: '设置配置文件路径为空' }
+        return { ok: true, path }
+      } catch (error) {
+        return { ok: false, error: '准备设置配置文件失败：' + String(error) }
+      }
     },
     'vscode.fileOpenSettingsUpdate': async (args) => {
       const settings = ctx.get('settings')

@@ -123,6 +123,8 @@ export function apply(ctx: Ctx, config?: unknown): void {
   })
   // 卸载时清空文件版本基准表（观察器为模块内单例，不清会跨装配残留陈旧版本）
   ctx.effect(() => () => fileVersions.dispose())
+  // 卸载时结束仍在运行的 SVN 更新，避免无主工作副本更新继续写入
+  ctx.effect(() => () => svnRpc.dispose())
   // 卸载/重启时结束调试会话并强杀适配器子进程（防残留注入器/适配器孤儿）
   ctx.effect(() => () => dapRpc.dispose())
   // 宿主进程退出回收：ctx.effect 清理不覆盖进程退出，缺此注册会留下跨重启的孤儿服务器

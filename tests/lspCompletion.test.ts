@@ -287,6 +287,19 @@ describe('client providers 源码契约', () => {
     expect(SRC.includes('registerSignatureHelpProvider')).toBe(true)
   })
 
+  it('Lua 候选与本地关键字/注解类型合并，仍沿用原补全 provider', () => {
+    expect(SRC.includes("lang === 'lua'")).toBe(true)
+    expect(SRC.includes('mergeKeywords(serverItems, [')).toBe(true)
+    expect(SRC.includes('luaTypesAt(')).toBe(true)
+  })
+
+  it('注解触发设置在切换 model 和光标时同步', () => {
+    const editor = readFileSync(join(process.cwd(), 'src', 'client', 'ui', 'EditorView.ts'), 'utf8')
+    expect(editor.includes('syncTypeSuggest(ed, monaco)')).toBe(true)
+    expect(editor.includes('syncTypeSuggest(ed, m)')).toBe(true)
+    expect(editor.includes('options.comments === comments')).toBe(true)
+  })
+
   it('resolve 阶段经 __edrvPath 取文档路径（Monaco 调 resolve 时不给 model）', () => {
     // 实测 vendored 0.42：provider.resolveCompletionItem(this.completion, token) —— 无 model 参数
     expect(SRC.includes('__edrvPath')).toBe(true)
@@ -417,7 +430,7 @@ describe('edrv.lsp.completion handler', () => {
     expect(server.calls).toEqual([{ path: LUA_DOC, line: 11, character: 6 }])
   })
 
-  it('超过 500 条截断并标记 truncated（与 references 同上限）', async () => {
+  it('超过 500 条截断并标记 truncated（与 references 同上限；无前缀时保服务器原序）', async () => {
     const items = Array.from({ length: 620 }, (_, i) => ({ label: 'm' + i }))
     const server = fakeServer(ROOT, 'lua', { items, incomplete: false })
     const rpc = createLspRpc({ ctx: fakeCtx() as never, pluginConfig: {}, manager: fakeManager(server) as never })
@@ -425,6 +438,34 @@ describe('edrv.lsp.completion handler', () => {
     const completions = (res as { completions: { items: unknown[]; truncated?: boolean } }).completions
     expect(completions.items.length).toBe(500)
     expect(completions.truncated).toBe(true)
+  })
+
+  it('超限时按前缀保留命中条目（项目全局不被 CS_* 桩挤出上限）', async () => {
+    // 复现现场：439 条 CS_* 之后才是字母序靠后的项目全局 ECommon
+    const items = [
+      ...Array.from({ length: 600 }, (_, i) => ({ label: 'CS_UnityEngine_Fake_' + i })),
+      { label: 'EChestCirculationState' },
+      { label: 'ECommon' },
+    ]
+    const server = fakeServer(ROOT, 'lua', { items, incomplete: false })
+    const rpc = createLspRpc({ ctx: fakeCtx() as never, pluginConfig: {}, manager: fakeManager(server) as never })
+    const res = await rpc.handlers['edrv.lsp.completion']!({ sessionId: 's1', path: LUA_DOC, position: { line: 0, character: 0 }, prefix: 'ECommon' })
+    const completions = (res as { completions: { items: Array<{ label: string }>; truncated?: boolean } }).completions
+    expect(completions.items.length).toBe(500)
+    expect(completions.truncated).toBe(true)
+    expect(completions.items.map((i) => i.label)).toContain('ECommon')
+    // startsWith 桶优先：ECommon 必须排在首位
+    expect(completions.items[0]!.label).toBe('ECommon')
+  })
+
+  it('未超限时不截断、不重排（有前缀也零行为变化）', async () => {
+    const items = [{ label: 'ECommon' }, { label: 'CS_Foo' }]
+    const server = fakeServer(ROOT, 'lua', { items, incomplete: false })
+    const rpc = createLspRpc({ ctx: fakeCtx() as never, pluginConfig: {}, manager: fakeManager(server) as never })
+    const res = await rpc.handlers['edrv.lsp.completion']!({ sessionId: 's1', path: LUA_DOC, position: { line: 0, character: 0 }, prefix: 'ECommon' })
+    const completions = (res as { completions: { items: Array<{ label: string }>; truncated?: boolean } }).completions
+    expect(completions.items.map((i) => i.label)).toEqual(['ECommon', 'CS_Foo'])
+    expect(completions.truncated).toBeUndefined()
   })
 
   it('会话不存在 → ok:false + 可见错误（不静默吞掉）', async () => {

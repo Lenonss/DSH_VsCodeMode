@@ -27,6 +27,8 @@ import { createFileOpenerRegistry, scanSidebar, officialSidebarOpener, shouldCla
 import type { FileOpenerRegistry } from './fileOpeners.js'
 import { installOpenPathRouter, vscodeOpener, autoValue } from './openPathRouter.js'
 import { patchRemoteOpen, probeRemoteOpen } from './remoteOpenRouter.js'
+import { patchSettingsDoc, probeSettingsDoc } from './settingsDocRouter.js'
+import { openEditorView } from './events.js'
 import { setupExtOpen } from './externalOpen.js'
 import { SettingsContext } from './settingsContext.js'
 import { SIDEBAR_PLUGIN, registerSlotSafely, settingsBridge } from './compat.js'
@@ -104,6 +106,29 @@ function setupCommands(ctx: any): void {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function apply(ctx: any): void {
   const schedule = (fn: () => void, ms: number) => ctx.timeout(fn, ms)
+  ctx.effect(() => {
+    let disposed = false
+    let attempts = 0
+    let restore: (() => void) | null = null
+    const install = (): void => {
+      if (disposed || restore || attempts >= 15) return
+      attempts += 1
+      const service = probeSettingsDoc(ctx)
+      if (service) {
+        restore = patchSettingsDoc(service, async () => {
+          const result = await rpc('vscode.settingsDocumentPath', {})
+          return result.ok ? { ok: true, path: result.path } : { ok: false, error: result.error }
+        }, openEditorView, (message) => log.warn(message))
+        if (restore) return
+      }
+      if (attempts < 15) schedule(install, 2000)
+    }
+    install()
+    return () => {
+      disposed = true
+      restore?.()
+    }
+  }, 'vscode-mode: settings document editor route')
 
   // 指令系统（命令栏 + 指令注册表）先装配：命令栏在被任何 React slot 渲染前即可唤起
   setupCommands(ctx)

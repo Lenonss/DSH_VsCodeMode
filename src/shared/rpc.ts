@@ -19,7 +19,7 @@ import type { RuleInfo, RuleProject, RuleRefInput, RuleSaveInput } from './rules
 import type { SnippetEntry, SnippetInfo, SnippetProject, SnippetRefInput, SnippetSaveInput } from './snippets.js'
 import type { LspCompletionItem, LspCompletionList, LspEnvInstallState, LspExtInfo, LspExtUpdate, LspHover, LspLocation, LspMarketItem, LspPosition, LspSemanticTokens, LspServerStatus, LspSignatureHelp, LspSymbol } from './lsp.js'
 import type { AiConfigPatch, AiConfigView, AiDirectoryView, AiInlineRequest, AiInlineResult } from './ai.js'
-import type { SvnAction, SvnAiPlan, SvnChangeEntry, SvnConflictArtifact, SvnDiffRevResult, SvnIgnoreItem, SvnLogEntry, SvnRemoteOutdatedEntry, SvnStatusPayload, SvnSumEntry, SvnUpdateResult } from './svn.js'
+import type { SvnAction, SvnAiPlan, SvnChangeEntry, SvnConflictArtifact, SvnDiffRevResult, SvnIgnoreItem, SvnLogEntry, SvnRemoteOutdatedEntry, SvnStatusPayload, SvnSumEntry, SvnUpdatePoll, SvnUpdateResult, SvnUpdateState } from './svn.js'
 import type { DapAction, DapAdapterInfo, DapBreakpointAck, DapBreakpointInput, DapConfigSnippet, DapConfigSource, DapDebugConfig, DapFrameView, DapPhase, DapPollResult, DapProcessInfo, DapScopeView, DapVariableView } from './dap.js'
 import { DAP_ACTIONS } from './dap.js'
 import type { LoggerLevel } from './logger.js'
@@ -371,6 +371,7 @@ export interface RpcRequestMap {
   'mcp.projectToggle': { workspacePath: string; serverName: string; enabled: boolean }
   'mcp.projectRefresh': { workspacePath: string; serverName: string }
   'vscode.fileOpenSettingsGet': {}
+  'vscode.settingsDocumentPath': {}
   'vscode.fileOpenSettingsUpdate': { fileOpenTool: string; integrationBaseUrl?: string; expectedRevision?: number }
   'edrv.integration.status': {}
   'edrv.integration.register': {}
@@ -396,7 +397,7 @@ export interface RpcRequestMap {
   'edrv.lsp.workspaceSymbol': { sessionId?: string; query: string }
   'edrv.lsp.hover': { sessionId?: string; path: string; position: LspPosition }
   'edrv.lsp.semanticTokens': { sessionId?: string; path: string }
-  'edrv.lsp.completion': { sessionId?: string; path: string; position: LspPosition; context?: { triggerKind?: number; triggerCharacter?: string } }
+  'edrv.lsp.completion': { sessionId?: string; path: string; position: LspPosition; context?: { triggerKind?: number; triggerCharacter?: string }; prefix?: string }
   'edrv.lsp.resolveCompletion': { sessionId?: string; path: string; item: LspCompletionItem }
   'edrv.lsp.signatureHelp': { sessionId?: string; path: string; position: LspPosition }
   'edrv.lsp.redetect': { languageId: string }
@@ -447,6 +448,10 @@ export interface RpcRequestMap {
   'svn.wcRev': { sessionId?: string; path?: string }
   'svn.cleanup': { sessionId?: string; removeUnversioned?: boolean; removeIgnored?: boolean }
   'svn.update': { sessionId?: string; path?: string }
+  'svn.updateStart': { sessionId?: string; path?: string }
+  'svn.updatePoll': { sessionId?: string; jobId: string; since: number }
+  'svn.updateCancel': { sessionId?: string; jobId: string }
+  'svn.updateActive': { sessionId?: string }
   'svn.tortoise': { sessionId?: string; action: SvnAction; path?: string }
   'svn.patchText': { sessionId?: string; path: string; whitespace?: 'none' | 'b' | 'w'; ignoreEol?: boolean; unified?: number }
   'svn.diffSum': { sessionId?: string; path?: string; revA: number; revB: number }
@@ -519,6 +524,7 @@ export interface RpcOkMap {
   'mcp.projectToggle': { project: MpcProject }
   'mcp.projectRefresh': { project: MpcProject }
   'vscode.fileOpenSettingsGet': { fileOpenTool: string; integrationBaseUrl: string; revision?: number }
+  'vscode.settingsDocumentPath': { path: string }
   'vscode.fileOpenSettingsUpdate': { fileOpenTool: string; integrationBaseUrl: string; revision?: number }
   'edrv.integration.status': ShellIntegrationStatus
   'edrv.integration.register': ShellIntegrationStatus
@@ -595,6 +601,10 @@ export interface RpcOkMap {
   'svn.wcRev': { revision: number | null }
   'svn.cleanup': { summary: string; output: string }
   'svn.update': SvnUpdateResult
+  'svn.updateStart': SvnUpdateState
+  'svn.updatePoll': SvnUpdatePoll
+  'svn.updateCancel': SvnUpdateState
+  'svn.updateActive': { job: SvnUpdateState | null }
   'svn.tortoise': { launched: string }
   'svn.patchText': { text: string; truncated: boolean; binary: boolean }
   'svn.diffSum': { entries: SvnSumEntry[]; truncated: boolean }

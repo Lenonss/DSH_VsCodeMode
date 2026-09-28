@@ -5,8 +5,9 @@
  * 并提供 definition/references/documentSymbol/hover/status 的 RPC 薄封装。
  * 作者 ddj 2026-08-27
  */
-import { rpc } from '../../rpc.js'
+import { rpc, dbg } from '../../rpc.js'
 import { monoToLsp } from '../../../shared/lsp.js'
+import { classifyMemberSet } from './memberScope.js'
 
 /** edrv:// 模型 URI → 工作区相对/绝对路径（与 host 侧 path 对齐）。 */
 export function pathOfModel(model) {
@@ -23,9 +24,11 @@ export function pathOfModel(model) {
 }
 
 const SYNC_DEBOUNCE_MS = 250
+const MAX_DOC_VERSION = 2147483647
 
 let sessionId
 const syncTimers = new Map()
+const docVersions = new Map()
 let statusCache = { servers: [], at: 0 }
 let progressListeners = new Set()
 let ready = false
@@ -47,6 +50,9 @@ function reportStatus(text) {
  */
 export function setLspSession(id) {
   if (sessionId === id) return
+  for (const timer of syncTimers.values()) clearTimeout(timer)
+  syncTimers.clear()
+  docVersions.clear()
   sessionId = id
   void refreshStatus()
 }
@@ -88,6 +94,18 @@ function publishProgress() {
 }
 
 /**
+ * LSP 版本须可被 Roslyn 的 Int32 反序列化；时间戳会直接使其退出。
+ * @author ddj 2026年09月24号
+ * @param path 文档路径
+ * @returns 当前文档下一个协议版本
+ */
+function nextDocVer(path) {
+  const version = Math.min(MAX_DOC_VERSION, (docVersions.get(path) ?? 0) + 1)
+  docVersions.set(path, version)
+  return version
+}
+
+/**
  * 立即同步某文档到 host（首次打开/查询前保证服务器已认识该文档）。
  * sessionId 缺失时仍发起请求：host 对唯一活跃会话有兜底解析，弃发会白白丢失文档归属。
  * @author ddj 2026年08月27号 / 2026年09月11号
@@ -99,13 +117,13 @@ export async function syncDoc(path, text, immediate = false) {
   if (!path || typeof text !== 'string') return
   if (immediate) {
     clearPending(path)
-    await rpc('edrv.lsp.sync', { sessionId, path, text, version: Date.now() }).catch(() => {})
+    await rpc('edrv.lsp.sync', { sessionId, path, text, version: nextDocVer(path) }).catch(() => {})
     return
   }
   clearPending(path)
   syncTimers.set(path, setTimeout(() => {
     syncTimers.delete(path)
-    rpc('edrv.lsp.sync', { sessionId, path, text, version: Date.now() }).catch(() => {})
+    rpc('edrv.lsp.sync', { sessionId, path, text, version: nextDocVer(path) }).catch(() => {})
   }, SYNC_DEBOUNCE_MS))
 }
 
@@ -117,6 +135,7 @@ function clearPending(path) {
 /** 文档关闭：停止去抖并通知 host。 */
 export function closeDoc(path) {
   clearPending(path)
+  docVersions.delete(path)
   void rpc('edrv.lsp.close', { sessionId, path }).catch(() => {})
 }
 
@@ -172,21 +191,64 @@ export async function fetchHover(path, text, position) {
 }
 
 /**
+ * 成员触发字符：这类位置的补全最易被服务器的旧解析树错答（外层作用域 / 全局集）。
+ * @author ddj 2026年09月24号
+ */
+const MEMBER_TRIGGERS = new Set(['.', ':'])
+
+/**
+ * 记录成员补全诊断（仅日志，不改结果）。
+ *
+ * 现场：`ECommon.` 这类成员位置偶尔返回 `this` 的外层作用域成员或全局集
+ * （含 `this`/`...` 与大量 `CS_*`），根因指向服务器对刚输入文本的解析新鲜度，
+ * 且非确定性。此处只把每次成员补全的形态打标，供真实使用中取证后再定修复。
+ * @author ddj 2026年09月24号
+ * @param path 工作区相对路径
+ * @param position Monaco 位置（1-based）
+ * @param context LSP CompletionContext（取触发字符）
+ * @param prefix 当前输入前缀
+ * @param list 服务器归一化后的补全结果
+ */
+function logMemberDiag(path, position, context, prefix, list) {
+  const ch = context?.triggerCharacter
+  if (!MEMBER_TRIGGERS.has(ch)) return
+  const info = classifyMemberSet(list.items)
+  dbg(sessionId, '成员补全诊断 ch=' + ch
+    + ' path=' + path
+    + ' pos=' + position.lineNumber + ':' + position.column
+    + ' prefix=' + JSON.stringify(prefix ?? '')
+    + ' 条数=' + info.total
+    + ' CS_*=' + info.csCount
+    + ' 分类=' + info.kind
+    + ' 首' + info.head.length + '=' + info.head.join(','))
+}
+
+/**
  * 查询补全列表（列表阶段不带 documentation，由 resolve 补全）。
- * @author ddj 2026年09月22号
+ *
+ * `prefix` 必须随请求上报：host 在 500 条上限处做前缀感知截断，不带前缀时
+ * 只能按服务器原始顺序切，项目全局（ECommon 等）会被上万个 CS_* 桩挤出上限。
+ * @author ddj 2026年09月22号 / 2026年09月24号
  * @param path 工作区相对路径
  * @param text 文档全文（未保存内容必须进服务器，否则按旧文本解析）
  * @param position Monaco 位置（1-based）
  * @param context LSP CompletionContext（触发类型/触发字符）
+ * @param prefix 当前输入前缀（Monaco getWordUntilPosition 的词；可缺省）
  * @returns { items, incomplete }；失败或空时 null
  */
-export async function fetchCompletions(path, text, position, context) {
+export async function fetchCompletions(path, text, position, context, prefix) {
   await syncDoc(path, text, true)
   const args = { path, position: monoToLsp(position.lineNumber, position.column) }
   if (context) args.context = context
+  if (prefix) args.prefix = prefix
   const res = await queryLsp('查询补全', 'edrv.lsp.completion', args)
   if (!res || !res.completions) return null
-  return res.completions
+  const list = res.completions
+  if (list.truncated === true) {
+    dbg(sessionId, '补全结果被截断（候选超上限）：' + path + ' prefix=' + String(prefix ?? ''))
+  }
+  logMemberDiag(path, position, context, prefix, list)
+  return list
 }
 
 /**

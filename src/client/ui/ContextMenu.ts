@@ -27,6 +27,8 @@ export interface ContextMenuProps {
   y: number
   entries: ContextMenuEntry[]
   onClose: () => void
+  /** 位于 ModalShell 内时可显式置于遮罩之上；缺省沿用 CSS 层级。 */
+  zIndex?: number
 }
 
 /** 估算宽高（实测前的回退值；条目数变化大时以实测为准，见 useLayoutEffect）。 */
@@ -67,7 +69,7 @@ export function menuRows(entries: readonly ContextMenuEntry[]): MenuRow[] {
  * @param props.onClose 关闭回调（backdrop 点击/右键/Esc/点击项后触发）
  */
 export function ContextMenu(props: ContextMenuProps): React.ReactElement {
-  const { x, y, entries, onClose } = props
+  const { x, y, entries, onClose, zIndex } = props
   const menuRef = React.useRef<HTMLDivElement | null>(null)
   // 实测菜单尺寸：页签菜单有 11 条 + 键位提示，估算常量会偏低导致底部条目越界不可达
   const [size, setSize] = React.useState<{ w: number; h: number } | null>(null)
@@ -145,7 +147,7 @@ export function ContextMenu(props: ContextMenuProps): React.ReactElement {
   }
 
   const overlay = React.createElement('div', { 'data-edrv-view': '1' },
-    React.createElement('div', { className: 'edrv-ctxmenu', ref: menuRef, style: position }, ...children))
+    React.createElement('div', { className: 'edrv-ctxmenu', ref: menuRef, style: zIndex === undefined ? position : { ...position, zIndex } }, ...children))
 
   return typeof document === 'undefined' ? overlay : createPortal(overlay, document.body)
 }

@@ -48,8 +48,10 @@ const MSG_H_DEFAULT = 140
 const MSG_H_MIN = 60
 /** 分段拖拽时下段保留的最小空间。 */
 const PANE_KEEP_MIN = 170
-/** 日志动作字母的配色分级（新增=绿、删除=红、替换=紫、修改=蓝）。 */
-const ACTION_TONE = { A: 'added', D: 'deleted', R: 'added', M: 'modified' }
+/** 保底计算需额外扣除的两根横向分隔条合计高度（2 × 6px；拖拽 clamp 与初始 fit 共用）。 @author ddj 2026年09月24号 */
+const HSPLIT_TOTAL_PX = 12
+/** 日志动作字母的配色分级（新增=绿、删除=红、替换=琥珀、修改=蓝；13-log-ui-polish 语义归位）。 */
+const ACTION_TONE = { A: 'added', D: 'deleted', R: 'replaced', M: 'modified' }
 /** 排序键 → 列头名（P0-12；顺序 = 列头展示顺序）。 */
 const SORT_COLUMNS = [
   { key: 'revision', label: '版本' },
@@ -427,7 +429,7 @@ function LogItem(props) {
       + (merged ? ' edrv-svnlog-item-merged' : '')
       + (wc ? ' edrv-svnlog-item-wc' : ''),
     title,
-    style: merged ? { paddingLeft: 6 + level * 18 } : undefined,
+    style: merged ? { paddingLeft: 16 + level * 18 } : undefined,
     onClick: (event) => onPick(event, item),
     onContextMenu: (event) => onMenu?.(event, item),
   },
@@ -460,24 +462,33 @@ function Splitter(props) {
 }
 
 /**
- * 吞掉拖拽结束后浏览器派发的下一次合成 click（capture 一次性）。
- * 拖拽常把指针移出卡片，松手后 click 落在遮罩上会误触「点遮罩关闭」。
- * @author ddj 2026年09月17号
+ * 吞掉拖拽松手后的合成 click（capture；仅遮罩目标 + 300ms 窗口）。
+ * 拖拽常把指针移出卡片，松手后 click 落在遮罩上会误触「点遮罩关闭」——原实现 setTimeout(0)
+ * 太短，CDP/合成输入的 click 跨任务到达时窗口已释放（13-log-ui-polish 勘误3 实测复现）。
+ * 现改为：只拦 target=遮罩 的 click（卡片内点击放行，不误吞行选中），300ms 后正常。
+ * @author ddj 2026年09月17号 / 2026年09月24号
  */
 function swallowNextClick() {
   const swallow = (event) => {
-    event.stopPropagation()
-    event.preventDefault()
+    const onMask = event.target && event.target.classList && event.target.classList.contains('edrv-modal-mask')
+    if (onMask) {
+      event.stopPropagation()
+      event.preventDefault()
+    }
     window.removeEventListener('click', swallow, true)
   }
   window.addEventListener('click', swallow, true)
-  window.setTimeout(() => window.removeEventListener('click', swallow, true), 0)
+  window.setTimeout(() => window.removeEventListener('click', swallow, true), 300)
 }
 
+/** 八向手柄 → 提示文案（title 供无障碍与实机寻址；13-log-ui-polish 增量3）。 */
+const GRIP_LABEL = { n: '上缘', s: '下缘', w: '左缘', e: '右缘', nw: '左上角', ne: '右上角', sw: '左下角', se: '右下角' }
+
 /**
- * 外框尺寸手柄（P0-14）：mode 'r'=右缘调宽 / 'b'=底缘调高 / 'c'=右下角双向；双击复位。
- * @author ddj 2026年09月17号
- * @param props.mode 手柄形态
+ * 外框尺寸手柄（13-log-ui-polish 增量3 八向）：mode ∈ n/s/w/e/nw/ne/sw/se（四边+四角）；双击复位。
+ * 拖拽语义：拖哪边哪边动、对边固定（由弹窗侧 startResize 以 rect 起点 + absolute 锚定实现）。
+ * @author ddj 2026年09月17号 / 2026年09月24号
+ * @param props.mode 手柄形态（八向标准向名）
  * @param props.onDragStart pointerdown 回调（弹窗侧启动 window 级跟踪）
  * @param props.onReset 双击复位
  * @returns 手柄元素
@@ -486,9 +497,23 @@ function Grip(props) {
   const { mode, onDragStart, onReset } = props
   return React.createElement('div', {
     className: 'edrv-svnlog-grip edrv-svnlog-grip-' + mode,
+    title: '调整弹窗尺寸（' + (GRIP_LABEL[mode] ?? mode) + '）· 双击复位',
     onPointerDown: (event) => onDragStart(event, mode),
     onDoubleClick: (event) => { event.stopPropagation(); onReset() },
   })
+}
+
+/**
+ * 路径两段拆分（目录段弱化 + 文件名加重；无斜杠时整段为文件名）。
+ * @author ddj 2026年09月24号
+ * @param text 显示用路径文本
+ * @returns { dir, base } 目录前缀（含尾斜杠，可为空串）与文件名
+ */
+function pathSegsOf(text) {
+  const raw = String(text ?? '')
+  const at = raw.lastIndexOf('/')
+  if (at < 0) return { dir: '', base: raw }
+  return { dir: raw.slice(0, at + 1), base: raw.slice(at + 1) }
 }
 
 /**
@@ -512,6 +537,7 @@ function PathRow(props) {
   const open = () => { if (actionable) onOpenFile?.(item.relPath) }
   const diff = () => { if (actionable && item.kind !== 'dir') onOpenDiff?.(item.relPath, revision) }
   const relText = outside ? item.path + '（仓库外）' : (isRoot ? '（工作副本根）' : item.relPath)
+  const segs = pathSegsOf(relText)
   const buttons = actionable ? React.createElement('span', { className: 'edrv-svnlog-acts' },
     React.createElement('button', {
       className: 'edrv-svn-act', title: '在工作区打开该文件',
@@ -533,7 +559,9 @@ function PathRow(props) {
     onContextMenu: (event) => onMenu?.(event, item, revision),
   },
     actionLetterEl(item.action),
-    React.createElement('span', { className: 'edrv-svnlog-pathtext' }, relText),
+    React.createElement('span', { className: 'edrv-svnlog-pathtext' },
+      segs.dir ? React.createElement('span', { className: 'edrv-svnlog-pdir' }, segs.dir) : null,
+      React.createElement('span', { className: 'edrv-svnlog-pbase' }, segs.base)),
     (item.kind === 'dir' ? React.createElement('span', { className: 'edrv-svnlog-kind' }, '目录') : null),
     (item.copyFrom ? React.createElement('span', { className: 'edrv-svnlog-kind' }, '复制') : null),
     React.createElement('span', { className: 'edrv-svnlog-copyfrom', title: item.copyFrom ? item.copyFrom + '@' + (item.copyFromRev ?? '?') : '' },
@@ -708,12 +736,13 @@ function LogFilterBar(props) {
     React.createElement('label', { className: 'edrv-svnlog-check', title: '把每个词元当正则表达式（语法错误回落子串匹配）' },
       React.createElement('input', { type: 'checkbox', checked: regexOn, onChange: (event) => onRegex(event.target.checked) }),
       '正则'),
-    React.createElement('label', { className: 'edrv-svnlog-check' },
-      '从',
-      React.createElement('input', { type: 'date', className: 'edrv-svnlog-date', value: from, onChange: (event) => onFrom(event.target.value) })),
-    React.createElement('label', { className: 'edrv-svnlog-check' },
-      '到',
-      React.createElement('input', { type: 'date', className: 'edrv-svnlog-date', value: to, onChange: (event) => onTo(event.target.value) })))
+    React.createElement('span', { className: 'edrv-svnlog-dates' },
+      React.createElement('label', { className: 'edrv-svnlog-check' },
+        '从',
+        React.createElement('input', { type: 'date', className: 'edrv-svnlog-date', value: from, onChange: (event) => onFrom(event.target.value) })),
+      React.createElement('label', { className: 'edrv-svnlog-check' },
+        '到',
+        React.createElement('input', { type: 'date', className: 'edrv-svnlog-date', value: to, onChange: (event) => onTo(event.target.value) }))))
 }
 
 /**
@@ -776,41 +805,44 @@ function LogFoot(props) {
       React.createElement('span', { style: { flex: 1 } }),
       status),
     React.createElement('div', { className: 'edrv-svnlog-btns' },
-      React.createElement('button', {
-        className: 'edrv-svn-act', disabled: busy || !truncated || rangeActive,
-        title: rangeActive ? '区间模式下不可加载更多（回到最新后可用）' : (truncated ? '再取 100 条' : '已到最早提交：该目标的全部历史已显示（svn 日志只含该路径发生过变更的版本）'),
-        onClick: onLoadMore,
-      }, 'Next 100'),
-      React.createElement('button', {
-        className: 'edrv-svn-act', disabled: busy || rangeActive,
-        title: rangeActive
-          ? '区间模式下不可用（回到最新后可用）'
-          : '取到本插件上限 ' + SVN_LOG_SHOW_ALL_LIMIT + ' 条（超大仓库可能较慢；再往前的历史可用 Show Range… 指定区间）',
-        onClick: onShowAll,
-      }, 'Show All'),
-      React.createElement('button', {
-        className: 'edrv-svn-act', disabled: busy, title: '按版本区间拉取（P1-6；起始=较早、结束=较晚）',
-        onClick: onOpenRange,
-      }, 'Show Range…'),
-      (rangeActive
-        ? React.createElement('button', { className: 'edrv-svn-act', disabled: busy, title: '清除区间，回到默认 HEAD 往前的窗口', onClick: onRangeReset }, '回到最新')
-        : null),
-      React.createElement('button', {
-        className: 'edrv-svn-act', disabled: busy || !filtered || !filtered.length,
-        title: '导出当前过滤后的修订列表为 CSV（带 BOM，Excel 直开；修订/作者/日期/信息/路径）',
-        onClick: onExportCsv,
-      }, '导出CSV'),
-      React.createElement('button', {
-        className: 'edrv-svn-act', disabled: busy || !filtered || !filtered.length,
-        title: '导出当前过滤后的修订列表为 HTML 报表（仅本地查看，不外发）',
-        onClick: onExportHtml,
-      }, '导出HTML'),
+      React.createElement('span', { className: 'edrv-svnlog-btngroup' },
+        React.createElement('button', {
+          className: 'edrv-svn-act', disabled: busy || !truncated || rangeActive,
+          title: rangeActive ? '区间模式下不可加载更多（回到最新后可用）' : (truncated ? '再取 100 条' : '已到最早提交：该目标的全部历史已显示（svn 日志只含该路径发生过变更的版本）'),
+          onClick: onLoadMore,
+        }, 'Next 100'),
+        React.createElement('button', {
+          className: 'edrv-svn-act', disabled: busy || rangeActive,
+          title: rangeActive
+            ? '区间模式下不可用（回到最新后可用）'
+            : '取到本插件上限 ' + SVN_LOG_SHOW_ALL_LIMIT + ' 条（超大仓库可能较慢；再往前的历史可用 Show Range… 指定区间）',
+          onClick: onShowAll,
+        }, 'Show All'),
+        React.createElement('button', {
+          className: 'edrv-svn-act', disabled: busy, title: '按版本区间拉取（P1-6；起始=较早、结束=较晚）',
+          onClick: onOpenRange,
+        }, 'Show Range…'),
+        (rangeActive
+          ? React.createElement('button', { className: 'edrv-svn-act', disabled: busy, title: '清除区间，回到默认 HEAD 往前的窗口', onClick: onRangeReset }, '回到最新')
+          : null)),
+      React.createElement('span', { className: 'edrv-svnlog-btngroup' },
+        React.createElement('button', {
+          className: 'edrv-svn-act', disabled: busy || !filtered || !filtered.length,
+          title: '导出当前过滤后的修订列表为 CSV（带 BOM，Excel 直开；修订/作者/日期/信息/路径）',
+          onClick: onExportCsv,
+        }, '导出CSV'),
+        React.createElement('button', {
+          className: 'edrv-svn-act', disabled: busy || !filtered || !filtered.length,
+          title: '导出当前过滤后的修订列表为 HTML 报表（仅本地查看，不外发）',
+          onClick: onExportHtml,
+        }, '导出HTML')),
       React.createElement('span', { style: { flex: 1 } }),
-      React.createElement('button', { className: 'edrv-svn-act', disabled: busy, title: '重新读取日志（F5）', onClick: onRefresh }, 'Refresh'),
-      React.createElement('button', {
-        className: 'edrv-svn-act', disabled: !list || !list.length,
-        title: '统计当前显示的修订（期间 / 按作者 / 按日期，P1-10）', onClick: onStats,
-      }, 'Statistics')))
+      React.createElement('span', { className: 'edrv-svnlog-btngroup' },
+        React.createElement('button', { className: 'edrv-svn-act', disabled: busy, title: '重新读取日志（F5）', onClick: onRefresh }, 'Refresh'),
+        React.createElement('button', {
+          className: 'edrv-svn-act', disabled: !list || !list.length,
+          title: '统计当前显示的修订（期间 / 按作者 / 按日期，P1-10）', onClick: onStats,
+        }, 'Statistics'))))
 }
 
 /**
@@ -856,6 +888,7 @@ export function SvnLogDialog(props) {
   const [menu, setMenu] = React.useState(null)
   const [dlgW, setDlgW] = React.useState(() => Math.min(DIALOG_W_DEFAULT, (typeof window !== 'undefined' ? window.innerWidth : 1280) - 24)) // P0-14：外框宽（拖拽受控）
   const [dlgH, setDlgH] = React.useState(() => Math.min(DIALOG_H_DEFAULT, (typeof window !== 'undefined' ? window.innerHeight : 800) - 24)) // P0-14：外框高（拖拽受控）
+  const [anchor, setAnchor] = React.useState(null) // 八向拖拽锚点（null=flex 居中；非 null=absolute 定位于该视口坐标） @author ddj 2026年09月24号
   const [listH, setListH] = React.useState(LIST_H_DEFAULT) // P0-14：上段修订列表高（拖拽受控）
   const [msgH, setMsgH] = React.useState(MSG_H_DEFAULT) // P0-14：中段提交信息高（拖拽受控）
   const [statsOpen, setStatsOpen] = React.useState(false) // P1-10：统计窗开关
@@ -863,6 +896,8 @@ export function SvnLogDialog(props) {
   const [rangeFrom, setRangeFrom] = React.useState('') // P1-6：起始修订（较早）
   const [rangeTo, setRangeTo] = React.useState('') // P1-6：结束修订（较晚）
   const bodyRef = React.useRef(null)
+  const paneRef = React.useRef(null) // 下段 pathspane 实高测量点（fitHeights 导出非本段占用；13-log-ui-polish 勘误） @author ddj 2026年09月24号
+  const fitOnDataRef = React.useRef(false) // 初次数据到达只补 fit 一次（挂载时 chrome 量到的是数据前布局，终态差 ~4px） @author ddj 2026年09月24号
 
   const list = Array.isArray(entries) ? entries : null
   // 选中项：默认首条；数据刷新/过滤后仅保留仍存在的选中（G10：按 revision 维护），全部消失回落首条；
@@ -963,17 +998,45 @@ export function SvnLogDialog(props) {
     window.addEventListener('pointerup', up)
   }
 
-  // P0-14 外框调尺寸：mode 'r'=右缘调宽 / 'b'=底缘调高 / 'c'=角手柄双向；clamp 视口内
+  // 八向（13-log-ui-polish 增量3）：pointerdown 取卡片视口 rect 起点并立即 absolute 锚定，
+  // 实现「拖哪边哪边动、对边固定」（flex 居中模型无法表达该语义）；clamp = 尺寸下限 680/480
+  // 与视口 12px 边距；每把手柄都以实际 rect 重锚 → CSS 截断/取整漂移自校正。
   const startResize = (event, mode) => {
     event.preventDefault()
     event.stopPropagation()
+    const card = event.currentTarget.parentElement
+    const rect = card ? card.getBoundingClientRect() : null
+    if (!rect) return
+    const r0 = { left: rect.left, top: rect.top, width: rect.width, height: rect.height }
     const startX = event.clientX
     const startY = event.clientY
-    const startW = dlgW
-    const startH = dlgH
+    const moveL = mode === 'w' || mode === 'nw' || mode === 'sw'
+    const moveR = mode === 'e' || mode === 'ne' || mode === 'se'
+    const moveT = mode === 'n' || mode === 'nw' || mode === 'ne'
+    const moveB = mode === 's' || mode === 'sw' || mode === 'se'
+    const EDGE = 12 // 视口边距
+    const right0 = r0.left + r0.width
+    const bottom0 = r0.top + r0.height
+    // 起手锚定：切 absolute 到当前 rect（视觉零跳变）并同步 state=实际渲染尺寸
+    setAnchor({ left: r0.left, top: r0.top })
+    setDlgW(Math.round(r0.width))
+    setDlgH(Math.round(r0.height))
     const move = (e) => {
-      if (mode !== 'b') setDlgW(Math.min(window.innerWidth - 24, Math.max(DIALOG_W_MIN, startW + (e.clientX - startX))))
-      if (mode !== 'r') setDlgH(Math.min(window.innerHeight - 24, Math.max(DIALOG_H_MIN, startH + (e.clientY - startY))))
+      const dx = e.clientX - startX
+      const dy = e.clientY - startY
+      let left = r0.left
+      let top = r0.top
+      let width = r0.width
+      let height = r0.height
+      if (moveR) width = Math.min(Math.max(DIALOG_W_MIN, r0.width + dx), window.innerWidth - EDGE - r0.left)
+      if (moveL) { left = Math.min(Math.max(EDGE, r0.left + dx), right0 - DIALOG_W_MIN); width = right0 - left }
+      if (moveB) height = Math.min(Math.max(DIALOG_H_MIN, r0.height + dy), window.innerHeight - EDGE - r0.top)
+      if (moveT) { top = Math.min(Math.max(EDGE, r0.top + dy), bottom0 - DIALOG_H_MIN); height = bottom0 - top }
+      const nextLeft = left
+      const nextTop = top
+      setAnchor((prev) => (prev && prev.left === nextLeft && prev.top === nextTop) ? prev : { left: nextLeft, top: nextTop })
+      setDlgW(Math.round(width))
+      setDlgH(Math.round(height))
     }
     const up = () => {
       window.removeEventListener('pointermove', move)
@@ -984,19 +1047,76 @@ export function SvnLogDialog(props) {
     window.addEventListener('pointerup', up)
   }
 
-  /** 上段修订列表高度拖拽（clamp：下限 200，上限 = body 高 - 信息区/路径区保留空间）。 */
+  /**
+   * 双击复位：清锚回 flex 居中 + 默认尺寸（视口 clamp 同初始，防小屏溢出）。
+   * @author ddj 2026年09月24号
+   */
+  const resetDlgSize = () => {
+    setAnchor(null)
+    setDlgW(Math.min(DIALOG_W_DEFAULT, window.innerWidth - 24))
+    setDlgH(Math.min(DIALOG_H_DEFAULT, window.innerHeight - 24))
+  }
+
+  /** 上段修订列表高度拖拽（clamp：下限 200，上限 = body 高 - 信息区/路径区/分隔条保留空间）。 */
   const onListHDrag = (event) => startDrag(event, 'y', listH, (next) => {
     const total = bodyRef.current?.clientHeight ?? 0
-    const max = Math.max(LIST_H_MIN + 80, total - msgH - PANE_KEEP_MIN)
+    const max = Math.max(LIST_H_MIN + 80, total - msgH - PANE_KEEP_MIN - HSPLIT_TOTAL_PX)
     setListH(Math.min(max, Math.max(LIST_H_MIN, next)))
   })
 
-  /** 中段提交信息高度拖拽（clamp：下限 60，上限 = body 高 - 列表/路径区保留空间）。 */
+  /** 中段提交信息高度拖拽（clamp：下限 60，上限 = body 高 - 列表区/路径区/分隔条保留空间）。 */
   const onMsgHDrag = (event) => startDrag(event, 'y', msgH, (next) => {
     const total = bodyRef.current?.clientHeight ?? 0
-    const max = Math.max(MSG_H_MIN + 80, total - listH - PANE_KEEP_MIN)
+    const max = Math.max(MSG_H_MIN + 80, total - listH - PANE_KEEP_MIN - HSPLIT_TOTAL_PX)
     setMsgH(Math.min(max, Math.max(MSG_H_MIN, next)))
   })
+
+  /**
+   * 上/中段高度收敛进 body（初始挂载、dlgH 变化、双击复位共用；shrink-only 只缩不涨）。
+   * 非本段占用 chrome 由 DOM 实测导出（= bodyH - 上中段 state - 下段实占；含 gap4×6 + 分隔条
+   * 2×10 + 上段 padding/border6 + 中段 padding/border18 = 68px），免手算且 CSS 微调自动跟随；
+   * 保下段 ≥ PANE_KEEP_MIN。极端小视口（预算 < 两段地板和）给各自下限不倒挂；
+   * 地板救济：抬 list 至地板后超出从 msg 扣回（预算 ≥ 地板和保证不破对方地板）。
+   * 只缩不涨 + 地板兜底，与拖拽 clamp 同向，天然不会与拖拽互相拉扯成循环。
+   * @author ddj 2026年09月24号
+   * @param wantList 目标上段（修订列表）高度
+   * @param wantMsg 目标中段（提交信息）高度
+   */
+  const fitHeights = (wantList, wantMsg) => {
+    const total = bodyRef.current?.clientHeight ?? 0
+    if (!total) { setListH(wantList); setMsgH(wantMsg); return }
+    const paneOcc = paneRef.current?.offsetHeight ?? -1
+    // 实测导出非本段占用（勘误 2026-09-24：手算公式漏 gap/margin/padding 曾致保底仅114）；测不到回落分隔条
+    const chrome = paneOcc >= 0 ? Math.max(0, total - listH - msgH - paneOcc) : HSPLIT_TOTAL_PX
+    const budget = total - PANE_KEEP_MIN - chrome
+    if (budget < LIST_H_MIN + MSG_H_MIN) {
+      setListH(Math.min(wantList, LIST_H_MIN))
+      setMsgH(Math.min(wantMsg, MSG_H_MIN))
+      return
+    }
+    if (wantList + wantMsg <= budget) { setListH(wantList); setMsgH(wantMsg); return }
+    const scale = budget / (wantList + wantMsg)
+    let nextList = Math.floor(wantList * scale)
+    let nextMsg = Math.floor(wantMsg * scale)
+    if (nextList < LIST_H_MIN) { nextList = LIST_H_MIN; nextMsg = Math.min(nextMsg, budget - nextList) }
+    else if (nextMsg < MSG_H_MIN) { nextMsg = MSG_H_MIN; nextList = Math.min(nextList, budget - nextMsg) }
+    setListH(nextList)
+    setMsgH(nextMsg)
+  }
+
+  // 初始/弹窗尺寸变化 fit（2026-09-24 用户反馈：固定高中段把下段变更文件区挤到 0）：
+  // 挂载与 dlgH 变化时收敛一次；拖拽期间不介入（拖拽自带 clamp），双击复位经 fitHeights 显式收敛。
+  React.useEffect(() => {
+    fitHeights(listH, msgH)
+  }, [dlgH])
+
+  // 勘误2（2026-09-24）：挂载 fit 量到的是数据到达前布局（终态差 ~4px → 保底 166）。
+  // 初次数据到达以终态布局补 fit 一次收敛至 ≥170；单次门闩，之后刷新/加载更多/拖拽不介入。
+  React.useEffect(() => {
+    if (!list || fitOnDataRef.current) return
+    fitOnDataRef.current = true
+    fitHeights(listH, msgH)
+  }, [list])
 
   // 键盘：F5 刷新（防浏览器整页刷新）；↑↓ 在显示列表内移动选中（输入框内不劫持）
   React.useEffect(() => {
@@ -1094,20 +1214,25 @@ export function SvnLogDialog(props) {
       height: listH, wcRev,
     }),
     React.createElement(Splitter, {
-      title: '调整修订列表高度', onDragStart: onListHDrag, onReset: () => setListH(LIST_H_DEFAULT),
+      title: '调整修订列表高度', onDragStart: onListHDrag, onReset: () => fitHeights(LIST_H_DEFAULT, msgH),
     }),
     React.createElement('div', { className: 'edrv-svnlog-pane edrv-svnlog-msgpane', style: { height: msgH } },
       React.createElement(LogMsgInner, { selected: visibleSelected })),
     React.createElement(Splitter, {
-      title: '调整提交信息区高度', onDragStart: onMsgHDrag, onReset: () => setMsgH(MSG_H_DEFAULT),
+      title: '调整提交信息区高度', onDragStart: onMsgHDrag, onReset: () => fitHeights(listH, MSG_H_DEFAULT),
     }),
-    React.createElement('div', { className: 'edrv-svnlog-pane edrv-svnlog-pathspane' },
+    React.createElement('div', { className: 'edrv-svnlog-pane edrv-svnlog-pathspane', ref: paneRef },
       React.createElement(LogPathsInner, { selected: visibleSelected, target, onlyAffected, onOpenFile, onOpenDiff, onPathMenu })))
 
   return React.createElement(ModalShell, {
     dialogClass: 'edrv-svnlog-dialog',
     width: Math.round(dlgW) + 'px',
-    cardStyle: { height: Math.round(dlgH) + 'px' },
+    // 八向锚定（增量3）：anchor 非空时 absolute 定位于视口坐标（脱离 flex 居中，视觉零跳变）；
+    // border-box 令 rect==state（clamp/拖拽零换算）；maxHeight:none 消除 88vh 造成 state≠视觉的漂移。
+    cardStyle: Object.assign(
+      { height: Math.round(dlgH) + 'px', boxSizing: 'border-box', maxHeight: 'none' },
+      anchor ? { position: 'absolute', left: Math.round(anchor.left) + 'px', top: Math.round(anchor.top) + 'px' } : null,
+    ),
     onClose,
   },
     React.createElement(LogHead, { target, onClose }),
@@ -1124,9 +1249,15 @@ export function SvnLogDialog(props) {
       onExportCsv: () => onExport('csv'), onExportHtml: () => onExport('html'),
       rangeActive: rangeActive === true, onOpenRange: () => setRangeOpen(true), onRangeReset: () => onRangeReset?.(),
     }),
-    React.createElement(Grip, { mode: 'r', onDragStart: startResize, onReset: () => { setDlgW(DIALOG_W_DEFAULT); setDlgH(DIALOG_H_DEFAULT) } }),
-    React.createElement(Grip, { mode: 'b', onDragStart: startResize, onReset: () => { setDlgW(DIALOG_W_DEFAULT); setDlgH(DIALOG_H_DEFAULT) } }),
-    React.createElement(Grip, { mode: 'c', onDragStart: startResize, onReset: () => { setDlgW(DIALOG_W_DEFAULT); setDlgH(DIALOG_H_DEFAULT) } }),
+    // 八向手柄（增量3）：四边先渲染、四角后渲染（角盖过相邻边 2px overlap）；双击复位统一走 resetDlgSize
+    React.createElement(Grip, { mode: 'n', onDragStart: startResize, onReset: resetDlgSize }),
+    React.createElement(Grip, { mode: 's', onDragStart: startResize, onReset: resetDlgSize }),
+    React.createElement(Grip, { mode: 'w', onDragStart: startResize, onReset: resetDlgSize }),
+    React.createElement(Grip, { mode: 'e', onDragStart: startResize, onReset: resetDlgSize }),
+    React.createElement(Grip, { mode: 'nw', onDragStart: startResize, onReset: resetDlgSize }),
+    React.createElement(Grip, { mode: 'ne', onDragStart: startResize, onReset: resetDlgSize }),
+    React.createElement(Grip, { mode: 'sw', onDragStart: startResize, onReset: resetDlgSize }),
+    React.createElement(Grip, { mode: 'se', onDragStart: startResize, onReset: resetDlgSize }),
     (menu ? React.createElement(ContextMenu, { x: menu.x, y: menu.y, entries: menu.entries, onClose: () => setMenu(null) }) : null),
     (statsOpen ? React.createElement(SvnLogStats, { key: 'edrv-svnlog-stats', entries: sorted, onClose: () => setStatsOpen(false) }) : null),
     (rangeOpen ? React.createElement(ModalShell, {

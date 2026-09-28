@@ -16,6 +16,7 @@ import {
   ignoreNameErrorOf,
   patchExtOf,
   processNameOf,
+  svnPathOf,
   updateResultOf,
 } from '../src/svn.js'
 import { FILE_SIZES_CAP, TORTOISE_EXE, tortoiseLaunchArgv } from '../src/shared/svn.js'
@@ -92,6 +93,17 @@ describe('findTortoiseProc', () => {
 
   it('全落空返回 null', async () => {
     expect(await findTortoiseProc('C:\\tsvn', async () => false, 'win32', 'C:\\p1')).toBeNull()
+  })
+})
+
+describe('svnPathOf', () => {
+  it('嵌套会话内文件与目录对应工作副本根相对路径', () => {
+    const root = join('/wc')
+    const cwd = join(root, 'sub')
+    expect(svnPathOf(cwd, root, 'a.cs')).toBe('sub/a.cs')
+    expect(svnPathOf(cwd, root, '')).toBe('sub')
+    expect(svnPathOf(root, root, '')).toBe('.')
+    expect(svnPathOf(join(root, '..', 'outside'), root, 'file.cs')).toBeNull()
   })
 })
 
@@ -246,6 +258,19 @@ describe('createSvnRpc svn.update / svn.tortoise', () => {
     const updateSpec = specs.find((s) => (s.argv as string[]).includes('update'))
     expect(updateSpec).toBeDefined()
     expect(updateSpec?.argv).toContain('--non-interactive')
+    expect((updateSpec?.argv as string[]).slice(-2)).toEqual(['--', 'src'])
+  })
+
+  it('流式更新 RPC 拒绝越界路径，空任务不能伪装为已更新', async () => {
+    const spawn = () => ({ done: Promise.resolve({ exitCode: 0 }), collected: {} })
+    const { handlers, dispose } = createSvnRpc(makeDeps({
+      ctx: makeCtx(spawn, '/wc'), findRoot: async () => '/wc', findTortoise: async () => null,
+    }))
+    const call = handlers as Record<string, (args: never) => Promise<{ ok: boolean; error?: string; job?: unknown }>>
+    expect((await call['svn.updateStart']({ path: '../outside' } as never)).error).toBe('路径不合法')
+    expect((await call['svn.updateActive']({} as never)).job).toBeNull()
+    expect((await call['svn.updatePoll']({ jobId: 'unknown', since: 0 } as never)).ok).toBe(false)
+    dispose()
   })
 
   it('tortoise 动作白名单：未知动作拒绝且不 spawn（白名单校验先于任何探测）', async () => {
@@ -597,6 +622,19 @@ describe('createSvnRpc svn.log argv（P1-4 stopOnCopy / P1-6 range，G1/G3 守�
     return { res, logArgv }
   }
 
+  it('嵌套会话查看日志按工作副本根拼 sub/a.cs，响应仍保留会话相对目标', async () => {
+    const root = join('/wc')
+    const cwd = join(root, 'sub')
+    const specs: Array<Record<string, unknown>> = []
+    const { handlers } = createSvnRpc(makeDeps({
+      ctx: makeCtx(spawnAll(specs), cwd), findRoot: async () => root, findTortoise: async () => null,
+    }))
+    const res = await (handlers as Record<string, (args: never) => unknown>)['svn.log']({ path: 'a.cs' } as never) as { ok: boolean; target?: string }
+    expect(res.ok).toBe(true)
+    expect(res.target).toBe('a.cs')
+    expect((specs.find((spec) => (spec.argv as string[]).includes('log'))?.argv as string[]).slice(-2)).toEqual(['--', 'sub/a.cs'])
+  })
+
   it('默认窗口：-r HEAD:1（G1），不带 --stop-on-copy 与 -g', async () => {
     const { res, logArgv } = await run({ path: 'Assets' })
     expect(res.ok).toBe(true)
@@ -654,6 +692,30 @@ describe('createSvnRpc svn.diffWorking（P1-1 与工作副本比较）', () => {
     expect(res.ok).toBe(true)
     expect(res.left).toBe('REV-CONTENT')
     expect(res.right).toBe('WORK-CONTENT')
+  })
+
+  it('嵌套会话的磁盘读取 a.txt 与 SVN cat sub/a.txt 指向同一文件', async () => {
+    const root = join('/wc')
+    const cwd = join(root, 'sub')
+    const specs: Array<Record<string, unknown>> = []
+    const resolved: string[] = []
+    const fs = {
+      resolve: async (p: string) => { resolved.push(p); return p },
+      stat: async () => ({ type: 'file', size: 1 }),
+      readText: async () => 'WORK', processPath: (p: unknown) => String(p),
+    }
+    const spawn = (spec: Record<string, unknown>) => {
+      specs.push(spec)
+      return { done: Promise.resolve({ exitCode: 0 }), collected: {
+        stdout: { readFrom: () => ({ text: 'REV' }) }, stderr: { readFrom: () => ({ text: '' }) },
+      } }
+    }
+    const { handlers } = createSvnRpc(makeDeps({ ctx: makeCtx(spawn, cwd, fs), findRoot: async () => root, findTortoise: async () => null }))
+    const res = await (handlers as Record<string, (args: never) => unknown>)['svn.diffWorking']({ path: 'a.txt', revision: 7 } as never) as { ok: boolean; left?: string }
+    expect(res.ok).toBe(true)
+    expect(res.left).toBe('REV')
+    expect(resolved).toContain('a.txt')
+    expect((specs.find((spec) => (spec.argv as string[]).includes('cat'))?.argv as string[]).slice(-2)).toEqual(['--', 'sub/a.txt'])
   })
 
   it('该版本尚无此文件：ok=true、left=null、reason=not-exist（非报错面板）', async () => {

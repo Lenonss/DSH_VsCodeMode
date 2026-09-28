@@ -404,6 +404,15 @@ describe('updateResultOf（条目级）', () => {
     expect(res.entries[0].path).toBe('my dir/a b.txt')
   })
 
+  it('第二状态列 U、属性冲突 C 与空格路径仍可解析', () => {
+    const output = ' U   my dir/中文.meta\n _C  prop conflict.txt\nUpdated to revision 12.'
+    const result = updateResultOf(output, '', 0)
+    expect(result.entries.map((entry) => [entry.action, entry.path])).toEqual([
+      ['U', 'my dir/中文.meta'], ['C', 'prop conflict.txt'],
+    ])
+    expect(result.conflicts).toEqual(['prop conflict.txt'])
+  })
+
   it('失败输出保留原文且可为空条目', () => {
     const res = updateResultOf('', 'svn: E175013: Access denied', 1)
     expect(res.output).toContain('E175013')

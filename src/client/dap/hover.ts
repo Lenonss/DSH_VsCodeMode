@@ -7,6 +7,7 @@
  */
 import { dapStore } from './store.js'
 import { pathOfModel } from '../monaco/lsp/lspClient.js'
+import { LUA_RESERVED_WORD_SET } from '../luaReservedWords.js'
 import { BLOCK_ATTR, EQ_ATTR, EXPR_ATTR, HEAD_ATTR, TYPE_ATTR, VAL_ATTR, createTreeState, escapeHtml, initialHtml } from './hoverTree.js'
 
 const GLOBAL_KEY = '__edrvDapHoverProvider__'
@@ -35,12 +36,6 @@ function treeKeyOf(target: { expression: string; lineNumber: number; startColumn
   return target.expression + '@' + path + ':' + target.lineNumber + ':' + target.startColumn + '-' + target.endColumn
 }
 
-/** Lua 保留字集合（保留字不是可求值表达式，避免 adapter 返回 syntax err 噪声）。 */
-const LUA_KEYWORDS = new Set([
-  'and', 'break', 'do', 'else', 'elseif', 'end', 'false', 'for', 'function', 'goto',
-  'if', 'in', 'local', 'nil', 'not', 'or', 'repeat', 'return', 'then', 'true', 'until', 'while',
-])
-
 /** 可求值路径表达式：标识符链，成员用 . 或 : 连接（注释里的中文文本等一律不匹配）。 */
 const EVAL_EXPR = /^[A-Za-z_][A-Za-z0-9_]*(?:[.:][A-Za-z_][A-Za-z0-9_]*)*$/
 
@@ -51,7 +46,7 @@ const EVAL_EXPR = /^[A-Za-z_][A-Za-z0-9_]*(?:[.:][A-Za-z_][A-Za-z0-9_]*)*$/
  * @returns 是否可求值
  */
 function isEvalExpr(text: string): boolean {
-  return EVAL_EXPR.test(text) && !LUA_KEYWORDS.has(text)
+  return EVAL_EXPR.test(text) && !LUA_RESERVED_WORD_SET.has(text)
 }
 
 /**

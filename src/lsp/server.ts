@@ -57,6 +57,19 @@ interface OpenDoc {
 }
 
 const RESTARTABLE = true
+const MAX_DOC_VERSION = 2147483647
+
+/**
+ * 使用合法、递增的 Int32 文档版本；旧客户端的毫秒时间戳不能直发给 Roslyn。
+ * @author ddj 2026年09月24号
+ * @param incoming 客户端传来的版本
+ * @param previous 当前服务器记录的版本
+ * @returns 可发送给语言服务器的版本
+ */
+export function lspDocVersion(incoming: number, previous?: number): number {
+  const next = Math.min(MAX_DOC_VERSION, (previous ?? 0) + 1)
+  return Number.isInteger(incoming) && incoming >= next && incoming <= MAX_DOC_VERSION ? incoming : next
+}
 
 /**
  * 创建语言服务器会话。
@@ -237,21 +250,22 @@ export function createLspServer(spec: LspProviderSpec, root: string, languageId:
     sync(path: string, text: string, version: number): void {
       const existing = docs.get(path)
       const uri = existing?.uri ?? docUriOf(path)
+      const safeVersion = lspDocVersion(version, existing?.version)
       if (existing) {
-        existing.version = version
+        existing.version = safeVersion
         existing.text = text
         if (phase === 'ready' || phase === 'indexing') {
           client?.notify('textDocument/didChange', {
-            textDocument: { uri, version },
+            textDocument: { uri, version: safeVersion },
             contentChanges: [{ text }],
           })
         }
         return
       }
-      docs.set(path, { path, uri, version, text })
+      docs.set(path, { path, uri, version: safeVersion, text })
       if (phase === 'ready' || phase === 'indexing') {
         client?.notify('textDocument/didOpen', {
-          textDocument: { uri, languageId, version, text },
+          textDocument: { uri, languageId, version: safeVersion, text },
         })
       }
     },
