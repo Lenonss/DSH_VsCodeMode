@@ -5,6 +5,8 @@
  * `|` 连接多个候选（任一命中即触发），如 `Alt+ArrowLeft|Ctrl+Alt+-`。
  * 约束：本模块被 host 与 client 两半共用，**禁止 import client 侧模块**（React/浏览器 API）。
  * 与 client/ui/commandCatalog 的一致性由 tests/commands.test.ts 断言兜底。
+ * 官方机制（2026-10）：SHORTCUT_PROFILES 描述各命令在官方 ctx.shortcuts 的 profile 默认键位
+ * （由 client 注册官方服务时使用）；chordToBinding/bindingToChord 负责插件弦与官方绑定互转。
  * 作者 ddj 2026年08月26号 / 2026年09月10号
  */
 
@@ -66,3 +68,254 @@ export function normalizeKeybindings(raw: unknown): Record<string, string> {
   }
   return out
 }
+
+//#region 官方 shortcuts 机制映射层（纯数据/纯函数，禁 import client 侧与官方包）
+
+/** 官方 shortcuts 服务的修饰符标记（'primary' = 桌面端按平台展开为 Ctrl/Cmd，web 同语义）。 */
+export type OfficialModifier = 'primary' | 'control' | 'alt' | 'shift' | 'meta'
+
+/** 官方绑定形状（物理 code + 修饰符；与 @deepseek-ai/dsh-client-shortcuts 绑定契约同构，鸭子类型）。 */
+export interface OfficialBinding {
+  code: string
+  modifiers: OfficialModifier[]
+  secondCode?: string
+}
+
+/** 官方 profile 键（desktop|web × macos|windows|linux）。 */
+export type ShortcutProfileKey =
+  | 'desktop:macos' | 'desktop:windows' | 'desktop:linux'
+  | 'web:macos' | 'web:windows' | 'web:linux'
+
+/** 命令 id → 各 profile 官方默认键位（缺 profile = 该端不绑定）。 */
+export type ShortcutProfiles = Partial<Record<ShortcutProfileKey, OfficialBinding>>
+
+/** 显示主键 → 官方物理 code 对照（官方 code 白名单：Key[A-Z]|Digit[0-9]|F1-24|具名键）。 */
+const DISPLAY_KEY_TO_CODE: Record<string, string> = {
+  '-': 'Minus', '=': 'Equal', '[': 'BracketLeft', ']': 'BracketRight',
+  ';': 'Semicolon', "'": 'Quote', ',': 'Comma', '.': 'Period',
+  '/': 'Slash', '\\': 'Backslash', '`': 'Backquote',
+  Enter: 'Enter', Tab: 'Tab', Backspace: 'Backspace', Delete: 'Delete',
+  Escape: 'Escape', Space: 'Space',
+  ArrowUp: 'ArrowUp', ArrowDown: 'ArrowDown', ArrowLeft: 'ArrowLeft', ArrowRight: 'ArrowRight',
+}
+
+/** 官方具名 code（非 Key/Digit/F 前缀且可回显的部分）。 */
+const NAMED_CODES = ['Enter', 'Tab', 'Backspace', 'Delete', 'Escape', 'Space',
+  'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'] as const
+
+/** 官方 code → 显示主键（符号键反向对照）。 */
+const CODE_TO_DISPLAY_KEY: Record<string, string> = {
+  Minus: '-', Equal: '=', BracketLeft: '[', BracketRight: ']',
+  Semicolon: ';', Quote: "'", Comma: ',', Period: '.',
+  Slash: '/', Backslash: '\\', Backquote: '`',
+}
+
+/** 显示主键 → 官方 code（PageUp/PageDown/Home/End/Insert 等官方不支持 → null）。 */
+function keyToCode(key: string): string | null {
+  if (Object.hasOwn(DISPLAY_KEY_TO_CODE, key)) return DISPLAY_KEY_TO_CODE[key]
+  if (key.length === 1 && key >= 'a' && key <= 'z') return 'Key' + key.toUpperCase()
+  if (key.length === 1 && key >= 'A' && key <= 'Z') return 'Key' + key
+  if (key.length === 1 && key >= '0' && key <= '9') return 'Digit' + key
+  if (/^F([1-9]|1[0-9]|2[0-4])$/u.test(key)) return key
+  return null
+}
+
+/** 官方 code → 显示主键（不可回显 → null）。 */
+function codeToKey(code: string): string | null {
+  if (Object.hasOwn(CODE_TO_DISPLAY_KEY, code)) return CODE_TO_DISPLAY_KEY[code]
+  if (/^Key[A-Z]$/u.test(code)) return code.slice(3)
+  if (/^Digit[0-9]$/u.test(code)) return code.slice(5)
+  if (/^F([1-9]|1[0-9]|2[0-4])$/u.test(code)) return code
+  if ((NAMED_CODES as readonly string[]).includes(code)) return code
+  return null
+}
+
+/** 插件弦的修饰符 token → 官方修饰符（Ctrl 与 Cmd 同为 primary，与 matchEvent 的互认语义一致）。 */
+const CHORD_MODIFIER_TOKENS: Record<string, OfficialModifier> = {
+  ctrl: 'primary', control: 'primary', cmd: 'primary', meta: 'primary',
+  shift: 'shift', alt: 'alt',
+}
+
+/**
+ * 插件键位弦（单候选）→ 官方绑定。
+ * 不可表示的主键（PageUp/PageDown/Home/End/Insert 等）返回 null，调用方跳过。
+ * @author ddj 2026年10月
+ * @param chord 键位弦（如 `Ctrl+Alt+-` / `F9` / `Alt+ArrowLeft`）
+ * @returns 官方绑定或 null
+ */
+export function chordToBinding(chord: string): OfficialBinding | null {
+  const parts = String(chord ?? '').split('+').map((part) => part.trim()).filter(Boolean)
+  if (!parts.length) return null
+  const modifiers = new Set<OfficialModifier>()
+  let key = ''
+  for (const part of parts) {
+    const modifier = CHORD_MODIFIER_TOKENS[part.toLowerCase()]
+    if (modifier) {
+      modifiers.add(modifier)
+      continue
+    }
+    if (key) return null
+    key = part
+  }
+  if (!key) return null
+  if (key === ' ') key = 'Space'
+  else if (key.length === 1 && key >= 'a' && key <= 'z') key = key.toUpperCase()
+  const code = keyToCode(key)
+  return code === null ? null : { code, modifiers: [...modifiers] }
+}
+
+/**
+ * 官方绑定 → 插件显示键位弦（primary 显示为 Ctrl，与历史 tooltip 文案保持一致）。
+ * @author ddj 2026年10月
+ * @param binding 官方绑定
+ * @returns 插件弦（不可表示 → null）
+ */
+export function bindingToChord(binding: OfficialBinding): string | null {
+  if (!binding || typeof binding !== 'object') return null
+  const key = codeToKey(binding.code)
+  if (key === null) return null
+  let suffix = ''
+  if (binding.secondCode !== undefined) {
+    const secondKey = codeToKey(binding.secondCode)
+    if (secondKey === null) return null
+    suffix = '+' + secondKey
+  }
+  const parts: string[] = []
+  if (binding.modifiers.includes('primary')) parts.push('Ctrl')
+  if (binding.modifiers.includes('shift')) parts.push('Shift')
+  if (binding.modifiers.includes('alt')) parts.push('Alt')
+  return [...parts, key + suffix].join('+')
+}
+
+/** 官方绑定字面量构造（表格可读性辅助）。 */
+function bind(code: string, modifiers: OfficialModifier[]): OfficialBinding {
+  return { code, modifiers }
+}
+
+/**
+ * 命令 id → 官方 profile 默认键位（与 KEYBINDING_DEFAULTS 一一对应；client 注册官方服务的数据源）。
+ * 取值约束（对齐官方 bindingIssue/isWebBindingAllowed 校验，错报会在注册时抛错）：
+ * - desktop:macos/windows：官方不做保留校验，用 VS Code 同款 chord；
+ * - desktop:linux / web:linux：Arrow*、裸 F 键、全 Shift、Ctrl+V/C/X/Z/Y/Q/H/A、Meta 均为保留键 → 不声明；
+ * - web:macos/windows：单修饰符组合不在白名单 → 用 primary+alt / primary+shift 变体（官方 ui-layout 同款）；
+ * - Ctrl+PageDown/PageUp 候选废弃（官方 code 白名单无 PageUp/PageDown）；
+ * - edrv.toggleSidebar 留空：Ctrl+B 与官方 sidebar.left.toggle（Mod+B）冲突，注册会抛错且冲突键互相阻断。
+ * @author ddj 2026年10月
+ */
+export const SHORTCUT_PROFILES: Record<string, ShortcutProfiles> = {
+  'edrv.toggleSidebar': {},
+  'edrv.save': {
+    'desktop:macos': bind('KeyS', ['primary']),
+    'desktop:windows': bind('KeyS', ['primary']),
+    'desktop:linux': bind('KeyS', ['primary']),
+  },
+  // 官方 workspace.files 已占用桌面 primary+P 和 Web primary+alt+P；插件 QuickOpen 使用非冲突组合。
+  'edrv.quickOpen': {
+    'desktop:macos': bind('KeyP', ['primary', 'alt']),
+    'desktop:windows': bind('KeyP', ['primary', 'alt']),
+    'desktop:linux': bind('KeyP', ['primary', 'alt']),
+    'web:macos': bind('KeyP', ['primary', 'alt', 'shift']),
+    'web:windows': bind('KeyP', ['primary', 'alt', 'shift']),
+  },
+  'edrv.searchInFiles': {
+    'desktop:macos': bind('KeyF', ['primary', 'shift']),
+    'desktop:windows': bind('KeyF', ['primary', 'shift']),
+    'desktop:linux': bind('KeyF', ['primary', 'shift']),
+    'web:macos': bind('KeyF', ['primary', 'shift']),
+    'web:windows': bind('KeyF', ['primary', 'shift']),
+  },
+  // Ctrl+Shift+V（primary+KeyV）在 linux 为保留键（官方 bindingIssue 不豁免 shift），desktop:linux 不声明
+  'edrv.toggleMarkdownPreview': {
+    'desktop:macos': bind('KeyV', ['primary', 'shift']),
+    'desktop:windows': bind('KeyV', ['primary', 'shift']),
+    'web:macos': bind('KeyV', ['primary', 'shift']),
+    'web:windows': bind('KeyV', ['primary', 'shift']),
+  },
+  // 导航历史：主候选 Alt+Arrow 在 linux/web 为保留或白名单外；web 取第二候选（Ctrl+Alt+- / Ctrl+Shift+-）
+  'edrv.navigateBack': {
+    'desktop:macos': bind('ArrowLeft', ['alt']),
+    'desktop:windows': bind('ArrowLeft', ['alt']),
+    'web:macos': bind('Minus', ['primary', 'alt']),
+    'web:windows': bind('Minus', ['primary', 'alt']),
+  },
+  'edrv.navigateForward': {
+    'desktop:macos': bind('ArrowRight', ['alt']),
+    'desktop:windows': bind('ArrowRight', ['alt']),
+    'web:macos': bind('Minus', ['primary', 'shift']),
+    'web:windows': bind('Minus', ['primary', 'shift']),
+  },
+  // 页签循环：Ctrl+PageDown/PageUp 候选官方不可表示，仅保留 Ctrl+Alt+Arrow 主候选
+  'edrv.nextTab': {
+    'desktop:macos': bind('ArrowRight', ['primary', 'alt']),
+    'desktop:windows': bind('ArrowRight', ['primary', 'alt']),
+    'web:macos': bind('ArrowRight', ['primary', 'alt']),
+    'web:windows': bind('ArrowRight', ['primary', 'alt']),
+  },
+  'edrv.prevTab': {
+    'desktop:macos': bind('ArrowLeft', ['primary', 'alt']),
+    'desktop:windows': bind('ArrowLeft', ['primary', 'alt']),
+    'web:macos': bind('ArrowLeft', ['primary', 'alt']),
+    'web:windows': bind('ArrowLeft', ['primary', 'alt']),
+  },
+  'edrv.goToLine': {
+    'desktop:macos': bind('KeyG', ['primary']),
+    'desktop:windows': bind('KeyG', ['primary']),
+    'desktop:linux': bind('KeyG', ['primary']),
+  },
+  'edrv.showCommands': {
+    'desktop:macos': bind('KeyP', ['primary', 'shift']),
+    'desktop:windows': bind('KeyP', ['primary', 'shift']),
+    'desktop:linux': bind('KeyP', ['primary', 'shift']),
+    'web:macos': bind('KeyP', ['primary', 'shift']),
+    'web:windows': bind('KeyP', ['primary', 'shift']),
+  },
+  'edrv.nextEditorRow': {
+    'desktop:macos': bind('ArrowDown', ['primary', 'alt']),
+    'desktop:windows': bind('ArrowDown', ['primary', 'alt']),
+    'web:macos': bind('ArrowDown', ['primary', 'alt']),
+    'web:windows': bind('ArrowDown', ['primary', 'alt']),
+  },
+  'edrv.prevEditorRow': {
+    'desktop:macos': bind('ArrowUp', ['primary', 'alt']),
+    'desktop:windows': bind('ArrowUp', ['primary', 'alt']),
+    'web:macos': bind('ArrowUp', ['primary', 'alt']),
+    'web:windows': bind('ArrowUp', ['primary', 'alt']),
+  },
+  'edrv.addSelectionRef': {
+    'desktop:macos': bind('KeyU', ['primary']),
+    'desktop:windows': bind('KeyU', ['primary']),
+    'desktop:linux': bind('KeyU', ['primary']),
+  },
+  'edrv.closeTab': {
+    'desktop:macos': bind('F4', ['primary']),
+    'desktop:windows': bind('F4', ['primary']),
+    'desktop:linux': bind('F4', ['primary']),
+  },
+  // 调试 F 键：linux 判 modifier-required（裸 F/全 Shift），仅 desktop:macos/windows
+  'edrv.debugToggleBreakpoint': {
+    'desktop:macos': bind('F9', []),
+    'desktop:windows': bind('F9', []),
+  },
+  'edrv.debugStartContinue': {
+    'desktop:macos': bind('F5', []),
+    'desktop:windows': bind('F5', []),
+  },
+  'edrv.debugStepOver': {
+    'desktop:macos': bind('F10', []),
+    'desktop:windows': bind('F10', []),
+  },
+  'edrv.debugStepInto': {
+    'desktop:macos': bind('F11', []),
+    'desktop:windows': bind('F11', []),
+  },
+  'edrv.debugStepOut': {
+    'desktop:macos': bind('F11', ['shift']),
+    'desktop:windows': bind('F11', ['shift']),
+  },
+  'edrv.debugStop': {
+    'desktop:macos': bind('F5', ['shift']),
+    'desktop:windows': bind('F5', ['shift']),
+  },
+}
+
+//#endregion

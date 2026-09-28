@@ -1,6 +1,6 @@
 /**
  * dsh-vscode-mode host — 规则管理（Codebuddy/Cursor 式 .mdc 规则）。
- * - 存储：用户规则 ~/.dsh/rules/*.mdc；项目规则 <工作区>/.dsh/rules/*.mdc（随仓库共享）。
+ * - 存储：用户规则 DSH_HOME/rules + ~/.dsh/rules（当前目录优先）；项目规则 <工作区>/.dsh/rules。
  * - 格式：frontmatter（description / alwaysApply / globs / enabled）+ markdown 正文；
  *   类型映射 总是=always / 自动=auto(globs) / 手动=manual(仅索引)；enabled 为本插件扩展字段，缺省 true。
  * - 生效：host 注册 systemPrompt.section（order 400），每次装配同步读取（mtime 缓存），
@@ -11,9 +11,10 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { Buffer } from 'node:buffer'
-import { join } from 'node:path'
+import { homedir } from 'node:os'
+import { join, resolve } from 'node:path'
 import { dshHome } from './paths.js'
-import type { RuleInfo, RuleProject, RuleRefInput, RuleScope, RuleSaveInput } from './shared/rules.js'
+import type { RuleInfo, RuleProject, RuleRefInput, RuleScope, RuleSaveInput, UserRuleOrigin } from './shared/rules.js'
 import type { Ctx } from './store.js'
 
 // --region 常量与目录定位
@@ -33,13 +34,39 @@ const SECTION_NAME = 'dsh-vscode-mode:rules'
 const SECTION_ORDER = 400
 
 /**
- * 用户规则目录（~/.dsh/rules）。
+ * 当前用户规则目录（DSH_HOME/rules）。
  * @author ddj 2026年09月03号
  * @param home DSH home（缺省自动解析）
  * @returns 绝对路径
  */
 export function userRulesDir(home = dshHome()): string {
   return join(home, 'rules')
+}
+
+export interface UserRulesDirs {
+  current: string
+  legacy?: string
+}
+
+/** DSH_HOME 改变时仍读取系统用户目录的旧规则；相同路径不重复加载。 */
+export function userRuleDirs(activeHome = dshHome(), systemHome = homedir()): UserRulesDirs {
+  const current = resolve(userRulesDir(activeHome))
+  const legacy = resolve(userRulesDir(join(systemHome, '.dsh')))
+  const key = (path: string) => process.platform === 'win32' ? path.toLowerCase() : path
+  return key(current) === key(legacy) ? { current } : { current, legacy }
+}
+
+function userDirOf(origin: UserRuleOrigin | undefined, dirs: UserRulesDirs): string {
+  if (origin === undefined || origin === 'current') return dirs.current
+  if (origin === 'legacy' && dirs.legacy) return dirs.legacy
+  throw new Error('无效的用户规则来源')
+}
+
+/** 同名时当前目录优先；禁用的当前规则也应遮蔽旧目录规则。 */
+function mergeUserRules<T>(current: T[], legacy: T[], fileOf: (rule: T) => string): T[] {
+  const key = (rule: T) => process.platform === 'win32' ? fileOf(rule).toLowerCase() : fileOf(rule)
+  const seen = new Set(current.map(key))
+  return [...current, ...legacy.filter((rule) => !seen.has(key(rule)))].sort((a, b) => fileOf(a).localeCompare(fileOf(b)))
 }
 
 /**
@@ -261,18 +288,31 @@ export function renderRulesSection(user: LoadedRule[], project: LoadedRule[], wo
 
 // --region IO（列表 / 读 / 存 / 删 / 开关）
 /** 单目录规则元信息列表（仅 *.mdc，最多 RULE_DIR_CAP 个；目录缺失返回空）。 */
-async function listRulesDir(dir: string, scope: RuleScope): Promise<RuleInfo[]> {
-  const names = await readdir(dir).catch(() => [] as string[])
+async function listRulesDir(dir: string, scope: RuleScope, origin?: UserRuleOrigin): Promise<RuleInfo[]> {
+  const names = await readdir(dir).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === 'ENOENT') return [] as string[]
+    throw error
+  })
   const mdcs = names.filter((name) => name.endsWith('.mdc')).sort().slice(0, RULE_DIR_CAP)
   const out: RuleInfo[] = []
   for (const file of mdcs) {
     const absPath = join(dir, file)
-    const info = await stat(absPath).catch(() => null)
+    const info = await stat(absPath).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return null
+      throw error
+    })
     if (!info || !info.isFile()) continue
-    const parsed = parseRuleMdc(await readFile(absPath, 'utf8').catch(() => ''))
-    out.push(toRuleInfo(scope, file, absPath, parsed, info.size, info.mtimeMs))
+    const parsed = parseRuleMdc(await readFile(absPath, 'utf8'))
+    out.push(toRuleInfo(scope, file, absPath, parsed, info.size, info.mtimeMs, origin))
   }
   return out
+}
+
+/** 列表与注入共用当前目录优先的合并约定。 */
+export async function listUserRules(dirs = userRuleDirs()): Promise<RuleInfo[]> {
+  const current = await listRulesDir(dirs.current, 'user', 'current')
+  const legacy = dirs.legacy ? await listRulesDir(dirs.legacy, 'user', 'legacy') : []
+  return mergeUserRules(current, legacy, (rule) => rule.file)
 }
 
 /** 已注册 workspace 列表（项目 Tab 与写入校验共用）。 */
@@ -297,10 +337,16 @@ function requireWorkspace(ctx: Ctx, workspacePath: string | undefined): { path: 
   return workspace as { path: string; title?: string }
 }
 
-/** 按作用域解析规则目录（project 先过 requireWorkspace）。 */
-function dirOf(ctx: Ctx, scope: RuleScope, workspacePath?: string): string {
-  if (scope === 'project') return projectRulesDir(requireWorkspace(ctx, workspacePath).path)
-  return userRulesDir()
+/** 按作用域解析规则目录；客户端路径和未识别的来源均不作为目标使用。 */
+function dirOf(ctx: Ctx, ref: RuleRefInput, dirs: UserRulesDirs): string {
+  const invalid = validateRuleFile(ref.file)
+  if (invalid) throw new Error(invalid)
+  if (ref.scope === 'project') {
+    if (ref.origin !== undefined) throw new Error('项目规则不能指定用户规则来源')
+    return projectRulesDir(requireWorkspace(ctx, ref.workspacePath).path)
+  }
+  if (ref.scope !== 'user') throw new Error('无效的规则作用域')
+  return userDirOf(ref.origin, dirs)
 }
 
 /**
@@ -309,8 +355,8 @@ function dirOf(ctx: Ctx, scope: RuleScope, workspacePath?: string): string {
  * @param ctx DSH 上下文
  * @returns rules.list 载荷
  */
-export async function rulesList(ctx: Ctx): Promise<{ user: RuleInfo[]; projects: RuleProject[] }> {
-  const user = await listRulesDir(userRulesDir(), 'user')
+export async function rulesList(ctx: Ctx, dirs = userRuleDirs()): Promise<{ user: RuleInfo[]; projects: RuleProject[] }> {
+  const user = await listUserRules(dirs)
   const projects: RuleProject[] = []
   for (const workspace of workspaceList(ctx)) {
     const dir = projectRulesDir(workspace.path)
@@ -328,8 +374,8 @@ export async function rulesList(ctx: Ctx): Promise<{ user: RuleInfo[]; projects:
  * @param ref 作用域 + 文件名（+ 项目工作区）
  * @returns 文件全文
  */
-export async function rulesRead(ctx: Ctx, ref: RuleRefInput): Promise<string> {
-  const dir = dirOf(ctx, ref.scope, ref.workspacePath)
+export async function rulesRead(ctx: Ctx, ref: RuleRefInput, dirs = userRuleDirs()): Promise<string> {
+  const dir = dirOf(ctx, ref, dirs)
   return readFile(join(dir, ref.file), 'utf8')
 }
 
@@ -344,10 +390,10 @@ export async function rulesRead(ctx: Ctx, ref: RuleRefInput): Promise<string> {
  * @param mtime 修改时间毫秒
  * @returns 规则元信息
  */
-function toRuleInfo(scope: RuleScope, file: string, absPath: string, parsed: ParsedRule, size: number, mtime: number): RuleInfo {
+function toRuleInfo(scope: RuleScope, file: string, absPath: string, parsed: ParsedRule, size: number, mtime: number, origin?: UserRuleOrigin): RuleInfo {
   return {
-    scope, file, absPath,
-    relHint: scope === 'project' ? '.dsh/rules/' : 'rules/',
+    scope, file, absPath, ...(scope === 'user' ? { origin: origin ?? 'current' } : {}),
+    relHint: scope === 'project' ? '.dsh/rules/' : origin === 'legacy' ? '~/.dsh/rules/' : 'rules/',
     description: parsed.description, type: ruleTypeOf(parsed), globs: parsed.globs, enabled: parsed.enabled,
     size, mtime, error: parsed.error,
   }
@@ -360,10 +406,8 @@ function toRuleInfo(scope: RuleScope, file: string, absPath: string, parsed: Par
  * @param input 保存入参
  * @returns 保存后的规则元信息
  */
-export async function rulesSave(ctx: Ctx, input: RuleSaveInput): Promise<RuleInfo> {
-  const invalid = validateRuleFile(input.file)
-  if (invalid) throw new Error(invalid)
-  const dir = dirOf(ctx, input.scope, input.workspacePath)
+export async function rulesSave(ctx: Ctx, input: RuleSaveInput, dirs = userRuleDirs()): Promise<RuleInfo> {
+  const dir = dirOf(ctx, input, dirs)
   await mkdir(dir, { recursive: true })
   const absPath = join(dir, input.file)
   const content = String(input.content ?? '')
@@ -376,7 +420,7 @@ export async function rulesSave(ctx: Ctx, input: RuleSaveInput): Promise<RuleInf
     await writeFile(absPath, content, 'utf8')
   }
   const info = await stat(absPath).catch(() => null)
-  return toRuleInfo(input.scope, input.file, absPath, parseRuleMdc(content), info?.size ?? Buffer.byteLength(content), info?.mtimeMs ?? Date.now())
+  return toRuleInfo(input.scope, input.file, absPath, parseRuleMdc(content), info?.size ?? Buffer.byteLength(content), info?.mtimeMs ?? Date.now(), input.origin)
 }
 
 /**
@@ -384,8 +428,8 @@ export async function rulesSave(ctx: Ctx, input: RuleSaveInput): Promise<RuleInf
  * @author ddj 2026年09月03号
  * @param ref 作用域 + 文件名（+ 项目工作区）
  */
-export async function rulesRemove(ctx: Ctx, ref: RuleRefInput): Promise<void> {
-  const dir = dirOf(ctx, ref.scope, ref.workspacePath)
+export async function rulesRemove(ctx: Ctx, ref: RuleRefInput, dirs = userRuleDirs()): Promise<void> {
+  const dir = dirOf(ctx, ref, dirs)
   await rm(join(dir, ref.file), { force: true })
 }
 
@@ -396,8 +440,8 @@ export async function rulesRemove(ctx: Ctx, ref: RuleRefInput): Promise<void> {
  * @param enabled 目标状态
  * @returns 更新后的规则元信息
  */
-export async function rulesToggle(ctx: Ctx, ref: RuleRefInput, enabled: boolean): Promise<RuleInfo> {
-  const dir = dirOf(ctx, ref.scope, ref.workspacePath)
+export async function rulesToggle(ctx: Ctx, ref: RuleRefInput, enabled: boolean, dirs = userRuleDirs()): Promise<RuleInfo> {
+  const dir = dirOf(ctx, ref, dirs)
   const absPath = join(dir, ref.file)
   const text = await readRuleText(ctx, ref, absPath)
   if (text === null) throw new Error('规则文件不存在：' + ref.file)
@@ -409,7 +453,10 @@ export async function rulesToggle(ctx: Ctx, ref: RuleRefInput, enabled: boolean)
 
 /** 按作用域读规则全文：project 与写盘同通道走 ctx fs，user 走 node fs；缺失返回 null。 */
 async function readRuleText(ctx: Ctx, ref: RuleRefInput, absPath: string): Promise<string | null> {
-  if (ref.scope !== 'project') return readFile(absPath, 'utf8').catch(() => null)
+  if (ref.scope !== 'project') return readFile(absPath, 'utf8').catch((error: NodeJS.ErrnoException) => {
+    if (error.code === 'ENOENT') return null
+    throw error
+  })
   const fs = ctx.get('fs')
   if (!fs) throw new Error('缺少 fs 服务')
   const target = await fs.resolve('.dsh/rules/' + ref.file, { cwd: requireWorkspace(ctx, ref.workspacePath).path })
@@ -435,7 +482,7 @@ async function rulesSaveContent(ctx: Ctx, ref: RuleRefInput, absPath: string, co
 /** 重建单条规则元信息（toggle 后回传 UI；stat 失败时用内容长度 + 当前时间兜底）。 */
 async function ruleInfoOf(ref: RuleRefInput, absPath: string, content: string): Promise<RuleInfo> {
   const info = await stat(absPath).catch(() => null)
-  return toRuleInfo(ref.scope, ref.file, absPath, parseRuleMdc(content), info?.size ?? Buffer.byteLength(content), info?.mtimeMs ?? Date.now())
+  return toRuleInfo(ref.scope, ref.file, absPath, parseRuleMdc(content), info?.size ?? Buffer.byteLength(content), info?.mtimeMs ?? Date.now(), ref.origin)
 }
 // --endregion
 
@@ -449,20 +496,20 @@ interface InjCacheEntry {
 const injCache = new Map<string, InjCacheEntry>()
 
 /**
- * 同步读取一个规则目录（装配 provider 内专用）：仅 *.mdc，mtime 缓存，异常静默为空。
+ * 同步读取一个规则目录（装配 provider 内专用）：仅 *.mdc，mtime 缓存；缺失视为空。
  * @author ddj 2026年09月03号
  * @param dir 规则目录
  * @param scope 作用域
- * @param relHint 相对提示
+ * @param origin 用户规则来源
  * @returns 已加载规则列表
  */
-function readRulesSync(dir: string, scope: RuleScope): LoadedRule[] {
-  if (!existsSync(dir)) return []
+function readRulesSync(dir: string, scope: RuleScope, origin?: UserRuleOrigin): LoadedRule[] {
   let names: string[]
   try {
     names = readdirSync(dir)
-  } catch {
-    return []
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
+    throw error
   }
   const out: LoadedRule[] = []
   for (const file of names.filter((name) => name.endsWith('.mdc')).sort().slice(0, RULE_DIR_CAP)) {
@@ -470,8 +517,9 @@ function readRulesSync(dir: string, scope: RuleScope): LoadedRule[] {
     let info: { mtimeMs: number; size: number; isFile(): boolean }
     try {
       info = statSync(absPath)
-    } catch {
-      continue
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue
+      throw error
     }
     if (!info.isFile()) continue
     const cached = injCache.get(absPath)
@@ -481,17 +529,25 @@ function readRulesSync(dir: string, scope: RuleScope): LoadedRule[] {
     } else {
       try {
         parsed = parseRuleMdc(readFileSync(absPath, 'utf8'))
-      } catch {
-        continue
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue
+        throw error
       }
       injCache.set(absPath, { mtimeMs: info.mtimeMs, size: info.size, parsed })
     }
     out.push({
-      info: toRuleInfo(scope, file, absPath, parsed, info.size, info.mtimeMs),
+      info: toRuleInfo(scope, file, absPath, parsed, info.size, info.mtimeMs, origin),
       body: parsed.body,
     })
   }
   return out
+}
+
+/** 同步装配与列表同名遮蔽策略一致。 */
+export function readUserRulesSync(dirs = userRuleDirs()): LoadedRule[] {
+  const current = readRulesSync(dirs.current, 'user', 'current')
+  const legacy = dirs.legacy ? readRulesSync(dirs.legacy, 'user', 'legacy') : []
+  return mergeUserRules(current, legacy, (rule) => rule.info.file)
 }
 
 /** 从装配上下文解析会话工作区 cwd（agent.id → sessions → header.cwd；缺链返回 null）。 */
@@ -509,12 +565,12 @@ function cwdFromAssemble(ctx: Ctx, asm: { agent?: { id?: unknown } } | undefined
  * @param ctx DSH host 上下文
  * @returns 是否成功注册
  */
-export function installRulesSection(ctx: Ctx): boolean {
+export function installRulesSection(ctx: Ctx, dirs = userRuleDirs()): boolean {
   const sp = ctx.get('systemPrompt')
   if (!sp || typeof sp.section !== 'function') return false
   const provider = (asm: { agent?: { id?: unknown } }): string => {
     try {
-      const user = readRulesSync(userRulesDir(), 'user')
+      const user = readUserRulesSync(dirs)
       const cwd = cwdFromAssemble(ctx, asm)
       const project = cwd ? readRulesSync(projectRulesDir(cwd), 'project') : []
       return renderRulesSection(user, project, cwd ?? undefined)

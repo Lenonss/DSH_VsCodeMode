@@ -1,14 +1,39 @@
 /**
- * 快捷键模块与设置页草稿逻辑测试。
- * 作者 ddj 2026-08-26
+ * 快捷键模块与官方目录弦表同步测试。
+ * 弦表（chordOf/bindingsOf）由官方 shortcuts 目录驱动：测试用
+ * SHORTCUT_PROFILES → bindingToChord 派生弦表，等价线上 bindCatalogChords 的产物。
+ * 作者 ddj 2026-08-26 / 2026年10月
  */
 import { describe, expect, it } from 'vitest'
 import {
-  COMMANDS, bindingsOf, chordFromEvent, chordOf, formatChord, keybindingsApply,
+  COMMANDS, applyOfficialChords, bindingsOf, chordFromEvent, chordOf, formatChord,
   matchEvent, normalizeKey, parseChord, parseChords,
 } from '../src/client/keybindings.js'
-import { draftOf, storeOf, conflictsOf } from '../src/client/ui/KeybindingsPanel.js'
-import { defaultKeybindings, KEYBINDING_DEFAULTS, normalizeKeybindings } from '../src/shared/keybindings.js'
+import {
+  bindingToChord, defaultKeybindings, KEYBINDING_DEFAULTS, normalizeKeybindings,
+  SHORTCUT_PROFILES, type ShortcutProfiles,
+} from '../src/shared/keybindings.js'
+
+/** 按 SHORTCUT_PROFILES 派生官方目录弦表（等价 shortcutsOfficial.bindCatalogChords 的产物）。 */
+function officialChordsOf(profiles: Record<string, ShortcutProfiles>): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const [id, profile] of Object.entries(profiles)) {
+    for (const binding of Object.values(profile)) {
+      if (!binding) continue
+      const chord = bindingToChord(binding)
+      if (chord !== null) {
+        out[id] = chord
+        break
+      }
+    }
+  }
+  return out
+}
+
+/** 模拟官方目录首次同步（默认键位）。 */
+function applyOfficialDefaults(): void {
+  applyOfficialChords(officialChordsOf(SHORTCUT_PROFILES))
+}
 
 describe('keybindings shared defaults', () => {
   it('declares every editor command with defaults', () => {
@@ -39,7 +64,7 @@ describe('keybindings shared defaults', () => {
   })
 
   it('关闭当前页签键位（Ctrl+F4）可解析命中；不绑 Ctrl+W（浏览器会截获）', () => {
-    keybindingsApply({})
+    applyOfficialDefaults()
     expect(chordOf('edrv.closeTab')).toBe('Ctrl+F4')
     expect(matchEvent({ ctrlKey: true, key: 'F4' }, bindingsOf('edrv.closeTab'))).toBe(true)
     // Ctrl+F4 缺 Ctrl（裸 F4）不命中；Ctrl+W 不在目录里
@@ -48,7 +73,7 @@ describe('keybindings shared defaults', () => {
   })
 
   it('转到行（Ctrl+G）可解析命中，裸 G / Ctrl+Shift+G 不误命中', () => {
-    keybindingsApply({})
+    applyOfficialDefaults()
     expect(chordOf('edrv.goToLine')).toBe('Ctrl+G')
     expect(matchEvent({ ctrlKey: true, key: 'g' }, bindingsOf('edrv.goToLine'))).toBe(true)
     expect(matchEvent({ key: 'g' }, bindingsOf('edrv.goToLine'))).toBe(false)
@@ -56,18 +81,17 @@ describe('keybindings shared defaults', () => {
   })
 
   it('添加选中内容为引用（Ctrl+U）可解析命中，Ctrl+Shift+U 不误命中', () => {
-    keybindingsApply({})
+    applyOfficialDefaults()
     expect(chordOf('edrv.addSelectionRef')).toBe('Ctrl+U')
     expect(matchEvent({ ctrlKey: true, key: 'u' }, bindingsOf('edrv.addSelectionRef'))).toBe(true)
     expect(matchEvent({ ctrlKey: true, shiftKey: true, key: 'U' }, bindingsOf('edrv.addSelectionRef'))).toBe(false)
     expect(matchEvent({ ctrlKey: true, key: 'S' }, bindingsOf('edrv.addSelectionRef'))).toBe(false)
   })
 
-  it('命令栏键位（Ctrl+Shift+P / F1）可解析并命中，且不与既有键位冲突', () => {
-    keybindingsApply({})
-    expect(chordOf('edrv.showCommands')).toBe('Ctrl+Shift+P|F1')
+  it('命令栏键位（官方仅 Ctrl+Shift+P；F1 候选随官方机制废弃）可解析并命中', () => {
+    applyOfficialDefaults()
+    expect(chordOf('edrv.showCommands')).toBe('Ctrl+Shift+P')
     expect(matchEvent({ ctrlKey: true, shiftKey: true, key: 'P' }, bindingsOf('edrv.showCommands'))).toBe(true)
-    expect(matchEvent({ key: 'F1' }, bindingsOf('edrv.showCommands'))).toBe(true)
     // 缺 Shift 的 Ctrl+P 仍是快速打开，不得命中命令栏
     expect(matchEvent({ ctrlKey: true, key: 'P' }, bindingsOf('edrv.showCommands'))).toBe(false)
   })
@@ -84,17 +108,16 @@ describe('keybindings shared defaults', () => {
   })
 })
 
-describe('页签循环键位（编辑器自带分页）', () => {
+describe('页签循环键位（官方派发，Ctrl+PageDown 候选随官方机制废弃）', () => {
   it('命令目录含下一/上一页签，默认键位可解析并命中', () => {
     const ids = COMMANDS.map((c) => c.id)
     expect(ids).toContain('edrv.nextTab')
     expect(ids).toContain('edrv.prevTab')
-    keybindingsApply({})
-    expect(chordOf('edrv.nextTab')).toBe('Ctrl+Alt+ArrowRight|Ctrl+PageDown')
-    expect(chordOf('edrv.prevTab')).toBe('Ctrl+Alt+ArrowLeft|Ctrl+PageUp')
+    applyOfficialDefaults()
+    expect(chordOf('edrv.nextTab')).toBe('Ctrl+Alt+ArrowRight')
+    expect(chordOf('edrv.prevTab')).toBe('Ctrl+Alt+ArrowLeft')
     expect(matchEvent({ ctrlKey: true, altKey: true, key: 'ArrowRight' }, bindingsOf('edrv.nextTab'))).toBe(true)
-    expect(matchEvent({ ctrlKey: true, key: 'PageDown' }, bindingsOf('edrv.nextTab'))).toBe(true)
-    expect(matchEvent({ ctrlKey: true, key: 'PageUp' }, bindingsOf('edrv.prevTab'))).toBe(true)
+    expect(matchEvent({ ctrlKey: true, altKey: true, key: 'ArrowLeft' }, bindingsOf('edrv.prevTab'))).toBe(true)
     // 缺 Alt 的 Ctrl+→ 不应命中（避免与普通光标操作冲突）
     expect(matchEvent({ ctrlKey: true, key: 'ArrowRight' }, bindingsOf('edrv.nextTab'))).toBe(false)
   })
@@ -185,46 +208,30 @@ describe('chordFromEvent (recording)', () => {
   })
 })
 
-describe('keybindingsApply module state', () => {
-  it('merges overrides with defaults and drops unknown ids', () => {
-    keybindingsApply({ 'edrv.save': 'Ctrl+Alt+S', ghost: 'Ctrl+Z' })
-    expect(chordOf('edrv.save')).toBe('Ctrl+Alt+S')
-    expect(chordOf('edrv.quickOpen')).toBe('Ctrl+P')
-    expect(bindingsOf('edrv.save')).toEqual([{ ctrl: true, alt: true, shift: false, meta: false, key: 'S' }])
-    expect(bindingsOf('edrv.navigateBack')).toEqual([
-      { ctrl: false, shift: false, alt: true, meta: false, key: 'ArrowLeft' },
-      { ctrl: true, shift: false, alt: true, meta: false, key: '-' },
-    ])
-    keybindingsApply(undefined)
+describe('applyOfficialChords module state', () => {
+  it('官方目录弦表全量替换（旧目录残留不得泄漏）', () => {
+    applyOfficialDefaults()
     expect(chordOf('edrv.save')).toBe('Ctrl+S')
+    applyOfficialChords({ 'edrv.save': 'Ctrl+Alt+S' })
+    expect(chordOf('edrv.save')).toBe('Ctrl+Alt+S')
+    expect(chordOf('edrv.quickOpen')).toBeNull()
+    expect(bindingsOf('edrv.save')).toEqual([{ ctrl: true, alt: true, shift: false, meta: false, key: 'S' }])
   })
 
-  it('treats empty chord as unbound', () => {
-    keybindingsApply({ 'edrv.toggleSidebar': '' })
+  it('目录未就绪（空弦表）时全部视为未绑定', () => {
+    applyOfficialChords({})
+    expect(chordOf('edrv.save')).toBeNull()
+    expect(bindingsOf('edrv.save')).toEqual([])
+  })
+
+  it('空弦条目按未绑定处理（用户显式清空）', () => {
+    applyOfficialChords({ 'edrv.toggleSidebar': '' })
     expect(chordOf('edrv.toggleSidebar')).toBeNull()
     expect(bindingsOf('edrv.toggleSidebar')).toEqual([])
-    keybindingsApply(undefined)
-  })
-})
-
-describe('KeybindingsPanel draft helpers', () => {
-  it('merges defaults, normalizes empty to null', () => {
-    const draft = draftOf({ 'edrv.save': '', 'edrv.quickOpen': 'Ctrl+Shift+P' })
-    expect(draft['edrv.save']).toBeNull()
-    expect(draft['edrv.quickOpen']).toBe('Ctrl+Shift+P')
-    expect(draft['edrv.searchInFiles']).toBe('Ctrl+Shift+F')
   })
 
-  it('stores null as empty string and keeps overrides', () => {
-    expect(storeOf({ 'edrv.save': null, 'edrv.quickOpen': 'Ctrl+Shift+P' }))
-      .toEqual({ 'edrv.save': '', 'edrv.quickOpen': 'Ctrl+Shift+P' })
-  })
-
-  it('flags commands sharing one chord', () => {
-    const draft = { 'edrv.save': 'Ctrl+S', 'edrv.quickOpen': 'Ctrl+P', 'edrv.toggleSidebar': 'Ctrl+S', 'edrv.searchInFiles': 'Ctrl+Shift+F' }
-    const conflicts = conflictsOf(draft)
-    expect(conflicts.has('edrv.save')).toBe(true)
-    expect(conflicts.has('edrv.toggleSidebar')).toBe(true)
-    expect(conflicts.has('edrv.quickOpen')).toBe(false)
+  it('官方目录不派生 toggleSidebar 弦（Ctrl+B 冲突保留，默认未绑定）', () => {
+    applyOfficialDefaults()
+    expect(chordOf('edrv.toggleSidebar')).toBeNull()
   })
 })

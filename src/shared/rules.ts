@@ -4,7 +4,10 @@
  * 作者 ddj 2026年09月03号
  */
 
-/** 规则作用域：用户规则（~/.dsh/rules）或项目规则（<工作区>/.dsh/rules）。 */
+/** 用户规则来源：当前 DSH_HOME 或系统用户目录的旧版 .dsh。 */
+export type UserRuleOrigin = 'current' | 'legacy'
+
+/** 规则作用域：用户规则（DSH_HOME/rules + ~/.dsh/rules）或项目规则（<工作区>/.dsh/rules）。 */
 export type RuleScope = 'user' | 'project'
 
 /** 规则生效类型（由 frontmatter 推导）：总是 / 自动（globs 命中时）/ 手动（仅索引）。 */
@@ -13,6 +16,8 @@ export type RuleType = 'always' | 'auto' | 'manual'
 /** 一条 .mdc 规则的元信息（列表行展示 + 注入语义所需的最小集）。 */
 export interface RuleInfo {
   scope: RuleScope
+  /** 用户规则的实际来源；项目规则不设置。 */
+  origin?: UserRuleOrigin
   /** 文件名（含 .mdc 后缀，不含路径）。 */
   file: string
   /** 绝对路径（host 解析，供展示与按需读取）。 */
@@ -48,6 +53,8 @@ export interface RuleSaveInput {
   scope: RuleScope
   /** project 必填：目标工作区绝对路径（须为 DSH 已注册 workspace）。 */
   workspacePath?: string
+  /** 缺省 current；仅用户规则可指定 legacy。 */
+  origin?: UserRuleOrigin
   file: string
   content: string
 }
@@ -56,5 +63,6 @@ export interface RuleSaveInput {
 export interface RuleRefInput {
   scope: RuleScope
   workspacePath?: string
+  origin?: UserRuleOrigin
   file: string
 }

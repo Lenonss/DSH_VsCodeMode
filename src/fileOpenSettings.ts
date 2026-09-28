@@ -407,6 +407,9 @@ export async function updateSection(provider: SettingsProvider | undefined, ns: 
  * 构建设置 section schema（install 路径与插件 Config 声明共用，保证两代形状同源）。
  * 字段集 = fileOpenTool/keybindings/sidebarMinWidth/maxOpenEditors/integrationBaseUrl/
  * aiInline/aiProvider/aiModel/aiEffort/svnPath/tortoisePath/nativeOpenExts，全部带默认值
+ * （keybindings 自 2026-10 起废弃停写：键位持久化归官方 shortcuts 存储
+ *   userData/keybindings.json / dsh.keybindings.v1；字段保留仅为旧档迁移读取与降级回滚，
+ *   见 client/shortcutsOfficial.ts 的 migrateLegacyKeybindings。）
  * （Config 启动校验在 undefined/空配置下自动填充，rc/alpha 两代 cordis 均通过）。
  * options.volatile：DSH 0.1.7 线的 Config 导出专用——SettingsForms.describe 只下发
  * 含 volatile 字段的 entry（volatileForm 门槛），不标记则 ns 永不出现在 describe、

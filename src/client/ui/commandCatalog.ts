@@ -1,12 +1,14 @@
 /**
  * dsh-vscode-mode client — 编辑器指令目录（纯元数据）。
- * 「一条命令 = 一条注册数据」：命令栏、快捷键设置页、快捷键监听与 Monaco 右键菜单
- * 全部从本表读取；新增一条能力只需在 EDITOR_COMMANDS 追加一项（可选 keybinding）。
+ * 「一条命令 = 一条注册数据」：命令栏、快捷键设置页与 Monaco 右键菜单
+ * 全部从本表读取；新增一条能力只需在 EDITOR_COMMANDS 追加一项（默认键位见 shared/keybindings SHORTCUT_PROFILES）。
  * run 只派发 `edrv.command.*` 窗口事件，不直接触碰 React/Monaco（`edrv.command.` 前缀
  * 与既有 `edrv:` 刷新/主题事件分属不同命名空间，互不干扰）。
  * 作者 ddj 2026年09月10号
  */
 import { hasEditorModel, hasOpenTabs } from '../editorModelState.js'
+import { activeEditorPath } from '../activePathStore.js'
+import { isMarkdownPath } from '../markdownPreview.js'
 import { svnCurrentStatus } from '../svnStatus.js'
 import { dapStore } from '../dap/store.js'
 import { svnActionOn, svnActionsFor } from '../../shared/svnActions.js'
@@ -22,8 +24,6 @@ export interface CommandDef {
   category: string
   /** 组内排序（小者优先）。 */
   order?: number
-  /** 默认键位弦（可选；可含 `|` 多候选）。声明后由快捷键设置页展示与录制。 */
-  keybinding?: string
   /** 运行体：派发窗口事件或直接执行。 */
   run: () => void
   /** 可用性判定（缺省视为始终可用；返回 false 时命令栏隐藏且 run 被拒）。 */
@@ -62,7 +62,7 @@ function alwaysAvailable(): boolean {
 function nextEditorRowDef(): CommandDef {
   return {
     id: 'edrv.nextEditorRow', label: '下一编辑行（光标整行下移）', category: '导航', order: 50,
-    keybinding: 'Ctrl+Alt+ArrowDown', available: needsModel,
+    available: needsModel,
     run: () => emit('nextEditorRow'),
   }
 }
@@ -75,7 +75,7 @@ function nextEditorRowDef(): CommandDef {
 function prevEditorRowDef(): CommandDef {
   return {
     id: 'edrv.prevEditorRow', label: '上一编辑行（光标整行上移）', category: '导航', order: 60,
-    keybinding: 'Ctrl+Alt+ArrowUp', available: needsModel,
+    available: needsModel,
     run: () => emit('prevEditorRow'),
   }
 }
@@ -88,7 +88,7 @@ function prevEditorRowDef(): CommandDef {
 function gotoLineDef(): CommandDef {
   return {
     id: 'edrv.goToLine', label: '转到行', category: '导航', order: 45,
-    keybinding: 'Ctrl+G', available: needsModel,
+    available: needsModel,
     run: () => emit('goToLine'),
   }
 }
@@ -102,7 +102,7 @@ function gotoLineDef(): CommandDef {
 function addSelectionRefDef(): CommandDef {
   return {
     id: 'edrv.addSelectionRef', label: '添加选中内容为引用', category: '编辑', order: 10,
-    keybinding: 'Ctrl+U', available: needsModel,
+    available: needsModel,
     run: () => emit('addSelectionRef'),
   }
 }
@@ -117,7 +117,7 @@ function addSelectionRefDef(): CommandDef {
 function closeTabDef(): CommandDef {
   return {
     id: 'edrv.closeTab', label: '关闭当前页签', category: '文件', order: 40,
-    keybinding: 'Ctrl+F4', available: hasOpenTabs,
+    available: hasOpenTabs,
     run: () => emit('closeTab'),
   }
 }
@@ -188,34 +188,39 @@ function svnEventOf(action: SvnActionDef): string {
 
 /**
  * 编辑器内置指令目录（顺序 = 快捷键设置页展示顺序）。
- * 前置 8 条的键位由 EditorView / QuickOpen 自行 capture 监听（历史实现），
- * 故不进 BRIDGE_COMMANDS，避免同一按键双执行。
- * @author ddj 2026年09月10号
+ * 键位派发已归官方 shortcuts 机制：默认键位表在 shared/keybindings.ts 的 SHORTCUT_PROFILES，
+ * 由 client/index.ts 经 shortcutsOfficial.registerOfficialShortcuts 注册，本目录只管
+ * 「标签/可用性/执行」。无默认键位的命令同样注册（官方 UI/插件子页内可自定义绑定）。
+ * @author ddj 2026年09月10号 / 2026年10月
  */
 export const EDITOR_COMMANDS: readonly CommandDef[] = [
   {
     id: 'edrv.save', label: '保存文件', category: '文件', order: 10,
-    keybinding: 'Ctrl+S', available: needsModel,
+    available: needsModel,
     run: () => emit('save'),
   },
   {
     id: 'edrv.quickOpen', label: '快速打开文件', category: '文件', order: 20,
-    keybinding: 'Ctrl+P', available: alwaysAvailable,
+    available: alwaysAvailable,
     run: () => emit('quickOpen'),
   },
   {
     id: 'edrv.toggleSidebar', label: '切换侧边栏', category: '视图', order: 10,
-    keybinding: 'Ctrl+B', available: alwaysAvailable,
+    available: alwaysAvailable,
     run: () => emit('toggleSidebar'),
   },
   {
     id: 'edrv.searchInFiles', label: '在工作区中搜索', category: '视图', order: 20,
-    keybinding: 'Ctrl+Shift+F', available: alwaysAvailable,
+    available: alwaysAvailable,
     run: () => emit('searchInFiles'),
   },
   {
     id: 'edrv.toggleMarkdownPreview', label: '切换 Markdown 预览', category: '视图', order: 25,
-    keybinding: 'Ctrl+Shift+V', available: alwaysAvailable,
+    // 仅活动文件是 .md 时可用（不可用时官方派发返回 pass 不吞键，保留浏览器「无格式粘贴」语义）
+    available: () => {
+      const path = activeEditorPath()
+      return typeof path === 'string' && isMarkdownPath(path)
+    },
     run: () => emit('toggleMarkdownPreview'),
   },
   {
@@ -225,22 +230,22 @@ export const EDITOR_COMMANDS: readonly CommandDef[] = [
   },
   {
     id: 'edrv.navigateBack', label: '后退（导航历史）', category: '导航', order: 10,
-    keybinding: 'Alt+ArrowLeft|Ctrl+Alt+-', available: needsModel,
+    available: needsModel,
     run: () => emit('navigateBack'),
   },
   {
     id: 'edrv.navigateForward', label: '前进（导航历史）', category: '导航', order: 20,
-    keybinding: 'Alt+ArrowRight|Ctrl+Shift+-', available: needsModel,
+    available: needsModel,
     run: () => emit('navigateForward'),
   },
   {
     id: 'edrv.nextTab', label: '下一个页签', category: '导航', order: 30,
-    keybinding: 'Ctrl+Alt+ArrowRight|Ctrl+PageDown', available: needsModel,
+    available: needsModel,
     run: () => emit('nextTab'),
   },
   {
     id: 'edrv.prevTab', label: '上一个页签', category: '导航', order: 40,
-    keybinding: 'Ctrl+Alt+ArrowLeft|Ctrl+PageUp', available: needsModel,
+    available: needsModel,
     run: () => emit('prevTab'),
   },
   {
@@ -291,41 +296,41 @@ function debugPaletteDefs(): CommandDef[] {
   return [
     {
       id: 'edrv.debugToggleBreakpoint', label: '调试：切换断点（光标行）', category: '调试', order: 10,
-      keybinding: 'F9', available: needsModel,
+      available: needsModel,
       run: () => emit('debugToggleBreakpoint'),
     },
     {
       id: 'edrv.debugStartContinue', label: '调试：启动 / 继续', category: '调试', order: 20,
-      keybinding: 'F5', available: canStart,
+      available: canStart,
       run: () => emit('debugStartContinue'),
     },
     {
       id: 'edrv.debugStepOver', label: '调试：单步跳过', category: '调试', order: 30,
-      keybinding: 'F10', available: paused,
+      available: paused,
       run: () => emit('debugStepOver'),
     },
     {
       id: 'edrv.debugStepInto', label: '调试：单步步入', category: '调试', order: 40,
-      keybinding: 'F11', available: paused,
+      available: paused,
       run: () => emit('debugStepInto'),
     },
     {
       id: 'edrv.debugStepOut', label: '调试：单步步出', category: '调试', order: 50,
-      keybinding: 'Shift+F11', available: paused,
+      available: paused,
       run: () => emit('debugStepOut'),
     },
     {
       id: 'edrv.debugStop', label: '调试：停止', category: '调试', order: 60,
-      keybinding: 'Shift+F5', available: canStop,
+      available: canStop,
       run: () => emit('debugStop'),
     },
   ]
 }
 
 /**
- * 桥接派发指令（无原生监听，键位由 commandBridge 统一 capture 处理）。
- * 新增「只填目录、不写监听」的编辑器指令一律放这里：键位、命令栏、设置页自动可用。
- * @author ddj 2026年09月10号
+ * 非编辑器原生路径的指令（键位统一由官方 shortcuts 机制派发；历史「桥接」分组名保留）。
+ * 新增「只填目录」的编辑器指令一律放这里：命令栏与官方快捷键目录自动可用。
+ * @author ddj 2026年09月10号 / 2026年10月
  */
 export const BRIDGE_COMMANDS: readonly CommandDef[] = [
   nextEditorRowDef(),
@@ -345,16 +350,6 @@ export const BRIDGE_COMMANDS: readonly CommandDef[] = [
 export function showCommandsDef(run: () => void): CommandDef {
   return {
     id: 'edrv.showCommands', label: '显示所有命令', category: '视图', order: 1,
-    keybinding: 'Ctrl+Shift+P|F1', available: alwaysAvailable, run,
+    available: alwaysAvailable, run,
   }
-}
-
-/**
- * 需要全局键位派发的指令（桥接类 + 命令栏自身；不含 EditorView/QuickOpen 原生监听的那些）。
- * @author ddj 2026年09月10号
- * @param showCommands 命令栏命令定义
- * @returns 派发集合
- */
-export function dispatchedCommands(showCommands: CommandDef): readonly CommandDef[] {
-  return [...BRIDGE_COMMANDS, showCommands]
 }

@@ -50,9 +50,13 @@ import { createDefaultFileMenuItems } from './sidebar/menuItems.js'
 import { createOutlinePanel } from './outline/index.js'
 import { createOutlineSourceRegistry, registerBuiltinOutlineSources } from './outline/sources.js'
 import { createLspOutlineSource } from './outline/lspSource.js'
-import { keybindingsApply } from './keybindings.js'
+import { applyOfficialChords } from './keybindings.js'
 import { createCommandBridge } from './commandBridge.js'
+import type { CommandBridge } from './commandBridge.js'
 import { REGISTRY_GLOBAL } from './commandGlobals.js'
+import { awaitShortcutsService, bindCatalogChords, detectShortcuts, installLegacyKeys, migrateLegacyKeybindings, registerOfficialShortcuts } from './shortcutsOfficial.js'
+import { SHORTCUT_PROFILES, defaultKeybindings, normalizeKeybindings } from '../shared/keybindings.js'
+import { ShortcutSettings } from './ui/ShortcutSettings.js'
 import { sidebarMinApply } from './sidebarMin.js'
 import { editorLimitApply } from './editorLimit.js'
 import { log } from './log.js'
@@ -71,31 +75,32 @@ import type { CompatAdapter } from '../shared/compat.js'
 // 写死任一桥名都会在另一版本停等）——设置桥由 compat.pickSettingsBinder 运行时探测三级降级。
 export const inject = ['slots', 'timer', 'locale', 'connection', 'remote', 'workspaces', 'sessions', 'conversation']
 
-/** 指令桥装配幂等标记（同一 document 重复 apply 只装配一次，避免重复键位监听）。 */
-let commandsMounted = false
+/** 指令桥单例（同一 document 重复 apply 只装配一次；HMR 重挂不重复注册）。 */
+let commandsBridge: CommandBridge | null = null
 
 /**
  * 装配指令注册表（指令桥 + 命令栏）。
  * 指令桥不依赖已挂载编辑器（run 只派发窗口事件），故可在启动期装配；
  * 命令栏浮层的宿主由 CommandPalette 自己在编辑区树内认领。
- * @author ddj 2026年09月10号
+ * @author ddj 2026年09月10号 / 2026年10月
  * @param ctx 客户端根上下文
- * @returns void
+ * @returns 指令桥（官方 shortcuts 注册的执行器来源）
  */
-function setupCommands(ctx: any): void {
-  if (commandsMounted) return
-  commandsMounted = true
+function setupCommands(ctx: any): CommandBridge {
+  if (commandsBridge) return commandsBridge
   const bridge = createCommandBridge()
+  commandsBridge = bridge
   ctx.provide(REGISTRY_GLOBAL, bridge.registry)
   // 无条件镜像到 window（DSH 不创建 window.dsh，旧条件式赋值是死代码 → 命令栏空表）
   const host = window as unknown as Record<string, unknown>
   host[REGISTRY_GLOBAL] = bridge.registry
   ctx.effect(() => () => {
     bridge.dispose()
-    commandsMounted = false
+    commandsBridge = null
     if (host[REGISTRY_GLOBAL] === bridge.registry) delete host[REGISTRY_GLOBAL]
   }, 'vscode-mode: command registry')
   log.info('指令系统已装配：' + bridge.registry.list().length + ' 条指令，Ctrl+Shift+P 打开命令栏')
+  return bridge
 }
 
 /**
@@ -131,7 +136,7 @@ export function apply(ctx: any): void {
   }, 'vscode-mode: settings document editor route')
 
   // 指令系统（命令栏 + 指令注册表）先装配：命令栏在被任何 React slot 渲染前即可唤起
-  setupCommands(ctx)
+  const commands = setupCommands(ctx)
 
   const registry: FileOpenerRegistry = createFileOpenerRegistry()
   const workspaces = ctx.get('workspaces')
@@ -270,6 +275,17 @@ export function apply(ctx: any): void {
       claimDisposer = null
     }
   }
+  const legacyDefaults = defaultKeybindings()
+  let officialReady = false
+  /**
+   * 获取旧版快捷键覆盖；设置桥尚未就绪时回退默认键位。
+   * @author ddj 2026年09月28号
+   * @returns 旧版键位弦表
+   */
+  const legacyChords = (): Record<string, string> => ({
+    ...legacyDefaults, ...normalizeKeybindings(bridge.scope()?.getSnapshot().value?.keybindings),
+  })
+  applyOfficialChords(legacyChords())
   // 设置同步（fileOpenTool / 快捷键 / 侧宽 / 页签上限）：桥可能晚于本插件 apply 就绪
   // （设置桥服务不进 inject），首次命中即挂两条 effect；晚到经 bridge.whenReady 重挂一次
   // （settingsBridge 15×2s 有界重试内命中才会触发，用尽后保持旧行为不轮询）。
@@ -290,14 +306,14 @@ export function apply(ctx: any): void {
       sync()
       return scope.subscribe(sync)
     }, 'vscode-mode: file opener setting sync')
-    // 快捷键配置同步：设置提交后立即刷新键位匹配（编辑器/QuickOpen 按事件时读取）
-    // 同一订阅里顺带同步侧边栏最小宽度（sidebarMinWidth）→ 派发 edrv:sidebar-min-width 通知编辑器重夹
-    // 以及页签上限（maxOpenEditors）→ 派发 edrv:max-open-editors 通知编辑器复算淘汰
+    // 界面偏好同步：侧边栏最小宽度（sidebarMinWidth）→ 派发 edrv:sidebar-min-width 通知编辑器重夹
+    // 页签上限（maxOpenEditors）→ 派发 edrv:max-open-editors 通知编辑器复算淘汰
+    // （快捷键配置已归官方 shortcuts 机制，目录弦表同步见 'vscode-mode: official shortcuts' effect）
     ctx.effect(() => {
       const sync = (): void => {
         const snapshot = scope.getSnapshot()
         if (snapshot.status === 'loading') return
-        keybindingsApply(snapshot.value?.keybindings)
+        if (!officialReady) applyOfficialChords(legacyChords())
         const minW = sidebarMinApply(snapshot.value?.sidebarMinWidth)
         window.dispatchEvent(new CustomEvent('edrv:sidebar-min-width', { detail: { value: minW } }))
         const limit = editorLimitApply(snapshot.value?.maxOpenEditors)
@@ -311,6 +327,58 @@ export function apply(ctx: any): void {
   }
   mountSettingsSyncs()
   if (!settingsSyncMounted) ctx.effect(() => bridge.whenReady(mountSettingsSyncs), 'vscode-mode: settings bridge wait')
+
+  // 官方 shortcuts 机制装配（可选服务，有界重试；服务缺失仅降级告警，不阻断装配）：
+  // ① 全部指令注册进官方目录（含无默认键位命令，官方 UI 可自定义绑定；冲突默认自动降级未绑定）；
+  // ② 订阅官方目录 → 弦表同步（chordOf/bindingsOf 数据源，tooltip/命令栏提示跟随）；
+  // ③ 旧 keybindings 设置一次性迁移进官方存储（幂等，与设置桥双就绪后有界重试）。
+  ctx.effect(() => {
+    let cancelled = false
+    let disposeRegistration: (() => void) | null = null
+    let disposeCatalog: (() => void) | null = null
+    const disposeLegacy = installLegacyKeys(commands.registry.list(), commands.registry, legacyChords)
+    const cancelProbe = awaitShortcutsService(ctx, {
+      schedule,
+      onReady: (service) => {
+        if (cancelled) return
+        if (service === null) {
+          log.warn('官方 shortcuts 服务不可用（DSH 版本过旧？），继续使用旧版快捷键派发')
+          return
+        }
+        disposeLegacy()
+        officialReady = true
+        disposeRegistration = registerOfficialShortcuts(service, commands.registry.list(), commands.registry, SHORTCUT_PROFILES)
+        disposeCatalog = bindCatalogChords(service, applyOfficialChords)
+        let attempts = 0
+        const attemptMigration = (): void => {
+          if (cancelled) return
+          const scope = bridge.scope()
+          if (!scope) {
+            if (attempts < 15) {
+              attempts += 1
+              schedule(attemptMigration, 2000)
+            }
+            return
+          }
+          void migrateLegacyKeybindings(service, scope).then((result) => {
+            if (cancelled || result.done) return
+            if (attempts < 15) {
+              attempts += 1
+              schedule(attemptMigration, 2000)
+            }
+          })
+        }
+        attemptMigration()
+      },
+    })
+    return () => {
+      cancelled = true
+      cancelProbe()
+      disposeLegacy()
+      disposeRegistration?.()
+      disposeCatalog?.()
+    }
+  }, 'vscode-mode: official shortcuts')
   if (workspaces?.openPath) {
     ctx.effect(() => installOpenPathRouter({
       workspaces,
@@ -502,6 +570,15 @@ export function apply(ctx: any): void {
     order: 30,
     label: 'VSCodeMode',
   }, () => React.createElement(SettingsContext.Provider, { value: bridge.scope() }, React.createElement(McpSettings, { openerRegistry: registry, compatSummary })))
+
+  // 独立「快捷键」设置区（与 VSCodeMode 平级）：官方快捷键子页 + 插件快捷键子页。
+  // 服务经 getShortcuts 运行时探测（自愈），组件内部自带就绪重试。
+  registerSlotSafely(ctx, {
+    name: 'settings.section',
+    id: 'vscode-mode-shortcuts',
+    order: 31,
+    label: '快捷键',
+  }, () => React.createElement(ShortcutSettings, { getShortcuts: () => detectShortcuts(ctx) }))
 
   // 卸载收尾（G4，DSH 0.1.6-alpha.2 起支持运行时卸载/重载）：
   // 注销挂在存活的 window.monaco 上的全部 Monaco provider 并复位模块状态。

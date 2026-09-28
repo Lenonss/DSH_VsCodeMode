@@ -11,7 +11,8 @@ import { join } from 'node:path'
 import {
   parseRuleMdc, ruleTypeOf, validateRuleFile, toggleEnabledLine,
   renderRulesSection, rulesList, rulesRead, rulesSave, rulesRemove, rulesToggle,
-  installRulesSection, projectRulesDir, userRulesDir, type LoadedRule,
+  installRulesSection, projectRulesDir, userRulesDir, userRuleDirs, listUserRules, readUserRulesSync,
+  type LoadedRule, type UserRulesDirs,
 } from '../src/rules.js'
 
 // --region 纯函数：解析与类型
@@ -168,6 +169,7 @@ describe('renderRulesSection', () => {
 // --region IO（tmpdir + mock ctx）
 let home = ''
 let projectA = ''
+let testDirs: UserRulesDirs
 /** 项目写盘捕获（ctx fs mock）。 */
 const written = new Map<string, string>()
 
@@ -194,6 +196,7 @@ function mockCtx(withWorkspace: boolean): any {
 beforeAll(async () => {
   home = await mkdtemp(join(tmpdir(), 'edrv-rules-'))
   projectA = join(home, 'projA')
+  testDirs = { current: join(home, 'rules'), legacy: join(home, 'isolated-legacy', 'rules') }
   process.env.DSH_HOME = home
   await mkdir(projectA, { recursive: true })
 })
@@ -212,7 +215,7 @@ describe('rules IO（用户域）', () => {
     expect(saved.enabled).toBe(true)
     expect(saved.absPath).toBe(join(userRulesDir(), 'alpha.mdc'))
 
-    const list = await rulesList(ctx)
+    const list = await rulesList(ctx, testDirs)
     expect(list.user.map((r) => r.file)).toContain('alpha.mdc')
     expect(await rulesRead(ctx, { scope: 'user', file: 'alpha.mdc' })).toBe(content)
 
@@ -235,9 +238,104 @@ describe('rules IO（用户域）', () => {
   })
 
   it('list 目录缺失返回空而非报错', async () => {
-    const list = await rulesList(mockCtx(false))
+    const list = await rulesList(mockCtx(false), testDirs)
     expect(Array.isArray(list.user)).toBe(true)
     expect(Array.isArray(list.projects)).toBe(true)
+  })
+})
+
+describe('双目录用户规则', () => {
+  const ctx = mockCtx(false)
+  const activeHome = join('dual', 'active')
+  const systemHome = join('dual', 'system')
+  const always = (body: string, enabled = true) => `---\nalwaysApply: true\nenabled: ${enabled}\n---\n${body}`
+  const dirs = () => userRuleDirs(join(home, activeHome), join(home, systemHome))
+
+  it('目录相同时不重复加载，只有旧目录存在时列表与注入均读取旧规则', async () => {
+    expect(userRuleDirs(join(home, systemHome, '.dsh'), join(home, systemHome)).legacy).toBeUndefined()
+    const paths = dirs()
+    await mkdir(paths.legacy!, { recursive: true })
+    await writeFile(join(paths.legacy!, 'old.mdc'), always('旧规则正文'), 'utf8')
+    const list = await rulesList(ctx, paths)
+    expect(list.user.map((rule) => [rule.file, rule.origin])).toEqual([['old.mdc', 'legacy']])
+    expect(list.user[0].absPath).toBe(join(paths.legacy!, 'old.mdc'))
+    expect(await rulesRead(ctx, { scope: 'user', origin: 'legacy', file: 'old.mdc' }, paths)).toContain('旧规则正文')
+    expect(renderRulesSection(readUserRulesSync(paths), [])).toContain('旧规则正文')
+    let provider: ((asm: unknown) => string) | undefined
+    const spCtx = { ...ctx, get: (name: string) => name === 'systemPrompt'
+      ? { section: (section: { text: typeof provider }) => { provider = section.text; return () => {} } }
+      : undefined }
+    expect(installRulesSection(spCtx, paths)).toBe(true)
+    expect(provider!({})).toContain('旧规则正文')
+  })
+
+  it('当前目录同名优先，禁用当前版也遮蔽旧版；删除后旧版重新生效', async () => {
+    const paths = dirs()
+    await mkdir(paths.current, { recursive: true })
+    await writeFile(join(paths.legacy!, 'same.mdc'), always('旧版正文'), 'utf8')
+    await writeFile(join(paths.current, 'same.mdc'), always('当前正文', false), 'utf8')
+    await writeFile(join(paths.current, 'new.mdc'), always('独有规则'), 'utf8')
+    const list = await listUserRules(paths)
+    expect(list.map((rule) => [rule.file, rule.origin])).toEqual([
+      ['new.mdc', 'current'], ['old.mdc', 'legacy'], ['same.mdc', 'current'],
+    ])
+    const injected = renderRulesSection(readUserRulesSync(paths), [])
+    expect(injected).toContain('旧规则正文')
+    expect(injected).toContain('独有规则')
+    expect(injected).not.toContain('旧版正文')
+    expect(injected).not.toContain('当前正文')
+    await rulesRemove(ctx, { scope: 'user', origin: 'current', file: 'same.mdc' }, paths)
+    expect((await listUserRules(paths)).find((rule) => rule.file === 'same.mdc')?.origin).toBe('legacy')
+    expect(renderRulesSection(readUserRulesSync(paths), [])).toContain('旧版正文')
+  })
+
+  it('文件名大小写的遮蔽语义与宿主平台一致', async () => {
+    const paths = userRuleDirs(join(home, 'case', 'active'), join(home, 'case', 'system'))
+    await mkdir(paths.current, { recursive: true })
+    await mkdir(paths.legacy!, { recursive: true })
+    await writeFile(join(paths.current, 'Case.mdc'), always('当前大小写规则'), 'utf8')
+    await writeFile(join(paths.legacy!, 'case.mdc'), always('旧版大小写规则'), 'utf8')
+    const listed = await listUserRules(paths)
+    const injected = readUserRulesSync(paths)
+    const expected = process.platform === 'win32' ? 1 : 2
+    expect(listed).toHaveLength(expected)
+    expect(injected).toHaveLength(expected)
+    if (process.platform === 'win32') expect(injected[0].body).not.toContain('旧版大小写规则')
+  })
+
+  it('旧规则的保存、开关、删除只作用于旧目录，新规则默认写当前目录', async () => {
+    const paths = dirs()
+    const ref = { scope: 'user' as const, origin: 'legacy' as const, file: 'edit.mdc' }
+    const saved = await rulesSave(ctx, { ...ref, content: always('旧目录编辑') }, paths)
+    expect(saved.origin).toBe('legacy')
+    expect(saved.absPath).toBe(join(paths.legacy!, ref.file))
+    expect(await rulesRead(ctx, ref, paths)).toContain('旧目录编辑')
+    expect(existsSync(join(paths.current, ref.file))).toBe(false)
+    expect((await rulesToggle(ctx, ref, false, paths)).origin).toBe('legacy')
+    expect(await readFile(saved.absPath, 'utf8')).toContain('enabled: false')
+    await rulesSave(ctx, { scope: 'user', file: 'fresh.mdc', content: always('新规则') }, paths)
+    expect(existsSync(join(paths.current, 'fresh.mdc'))).toBe(true)
+    await rulesRemove(ctx, ref, paths)
+    expect(existsSync(saved.absPath)).toBe(false)
+    expect(existsSync(join(paths.current, 'fresh.mdc'))).toBe(true)
+  })
+
+  it('缺失目录为空；非法来源和文件名拒绝；非缺失目录错误不被吞掉', async () => {
+    const paths = { current: join(home, 'absent-active'), legacy: join(home, 'absent-legacy') }
+    expect(await listUserRules(paths)).toEqual([])
+    expect(readUserRulesSync(paths)).toEqual([])
+    const bad = { scope: 'user' as const, file: 'old.mdc', origin: 'arbitrary' as any }
+    await expect(rulesRead(ctx, bad, paths)).rejects.toThrow('来源')
+    await expect(rulesSave(ctx, { ...bad, content: 'x' }, paths)).rejects.toThrow('来源')
+    await expect(rulesRemove(ctx, bad, paths)).rejects.toThrow('来源')
+    await expect(rulesToggle(ctx, bad, false, paths)).rejects.toThrow('来源')
+    await expect(rulesRemove(ctx, { scope: 'user', origin: 'legacy', file: '../x.mdc' }, paths)).rejects.toThrow('文件名')
+    await expect(rulesRead(ctx, { scope: 'user', file: '../x.mdc' }, paths)).rejects.toThrow('文件名')
+    await expect(rulesSave(ctx, { scope: 'project', origin: 'legacy', workspacePath: projectA, file: 'p.mdc', content: 'x' }, paths)).rejects.toThrow('项目规则不能指定')
+    const invalidDir = join(home, 'not-a-directory')
+    await writeFile(invalidDir, 'x', 'utf8')
+    await expect(listUserRules({ current: invalidDir })).rejects.toMatchObject({ code: 'ENOTDIR' })
+    expect(() => readUserRulesSync({ current: invalidDir })).toThrow()
   })
 })
 
@@ -256,7 +354,7 @@ describe('rules IO（项目域）', () => {
     expect(written.get(key!)).toContain('项目规则')
     expect(existsSync(projectRulesDir(projectA))).toBe(true)
 
-    const list = await rulesList(ctx)
+    const list = await rulesList(ctx, testDirs)
     const proj = list.projects.find((p) => p.workspacePath === projectA)
     expect(proj?.title).toBe('项目A')
     expect(proj?.rules.map((r) => r.file)).toContain('proj-rule.mdc')
@@ -268,13 +366,13 @@ describe('rules IO（项目域）', () => {
   })
 
   it('无 .dsh/rules 的已注册工作区 → missingDir 标记', async () => {
-    const list = await rulesList(mockCtx(true))
+    const list = await rulesList(mockCtx(true), testDirs)
     // projectA 在上一用例已建目录；另造一个无规则目录的注册项验证 missingDir
     const bare = join(home, 'projBare')
     await mkdir(bare, { recursive: true })
     const ctx = mockCtx(false)
     ctx.get = (name: string) => (name === 'workspaceRegistry' ? { list: () => [{ path: bare, title: 'Bare' }] } : undefined)
-    const list2 = await rulesList(ctx)
+    const list2 = await rulesList(ctx, testDirs)
     expect(list2.projects[0]?.missingDir).toBe(true)
   })
 })
@@ -296,7 +394,7 @@ describe('installRulesSection', () => {
       if (name === 'workspaceRegistry') return { list: () => [{ path: projectA, title: 'A' }] }
       return undefined
     }
-    expect(installRulesSection(ctx)).toBe(true)
+    expect(installRulesSection(ctx, testDirs)).toBe(true)
     expect(captured!.name).toBe('dsh-vscode-mode:rules')
     expect(captured!.order).toBe(400)
     const provider = captured!.text as (asm: unknown) => string

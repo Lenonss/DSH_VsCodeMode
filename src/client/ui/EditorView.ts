@@ -13,6 +13,7 @@ import { emitFileChanged, emitRefresh } from '../events.js'
 import { langOf, loadMonaco, snippetLanguageOf } from '../monaco/loader.js'
 import { clampZoom, clearZoomMem, dataUrlOf, isImagePath, isSvgPath, recallZoom, rememberZoom, zoomKeyOf, zoomStepOf } from '../imagePreview.js'
 import { isMarkdownPath } from '../markdownPreview.js'
+import { setActiveEditorPath } from '../activePathStore.js'
 import { MarkdownPanel } from '../md/mdPanel.js'
 import { base64ToBytes, bytesToBase64, isPdfPath } from '../pdfPreview.js'
 import { inNativePath, tryNativeOpen } from '../nativeOpenStore.js'
@@ -49,7 +50,7 @@ import { upsertViewState, viewStatesLoad, viewStatesSave } from '../state/viewSt
 import { migrateScopedKeys, workspaceScopeOf } from '../state/scopeStore.js'
 import { modelsForScope, rememberModel } from '../state/modelCache.js'
 import { navFlashRangeOf } from '../navHighlight.js'
-import { bindingsOf, chordOf, matchEvent, useKeybindingsVersion } from '../keybindings.js'
+import { chordOf, useKeybindingsVersion } from '../keybindings.js'
 import { getSidebarMinWidth } from '../sidebarMin.js'
 import { navHistoryFor } from '../navHistory.js'
 import { statusOfAdd } from '../addToConversation.js'
@@ -335,6 +336,9 @@ export function EditorView(props) {
   const rowNavMoveRef = React.useRef(false) // 本次光标变化是否由整行移动触发（否则清空期望列）
   const activeRef = React.useRef(null) // 当前活动文件的最新值（空依赖闭包/指令回调读取）
   activeRef.current = active
+  // 活动文件路径镜像到模块级 store：命令目录可用性判定读取（如 Markdown 预览切换仅 .md 吞键）
+  setActiveEditorPath(active)
+  React.useEffect(() => () => setActiveEditorPath(null), [])
   const tabsRef = React.useRef([]) // 当前页签表的最新值（菜单动作按 id 分派时读，防陈旧闭包）
   tabsRef.current = tabs
   const tabPathsRef = React.useRef([]) // 页签路径镜像（外部改动轮询读取）
@@ -1340,29 +1344,10 @@ export function EditorView(props) {
     try { localStorage.setItem(sidebarKey, JSON.stringify({ on: sidebarOn, width: sidebarW, panel: activePanel })) }
     catch (e) { /* 忽略 */ }
   }, [sidebarOn, sidebarW, activePanel, sessionId, sidebarKey])
-  // 切换侧边栏（capture 抢占，避免与 DSH 全局冲突；键位随快捷键配置）
-  React.useEffect(() => {
-    const onKey = (e) => {
-      if (!matchEvent(e, bindingsOf('edrv.toggleSidebar'))) return
-      e.preventDefault(); e.stopPropagation()
-      setSidebarOn((v) => !v)
-    }
-    window.addEventListener('keydown', onKey, true)
-    return () => window.removeEventListener('keydown', onKey, true)
-  }, [])
-
-  // 保存文件（窗口级）：编辑器有活动模型才拦截执行，无文件时放行（浏览器默认行为）
-  React.useEffect(() => {
-    const onKey = (e) => {
-      if (!matchEvent(e, bindingsOf('edrv.save'))) return
-      if (!editorRef.current?.getModel?.()) return
-      e.preventDefault(); e.stopPropagation()
-      flushSave()
-      doSaveRef.current(false)
-    }
-    window.addEventListener('keydown', onKey, true)
-    return () => window.removeEventListener('keydown', onKey, true)
-  }, [])
+  // 编辑器键位（侧栏/保存/搜索/Markdown 预览/导航/页签循环）已归官方 shortcuts 机制派发：
+  // 官方 resolve → 指令注册表 run → `edrv.command.*` 事件 → 下方「指令系统接线」表执行。
+  // 历史 capture 监听移除（与官方派发并存会双执行）；Markdown 预览的「非 .md 不吞键」
+  // 语义由命令 available()（activePathStore + isMarkdownPath）承载，可用性为假时官方派发放行。
 
   /**
    * 打开搜索面板（Ctrl+Shift+F 与命令栏「在工作区中搜索」的唯一动作）。
@@ -1388,65 +1373,7 @@ export function EditorView(props) {
     setTimeout(() => window.dispatchEvent(new CustomEvent('edrv:search-focus')), 0)
   }
 
-  // Ctrl+Shift+F 全局搜索：展开侧边栏 + 激活搜索页签，随后聚焦搜索输入框（有选中则填入）
-  React.useEffect(() => {
-    const onKey = (e) => {
-      if (!matchEvent(e, bindingsOf('edrv.searchInFiles'))) return
-      e.preventDefault(); e.stopPropagation()
-      openSearchPanel()
-    }
-    window.addEventListener('keydown', onKey, true)
-    return () => window.removeEventListener('keydown', onKey, true)
-  }, [])
-
-  // Ctrl+Shift+V 切换 Markdown 预览：仅活动文件是 Markdown 时吞键；
-  // 其余情况直接放行（不 preventDefault），保留浏览器/输入框原生的「无格式粘贴」语义
-  // ——与 closeTab / addSelectionRef「不可用时放行按键」同款约定。
-  React.useEffect(() => {
-    const onKey = (e) => {
-      if (!matchEvent(e, bindingsOf('edrv.toggleMarkdownPreview'))) return
-      const path = activeRef.current
-      if (!isMarkdownPath(path)) return
-      e.preventDefault(); e.stopPropagation()
-      toggleMdPreviewRef.current?.(path)
-    }
-    window.addEventListener('keydown', onKey, true)
-    return () => window.removeEventListener('keydown', onKey, true)
-  }, [])
-
-  // 后退/前进：导航历史（跨文件焦点位置；经 ref 读最新闭包，避免空依赖过期）
-  React.useEffect(() => {
-    const onKey = (e) => {
-      if (!matchEvent(e, bindingsOf('edrv.navigateBack'))) return
-      e.preventDefault(); e.stopPropagation()
-      if (navBackRef.current) navBackRef.current()
-    }
-    window.addEventListener('keydown', onKey, true)
-    return () => window.removeEventListener('keydown', onKey, true)
-  }, [])
-  React.useEffect(() => {
-    const onKey = (e) => {
-      if (!matchEvent(e, bindingsOf('edrv.navigateForward'))) return
-      e.preventDefault(); e.stopPropagation()
-      if (navForwardRef.current) navForwardRef.current()
-    }
-    window.addEventListener('keydown', onKey, true)
-    return () => window.removeEventListener('keydown', onKey, true)
-  }, [])
-
-  // 页签循环切换：Ctrl+Alt+←/→（主候选，浏览器不占用）或 Ctrl+PgUp/PgDn（部分宿主可用）
-  React.useEffect(() => {
-    const onKey = (e) => {
-      const step = matchEvent(e, bindingsOf('edrv.nextTab')) ? 1
-        : matchEvent(e, bindingsOf('edrv.prevTab')) ? -1
-          : 0
-      if (step === 0) return
-      e.preventDefault(); e.stopPropagation()
-      if (cycleTabRef.current) cycleTabRef.current(step)
-    }
-    window.addEventListener('keydown', onKey, true)
-    return () => window.removeEventListener('keydown', onKey, true)
-  }, [])
+  // Ctrl+Shift+F / Ctrl+Shift+V / Alt+←→ / Ctrl+Alt+←→ 的 capture 监听已随官方派发改造移除（见上）。
 
   // 整行上下移动的实现见下方「指令系统接线」effect（moveRow 单点定义，命令栏与键位共用）。
 

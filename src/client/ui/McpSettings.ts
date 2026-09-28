@@ -1,8 +1,9 @@
 // @ts-nocheck
 /**
- * dsh-vscode-mode client — VSCodeMode 设置区：通用 / 快捷键 / MCP 管理 / 语言服务器 / 性能优化 / 兼容性。
+ * dsh-vscode-mode client — VSCodeMode 设置区：通用 / MCP 管理 / 语言服务器 / 性能优化 / 兼容性。
+ * （快捷键管理已迁出为独立顶层设置区 ui/ShortcutSettings.ts，与 VSCodeMode 平级。）
  * MCP 管理 Tab 下含三个子页签：我的 MCP（profile 全局）/ 项目 MCP（各项目 .mcp.json）/ MCP 市场（占位）。
- * 作者 ddj 2026年08月22号 / 2026年08月26号 / 2026年08月27号
+ * 作者 ddj 2026年08月22号 / 2026年08月26号 / 2026年08月27号 / 2026年10月
  */
 import React from 'react'
 import { rpc } from '../rpc.js'
@@ -14,7 +15,6 @@ import { normalizeSidebarMinWidth, SIDEBAR_MIN_DEFAULT } from '../sidebarMin.js'
 import { EDITOR_LIMIT_CEIL, EDITOR_LIMIT_DEFAULT, normalizeMaxOpenEditors } from '../../shared/editorLimit.js'
 import { TORTOISE_DIR_DEFAULT } from '../../shared/svn.js'
 import { DEFAULT_NATIVE_CSV } from '../../shared/nativeOpen.js'
-import { KeybindingsPanel } from './KeybindingsPanel.js'
 import { LspSettings } from './LspSettings.js'
 import { PerfSettings } from './PerfSettings.js'
 import { IntegrationSettings } from './IntegrationSettings.js'
@@ -581,7 +581,6 @@ export function McpSettings(props) {
   let body
   if (loading) body = React.createElement('div', { className: 'vsm-mcp-empty' }, '正在读取 MCP 服务…')
   else if (tab === 'general') body = React.createElement(GeneralSettings, { registry: openerRegistry })
-  else if (tab === 'keys') body = React.createElement(KeybindingsPanel, null)
   else if (tab === 'mcp') body = React.createElement(McpManagePanel, { servers, projects, busy, draft, edit, resetDraft,
     saveGlobal: (close) => saveGlobal(close), saveProject: (workspacePath, close) => saveProject(workspacePath, close),
     refreshGlobal, toggleGlobal, removeGlobal, refreshProject, toggleProject, removeProject })
@@ -591,7 +590,7 @@ export function McpSettings(props) {
   else body = React.createElement(PerfSettings, null)
   return React.createElement('section', { className: 'vsm-mcp-page' },
     React.createElement('header', { className: 'vsm-mcp-header' }, React.createElement('div', null, React.createElement('h2', null, 'VSCodeMode'), React.createElement('p', null, '管理当前 profile 与各项目的 Model Context Protocol 服务。'))),
-    React.createElement('nav', { className: 'vsm-mcp-tabs' }, React.createElement('button', { className: tab === 'general' ? 'active' : '', onClick: () => setTab('general') }, '通用'), React.createElement('button', { className: tab === 'keys' ? 'active' : '', onClick: () => setTab('keys') }, '快捷键'), React.createElement('button', { className: tab === 'mcp' ? 'active' : '', onClick: () => setTab('mcp') }, 'MCP 管理'), React.createElement('button', { className: tab === 'lsp' ? 'active' : '', onClick: () => setTab('lsp') }, '语言服务器'), React.createElement('button', { className: tab === 'ai' ? 'active' : '', onClick: () => setTab('ai') }, 'AI 补全'), React.createElement('button', { className: tab === 'perf' ? 'active' : '', onClick: () => setTab('perf') }, '性能优化'), React.createElement('button', { className: tab === 'compat' ? 'active' : '', onClick: () => setTab('compat') }, '兼容性')),
+    React.createElement('nav', { className: 'vsm-mcp-tabs' }, React.createElement('button', { className: tab === 'general' ? 'active' : '', onClick: () => setTab('general') }, '通用'), React.createElement('button', { className: tab === 'mcp' ? 'active' : '', onClick: () => setTab('mcp') }, 'MCP 管理'), React.createElement('button', { className: tab === 'lsp' ? 'active' : '', onClick: () => setTab('lsp') }, '语言服务器'), React.createElement('button', { className: tab === 'ai' ? 'active' : '', onClick: () => setTab('ai') }, 'AI 补全'), React.createElement('button', { className: tab === 'perf' ? 'active' : '', onClick: () => setTab('perf') }, '性能优化'), React.createElement('button', { className: tab === 'compat' ? 'active' : '', onClick: () => setTab('compat') }, '兼容性')),
     error && React.createElement('div', { className: 'vsm-mcp-error vsm-mcp-banner' }, error),
     body,
   )

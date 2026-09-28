@@ -9,7 +9,7 @@
  */
 import React from 'react'
 import { rpc } from '../rpc.js'
-import { bindingsOf, chordOf, matchEvent, useKeybindingsVersion } from '../keybindings.js'
+import { chordOf, useKeybindingsVersion } from '../keybindings.js'
 import { stepIndex } from './searchNav.js'
 
 /**
@@ -64,19 +64,18 @@ export function QuickOpen(props) {
       inputRef.current?.focus?.()
       setOpen(true)
     }
-    const onKey = (e) => {
-      if (matchEvent(e, bindingsOf('edrv.quickOpen'))) {
-        e.preventDefault(); e.stopPropagation()
-        openBox()
-      } else if (e.key === 'Escape') {
-        setOpen(false); inputRef.current?.blur?.()
-      }
+    // Esc 关闭（仅收起浮窗；历史 capture 行为保留，不参与命令派发、不吞键）
+    const onEscape = (e) => {
+      if (e.key !== 'Escape') return
+      setOpen(false)
+      inputRef.current?.blur?.()
     }
-    window.addEventListener('keydown', onKey, true)
-    // 指令系统入口（命令栏「快速打开文件」）：与键位复用同一动作
+    // 快速打开键位（Ctrl+P）已归官方 shortcuts 机制派发：官方 resolve → 注册表 run →
+    // 派发 `edrv.command.quickOpen` 事件到此处（历史窗口 capture 键位自检移除，防双开）。
+    window.addEventListener('keydown', onEscape, true)
     window.addEventListener('edrv.command.quickOpen', openBox)
     return () => {
-      window.removeEventListener('keydown', onKey, true)
+      window.removeEventListener('keydown', onEscape, true)
       window.removeEventListener('edrv.command.quickOpen', openBox)
     }
   }, [])

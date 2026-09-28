@@ -1,7 +1,8 @@
 /**
- * 指令系统装配测试：目录元数据 ↔ 共享键位表一致性、命令栏筛选、命令桥注册与键位派发、
+ * 指令系统装配测试：目录元数据 ↔ 官方键位表一致性、命令栏筛选、命令桥注册、
  * 命令栏 store 的开关与单实例宿主认领。全部为纯逻辑/DOM 无关断言（vitest node 环境）。
- * 作者 ddj 2026-09-10
+ * 键位派发归官方 shortcuts 机制的契约断言（探测/注册/迁移/弦表同步）在「装配层接线」组。
+ * 作者 ddj 2026-09-10 / 2026年10月
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
@@ -9,9 +10,8 @@ import { BRIDGE_COMMANDS, EDITOR_COMMANDS, showCommandsDef } from '../src/client
 import type { CommandDef } from '../src/client/ui/commandCatalog.js'
 import { filterCommands } from '../src/client/commandSearch.js'
 import { createCommandBridge } from '../src/client/commandBridge.js'
-import { COMMANDS, addRuntimeKeybinding, bindingsOf, chordOf, keybindingsApply, matchEvent } from '../src/client/keybindings.js'
-import { createCommandRegistry } from '../src/client/commandRegistry.js'
-import { KEYBINDING_DEFAULTS } from '../src/shared/keybindings.js'
+import { COMMANDS } from '../src/client/keybindings.js'
+import { bindingToChord, KEYBINDING_DEFAULTS, SHORTCUT_PROFILES, type ShortcutProfiles } from '../src/shared/keybindings.js'
 import {
   closeCommandPalette, isPaletteOpen, openCommandPalette,
   registryRef, releasePaletteHost, runPaletteCommand, setPaletteRunner, subscribePalette,
@@ -26,6 +26,22 @@ function cmd(id: string, label: string, category: string, order = 10): CommandDe
   return { id, label, category, order, run: () => {} }
 }
 
+/** 按 SHORTCUT_PROFILES 派生官方目录弦表（等价 shortcutsOfficial.bindCatalogChords 的产物）。 */
+function officialChordsOf(profiles: Record<string, ShortcutProfiles>): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const [id, profile] of Object.entries(profiles)) {
+    for (const binding of Object.values(profile)) {
+      if (!binding) continue
+      const chord = bindingToChord(binding)
+      if (chord !== null) {
+        out[id] = chord
+        break
+      }
+    }
+  }
+  return out
+}
+
 /** 事件目标替身：记录派发过的事件，供测试断言/回放。 */
 class FakeTarget extends EventTarget {
   sent: Event[] = []
@@ -33,30 +49,6 @@ class FakeTarget extends EventTarget {
   override dispatchEvent(event: Event): boolean {
     this.sent.push(event)
     return super.dispatchEvent(event)
-  }
-
-  /** 从另一端回放一条事件（模拟 window 收到键位/自定义事件）。 */
-  emit(type: string): void {
-    super.dispatchEvent(new Event(type))
-  }
-}
-
-/** 键盘事件替身（node 环境无 KeyboardEvent；桥只读 key/修饰键）。
- *  cancelable=true 与真实 keydown 一致——否则 preventDefault() 无效，无法断言「是否吞键」。 */
-class FakeKey extends Event {
-  key: string
-  ctrlKey: boolean
-  shiftKey: boolean
-  altKey: boolean
-  metaKey: boolean
-
-  constructor(key: string, mods: { ctrl?: boolean; shift?: boolean; alt?: boolean; meta?: boolean } = {}) {
-    super('keydown', { cancelable: true })
-    this.key = key
-    this.ctrlKey = mods.ctrl === true
-    this.shiftKey = mods.shift === true
-    this.altKey = mods.alt === true
-    this.metaKey = mods.meta === true
   }
 }
 
@@ -67,36 +59,24 @@ function installWindow(): FakeTarget {
   return fake
 }
 
-/**
- * 安装 document 替身：编辑器态指令的可用性判定走 DOM 探测
- * （editorModelState 读 `[data-edrv-view]` 与 Monaco 输入区），node 环境默认判为不可用。
- */
-function installDocument(): void {
-  vi.stubGlobal('document', {
-    querySelector: (selector: string) => ({ selector }),
-    activeElement: null,
-  })
-}
-
 afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-describe('指令目录与键位表一致性', () => {
-  it('目录声明的默认键位与共享键位表逐条一致', () => {
-    for (const command of CATALOG) {
-      if (!command.keybinding) continue
-      expect(KEYBINDING_DEFAULTS[command.id], command.id).toBe(command.keybinding)
-    }
-  })
-
+describe('指令目录与官方键位表一致性', () => {
   it('共享键位表的每条都有对应指令（无历史残留）', () => {
     const ids = new Set(CATALOG.map((command) => command.id))
     for (const id of Object.keys(KEYBINDING_DEFAULTS)) expect(ids.has(id), id).toBe(true)
   })
 
-  it('命令栏键位为 Ctrl+Shift+P（第二候选 F1）', () => {
+  it('SHORTCUT_PROFILES 无孤儿条目（每条都在目录内）', () => {
+    const ids = new Set(CATALOG.map((command) => command.id))
+    for (const id of Object.keys(SHORTCUT_PROFILES)) expect(ids.has(id), id).toBe(true)
+  })
+
+  it('共享键位表保留主候选 Ctrl+Shift+P（F1 候选为迁移基线，官方仅派生主候选）', () => {
     expect(KEYBINDING_DEFAULTS['edrv.showCommands']).toBe('Ctrl+Shift+P|F1')
+    expect(officialChordsOf(SHORTCUT_PROFILES)['edrv.showCommands']).toBe('Ctrl+Shift+P')
   })
 
   it('指令 id 唯一且均带 edrv. 前缀', () => {
@@ -109,41 +89,6 @@ describe('指令目录与键位表一致性', () => {
     const ids = COMMANDS.map((entry) => entry.id)
     expect(ids.length).toBe(CATALOG.length)
     for (const command of CATALOG) expect(ids).toContain(command.id)
-  })
-
-  it('设置合并后新指令即可命中（老用户存档缺新键也能用默认键位）', () => {
-    keybindingsApply({ 'edrv.save': 'Ctrl+Alt+S' }) // 模拟旧存档：只含既有命令
-    expect(chordOf('edrv.save')).toBe('Ctrl+Alt+S')
-    expect(bindingsOf('edrv.showCommands').length).toBeGreaterThan(0)
-    expect(matchEvent({ ctrlKey: true, shiftKey: true, key: 'P' }, bindingsOf('edrv.showCommands'))).toBe(true)
-    keybindingsApply(undefined)
-  })
-})
-
-describe('第三方指令运行时键位', () => {
-  it('addRuntimeKeybinding 键位优先于设置值，注销后回落', () => {
-    keybindingsApply({})
-    const dispose = addRuntimeKeybinding('ext.demo', 'Ctrl+Alt+D')
-    expect(chordOf('ext.demo')).toBe('Ctrl+Alt+D')
-    expect(matchEvent({ ctrlKey: true, altKey: true, key: 'D' }, bindingsOf('ext.demo'))).toBe(true)
-    dispose()
-    expect(chordOf('ext.demo')).toBeNull()
-    expect(bindingsOf('ext.demo')).toEqual([])
-  })
-
-  it('运行时键位可覆盖内置命令键位，注销后回到设置值', () => {
-    keybindingsApply({})
-    const dispose = addRuntimeKeybinding('edrv.save', 'Ctrl+Alt+S')
-    expect(chordOf('edrv.save')).toBe('Ctrl+Alt+S')
-    dispose()
-    expect(chordOf('edrv.save')).toBe('Ctrl+S')
-  })
-
-  it('空/非法键位按未绑定处理（不误命中）', () => {
-    const dispose = addRuntimeKeybinding('ext.empty', '')
-    expect(chordOf('ext.empty')).toBeNull()
-    expect(bindingsOf('ext.empty')).toEqual([])
-    dispose()
   })
 })
 
@@ -161,6 +106,13 @@ describe('装配层接线（client/index.ts 契约）', () => {
     expect(source).toContain('setupCommands(ctx)')
   })
 
+  it('键位派发归官方 shortcuts 机制（服务探测 + 官方注册 + 目录弦表同步 + 旧设置迁移）', () => {
+    expect(source).toContain('awaitShortcutsService')
+    expect(source).toContain('registerOfficialShortcuts')
+    expect(source).toContain('bindCatalogChords')
+    expect(source).toContain('migrateLegacyKeybindings')
+  })
+
   it('注册表挂到 window 自身，且不得依赖不存在的 window.dsh（回归：曾导致命令栏恒空）', () => {
     // 剥注释后判断：注释里提到该命名空间是允许的（说明为何不能改回去）
     const bare = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '')
@@ -171,7 +123,8 @@ describe('装配层接线（client/index.ts 契约）', () => {
 
 describe('命令栏候选来源（回归：DSH 无 window.dsh 导致空表）', () => {
   it('装配后 registryRef() 暴露注册表，卸载后清空', () => {
-    const bridge = createCommandBridge({ target: new EventTarget() })
+    installWindow()
+    const bridge = createCommandBridge()
     expect(registryRef()?.list().length).toBe(CATALOG.length)
     bridge.dispose()
     expect(registryRef()).toBeNull()
@@ -181,7 +134,7 @@ describe('命令栏候选来源（回归：DSH 无 window.dsh 导致空表）', 
     expect(REGISTRY_GLOBAL).not.toContain('.')
     const fake = new FakeTarget()
     vi.stubGlobal('window', fake)
-    const bridge = createCommandBridge({ target: new EventTarget() })
+    const bridge = createCommandBridge()
     const host = window as unknown as Record<string, unknown>
     host[REGISTRY_GLOBAL] = bridge.registry
     expect((host[REGISTRY_GLOBAL] as typeof bridge.registry).list().length).toBe(CATALOG.length)
@@ -194,7 +147,7 @@ describe('EditorView 指令接线（事件名与目录一致）', () => {
   const source = readFileSync(new URL('../src/client/ui/EditorView.ts', import.meta.url), 'utf8')
   const wired = [...new Set([...source.matchAll(/'?(edrv\.command\.[A-Za-z]+)'/g)].map((hit) => hit[1]))].sort()
   // 桥接类指令（目录里声明、无原生监听）必须由 EditorView 的动作映射接住；
-  // 其余内置指令走各自的原生监听（保存/侧栏/搜索等）或自有组件（快速打开在 QuickOpen）。
+  // 其余内置指令由官方 shortcuts 派发（保存/侧栏/搜索等）或自有组件（快速打开在 QuickOpen）。
   const bridgeEvents = BRIDGE_COMMANDS.map((command) => 'edrv.command.' + command.id.replace('edrv.', '')).sort()
   const occurrences = (name: string): number => source.split("'" + name + "'").length - 1
 
@@ -267,10 +220,10 @@ describe('filterCommands 命令栏筛选', () => {
   })
 })
 
-describe('createCommandBridge 装配与键位派发', () => {
+describe('createCommandBridge 装配（键位派发归官方机制）', () => {
   it('注册全部内置指令（含命令栏自身）', () => {
     installWindow()
-    const bridge = createCommandBridge({ target: new EventTarget() })
+    const bridge = createCommandBridge()
     expect(bridge.registry.has('edrv.save')).toBe(true)
     expect(bridge.registry.has('edrv.showCommands')).toBe(true)
     expect(bridge.registry.has('edrv.nextEditorRow')).toBe(true)
@@ -282,7 +235,7 @@ describe('createCommandBridge 装配与键位派发', () => {
 
   it('编辑器指令派发对应事件；编辑器态指令在无模型时被拒（桥不持有编辑器状态）', () => {
     const win = installWindow()
-    const bridge = createCommandBridge({ target: new EventTarget() })
+    const bridge = createCommandBridge()
     // 未挂载编辑器（无 document 探测命中）时编辑器态指令不可用
     expect(bridge.registry.run('edrv.save')).toBe(false)
     expect(bridge.registry.run('edrv.nextEditorRow')).toBe(false)
@@ -292,76 +245,6 @@ describe('createCommandBridge 装配与键位派发', () => {
     expect(bridge.registry.run('edrv.searchInFiles')).toBe(true)
     expect(win.sent.map((event) => event.type))
       .toEqual(['edrv.command.quickOpen', 'edrv.command.toggleSidebar', 'edrv.command.searchInFiles'])
-    bridge.dispose()
-  })
-
-  it('桥接指令键位（Ctrl+Alt+↓）命中并派发，dispose 后不再响应', () => {
-    const win = installWindow()
-    installDocument() // 模拟编辑器已挂载：整行移动指令可用
-    const target = new FakeTarget()
-    const bridge = createCommandBridge({ target })
-    target.dispatchEvent(new FakeKey('ArrowDown', { ctrl: true, alt: true }))
-    expect(win.sent.map((event) => event.type)).toEqual(['edrv.command.nextEditorRow'])
-    bridge.dispose()
-    target.dispatchEvent(new FakeKey('ArrowDown', { ctrl: true, alt: true }))
-    expect(win.sent.map((event) => event.type)).toEqual(['edrv.command.nextEditorRow'])
-  })
-
-  it('Ctrl+Shift+P 触发命令栏自身命令，F1 为第二候选', () => {
-    installWindow()
-    const target = new FakeTarget()
-    const bridge = createCommandBridge({ target })
-    const open = vi.fn()
-    const disposer = bridge.registry.register(showCommandsDef(open))
-    closeCommandPalette()
-    target.dispatchEvent(new FakeKey('P', { ctrl: true, shift: true }))
-    target.dispatchEvent(new FakeKey('F1'))
-    expect(open).toHaveBeenCalledTimes(2)
-    disposer()
-    closeCommandPalette()
-    bridge.dispose()
-  })
-
-  it('未配置键位的按键不触发任何命令', () => {
-    installWindow()
-    const target = new FakeTarget()
-    const bridge = createCommandBridge({ target })
-    const open = vi.fn()
-    const disposer = bridge.registry.register(showCommandsDef(open))
-    target.dispatchEvent(new FakeKey('Q', { ctrl: true }))
-    expect(open).not.toHaveBeenCalled()
-    disposer()
-    bridge.dispose()
-  })
-
-  it('命令不可用时不吞键（回归：无编辑器时 Ctrl+U 须放行给对话输入框）', () => {
-    installWindow()
-    // 未安装 document 替身 → 编辑器态指令（edrv.addSelectionRef）判定为不可用
-    const target = new FakeTarget()
-    const bridge = createCommandBridge({ target })
-    expect(bridge.registry.has('edrv.addSelectionRef')).toBe(true)
-    expect(bridge.registry.isAvailable('edrv.addSelectionRef')).toBe(false)
-    const seen: string[] = []
-    const late = (event: Event) => seen.push(event.type)
-    // 桥走 capture 阶段：非 capture 监听代表下游（浏览器默认/页面其它监听）仍能收到
-    target.addEventListener('keydown', late)
-    const event = new FakeKey('u', { ctrl: true })
-    target.dispatchEvent(event)
-    expect(event.defaultPrevented).toBe(false)
-    expect(seen).toEqual(['keydown'])
-    bridge.dispose()
-  })
-
-  it('命令可用时正常吞键并派发（Ctrl+U → addSelectionRef）', () => {
-    const win = installWindow()
-    installDocument() // 模拟编辑器已挂载
-    const target = new FakeTarget()
-    const bridge = createCommandBridge({ target })
-    expect(bridge.registry.isAvailable('edrv.addSelectionRef')).toBe(true)
-    const event = new FakeKey('u', { ctrl: true })
-    target.dispatchEvent(event)
-    expect(event.defaultPrevented).toBe(true)
-    expect(win.sent.map((item) => item.type)).toEqual(['edrv.command.addSelectionRef'])
     bridge.dispose()
   })
 })

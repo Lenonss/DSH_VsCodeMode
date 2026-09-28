@@ -64,10 +64,11 @@
 命令 id 均可命中），`↑↓` 选择、`Enter` 执行、`Esc` 关闭，每行显示 命令名 /
 分类 / 当前键位；需要打开文件的命令在空编辑器时自动隐藏。
 
-- **单一数据源**：命令目录（`ui/commandCatalog`）同时驱动命令栏、快捷键设置页、
-  全局键位派发、Monaco 右键菜单——新增能力只需追加一条命令定义。
-- **开放注册表**：`window.__edrvCommands__` 暴露 `register()` 注册命令、
-  `addRuntimeKeybinding()` 绑运行时键位（不落设置 schema）。
+- **单一数据源**：命令目录（`ui/commandCatalog`）驱动命令栏和官方快捷键目录；
+  设置 →「快捷键」可查看官方目录与编辑插件命令，绑定经 DSH 官方服务保存。旧版 DSH
+  没有该服务时继续使用原有窗口按键派发，旧 `keybindings` 设置仍可生效。
+- **开放注册表**：`window.__edrvCommands__` 暴露 `register()` 注册命令；插件
+  不再提供独立的运行时键位注册，改用 DSH 官方 shortcuts 配置。
 - **开箱 20 条命令**：保存 / 快速打开 / 在文件浏览器中打开 / 显示所有命令 /
   切换侧边栏 / 工作区搜索 / 切换 Markdown 预览 / 后退·前进 / 上下页签 / 关闭当前页签 /
   上下编辑行 / 转到定义 / 查找引用 / 触发 AI 补全 / 配置代码片段 / 插入代码片段 /
@@ -188,8 +189,12 @@ cmaps 支持中文渲染）；工具条进入注释编辑：✎ 文本框 / 🖌
 ### 10. 规则管理（v0.1.49 / v0.1.50，参考 Codebuddy）
 
 活动栏「规则」面板，管理 Cursor / Codebuddy 式 `.mdc` 规则文件：「用户规则」
-（`~/.dsh/rules/`，全局生效）与「项目规则」（`<工作区>/.dsh/rules/`，随仓库
-共享）双 Tab。
+（当前 `DSH_HOME/rules/`，兼容系统用户主目录下的 `~/.dsh/rules/`）与「项目规则」
+（`<工作区>/.dsh/rules/`，随仓库共享）双 Tab。`DSH_HOME` 未设置时默认
+`~/.dsh`，两个用户目录相同则只读取一次。两处同名规则以当前 `DSH_HOME/rules/`
+为准（即使已停用也遮蔽旧规则）；删除当前版本后旧目录版本会重新生效。
+新建写当前目录，编辑 / 启停 / 删除旧规则在旧目录原地进行，不自动搬迁；
+操作旧规则可能影响其他仍使用该目录的 DSH 安装。
 
 - 每条规则显示 文件名 / 相对路径 / 类型徽标（总是 = `alwaysApply`、自动 =
   `globs`、手动 = 仅索引）/ 描述；右侧常驻 编辑 / 删除 与滑动启用开关
@@ -431,13 +436,13 @@ TortoiseSVN（`TortoiseProc.exe`）仅作 Windows 过渡增强：自研能力覆
 
 ```bash
 # ① Git 安装（clone + prepare 构建；推荐打固定 tag）
-dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.11.0
+dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.12.0
 
 # ② npm 注册表（发布到 npm 后）
 dsh plugin --profile web add dsh-vscode-mode
 
 # ③ GitHub Release tgz 直装
-dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.11.0/dsh-vscode-mode-0.11.0.tgz
+dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.12.0/dsh-vscode-mode-0.12.0.tgz
 ```
 
 > `dsh plugin ...` 是 pnpm 转发器：git 安装会克隆仓库、执行该包 `prepare` 脚本
@@ -480,16 +485,19 @@ bundles 层后重启 DSH 即自动把插件行挂进 loader 树。**不要**再�
 
 ### 快捷键速查
 
+以下是桌面端常见默认键位；Web / Linux 的浏览器或系统保留键可能不绑定。
+实际生效键位以「设置 → 快捷键」为准；旧版 DSH 无官方 shortcuts 时沿用原有键位。
+
 | 快捷键 | 功能 |
 |---|---|
-| `Ctrl+P` | 快速打开文件（QuickOpen） |
+| `Ctrl+Alt+P`（桌面）/ `Ctrl+Alt+Shift+P`（Web Windows/macOS） | 插件快速打开文件（QuickOpen）；`Ctrl+P` 由 DSH 官方文件切换使用 |
 | `Ctrl+Shift+P` / `F1` | 命令面板 |
 | `Ctrl+U` | 选中内容加为引用（Add Selection to Chat） |
 | `Ctrl+S` | 保存（另有 700ms 防抖自动保存） |
 | `Ctrl+F` / `Ctrl+G` | 查找 / 跳转行 |
 | `F12` / `Shift+F12` | 转到定义 / 查找所有引用 |
 | `Ctrl+点击` / `Ctrl+hover` | 引用导航 / 可导航标识符提示 |
-| `Ctrl+B` | 切换文件管理侧边栏 |
+| 自定义键位 | 切换文件管理侧边栏（`Ctrl+B` 与 DSH 自身侧栏命令冲突，插件默认不绑定） |
 | `Ctrl+Shift+F` | 工作区搜索（有选中则把选中文本填入搜索框） |
 | `Ctrl+Shift+V` | 切换 Markdown 预览（仅活动文件为 .md 时生效） |
 | `Ctrl+F4` | 关闭当前页签 |
@@ -522,6 +530,12 @@ bundles 层后重启 DSH 即自动把插件行挂进 loader 树。**不要**再�
   自动弹出（`Ctrl+Space` 手动触发，`Tab` / `Enter` 采纳），函数实参处显示签名帮助。
 
 ## 配置
+
+设置 →「快捷键」页：官方目录总览和插件快捷键录制、逐项恢复；编辑通过官方
+shortcuts 服务持久化（Desktop：`userData/keybindings.json`；Web：
+`localStorage` 的 `dsh.keybindings.v1`）。旧版插件 `keybindings` 配置的单候选自定义值
+按当前平台一次性尝试迁入官方存储；旧配置始终保留供其他平台及人工恢复，
+多候选、冲突、不支持或未绑定的旧值不会被部分迁入或删除。
 
 设置 →「VSCodeMode」页：
 
@@ -732,6 +746,13 @@ Keep All / Undo All 却是亮的。修复：单文件 Keep / Undo 覆盖冲突�
 完整变更见 [GitHub Releases](https://github.com/Lenonss/DSH_VsCodeMode/releases)。
 近期关键版本：
 
+- **v0.12.0**：**用户规则双目录兼容 + 官方快捷键接管**——用户规则同时读取
+  `DSH_HOME/rules/` 和 `~/.dsh/rules/`，同名以当前目录为准，旧规则原地管理，
+  列表与提示词注入采用同一优先级；快捷键迁移到 DSH 官方 shortcuts 目录及独立设置页，
+  支持跨平台默认键位、录制、冲突校验和旧配置迁移；插件 QuickOpen 改用
+  桌面 `Ctrl+Alt+P` / Web Windows/macOS `Ctrl+Alt+Shift+P`（官方占用 `Ctrl+P`）。恢复插件键位只处理插件命令，
+  旧键位配置为跨平台回退始终保留，多候选不做部分导入；没有官方服务的旧版 DSH
+  仍使用原有键位派发。
 - **v0.11.0**：**原生 SVN 更新窗口（逐文件实时反馈）+ LSP 补全增强 + 设置文件就地打开**——① 「SVN 更新」
   从窄结果条升级为**插件内更新窗口**（`SvnUpdateDialog` + `svnUpdateJob`）：任务启动窗口即出现，实时
   逐文件列表（虚拟化 + 仅贴近底部时自动跟随）、动作着色（A/U/D/G/C/E/R）、完成后汇总版本号 / 计数 /

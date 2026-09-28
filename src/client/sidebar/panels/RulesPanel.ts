@@ -152,6 +152,8 @@ function RuleRow(props) {
       React.createElement('div', { className: 'edrv-rules-line1' },
         React.createElement('span', { className: 'edrv-rules-file' }, rule.file),
         !props.narrow ? React.createElement('span', { className: 'edrv-rules-path' }, '[' + rule.relHint + rule.file + ']') : null,
+        props.narrow && rule.scope === 'user' && rule.origin === 'legacy'
+          ? React.createElement('span', { className: 'edrv-rules-path', title: rule.absPath }, '旧目录') : null,
         !rule.enabled ? React.createElement('span', { className: 'edrv-rules-offtag' }, '已停用') : null),
       React.createElement('div', { className: 'edrv-rules-sub' },
         React.createElement('span', { className: 'edrv-rules-sublabel' }, '类型:'),
@@ -288,7 +290,7 @@ export function RulesPanel(props) {
     if (scope === 'project' && !cwd) { notify('当前会话没有工作区，无法新建项目规则'); return }
     const parsed = parseRuleFm(NEW_TEMPLATE)
     setForm({
-      mode: 'new', scope, workspacePath: scope === 'project' ? cwd : undefined,
+      mode: 'new', scope, origin: scope === 'user' ? 'current' : undefined, workspacePath: scope === 'project' ? cwd : undefined,
       relHint: scope === 'project' ? '.dsh/rules/' : 'rules/', file: '', content: NEW_TEMPLATE,
       fmType: parsed.type, desc: parsed.description, globs: parsed.globs.join(', '), error: '', saving: false,
     })
@@ -299,12 +301,12 @@ export function RulesPanel(props) {
    * @param rule 目标规则
    */
   const openEdit = (rule) => {
-    rpc('rules.read', { scope: rule.scope, workspacePath: rule.scope === 'project' ? rule.workspacePath : undefined, file: rule.file })
+    rpc('rules.read', { scope: rule.scope, origin: rule.origin, workspacePath: rule.scope === 'project' ? rule.workspacePath : undefined, file: rule.file })
       .then((res) => {
         if (!res || !res.ok) { notify(res?.error ?? '读取规则失败'); return }
         const parsed = parseRuleFm(res.content)
         setForm({
-          mode: 'edit', scope: rule.scope, workspacePath: rule.workspacePath, relHint: rule.relHint,
+          mode: 'edit', scope: rule.scope, origin: rule.origin, workspacePath: rule.workspacePath, relHint: rule.relHint,
           file: rule.file, content: res.content,
           fmType: parsed.type, desc: parsed.description, globs: parsed.globs.join(', '), error: '', saving: false,
         })
@@ -342,7 +344,7 @@ export function RulesPanel(props) {
     if (!file) { setForm({ ...next, saving: false, error: '文件名不能为空' }); return }
     if (form.fmType === 'auto' && globList(form.globs).length === 0) { setForm({ ...next, saving: false, error: '自动规则需要至少一个 glob（逗号分隔）' }); return }
     setForm(next)
-    rpc('rules.save', { scope: form.scope, workspacePath: form.workspacePath, file, content: form.content })
+    rpc('rules.save', { scope: form.scope, origin: form.origin, workspacePath: form.workspacePath, file, content: form.content })
       .then((res) => {
         if (res && res.ok) {
           setForm(null)
@@ -357,8 +359,10 @@ export function RulesPanel(props) {
    * @param rule 目标规则
    */
   const removeRule = (rule) => {
-    if (!window.confirm('删除规则 ' + rule.file + '？（不可恢复）')) return
-    rpc('rules.remove', { scope: rule.scope, workspacePath: rule.workspacePath, file: rule.file })
+    const reveal = rule.scope === 'user' && rule.origin !== 'legacy'
+      ? '\n若旧目录有同名规则，删除后它将重新生效。' : ''
+    if (!window.confirm('删除规则 ' + rule.absPath + '？（不可恢复）' + reveal)) return
+    rpc('rules.remove', { scope: rule.scope, origin: rule.origin, workspacePath: rule.workspacePath, file: rule.file })
       .then((res) => {
         if (res && res.ok) { notify('已删除：' + rule.file); load() } else notify(res?.error ?? '删除失败')
       }).catch((e) => notify('删除异常: ' + String(e)))
@@ -372,13 +376,13 @@ export function RulesPanel(props) {
     const enabled = !rule.enabled
     const applyLocal = (on) => setData((prev) => prev ? {
       ...prev,
-      user: prev.user.map((r) => (r.scope === 'user' && r.file === rule.file ? { ...r, enabled: on } : r)),
+      user: prev.user.map((r) => (rule.scope === 'user' && r.file === rule.file && (r.origin ?? 'current') === (rule.origin ?? 'current') ? { ...r, enabled: on } : r)),
       projects: prev.projects.map((p) => (p.workspacePath === rule.workspacePath
         ? { ...p, rules: p.rules.map((r) => (r.file === rule.file ? { ...r, enabled: on } : r)) }
         : p)),
     } : prev)
     applyLocal(enabled)
-    rpc('rules.toggle', { scope: rule.scope, workspacePath: rule.workspacePath, file: rule.file, enabled })
+    rpc('rules.toggle', { scope: rule.scope, origin: rule.origin, workspacePath: rule.workspacePath, file: rule.file, enabled })
       .then((res) => {
         if (res && res.ok) { applyLocal(res.rule?.enabled === true); notify(res.rule?.enabled === false ? '已停用：' + rule.file : '已启用：' + rule.file) }
         else { applyLocal(!enabled); notify(res?.error ?? '切换失败') }
@@ -411,7 +415,7 @@ export function RulesPanel(props) {
       if (!activeProject()) return '当前工作区未注册为 DSH workspace，暂不能管理其项目规则'
       return '<工作区>/.dsh/rules/ 还没有规则，点击「＋ 新建规则」创建'
     }
-    return '还没有用户规则（~/.dsh/rules/），点击「＋ 新建规则」创建'
+    return '还没有用户规则（当前 DSH_HOME/rules/ 或旧目录 ~/.dsh/rules/），点击「＋ 新建规则」创建'
   }
 
   const renderBody = () => {
@@ -433,13 +437,13 @@ export function RulesPanel(props) {
       onToggle: (rule) => toggleRule({ ...rule, workspacePath: rule.scope === 'project' ? cwd : undefined }),
     }
     return React.createElement('div', { className: 'edrv-rules-list' },
-      rows.map((rule) => React.createElement(RuleRow, { key: rule.scope + ':' + rule.file, rule, ...common })))
+      rows.map((rule) => React.createElement(RuleRow, { key: rule.scope + ':' + (rule.origin ?? 'project') + ':' + rule.file, rule, ...common })))
   }
 
   return React.createElement('div', { className: 'edrv-rules-panel', ref: panelRef },
     renderTabs(),
     renderWsLine(),
     React.createElement('div', { className: 'edrv-rules-hint' },
-      tab === 'user' ? '用户规则对所有会话生效（存放于 ~/.dsh/rules/）' : '项目规则仅对所在工作区的会话生效（存放于 <工作区>/.dsh/rules/）'),
+      tab === 'user' ? '读取 DSH_HOME/rules/ 与 ~/.dsh/rules/；同名时当前目录优先，新建保存到当前目录' : '项目规则仅对所在工作区的会话生效（存放于 <工作区>/.dsh/rules/）'),
     renderBody())
 }
