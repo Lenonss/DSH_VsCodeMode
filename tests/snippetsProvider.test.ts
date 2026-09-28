@@ -8,6 +8,7 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { disposeSnippets, invalidateSnippets, registerSnippetProvider, setSnippetsSession } from '../src/client/snippets/provider.js'
+import { rpcResponse } from './fixtures/rpcResponse.js'
 
 /** 造一个最小 Monaco 替身，记录注册的 provider。 */
 function fakeMonaco(opts: { enums?: boolean } = {}) {
@@ -42,7 +43,7 @@ function stubEntries(entries) {
   const calls = []
   vi.stubGlobal('fetch', async (url, init) => {
     calls.push(JSON.parse(init.body))
-    return { json: async () => ({ ok: true, entries }) }
+    return rpcResponse({ ok: true, entries })
   })
   return calls
 }

@@ -11,7 +11,7 @@
  */
 import { createHash } from 'node:crypto'
 import { homedir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { readdir, rm, stat } from 'node:fs/promises'
 import { RPC_PATH } from './shared/rpc.js'
@@ -117,15 +117,18 @@ export function sessionsRoot(home = dshHome()): string {
 // --endregion
 
 /**
- * 解析 DSH home：DSH_HOME（去空白）→ ~/.dsh。
- * @author ddj 2026年09月01号
+ * 解析 DSH home：空白环境值视为未设置，展开 ~ 并解析绝对路径。
+ * @public
+ * @author ddj 2026年09月28号
  * @param env 环境映射（缺省 process.env；测试可注入）
  * @returns 归一化的 DSH home 绝对路径
  */
 export function dshHome(env: Record<string, string | undefined> = process.env): string {
   const value = env[DSH_HOME_ENV]
-  if (value && value.trim()) return value
-  return join(homedir(), DSH_DIR_NAME)
+  const path = value && value.trim() ? value : join(homedir(), DSH_DIR_NAME)
+  if (path === '~') return resolve(homedir())
+  if (path.startsWith('~/') || path.startsWith('~\\')) return resolve(join(homedir(), path.slice(2)))
+  return resolve(path)
 }
 
 /** 插件缓存根（~/.dsh/dsh-vscode-mode/cache，下分 workspace/ 与 user/ 两级）。 */

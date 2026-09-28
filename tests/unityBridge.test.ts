@@ -4,9 +4,9 @@
  * 作者 ddj 2026-09-07
  */
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { join, dirname } from 'node:path'
+import { pathToFileURL, fileURLToPath } from 'node:url'
+import type { Ctx } from '../src/store.js'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   isUnityProject,
@@ -27,7 +27,7 @@ import { UNITY_PACKAGE_NAME } from '../src/shared/integration.js'
 let root: string | null = null
 
 async function tempRoot(): Promise<string> {
-  root = await mkdtemp(join(tmpdir(), 'edrv-unity-'))
+  root = await mkdtemp(join(dirname(fileURLToPath(import.meta.url)), '.edrv-unity-'))
   return root
 }
 
@@ -166,4 +166,46 @@ describe('登记清单（home 注入）', () => {
     await expect(unityAdd(plain, moduleUrl, home)).rejects.toThrow('不是 Unity 项目根')
     expect((await unityList(moduleUrl, home)).projects).toHaveLength(0)
   })
+})
+
+
+describe('Unity per-profile bridge provisioning', () => {
+  it('fresh installation creates a producer and project hint without a shell menu registration', async () => {
+    const base = await tempRoot()
+    const moduleUrl = await makeSource(base, '0.3.0')
+    const project = await makeProject(base)
+    const profile = join(base, 'profile-a')
+    await mkdir(profile)
+    await writeFile(join(profile, 'package.json'), JSON.stringify({ dependencies: { 'dsh-vscode-mode': '^0.13.0' } }))
+    const ctx = { get: (name: string) => name === 'profileContext' ? { dir: profile, name: 'desktop' } : undefined } as unknown as Ctx
+    const entry = await unityInstall(project, moduleUrl, { ctx, baseUrl: 'http://localhost:4567' })
+    const config = join(profile, 'dsh-vscode-mode', 'bridge', 'dsh-open.ini')
+    expect(entry.bridgeConfigPath).toBe(config)
+    expect(await readFile(join(project, 'UserSettings', 'dsh-editor.ini'), 'utf8')).toBe('[dsh]\nconfig=' + config + '\n')
+    expect(await readFile(config, 'utf8')).toContain('profile=' + profile)
+    expect(await readFile(config, 'utf8')).toContain('base=http://localhost:4567')
+    expect(await readFile(join(profile, 'dsh-vscode-mode', 'bridge', 'dsh-open.mjs'), 'utf8')).toContain('requestId')
+    await expect(readFile(join(profile, 'dsh-vscode-mode', 'shell', 'registered.json'))).rejects.toMatchObject({ code: 'ENOENT' })
+  }, 15_000)
+
+  it('installing a second profile leaves the first profile bridge and shell selection intact', async () => {
+    const base = await tempRoot()
+    const moduleUrl = await makeSource(base, '0.3.0')
+    const project = await makeProject(base)
+    const first = join(base, 'profile-a')
+    const second = join(base, 'profile-b')
+    const firstConfig = join(first, 'dsh-vscode-mode', 'bridge', 'dsh-open.ini')
+    const shellConfig = join(base, 'shell', 'dsh-open.ini')
+    await mkdir(dirname(firstConfig), { recursive: true })
+    await mkdir(dirname(shellConfig), { recursive: true })
+    await mkdir(second)
+    await writeFile(firstConfig, 'first-profile-selection')
+    await writeFile(shellConfig, 'shell-selected-first-profile')
+    await writeFile(join(second, 'package.json'), JSON.stringify({ dependencies: { 'dsh-vscode-mode': '^0.13.0' } }))
+    const ctx = { get: (name: string) => name === 'profileContext' ? { dir: second, name: 'web' } : undefined } as unknown as Ctx
+    const entry = await unityInstall(project, moduleUrl, { ctx, baseUrl: 'http://localhost:6789' })
+    expect(entry.bridgeConfigPath).toBe(join(second, 'dsh-vscode-mode', 'bridge', 'dsh-open.ini'))
+    expect(await readFile(firstConfig, 'utf8')).toBe('first-profile-selection')
+    expect(await readFile(shellConfig, 'utf8')).toBe('shell-selected-first-profile')
+  }, 15_000)
 })

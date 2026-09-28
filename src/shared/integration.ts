@@ -58,6 +58,8 @@ export interface UnityProjectEntry {
   upToDate: boolean
   /** 项目目录不存在。 */
   missingDir: boolean
+  /** 安装时绑定的本机 profile bridge 配置文件。 */
+  bridgeConfigPath?: string
   /** 非法原因（非 Unity 项目根等）。 */
   error?: string
 }

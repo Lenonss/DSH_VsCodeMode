@@ -7,6 +7,7 @@
  */
 import { EDRV_PARAM_KEYS, parseOpenParams } from '../shared/externalOpen.js'
 import { openDeepLink } from './openFlow.js'
+import { disposeOpenWait } from './openReceipt.js'
 import { rpc } from './rpc.js'
 import { log } from './log.js'
 
@@ -31,22 +32,23 @@ export interface ExtOpenOptions {
  * @param ctx 客户端根上下文（sessions/workspaces 服务）
  * @param options 可注入选项
  */
-export function setupExtOpen(ctx: unknown, options: ExtOpenOptions = {}): void {
-  startPresencePoll(ctx)
+export function setupExtOpen(ctx: unknown, options: ExtOpenOptions = {}): () => void {
+  const dispose = startPresencePoll(ctx)
   const search = options.search ?? (typeof location !== 'undefined' ? location.search : '')
   const params = parseOpenParams(search)
-  if (!params) return
+  if (!params) return dispose
   const referrer = options.referrer ?? (typeof document !== 'undefined' ? document.referrer : '')
   const origin = options.origin ?? (typeof location !== 'undefined' ? location.origin : '')
   if (!referrerAllowed(referrer, origin)) {
     log.warn('已忽略跨源深链请求（referrer=' + referrer + '）')
-    return
+    return dispose
   }
   stripCurrentUrl()
   void openDeepLink(ctx, params).catch((error) => {
     log.warn('深链打开失败：' + String(error))
     toastDom('深链打开失败：' + String((error as Error)?.message ?? error))
   })
+  return dispose
 }
 
 /**
@@ -55,23 +57,42 @@ export function setupExtOpen(ctx: unknown, options: ExtOpenOptions = {}): void {
  * @author ddj 2026年09月08号
  * @param ctx 客户端根上下文
  */
-function startPresencePoll(ctx: unknown): void {
-  if (typeof window === 'undefined') return
-  const marker = window as { __edrvExtPoll?: boolean }
-  if (marker.__edrvExtPoll) return
-  marker.__edrvExtPoll = true
+function startPresencePoll(ctx: unknown): () => void {
+  if (typeof window === 'undefined') return () => {}
+  const marker = window as unknown as { __edrvExtPoll?: () => void }
+  if (typeof marker.__edrvExtPoll === 'function') marker.__edrvExtPoll()
+  const clientId = crypto.randomUUID()
+  let disposed = false
+  let polling = false
   let executing = false
-  window.setInterval(() => {
-    if (executing) return
+  /** @private @author ddj 2026年09月28号 Open all requested paths before acknowledging this exact lease. */
+  async function execute(open: { paths: string[]; line?: number; column?: number; token: string; leaseId: string }): Promise<void> {
     executing = true
-    void rpc('edrv.external.pending', {})
-      .then(async (result) => {
-        if (!result.ok || !result.open) return
-        await openDeepLink(ctx, { paths: result.open.paths, line: result.open.line, column: result.open.column })
-      })
-      .catch(() => { /* 旧版 host 无此方法/离线：忽略 */ })
-      .finally(() => { executing = false })
-  }, HANDOFF_POLL_MS)
+    try {
+      const success = await openDeepLink(ctx, open)
+      if (!disposed) await rpc('edrv.external.ack', { token: open.token, leaseId: open.leaseId, clientId, success, error: success ? undefined : '编辑器打开失败或取消' })
+    } finally { executing = false }
+  }
+  /** @private @author ddj 2026年09月28号 Poll while opening to renew the lease without accepting a second request. */
+  async function tick(): Promise<void> {
+    if (disposed || polling) return
+    polling = true
+    try {
+      const result = await rpc('edrv.external.pending', { clientId, busy: executing })
+      if (!disposed && result.ok && result.open && !executing) void execute(result.open).catch(() => {})
+    } finally { polling = false }
+  }
+  const timer = window.setInterval(() => { void tick().catch(() => {}) }, HANDOFF_POLL_MS)
+  /** @private @author ddj 2026年09月28号 Stop heartbeats and fail outstanding editor waits on plugin disposal. */
+  function dispose(): void {
+    disposed = true
+    window.clearInterval(timer)
+    disposeOpenWait()
+    if (marker.__edrvExtPoll === dispose) delete marker.__edrvExtPoll
+  }
+  marker.__edrvExtPoll = dispose
+  void tick().catch(() => {})
+  return dispose
 }
 
 /**

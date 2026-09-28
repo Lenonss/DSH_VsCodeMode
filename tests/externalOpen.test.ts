@@ -4,7 +4,7 @@
  * 作者 ddj 2026-09-07
  */
 import { describe, expect, it } from 'vitest'
-import { EDRV_PARAM_KEYS, parseOpenParams, PATHS_SEPARATOR } from '../src/shared/externalOpen.js'
+import { EDRV_PARAM_KEYS, parseInboxOpen, parseOpenParams, PATHS_SEPARATOR, sameProfile } from '../src/shared/externalOpen.js'
 
 /** 模拟 launcher（Uri.EscapeDataString ≡ encodeURIComponent）拼出的查询串。 */
 function buildSearch(paths: string[], extra = ''): string {
@@ -42,5 +42,48 @@ describe('parseOpenParams', () => {
 
   it('深链参数键全集用于 URL 清理', () => {
     expect(EDRV_PARAM_KEYS).toEqual(['edrvOpen', 'edrvPaths', 'edrvLine', 'edrvColumn'])
+  })
+})
+
+describe('sameProfile', () => {
+  it('accepts the same Windows profile written with either separator or case', () => {
+    expect(sameProfile('C:/Users/a/.dsh/profiles/desktop', 'C:\\Users\\a\\.dsh\\profiles\\desktop', 'win32')).toBe(true)
+    expect(sameProfile('C:\\Users\\A\\.dsh\\profiles\\desktop\\', 'c:\\users\\a\\.dsh\\profiles\\desktop', 'win32')).toBe(true)
+  })
+
+  it('keeps POSIX profiles exact and separator-sensitive', () => {
+    expect(sameProfile('/home/a/.dsh/profiles/desktop/', '/home/a/.dsh/profiles/desktop', 'linux')).toBe(true)
+    expect(sameProfile('/home/a/.dsh/profiles/desktop', '/home/a/.dsh/profiles/Desktop', 'linux')).toBe(false)
+  })
+})
+
+describe('parseInboxOpen', () => {
+  /** @author ddj 2026年09月28号 @param profile Declared profile. @returns Valid request payload. */
+  const payload = (profile: string) => ({
+    version: 1,
+    requestId: '6c3946fa-94a1-4bed-ba60-5125fcb29a54',
+    profile,
+    paths: ['C:\\work\\a.ts'],
+    createdAt: Date.now(),
+  })
+
+  it('accepts the running profile written with forward slashes', () => {
+    const parsed = parseInboxOpen(payload('C:/Users/a/.dsh/profiles/desktop'), 'C:\\Users\\a\\.dsh\\profiles\\desktop', Date.now(), 'win32')
+    expect(parsed?.profile).toBe('C:/Users/a/.dsh/profiles/desktop')
+  })
+
+  it('still rejects a different profile, bad ids and expired requests', () => {
+    const expected = 'C:\\Users\\a\\.dsh\\profiles\\desktop'
+    expect(parseInboxOpen(payload('C:\\Users\\other\\.dsh\\profiles\\desktop'), expected, Date.now(), 'win32')).toBeNull()
+    const badId = { ...payload('C:/x'), requestId: 'not-a-uuid' }
+    expect(parseInboxOpen(badId, 'C:/x', Date.now(), 'linux')).toBeNull()
+    const expired = { ...payload('/home/a/.dsh/profiles/desktop'), createdAt: Date.now() - 120_000 }
+    expect(parseInboxOpen(expired, '/home/a/.dsh/profiles/desktop', Date.now(), 'linux')).toBeNull()
+  })
+
+  it('keeps POSIX profile identity case-sensitive through the parser', () => {
+    const declared = '/home/a/.dsh/profiles/desktop'
+    expect(parseInboxOpen(payload(declared), '/home/a/.dsh/profiles/Desktop', Date.now(), 'linux')).toBeNull()
+    expect(parseInboxOpen(payload(declared), declared, Date.now(), 'linux')?.profile).toBe(declared)
   })
 })

@@ -1,35 +1,26 @@
-# com.dsh.editor — DSH 文件编辑（Unity 外部脚本编辑器集成）
+# com.dsh.editor — DSH 文件编辑
 
-把 DSH 的 `dsh-vscode-mode`（VSCodeMode）编辑器注册为 Unity 外部脚本编辑器：
-双击脚本 / Console 报错跳转时，优先把打开请求**移交已打开的 DSH 页面**就地执行（不重复开新页）；
-无活跃页面时回退经默认浏览器深链打开对应文件并定位行列。
+Unity 外部脚本编辑器通过当前用户私有的 OPEN REQUEST/ACK 文件队列打开脚本或项目。收到 profile 与 requestId 匹配的成功 ACK 才确认完成；超时、拒绝或无效 ACK 会在 Unity Console 报告错误。
 
-## 安装方式一：DSH 设置页一键安装（推荐）
+## 安装
 
-1. 打开 DSH Web GUI → 设置 → VSCodeMode → 通用 →「系统集成」。
-2. 在 Unity 集成区添加你的 Unity 项目根（包含 `Assets/` 与 `ProjectSettings/` 的目录）。
-3. 点「安装」—— 包会复制为 `<项目>/Packages/com.dsh.editor`（Unity 内嵌包，自动发现）。
-4. 切回 Unity 窗口（或下次启动 Unity）自动生效。
+在 DSH 设置 → VSCodeMode → 系统集成中添加 Unity 项目并安装/更新内嵌包，或在 Unity Package Manager 中选择本包。切回 Unity 后，在 Preferences → External Tools → External Script Editor 中选择 **DSH 文件编辑**。
 
-后续插件更新后，同一按钮即为一键更新（整目录替换，列表里会显示「可更新」徽标）。
+DSH 安装 Unity 集成时会为当前 profile 准备独立的 `<profile>/dsh-vscode-mode/bridge`，并在项目的 `UserSettings/dsh-editor.ini` 写入 `config=<绝对桥接INI路径>`；无需先注册资源管理器菜单，也不会覆盖其他 profile 的菜单配置。
 
-## 安装方式二：Package Manager 手动安装
+**DSH 桥接配置**字段为每个 Unity 项目单独保存。填写绝对路径时使用该显式覆盖；留空时，后台先读取本项目的安装提示，只有提示文件不存在才回退 `$DSH_HOME/dsh-vscode-mode/shell/dsh-open.ini`。未设 `DSH_HOME` 时旧目录以用户目录中的 `.dsh` 为根。提示损坏、相对路径或目标配置不可读会通过 Unity Console 报告错误，不会猜测端口或切换 profile。清空字段可恢复自动选择。
 
-- Unity → Window → Package Manager → 左上角 `+` → **Add package from disk** →
-  选择插件目录下的 `unity/com.dsh.editor`（含本 README 的目录）。
+## 配置契约
 
-## 使用
+INI 保留 `base`，并包含 `mode=desktop|web`、绝对 `profile`、绝对 `inbox`、绝对 `node` 可执行文件、`nodeMode=node|electron` 和绝对 `helper`（安装的 `dsh-open.mjs`）。配置由 DSH 生成，Unity 不推测端口或 profile，也不创建任何队列目录。
 
-1. Unity → Edit → Preferences → External Tools → External Script Editor 下拉选择 **DSH 文件编辑**。
-2. 展开 DSH 文件编辑选项，确认「DSH 服务地址」（默认 `http://127.0.0.1:3080`，需与 DSH Web GUI 地址一致）。
-3. 双击任意脚本即可打开（有已打开 DSH 页面时直接在其页面内打开，不再新开标签）；Console 报错双击会带上行列。
+桌面模式仅唤起官方 `dsh://open`；Web 模式仅唤起所选 `base`。文件和行列只进入队列，不附加到 URL。Electron 解释器使用 `ELECTRON_RUN_AS_NODE=1`。producer 必须与 INI 一同安装，不能只复制 Unity 包后填写一个服务地址。
 
-## 说明
+## 使用与边界
 
-- 本包为虚拟外部编辑器：不需要本地可执行文件。打开优先走「移交」：POST 到 DSH host 的
-  `edrv.external.handoff`，已打开页面 3s 轮询领取并执行打开规则（文件夹/文件的智能路由见插件 README）；
-  无活跃页面或 2s 未领取时回退 `Application.OpenURL` 深链。移交在后台线程执行，不阻塞编辑器。
-- 仅文本/代码类文件（扩展名白名单 + Project Settings 用户自定义扩展）交 DSH 打开；双击预制体、
-  场景、模型、纹理等资源不受影响，仍由 Unity 原生处理（预制体编辑模式、场景打开等）。
-- 编辑器内查看任意绝对路径文件；保存受 DSH 会话沙箱策略约束（工作区外保存会被拒绝，属预期安全行为）。
-- 卸载：删除 `<项目>/Packages/com.dsh.editor` 目录，并在 External Script Editor 换回其他编辑器。
+- 双击支持的文本/代码文件，或从 Console 跳转行列。原有文本扩展名白名单及自定义文本扩展保留；prefab 和 scene 始终交回 Unity。
+- “Open C# Project” 的空路径打开 Unity 项目根；测试按钮也打开项目根。
+- 偏好读取在主线程；配置/队列 IO 与等待在后台 producer 中。界面激活通过 `EditorApplication.delayCall` 执行，不在后台调用 Unity UI。
+- 队列要求 Windows 当前用户独占 ACL，或 POSIX 目录 0700、文件 0600，并拒绝链接/重解析逃逸。目录缺失或不安全时失败，不建立宽松回退目录。
+- 请求最多 20 个绝对路径，每个至多 8192 字符，JSON 至多 64 KiB，有效期及 ACK 等待上限 60 秒。不使用 cookies 或通用 RPC。
+- 卸载时删除内嵌包并选择其他外部编辑器。个人配置保存在项目专属 EditorPrefs 键中，不修改项目资源。

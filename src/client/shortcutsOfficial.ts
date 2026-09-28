@@ -8,7 +8,7 @@
  * 作者 ddj 2026年10月
  */
 import { bindingToChord, chordToBinding, defaultKeybindings, normalizeKeybindings } from '../shared/keybindings.js'
-import { matchEvent, parseChords } from './keybindings.js'
+import { applyKeyAria, matchEvent, parseChords } from './keybindings.js'
 import type { OfficialBinding, ShortcutProfileKey } from '../shared/keybindings.js'
 import { log } from './log.js'
 
@@ -193,7 +193,9 @@ export function installLegacyKeys(
 ): () => void {
   if (!target) return () => {}
   const cache = new Map<string, ReturnType<typeof parseChords>>()
+  let disposed = false
   const onKey = (event: Event): void => {
+    if (disposed) return
     const key = event as KeyboardEvent
     const current = chords()
     for (const def of defs) {
@@ -211,8 +213,12 @@ export function installLegacyKeys(
       return
     }
   }
-  target.addEventListener('keydown', onKey, true)
-  return () => target.removeEventListener('keydown', onKey, true)
+  target.addEventListener('keydown', onKey, { capture: true })
+  return () => {
+    if (disposed) return
+    disposed = true
+    target.removeEventListener('keydown', onKey, { capture: true })
+  }
 }
 
 /**
@@ -283,16 +289,19 @@ export function registerOfficialShortcuts(
 export function bindCatalogChords(service: ShortcutsServiceLike, onChange: (chords: Readonly<Record<string, string>>) => void): () => void {
   const sync = (): void => {
     const chords: Record<string, string> = {}
+    const aria: Record<string, string | undefined> = {}
     try {
       for (const row of service.catalog.getSnapshot()) {
         if (!row.id.startsWith('edrv.') || row.binding === null) continue
         if (row.issue !== null) continue
-        const chord = bindingToChord(row.binding)
+        const chord = row.keys.length ? row.keys.join(' ') : bindingToChord(row.binding)
         if (chord !== null) chords[row.id] = chord
+        aria[row.id] = row.aria
       }
     } catch (error) {
       bridgeLog.warn('官方目录弦表重建失败：' + String(error))
     }
+    applyKeyAria(aria)
     onChange(chords)
   }
   sync()

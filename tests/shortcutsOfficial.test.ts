@@ -118,7 +118,45 @@ describe('installLegacyKeys 旧版 DSH 键位回退', () => {
     expect(event.preventDefault).toHaveBeenCalledOnce()
     expect(runner.run).toHaveBeenCalledWith('edrv.save')
     dispose()
-    expect(target.removeEventListener).toHaveBeenCalledWith('keydown', listener, true)
+    expect(target.removeEventListener).toHaveBeenCalledWith('keydown', listener, { capture: true })
+  })
+})
+
+describe('legacy handoff and guarded input', () => {
+  it('late official service removes fallback before official dispatch, without duplicate execution', () => {
+    const target = new EventTarget()
+    const runner = { isAvailable: () => true, run: vi.fn(() => true) }
+    const dispose = installLegacyKeys([{ id: 'edrv.save' }], runner, () => ({ 'edrv.save': 'Ctrl+S' }), target)
+    let service: ShortcutsServiceLike | undefined
+    const scheduled: Array<() => void> = []
+    const cancel = awaitShortcutsService({ get: () => service }, {
+      schedule: (tick) => scheduled.push(tick),
+      onReady: (ready) => { if (ready) dispose() },
+    })
+    const before = Object.assign(new Event('keydown', { cancelable: true }), { key: 's', ctrlKey: true })
+    target.dispatchEvent(before)
+    expect(before.defaultPrevented).toBe(true)
+    expect(runner.run).toHaveBeenCalledOnce()
+    service = mockService()
+    scheduled[0]()
+    const after = Object.assign(new Event('keydown', { cancelable: true }), { key: 's', ctrlKey: true })
+    target.dispatchEvent(after)
+    expect(after.defaultPrevented).toBe(false)
+    const official = officialCommandOf({ id: 'edrv.save', label: 'Save' }, runner).resolve({ region: 'page', modal: null })
+    if (official.status === 'handled') official.run()
+    expect(runner.run).toHaveBeenCalledTimes(2)
+    cancel(); dispose()
+  })
+
+  it.each([{ isComposing: true }, { keyCode: 229 }, { getModifierState: () => true }])('does not swallow IME or AltGraph: %j', (guard) => {
+    const target = new EventTarget()
+    const runner = { isAvailable: () => true, run: vi.fn(() => true) }
+    const dispose = installLegacyKeys([{ id: 'edrv.save' }], runner, () => ({ 'edrv.save': 'Ctrl+S' }), target)
+    const event = Object.assign(new Event('keydown', { cancelable: true }), { key: 's', ctrlKey: true, ...guard })
+    target.dispatchEvent(event)
+    expect(event.defaultPrevented).toBe(false)
+    expect(runner.run).not.toHaveBeenCalled()
+    dispose()
   })
 })
 

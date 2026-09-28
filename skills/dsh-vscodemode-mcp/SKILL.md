@@ -1,46 +1,37 @@
 ---
 name: dsh-vscodemode-mcp
-description: 配置、新增、启用或排查 dsh-vscode-mode 插件（VSCodeMode 设置页）的 MCP 服务——全局「我的 MCP」与项目级 `.mcp.json` 两种作用域、stdio / streamable-http 传输写法、`mcp.*` RPC 方法、serverName 命名与冲突规则、项目 MCP 的工作区隔离边界，以及连接失败/工具数为 0 等故障的定位路径。当用户提到「加个 MCP」「配置 MCP」「MCP 连不上」「项目 MCP」「.mcp.json」「VSCodeMode 的 MCP 管理」时加载本技能。
-whenToUse: 用户要求新增/修改/启停/排查 dsh-vscode-mode 的 MCP 服务配置时；或需要判断某个 MCP 工具为何在对话中不可见/被拒绝时。
+description: 配置、新增、启用或排查 dsh-vscode-mode 的 MCP 服务：全局「我的 MCP」、项目 .mcp.json、agent 连接实例、工具/资源/指令隔离、mcp.* RPC、命名冲突与连接状态。
+whenToUse: 用户要求新增、修改、启停或排查 VSCodeMode MCP 配置，或判断项目工具、资源、服务器指令为何不可见或被拒绝时。
 ---
 
-# dsh-vscodemode-mcp — dsh-vscode-mode 的 MCP 配置与使用
+# dsh-vscodemode-mcp — MCP 配置与使用
 
-本技能覆盖 **dsh-vscode-mode 插件**（DSH 上的类 VSCode 编码体验）提供的 MCP 可视化管理能力。
-它管理的是 `@deepseek-ai/dsh-mcp-client` 的 loader 条目，连接由 DSH Host 维护，**不在浏览器侧连接 MCP**。
+本技能覆盖 dsh-vscode-mode 的 MCP 管理面。连接由 DSH Host 内的官方 `@deepseek-ai/dsh-mcp-client` 插件维护；浏览器只管理配置。
 
-## 1. 两种作用域（先判断用户要哪一种）
+## 1. 先确定作用域
 
-| | 全局「我的 MCP」 | 项目 MCP |
+| 项目 | 全局「我的 MCP」 | 项目 MCP |
 |---|---|---|
-| 配置位置 | profile 的 loader 树（`~/.dsh/profiles/<profile>/cordis.yml`） | 项目根 `.mcp.json` 的 `mcpServers` |
-| 生效范围 | 该 profile 下所有工作区 | 仅该 workspace（+ 其子路径可匹配到的工作区） |
-| 随仓库共享 | 否 | 是（`.mcp.json` 入库即团队共享） |
-| 持久真相 | loader 条目 | `.mcp.json` 文件（重启后由插件 reconcile 恢复激活） |
-| 受工作区隔离约束 | 否 | **是**（见 §5） |
+| 持久配置 | profile loader 树 | 已注册 workspace 根目录的 `.mcp.json` |
+| 生效范围 | profile 内所有工作区 | cwd 匹配该 workspace 的 agent |
+| 运行方式 | 原有全局 loader entry | `agent.ctx.plugin(officialMcp, config)` |
+| 连接实例 | 每个启用的全局 entry 一份 | 每个活动 agent、每个启用服务一份 |
+| 没有活动 agent | 仍可运行 | 仅保存配置，`configured`、`instanceCount: 0` |
+| 团队共享 | 否 | `.mcp.json` 可以随仓库共享 |
 
-判断规则：
-- 用户说「全局都能用」「所有项目都要」→ 全局。
-- 用户说「这个项目需要」「跟仓库一起提交」→ 项目级。
-- 不确定且该 MCP 只在某个仓库有意义 → 默认项目级。
+用户说「全局都能用」选全局；说「这个项目需要」「跟仓库一起提交」选项目级。工作区匹配使用最长父路径；Windows 路径忽略大小写，POSIX 路径区分大小写。
 
-## 2. UI 路径
+## 2. UI 与连接语义
 
-设置 → **VSCodeMode** → **「MCP 管理」** Tab，其下三个子页签：
+设置 → VSCodeMode → MCP 管理，包含「我的 MCP」「项目 MCP」「MCP 市场」（占位）。项目服务在所选项目内管理。
 
-- **我的 MCP** — 全局服务列表（可查看状态/工具、添加、刷新 ⟳、启用/禁用、删除 ⌫）。
-- **项目 MCP** — 先选项目（带路径与 MCP 计数），再管理该项目的服务。
-- **MCP 市场** — 占位，暂未接入。
+保存项目服务会写入 `.mcp.json` 并更新匹配的活动 agent；没有活动 agent 时保存为待挂载配置。启用不会凭空创建会话。每个新 agent 的串行 `agent/created` 监听会读取最新配置并等待其官方插件启动；插件装配时也会接入已经存在的 agent。
 
-「+ 添加全局 MCP」按钮在子页签栏右侧；项目 MCP 的新增入口在所选项目的分组内。
-表单字段：名称 / 传输方式 / （stdio）命令·参数·工作目录 / （streamable-http）URL·请求头。
-按钮文案为「保存并连接」——**保存后会立刻尝试连接**。
+禁用、删除、配置变更、刷新重连及 agent/插件卸载都会释放相应 fiber 和连接。仅刷新未变化的项目列表不会重复连接。主机代码更新需要重启 DSH 才能加载新实现。
 
-## 3. 配置写法
+## 3. 项目配置
 
-### 3.1 项目级 `.mcp.json`
-
-对齐 Claude Code / Cursor 格式，存于项目根：
+`.mcp.json` 示例：
 
 ```json
 {
@@ -52,26 +43,26 @@ whenToUse: 用户要求新增/修改/启停/排查 dsh-vscode-mode 的 MCP 服�
     "remote-tools": {
       "url": "http://localhost:3000/mcp",
       "headers": { "Authorization": "Bearer <token>" },
-      "toolCallTimeoutMs": 60000
+      "toolCallTimeoutMs": 60000,
+      "reconnect": { "enabled": true }
     }
   }
 }
 ```
 
-规则（`src/mcpProject.ts` 的 `configFromDef`）：
-- **有 `url` → `streamable-http`；无 `url` → `stdio`**。传输方式由字段形态自动判定，不写 `transport`。
-- stdio 字段：`command`（必填）、`args`（数组）、`cwd`、`env`（键值对象）。
-- http 字段：`url`（必填，须 `http(s)://`）、`headers`（键值对象）。
-- 可选：`toolCallTimeoutMs`（数字）。
-- `disabled: true` = 停用（由启停开关维护；**保存时不会写这个键，保存恒为启用**）。
-- 顶层可有其他字段，写回时保留；`mcpServers` 之外的未知字段不丢。
+- 有字符串 `url` 采用 `streamable-http`；其余采用 `stdio`。文件不用写 `transport`。
+- stdio：`command` 必填；可填 `args`、`cwd`、`env`。未指定 `cwd` 时，以项目根作为进程工作目录。
+- HTTP：`url` 必须以 `http://` 或 `https://` 开头，可填 `headers`。
+- 高级参数：`toolCallTimeoutMs`、`failOnStartupError`、`maxInstructionBytes`、`reconnect`。
+- `disabled: true` 保持配置但不创建连接；保存表单会恢复启用。重启和 reconcile 都尊重 `disabled`。
+- 保存保留文档顶层、其他服务器及当前服务器的未知字段和未编辑高级参数；切换传输方式会移除旧传输专属字段。
+- `env` / `headers` 在返回值中使用 `••••••` 脱敏。原键的未修改掩码保存时恢复真实值；新键只有掩码而没有原值时会拒绝保存，需填写凭据。
+- 只有 `ENOENT` 表示配置不存在。权限、IO、JSON 或结构错误会报告 `fileError`，保留最后有效配置与活动连接，不覆盖损坏文件。
 
-### 3.2 全局（等价配置形）
-
-全局条目等价于 profile loader 里的一行 `@deepseek-ai/dsh-mcp-client`：
+全局配置继续使用官方 loader entry：
 
 ```yaml
-- id: <条目 id>
+- id: mcp-example
   name: '@deepseek-ai/dsh-mcp-client'
   config:
     serverName: codegraph
@@ -80,102 +71,73 @@ whenToUse: 用户要求新增/修改/启停/排查 dsh-vscode-mode 的 MCP 服�
     args: ['serve', '--mcp']
 ```
 
-但 **优先用设置页 UI 或 `mcp.save` RPC**，不要手改 profile 的 `cordis.yml`：UI/RPC 会同步触发 loader 热更新与冲突校验，手改容易产生重复条目。
+优先使用设置页或 RPC，保证冲突检查和运行状态同步。
 
-### 3.3 两个最小可用示例
+## 4. RPC
 
-stdio（本地命令行 MCP，如 CodeGraph）：
-```
-名称: codegraph
-传输方式: stdio
-命令: codegraph
-参数: serve --mcp --path D:/Work/MyProject
-```
+`POST /edrv/rpc`，请求 `{ "method": "...", "args": { ... } }`，返回 `{ ok: true, ... }` 或 `{ ok: false, error }`。
 
-streamable-http（远端/已启动的 HTTP MCP）：
-```
-名称: remote-tools
-传输方式: streamable-http
-URL: http://localhost:3000/mcp
-请求头: Authorization=Bearer <token>
-```
-
-## 4. RPC 方法表（UI 之外的程序化入口）
-
-路由：`POST /edrv/rpc`，报文体 `{ "method": "...", "args": { ... } }`，返回 `{ ok: true, ... }` 或 `{ ok: false, error }`。
-
-| 方法 | 入参 | 返回 |
+| 方法 | 入参 | 成功返回字段 |
 |---|---|---|
-| `mcp.list` | `{}` | `{ servers: MpcServer[] }` |
-| `mcp.save` | `{ config: MpcConfig }` | `{ server: MpcServer }` |
-| `mcp.remove` | `{ id }` | `{}` |
-| `mcp.toggle` | `{ id, enabled }` | `{ server: MpcServer }` |
-| `mcp.refresh` | `{ id }` | `{ server: MpcServer }` |
-| `mcp.projects` | `{}` | `{ projects: MpcProject[] }` |
-| `mcp.projectSave` | `{ workspacePath, serverName, config }` | `{ project: MpcProject }` |
-| `mcp.projectRemove` | `{ workspacePath, serverName }` | `{ project: MpcProject }` |
-| `mcp.projectToggle` | `{ workspacePath, serverName, enabled }` | `{ project: MpcProject }` |
-| `mcp.projectRefresh` | `{ workspacePath, serverName }` | `{ project: MpcProject }` |
+| `mcp.list` | `{}` | `servers` |
+| `mcp.save` | `{ config }` | `server` |
+| `mcp.remove` | `{ id }` | 无 |
+| `mcp.toggle` | `{ id, enabled }` | `server` |
+| `mcp.refresh` | `{ id }` | `server` |
+| `mcp.projects` | `{}` | `projects` |
+| `mcp.projectSave` | `{ workspacePath, serverName, config }` | `project` |
+| `mcp.projectRemove` | `{ workspacePath, serverName }` | `project` |
+| `mcp.projectToggle` | `{ workspacePath, serverName, enabled }` | `project` |
+| `mcp.projectRefresh` | `{ workspacePath, serverName }` | `project` |
 
-`MpcServer` 关键字段：`id`、`serverName`、`enabled`、`transport`、`config`、`status`、`toolCount`、`tools[]`。
-`MpcProject` 关键字段：`workspacePath`、`title`、`servers[]`、`source: 'project'`，异常时带 `missingDir` 或 `fileError`。
+`MpcServer` 包括 `id`、`serverName`、`enabled`、`transport`、脱敏 `config`、`status`、`instanceCount`、`toolCount`、`tools[]`、可选 `error`。项目视图另有 `workspacePath`、`title`、`source: 'project'`，以及可选 `missingDir`、`fileError`。
 
-## 5. 命名规则与冲突（最容易踩的坑）
+## 5. 命名与迁移
 
-- **`serverName` 规则**：`/^[A-Za-z0-9_-]{1,32}$/` —— 字母、数字、**下划线**、连字符，最多 32 位。
-  ⚠️ 注意与技能名的区别：**MCP 的 `serverName` 允许下划线**，而 DSH 技能名不允许（技能名须 kebab-case）。
-- **唯一性**：同一个 `serverName` 在**全局与所有项目之间**全局唯一。重复时保存直接失败：
-  `serverName "xxx" 已被另一个 MCP 使用（全局或其他项目），请换一个名称`。
-- **模型侧工具名**：`mcp__<serverName>__<原始工具名>`。这段前缀是隔离与可见性机制的判定依据，不要手工改 `serverName` 来"重命名工具"——那会生成一整套新工具名。
-- **项目条目 id**：`vsm-mcp.<workspaceHash>.<serverName>`（旧版残留为 `vsm-mcp:<hash>:<name>`，插件识别但不显示为全局 MCP）。
-- 项目 MCP 只接受**已注册为 DSH workspace** 的路径，否则报 `项目未注册为 DSH workspace，不能管理项目 MCP`。
+- `serverName` 使用 `/^[A-Za-z0-9_-]{1,32}$/`；允许下划线，与技能名规则不同。
+- VSCodeMode 管理的全局和所有项目配置之间名称唯一，包括未启用和没有活动 agent 的配置。官方 MCP 还会拒绝同一个 agent scope 中的重复名称。
+- 工具名是 `mcp__<serverName>__<原始工具名>`。共享资源工具通过 `arguments.server` 选择服务器。
+- 项目稳定 id 仍是 `vsm-mcp.<workspaceHash>.<serverName>`，用于 UI/RPC 身份；0.13 起不再代表全局 loader entry。
+- 启动迁移会先删除旧的 `vsm-mcp.*` 和 `vsm-mcp:*` 全局项目条目及其连接，再在 agent scope 挂载。不要手动将项目条目改成其他 id。
+- 项目写操作只接受已注册 workspace，目标固定为该根目录的 `.mcp.json`。
 
-## 6. 作用域隔离（项目 MCP 的边界）
+## 6. 工具、资源和指令隔离
 
-项目 MCP 的连接由 Host 维护，但**每个 agent 只继承当前工作区的项目工具**：
+官方 0.1.7-rc.2 的 MCP Config 没有关闭资源/指令的开关；官方注册随 `scopeOf(ctx)` 归属。因此项目连接必须直接在 `agent.ctx` 挂载，不能全局连接后只隐藏工具。
 
-- 机制：`tools.restrict({ deny })` 控制模型可见性 + `tools.guard()` 在执行层兜底拒绝。
-- 当前对话工作区 ≠ 条目所属工作区时，调用被拒，返回：
-  `已拒绝：当前对话工作区不能使用其他项目的 MCP`
-- 会话没有落在任何已注册工作区时：
-  `项目 MCP 需要在已注册工作区的对话中使用`
-- **全局 MCP 不受此限制**，在任何会话都可用。
-- 工作区匹配按**最长父路径**：在子目录会话里也能用到父级工作区的项目 MCP。
+子 agent 会继承父 scope；跨 cwd 子会话还有三层处理：
 
-排查「工具有但没有出现在模型面前」时，先看当前会话 cwd 是否落在目标 workspace 内。
+- `tools.restrict({ deny })` 隐藏继承的外项目工具；执行 guard 同时检查所有项目工具命名空间。
+- `list_mcp_resources`、`list_mcp_resource_templates`、`read_mcp_resource` 在执行前检查 `arguments.server` 归属，不能通过共享工具访问父工作区资源。
+- 子 scope 为外项目 `mcp:<serverName>` 注册空指令段；通过公开 `system-prompt/assemble` waterfall 按实际查看 scope 过滤官方资源服务器列表，保留全局和独立 agent preset 的纯资源服务。不会改动 scope parent 链。官方 0.1.7-rc.2 列表格式已验证；外项目存在且列表格式无法识别时，安全隐藏该提示列表，执行 guard 仍独立生效。
 
-## 7. 故障排查
+全局 MCP 保持可用。工作区外的 agent 不能访问任何项目 MCP。拒绝文案：
 
-| 症状 | 原因与处理 |
+- `已拒绝：当前对话工作区不能使用其他项目的 MCP`
+- `项目 MCP 需要在已注册工作区的对话中使用`
+
+## 7. 状态与排错
+
+| 状态/现象 | 含义与处理 |
 |---|---|
-| 卡片状态 `错误`，提示 `MCP 插件未正常运行` | loader 条目 fiber 未进入 ACTIVE。看 Host 启动日志中该条目的报错；多半是 `command` 不存在或启动即退出 |
-| 状态 `连接中` 一直不变 | 服务端未响应 MCP 握手。核对 stdio 的 `command`/`args`/`cwd`，或 HTTP 的 URL 可达性 |
-| 已连接但 `toolCount` 为 0 | 服务端 `tools/list` 返回空，或工具同步失败。先用该 MCP 的 CLI 自行验证能列出工具 |
-| `stdio MCP 必须填写 command` | 表单「命令」为空 |
-| `HTTP MCP 必须填写 http(s) URL` | 「URL」为空或不是 `http(s)://` 开头 |
-| `serverName 只能包含字母、数字、下划线和连字符（最多 32 位）` | 名称含空格/点/中文或超长 |
-| `serverName "x" 已被另一个 MCP 使用…` | 见 §5 唯一性 |
-| 设置页里 `env` / `headers` 的值显示成 `••••••` | **这是脱敏掩码**（`publicConfig`）。读回的是掩码而非真实值，**不要把它原样回写保存**，否则会用掩码覆盖真实凭据 |
-| `.mcp.json 解析失败：…` | 文件不是合法 JSON；插件只报错、**不覆盖**该文件，修好 JSON 后刷新 |
-| `.mcp.json 的 mcpServers 必须是对象` | `mcpServers` 写成了数组/标量 |
-| 项目显示「目录缺失」 | workspace 路径已不存在（项目被移动/删除） |
+| `configured` | 配置已保存，没有已挂载实例；打开匹配工作区会话后挂载 |
+| `disabled` | 配置已停用，不建立项目连接 |
+| `connecting` | 官方插件还在等待启动完成；检查命令、cwd、URL 和握手 |
+| `unverified` | fiber 已激活，但官方没有公开连接状态证据；不能宣称已连接 |
+| `error` | 插件启动或挂载失败；读 `error` 与 Host 日志 |
+| `instanceCount: N` | N 个挂载的官方插件 fiber，**不等于 N 个确认存活的网络连接** |
+| `toolCount: 0` | 可能是合法的纯资源服务器，也可能启动失败或工具同步失败；结合资源调用和日志判断 |
+| 文件读取/解析错误 | 修复源文件后刷新；最后有效实例保持运行 |
+| 工作区不匹配 | 检查 agent cwd 和最长父路径匹配结果 |
 
-## 8. 边界与注意事项
+`failOnStartupError` 默认 false：初次连接失败时 fiber 仍可能 ACTIVE。工具数和 ACTIVE 都不能单独证明连接成功；只有实际成功调用等公开证据才能确认。当前管理面保守使用 `unverified`。
 
-- **删除/启停走设置页或 RPC**，不要手删 profile 树里的条目——插件按条目 id（`vsm-mcp.*`）识别项目 MCP，手工改名会让它被当成全局条目。
-- **项目 MCP 的持久真相是 `.mcp.json`**：重启后插件按文件内容 reconcile 该项目的激活状态（文件里有的激活、文件里没有的停用）。
-- 项目 MCP 的写操作固定写入 `<workspacePath>/.mcp.json`，不会写到别处。
-- 全局 MCP 由 loader 落盘到 profile 树，重启自动恢复。
-- MCP 条目本身是 loader 条目，**HMR/热更新会重建连接**；调试连接问题时可先 `mcp.refresh`（等价于用当前 config 重新 `loader.update`）。
-- 本技能只覆盖 dsh-vscode-mode 的 MCP 管理面。若问题出在 MCP 服务端自身（协议实现、鉴权、工具 schema），那不是本插件的问题，应转向该服务端的调试手段。
+## 8. 维护位置与验证
 
-## 9. 关键源码位置
+- `src/mcpRuntime.ts`：agent → fibers 台账、官方插件加载、串行创建、迁移与卸载。
+- `src/mcpProject.ts`：源配置读取、保留字段、命名检查及 reconcile。
+- `src/mcpIsolation.ts`：继承工具限制、资源执行 guard、指令和资源列表覆盖。
+- `src/mcp.ts`：全局 loader CRUD、脱敏与诚实状态。
+- `src/shared/mcp.ts`：共享配置和状态契约。
 
-需要在插件仓库里核对行为时（按需读取，不要一次全开）：
-
-- `src/mcp.ts` — 全局 MCP 的 list/save/remove/toggle/refresh，`validateConfig`，`publicConfig` 脱敏，`toolsOf` 工具前缀。
-- `src/mcpProject.ts` — 项目 `.mcp.json` 读写、`configFromDef`、reconcile、条目 id 生成。
-- `src/mcpIsolation.ts` — 工作区隔离（restrict + guard）与两条拒绝文案。
-- `src/shared/mcp.ts` — 共享契约（`MpcConfig` / `MpcServer` / `MpcProject`）。
-- `src/shared/rpc.ts` — `mcp.*` 方法的入参与返回形状。
-- `src/client/ui/McpSettings.ts` — 设置页 UI（三个子页签与表单字段映射）。
+集成时先 `installIsolation(ctx)`，再 `await installMcpRuntime(ctx)`。UI 需支持 `configured`、`unverified` 和实例数。最小回归只运行 MCP 相关测试；可设置 `DSH_MCP_HOST_ROOT` 为安装的 harness 根来运行真实官方模块与本地 HTTP MCP 测试，未设置时该集成用例跳过。

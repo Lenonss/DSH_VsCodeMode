@@ -6,6 +6,7 @@
  * 与既有 `edrv:` 刷新/主题事件分属不同命名空间，互不干扰）。
  * 作者 ddj 2026年09月10号
  */
+import { panelAvailable, runPanelCommand } from '../panelCommands.js'
 import { hasEditorModel, hasOpenTabs } from '../editorModelState.js'
 import { activeEditorPath } from '../activePathStore.js'
 import { isMarkdownPath } from '../markdownPreview.js'
@@ -201,8 +202,8 @@ export const EDITOR_COMMANDS: readonly CommandDef[] = [
   },
   {
     id: 'edrv.quickOpen', label: '快速打开文件', category: '文件', order: 20,
-    available: alwaysAvailable,
-    run: () => emit('quickOpen'),
+    available: () => panelAvailable('quickOpen'),
+    run: () => { runPanelCommand('quickOpen') },
   },
   {
     id: 'edrv.toggleSidebar', label: '切换侧边栏', category: '视图', order: 10,
@@ -211,8 +212,8 @@ export const EDITOR_COMMANDS: readonly CommandDef[] = [
   },
   {
     id: 'edrv.searchInFiles', label: '在工作区中搜索', category: '视图', order: 20,
-    available: alwaysAvailable,
-    run: () => emit('searchInFiles'),
+    available: () => panelAvailable('searchInFiles'),
+    run: () => { runPanelCommand('searchInFiles') },
   },
   {
     id: 'edrv.toggleMarkdownPreview', label: '切换 Markdown 预览', category: '视图', order: 25,

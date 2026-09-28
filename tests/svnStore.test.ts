@@ -8,6 +8,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createSvnStore } from '../src/client/svnStore.js'
+import { rpcResponse } from './fixtures/rpcResponse.js'
 
 /** 载荷最小面：只断言 managed（显隐判定关键字段）。 */
 interface StatusLike {
@@ -59,7 +60,7 @@ function stubFetch(bodies: unknown[]) {
     calls.push(String(init?.body ?? ''))
     const body = bodies[Math.min(at, bodies.length - 1)]
     at += 1
-    return Promise.resolve({ json: () => Promise.resolve(body) })
+    return Promise.resolve(rpcResponse(body))
   })
   ;(globalThis as unknown as { fetch: unknown }).fetch = fetchMock
   return { calls, getCount: () => at }

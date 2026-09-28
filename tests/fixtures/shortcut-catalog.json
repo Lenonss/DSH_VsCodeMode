@@ -1,0 +1,1862 @@
+{
+  "source": "@deepseek-ai/dsh-client-shortcuts@0.1.7-rc.2 effectiveShortcuts + presentBinding; generated 2026-09-28",
+  "profiles": {
+    "desktop:macos": [
+      {
+        "id": "edrv.toggleSidebar",
+        "binding": null,
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.toggleSidebar",
+        "keys": []
+      },
+      {
+        "id": "edrv.save",
+        "binding": {
+          "code": "KeyS",
+          "modifiers": [
+            "meta"
+          ]
+        },
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.save",
+        "keys": [
+          "⌘",
+          "S"
+        ],
+        "aria": "Meta+S"
+      },
+      {
+        "id": "edrv.quickOpen",
+        "binding": {
+          "code": "KeyP",
+          "modifiers": [
+            "alt",
+            "meta"
+          ]
+        },
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.quickOpen",
+        "keys": [
+          "⌥",
+          "⌘",
+          "P"
+        ],
+        "aria": "Alt+Meta+P"
+      },
+      {
+        "id": "edrv.searchInFiles",
+        "binding": {
+          "code": "KeyF",
+          "modifiers": [
+            "shift",
+            "meta"
+          ]
+        },
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.searchInFiles",
+        "keys": [
+          "⇧",
+          "⌘",
+          "F"
+        ],
+        "aria": "Shift+Meta+F"
+      },
+      {
+        "id": "edrv.toggleMarkdownPreview",
+        "binding": {
+          "code": "KeyV",
+          "modifiers": [
+            "shift",
+            "meta"
+          ]
+        },
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.toggleMarkdownPreview",
+        "keys": [
+          "⇧",
+          "⌘",
+          "V"
+        ],
+        "aria": "Shift+Meta+V"
+      },
+      {
+        "id": "edrv.navigateBack",
+        "binding": {
+          "code": "ArrowLeft",
+          "modifiers": [
+            "alt"
+          ]
+        },
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.navigateBack",
+        "keys": [
+          "⌥",
+          "←"
+        ],
+        "aria": "Alt+ArrowLeft"
+      },
+      {
+        "id": "edrv.navigateForward",
+        "binding": {
+          "code": "ArrowRight",
+          "modifiers": [
+            "alt"
+          ]
+        },
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.navigateForward",
+        "keys": [
+          "⌥",
+          "→"
+        ],
+        "aria": "Alt+ArrowRight"
+      },
+      {
+        "id": "edrv.nextTab",
+        "binding": {
+          "code": "ArrowRight",
+          "modifiers": [
+            "alt",
+            "meta"
+          ]
+        },
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.nextTab",
+        "keys": [
+          "⌥",
+          "⌘",
+          "→"
+        ],
+        "aria": "Alt+Meta+ArrowRight"
+      },
+      {
+        "id": "edrv.prevTab",
+        "binding": {
+          "code": "ArrowLeft",
+          "modifiers": [
+            "alt",
+            "meta"
+          ]
+        },
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.prevTab",
+        "keys": [
+          "⌥",
+          "⌘",
+          "←"
+        ],
+        "aria": "Alt+Meta+ArrowLeft"
+      },
+      {
+        "id": "edrv.goToLine",
+        "binding": {
+          "code": "KeyG",
+          "modifiers": [
+            "meta"
+          ]
+        },
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.goToLine",
+        "keys": [
+          "⌘",
+          "G"
+        ],
+        "aria": "Meta+G"
+      },
+      {
+        "id": "edrv.showCommands",
+        "binding": {
+          "code": "KeyP",
+          "modifiers": [
+            "shift",
+            "meta"
+          ]
+        },
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.showCommands",
+        "keys": [
+          "⇧",
+          "⌘",
+          "P"
+        ],
+        "aria": "Shift+Meta+P"
+      },
+      {
+        "id": "edrv.nextEditorRow",
+        "binding": {
+          "code": "ArrowDown",
+          "modifiers": [
+            "alt",
+            "meta"
+          ]
+        },
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.nextEditorRow",
+        "keys": [
+          "⌥",
+          "⌘",
+          "↓"
+        ],
+        "aria": "Alt+Meta+ArrowDown"
+      },
+      {
+        "id": "edrv.prevEditorRow",
+        "binding": {
+          "code": "ArrowUp",
+          "modifiers": [
+            "alt",
+            "meta"
+          ]
+        },
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.prevEditorRow",
+        "keys": [
+          "⌥",
+          "⌘",
+          "↑"
+        ],
+        "aria": "Alt+Meta+ArrowUp"
+      },
+      {
+        "id": "edrv.addSelectionRef",
+        "binding": {
+          "code": "KeyU",
+          "modifiers": [
+            "meta"
+          ]
+        },
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.addSelectionRef",
+        "keys": [
+          "⌘",
+          "U"
+        ],
+        "aria": "Meta+U"
+      },
+      {
+        "id": "edrv.closeTab",
+        "binding": {
+          "code": "F4",
+          "modifiers": [
+            "meta"
+          ]
+        },
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.closeTab",
+        "keys": [
+          "⌘",
+          "F4"
+        ],
+        "aria": "Meta+F4"
+      },
+      {
+        "id": "edrv.debugToggleBreakpoint",
+        "binding": {
+          "code": "F9",
+          "modifiers": []
+        },
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.debugToggleBreakpoint",
+        "keys": [
+          "F9"
+        ],
+        "aria": "F9"
+      },
+      {
+        "id": "edrv.debugStartContinue",
+        "binding": {
+          "code": "F5",
+          "modifiers": []
+        },
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.debugStartContinue",
+        "keys": [
+          "F5"
+        ],
+        "aria": "F5"
+      },
+      {
+        "id": "edrv.debugStepOver",
+        "binding": {
+          "code": "F10",
+          "modifiers": []
+        },
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.debugStepOver",
+        "keys": [
+          "F10"
+        ],
+        "aria": "F10"
+      },
+      {
+        "id": "edrv.debugStepInto",
+        "binding": {
+          "code": "F11",
+          "modifiers": []
+        },
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.debugStepInto",
+        "keys": [
+          "F11"
+        ],
+        "aria": "F11"
+      },
+      {
+        "id": "edrv.debugStepOut",
+        "binding": {
+          "code": "F11",
+          "modifiers": [
+            "shift"
+          ]
+        },
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.debugStepOut",
+        "keys": [
+          "⇧",
+          "F11"
+        ],
+        "aria": "Shift+F11"
+      },
+      {
+        "id": "edrv.debugStop",
+        "binding": {
+          "code": "F5",
+          "modifiers": [
+            "shift"
+          ]
+        },
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.debugStop",
+        "keys": [
+          "⇧",
+          "F5"
+        ],
+        "aria": "Shift+F5"
+      }
+    ],
+    "desktop:windows": [
+      {
+        "id": "edrv.toggleSidebar",
+        "binding": null,
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.toggleSidebar",
+        "keys": []
+      },
+      {
+        "id": "edrv.save",
+        "binding": {
+          "code": "KeyS",
+          "modifiers": [
+            "control"
+          ]
+        },
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.save",
+        "keys": [
+          "Ctrl",
+          "+",
+          "S"
+        ],
+        "aria": "Control+S"
+      },
+      {
+        "id": "edrv.quickOpen",
+        "binding": {
+          "code": "KeyP",
+          "modifiers": [
+            "control",
+            "alt"
+          ]
+        },
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.quickOpen",
+        "keys": [
+          "Ctrl",
+          "+",
+          "Alt",
+          "+",
+          "P"
+        ],
+        "aria": "Control+Alt+P"
+      },
+      {
+        "id": "edrv.searchInFiles",
+        "binding": {
+          "code": "KeyF",
+          "modifiers": [
+            "control",
+            "shift"
+          ]
+        },
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.searchInFiles",
+        "keys": [
+          "Ctrl",
+          "+",
+          "Shift",
+          "+",
+          "F"
+        ],
+        "aria": "Control+Shift+F"
+      },
+      {
+        "id": "edrv.toggleMarkdownPreview",
+        "binding": {
+          "code": "KeyV",
+          "modifiers": [
+            "control",
+            "shift"
+          ]
+        },
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.toggleMarkdownPreview",
+        "keys": [
+          "Ctrl",
+          "+",
+          "Shift",
+          "+",
+          "V"
+        ],
+        "aria": "Control+Shift+V"
+      },
+      {
+        "id": "edrv.navigateBack",
+        "binding": {
+          "code": "ArrowLeft",
+          "modifiers": [
+            "alt"
+          ]
+        },
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.navigateBack",
+        "keys": [
+          "Alt",
+          "+",
+          "←"
+        ],
+        "aria": "Alt+ArrowLeft"
+      },
+      {
+        "id": "edrv.navigateForward",
+        "binding": {
+          "code": "ArrowRight",
+          "modifiers": [
+            "alt"
+          ]
+        },
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.navigateForward",
+        "keys": [
+          "Alt",
+          "+",
+          "→"
+        ],
+        "aria": "Alt+ArrowRight"
+      },
+      {
+        "id": "edrv.nextTab",
+        "binding": {
+          "code": "ArrowRight",
+          "modifiers": [
+            "control",
+            "alt"
+          ]
+        },
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.nextTab",
+        "keys": [
+          "Ctrl",
+          "+",
+          "Alt",
+          "+",
+          "→"
+        ],
+        "aria": "Control+Alt+ArrowRight"
+      },
+      {
+        "id": "edrv.prevTab",
+        "binding": {
+          "code": "ArrowLeft",
+          "modifiers": [
+            "control",
+            "alt"
+          ]
+        },
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.prevTab",
+        "keys": [
+          "Ctrl",
+          "+",
+          "Alt",
+          "+",
+          "←"
+        ],
+        "aria": "Control+Alt+ArrowLeft"
+      },
+      {
+        "id": "edrv.goToLine",
+        "binding": {
+          "code": "KeyG",
+          "modifiers": [
+            "control"
+          ]
+        },
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.goToLine",
+        "keys": [
+          "Ctrl",
+          "+",
+          "G"
+        ],
+        "aria": "Control+G"
+      },
+      {
+        "id": "edrv.showCommands",
+        "binding": {
+          "code": "KeyP",
+          "modifiers": [
+            "control",
+            "shift"
+          ]
+        },
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.showCommands",
+        "keys": [
+          "Ctrl",
+          "+",
+          "Shift",
+          "+",
+          "P"
+        ],
+        "aria": "Control+Shift+P"
+      },
+      {
+        "id": "edrv.nextEditorRow",
+        "binding": {
+          "code": "ArrowDown",
+          "modifiers": [
+            "control",
+            "alt"
+          ]
+        },
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.nextEditorRow",
+        "keys": [
+          "Ctrl",
+          "+",
+          "Alt",
+          "+",
+          "↓"
+        ],
+        "aria": "Control+Alt+ArrowDown"
+      },
+      {
+        "id": "edrv.prevEditorRow",
+        "binding": {
+          "code": "ArrowUp",
+          "modifiers": [
+            "control",
+            "alt"
+          ]
+        },
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.prevEditorRow",
+        "keys": [
+          "Ctrl",
+          "+",
+          "Alt",
+          "+",
+          "↑"
+        ],
+        "aria": "Control+Alt+ArrowUp"
+      },
+      {
+        "id": "edrv.addSelectionRef",
+        "binding": {
+          "code": "KeyU",
+          "modifiers": [
+            "control"
+          ]
+        },
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.addSelectionRef",
+        "keys": [
+          "Ctrl",
+          "+",
+          "U"
+        ],
+        "aria": "Control+U"
+      },
+      {
+        "id": "edrv.closeTab",
+        "binding": {
+          "code": "F4",
+          "modifiers": [
+            "control"
+          ]
+        },
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.closeTab",
+        "keys": [
+          "Ctrl",
+          "+",
+          "F4"
+        ],
+        "aria": "Control+F4"
+      },
+      {
+        "id": "edrv.debugToggleBreakpoint",
+        "binding": {
+          "code": "F9",
+          "modifiers": []
+        },
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.debugToggleBreakpoint",
+        "keys": [
+          "F9"
+        ],
+        "aria": "F9"
+      },
+      {
+        "id": "edrv.debugStartContinue",
+        "binding": {
+          "code": "F5",
+          "modifiers": []
+        },
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.debugStartContinue",
+        "keys": [
+          "F5"
+        ],
+        "aria": "F5"
+      },
+      {
+        "id": "edrv.debugStepOver",
+        "binding": {
+          "code": "F10",
+          "modifiers": []
+        },
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.debugStepOver",
+        "keys": [
+          "F10"
+        ],
+        "aria": "F10"
+      },
+      {
+        "id": "edrv.debugStepInto",
+        "binding": {
+          "code": "F11",
+          "modifiers": []
+        },
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.debugStepInto",
+        "keys": [
+          "F11"
+        ],
+        "aria": "F11"
+      },
+      {
+        "id": "edrv.debugStepOut",
+        "binding": {
+          "code": "F11",
+          "modifiers": [
+            "shift"
+          ]
+        },
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.debugStepOut",
+        "keys": [
+          "Shift",
+          "+",
+          "F11"
+        ],
+        "aria": "Shift+F11"
+      },
+      {
+        "id": "edrv.debugStop",
+        "binding": {
+          "code": "F5",
+          "modifiers": [
+            "shift"
+          ]
+        },
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.debugStop",
+        "keys": [
+          "Shift",
+          "+",
+          "F5"
+        ],
+        "aria": "Shift+F5"
+      }
+    ],
+    "desktop:linux": [
+      {
+        "id": "edrv.toggleSidebar",
+        "binding": null,
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.toggleSidebar",
+        "keys": []
+      },
+      {
+        "id": "edrv.save",
+        "binding": {
+          "code": "KeyS",
+          "modifiers": [
+            "control"
+          ]
+        },
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.save",
+        "keys": [
+          "Ctrl",
+          "S"
+        ],
+        "aria": "Control+S"
+      },
+      {
+        "id": "edrv.quickOpen",
+        "binding": {
+          "code": "KeyP",
+          "modifiers": [
+            "control",
+            "alt"
+          ]
+        },
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.quickOpen",
+        "keys": [
+          "Ctrl",
+          "Alt",
+          "P"
+        ],
+        "aria": "Control+Alt+P"
+      },
+      {
+        "id": "edrv.searchInFiles",
+        "binding": {
+          "code": "KeyF",
+          "modifiers": [
+            "control",
+            "shift"
+          ]
+        },
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.searchInFiles",
+        "keys": [
+          "Ctrl",
+          "Shift",
+          "F"
+        ],
+        "aria": "Control+Shift+F"
+      },
+      {
+        "id": "edrv.toggleMarkdownPreview",
+        "binding": null,
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.toggleMarkdownPreview",
+        "keys": []
+      },
+      {
+        "id": "edrv.navigateBack",
+        "binding": null,
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.navigateBack",
+        "keys": []
+      },
+      {
+        "id": "edrv.navigateForward",
+        "binding": null,
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.navigateForward",
+        "keys": []
+      },
+      {
+        "id": "edrv.nextTab",
+        "binding": null,
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.nextTab",
+        "keys": []
+      },
+      {
+        "id": "edrv.prevTab",
+        "binding": null,
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.prevTab",
+        "keys": []
+      },
+      {
+        "id": "edrv.goToLine",
+        "binding": {
+          "code": "KeyG",
+          "modifiers": [
+            "control"
+          ]
+        },
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.goToLine",
+        "keys": [
+          "Ctrl",
+          "G"
+        ],
+        "aria": "Control+G"
+      },
+      {
+        "id": "edrv.showCommands",
+        "binding": {
+          "code": "KeyP",
+          "modifiers": [
+            "control",
+            "shift"
+          ]
+        },
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.showCommands",
+        "keys": [
+          "Ctrl",
+          "Shift",
+          "P"
+        ],
+        "aria": "Control+Shift+P"
+      },
+      {
+        "id": "edrv.nextEditorRow",
+        "binding": null,
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.nextEditorRow",
+        "keys": []
+      },
+      {
+        "id": "edrv.prevEditorRow",
+        "binding": null,
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.prevEditorRow",
+        "keys": []
+      },
+      {
+        "id": "edrv.addSelectionRef",
+        "binding": {
+          "code": "KeyU",
+          "modifiers": [
+            "control"
+          ]
+        },
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.addSelectionRef",
+        "keys": [
+          "Ctrl",
+          "U"
+        ],
+        "aria": "Control+U"
+      },
+      {
+        "id": "edrv.closeTab",
+        "binding": {
+          "code": "F4",
+          "modifiers": [
+            "control"
+          ]
+        },
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.closeTab",
+        "keys": [
+          "Ctrl",
+          "F4"
+        ],
+        "aria": "Control+F4"
+      },
+      {
+        "id": "edrv.debugToggleBreakpoint",
+        "binding": null,
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.debugToggleBreakpoint",
+        "keys": []
+      },
+      {
+        "id": "edrv.debugStartContinue",
+        "binding": null,
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.debugStartContinue",
+        "keys": []
+      },
+      {
+        "id": "edrv.debugStepOver",
+        "binding": null,
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.debugStepOver",
+        "keys": []
+      },
+      {
+        "id": "edrv.debugStepInto",
+        "binding": null,
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.debugStepInto",
+        "keys": []
+      },
+      {
+        "id": "edrv.debugStepOut",
+        "binding": null,
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.debugStepOut",
+        "keys": []
+      },
+      {
+        "id": "edrv.debugStop",
+        "binding": null,
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.debugStop",
+        "keys": []
+      }
+    ],
+    "web:macos": [
+      {
+        "id": "edrv.toggleSidebar",
+        "binding": null,
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.toggleSidebar",
+        "keys": []
+      },
+      {
+        "id": "edrv.save",
+        "binding": null,
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.save",
+        "keys": []
+      },
+      {
+        "id": "edrv.quickOpen",
+        "binding": {
+          "code": "KeyP",
+          "modifiers": [
+            "alt",
+            "shift",
+            "meta"
+          ]
+        },
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.quickOpen",
+        "keys": [
+          "⌥",
+          "⇧",
+          "⌘",
+          "P"
+        ],
+        "aria": "Alt+Shift+Meta+P"
+      },
+      {
+        "id": "edrv.searchInFiles",
+        "binding": {
+          "code": "KeyF",
+          "modifiers": [
+            "alt",
+            "shift",
+            "meta"
+          ]
+        },
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.searchInFiles",
+        "keys": [
+          "⌥",
+          "⇧",
+          "⌘",
+          "F"
+        ],
+        "aria": "Alt+Shift+Meta+F"
+      },
+      {
+        "id": "edrv.toggleMarkdownPreview",
+        "binding": {
+          "code": "KeyV",
+          "modifiers": [
+            "shift",
+            "meta"
+          ]
+        },
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.toggleMarkdownPreview",
+        "keys": [
+          "⇧",
+          "⌘",
+          "V"
+        ],
+        "aria": "Shift+Meta+V"
+      },
+      {
+        "id": "edrv.navigateBack",
+        "binding": {
+          "code": "Minus",
+          "modifiers": [
+            "alt",
+            "meta"
+          ]
+        },
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.navigateBack",
+        "keys": [
+          "⌥",
+          "⌘",
+          "-"
+        ],
+        "aria": "Alt+Meta+-"
+      },
+      {
+        "id": "edrv.navigateForward",
+        "binding": {
+          "code": "Minus",
+          "modifiers": [
+            "shift",
+            "meta"
+          ]
+        },
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.navigateForward",
+        "keys": [
+          "⇧",
+          "⌘",
+          "-"
+        ],
+        "aria": "Shift+Meta+-"
+      },
+      {
+        "id": "edrv.nextTab",
+        "binding": {
+          "code": "ArrowRight",
+          "modifiers": [
+            "alt",
+            "meta"
+          ]
+        },
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.nextTab",
+        "keys": [
+          "⌥",
+          "⌘",
+          "→"
+        ],
+        "aria": "Alt+Meta+ArrowRight"
+      },
+      {
+        "id": "edrv.prevTab",
+        "binding": {
+          "code": "ArrowLeft",
+          "modifiers": [
+            "alt",
+            "meta"
+          ]
+        },
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.prevTab",
+        "keys": [
+          "⌥",
+          "⌘",
+          "←"
+        ],
+        "aria": "Alt+Meta+ArrowLeft"
+      },
+      {
+        "id": "edrv.goToLine",
+        "binding": null,
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.goToLine",
+        "keys": []
+      },
+      {
+        "id": "edrv.showCommands",
+        "binding": {
+          "code": "KeyP",
+          "modifiers": [
+            "shift",
+            "meta"
+          ]
+        },
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.showCommands",
+        "keys": [
+          "⇧",
+          "⌘",
+          "P"
+        ],
+        "aria": "Shift+Meta+P"
+      },
+      {
+        "id": "edrv.nextEditorRow",
+        "binding": {
+          "code": "ArrowDown",
+          "modifiers": [
+            "alt",
+            "meta"
+          ]
+        },
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.nextEditorRow",
+        "keys": [
+          "⌥",
+          "⌘",
+          "↓"
+        ],
+        "aria": "Alt+Meta+ArrowDown"
+      },
+      {
+        "id": "edrv.prevEditorRow",
+        "binding": {
+          "code": "ArrowUp",
+          "modifiers": [
+            "alt",
+            "meta"
+          ]
+        },
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.prevEditorRow",
+        "keys": [
+          "⌥",
+          "⌘",
+          "↑"
+        ],
+        "aria": "Alt+Meta+ArrowUp"
+      },
+      {
+        "id": "edrv.addSelectionRef",
+        "binding": null,
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.addSelectionRef",
+        "keys": []
+      },
+      {
+        "id": "edrv.closeTab",
+        "binding": null,
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.closeTab",
+        "keys": []
+      },
+      {
+        "id": "edrv.debugToggleBreakpoint",
+        "binding": null,
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.debugToggleBreakpoint",
+        "keys": []
+      },
+      {
+        "id": "edrv.debugStartContinue",
+        "binding": null,
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.debugStartContinue",
+        "keys": []
+      },
+      {
+        "id": "edrv.debugStepOver",
+        "binding": null,
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.debugStepOver",
+        "keys": []
+      },
+      {
+        "id": "edrv.debugStepInto",
+        "binding": null,
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.debugStepInto",
+        "keys": []
+      },
+      {
+        "id": "edrv.debugStepOut",
+        "binding": null,
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.debugStepOut",
+        "keys": []
+      },
+      {
+        "id": "edrv.debugStop",
+        "binding": null,
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.debugStop",
+        "keys": []
+      }
+    ],
+    "web:windows": [
+      {
+        "id": "edrv.toggleSidebar",
+        "binding": null,
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.toggleSidebar",
+        "keys": []
+      },
+      {
+        "id": "edrv.save",
+        "binding": null,
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.save",
+        "keys": []
+      },
+      {
+        "id": "edrv.quickOpen",
+        "binding": {
+          "code": "KeyP",
+          "modifiers": [
+            "control",
+            "alt",
+            "shift"
+          ]
+        },
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.quickOpen",
+        "keys": [
+          "Ctrl",
+          "+",
+          "Alt",
+          "+",
+          "Shift",
+          "+",
+          "P"
+        ],
+        "aria": "Control+Alt+Shift+P"
+      },
+      {
+        "id": "edrv.searchInFiles",
+        "binding": {
+          "code": "KeyF",
+          "modifiers": [
+            "control",
+            "alt",
+            "shift"
+          ]
+        },
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.searchInFiles",
+        "keys": [
+          "Ctrl",
+          "+",
+          "Alt",
+          "+",
+          "Shift",
+          "+",
+          "F"
+        ],
+        "aria": "Control+Alt+Shift+F"
+      },
+      {
+        "id": "edrv.toggleMarkdownPreview",
+        "binding": {
+          "code": "KeyV",
+          "modifiers": [
+            "control",
+            "shift"
+          ]
+        },
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.toggleMarkdownPreview",
+        "keys": [
+          "Ctrl",
+          "+",
+          "Shift",
+          "+",
+          "V"
+        ],
+        "aria": "Control+Shift+V"
+      },
+      {
+        "id": "edrv.navigateBack",
+        "binding": {
+          "code": "Minus",
+          "modifiers": [
+            "control",
+            "alt"
+          ]
+        },
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.navigateBack",
+        "keys": [
+          "Ctrl",
+          "+",
+          "Alt",
+          "+",
+          "-"
+        ],
+        "aria": "Control+Alt+-"
+      },
+      {
+        "id": "edrv.navigateForward",
+        "binding": {
+          "code": "Minus",
+          "modifiers": [
+            "control",
+            "shift"
+          ]
+        },
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.navigateForward",
+        "keys": [
+          "Ctrl",
+          "+",
+          "Shift",
+          "+",
+          "-"
+        ],
+        "aria": "Control+Shift+-"
+      },
+      {
+        "id": "edrv.nextTab",
+        "binding": {
+          "code": "ArrowRight",
+          "modifiers": [
+            "control",
+            "alt"
+          ]
+        },
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.nextTab",
+        "keys": [
+          "Ctrl",
+          "+",
+          "Alt",
+          "+",
+          "→"
+        ],
+        "aria": "Control+Alt+ArrowRight"
+      },
+      {
+        "id": "edrv.prevTab",
+        "binding": {
+          "code": "ArrowLeft",
+          "modifiers": [
+            "control",
+            "alt"
+          ]
+        },
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.prevTab",
+        "keys": [
+          "Ctrl",
+          "+",
+          "Alt",
+          "+",
+          "←"
+        ],
+        "aria": "Control+Alt+ArrowLeft"
+      },
+      {
+        "id": "edrv.goToLine",
+        "binding": null,
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.goToLine",
+        "keys": []
+      },
+      {
+        "id": "edrv.showCommands",
+        "binding": {
+          "code": "KeyP",
+          "modifiers": [
+            "control",
+            "shift"
+          ]
+        },
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.showCommands",
+        "keys": [
+          "Ctrl",
+          "+",
+          "Shift",
+          "+",
+          "P"
+        ],
+        "aria": "Control+Shift+P"
+      },
+      {
+        "id": "edrv.nextEditorRow",
+        "binding": {
+          "code": "ArrowDown",
+          "modifiers": [
+            "control",
+            "alt"
+          ]
+        },
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.nextEditorRow",
+        "keys": [
+          "Ctrl",
+          "+",
+          "Alt",
+          "+",
+          "↓"
+        ],
+        "aria": "Control+Alt+ArrowDown"
+      },
+      {
+        "id": "edrv.prevEditorRow",
+        "binding": {
+          "code": "ArrowUp",
+          "modifiers": [
+            "control",
+            "alt"
+          ]
+        },
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.prevEditorRow",
+        "keys": [
+          "Ctrl",
+          "+",
+          "Alt",
+          "+",
+          "↑"
+        ],
+        "aria": "Control+Alt+ArrowUp"
+      },
+      {
+        "id": "edrv.addSelectionRef",
+        "binding": null,
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.addSelectionRef",
+        "keys": []
+      },
+      {
+        "id": "edrv.closeTab",
+        "binding": null,
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.closeTab",
+        "keys": []
+      },
+      {
+        "id": "edrv.debugToggleBreakpoint",
+        "binding": null,
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.debugToggleBreakpoint",
+        "keys": []
+      },
+      {
+        "id": "edrv.debugStartContinue",
+        "binding": null,
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.debugStartContinue",
+        "keys": []
+      },
+      {
+        "id": "edrv.debugStepOver",
+        "binding": null,
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.debugStepOver",
+        "keys": []
+      },
+      {
+        "id": "edrv.debugStepInto",
+        "binding": null,
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.debugStepInto",
+        "keys": []
+      },
+      {
+        "id": "edrv.debugStepOut",
+        "binding": null,
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.debugStepOut",
+        "keys": []
+      },
+      {
+        "id": "edrv.debugStop",
+        "binding": null,
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.debugStop",
+        "keys": []
+      }
+    ],
+    "web:linux": [
+      {
+        "id": "edrv.toggleSidebar",
+        "binding": null,
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.toggleSidebar",
+        "keys": []
+      },
+      {
+        "id": "edrv.save",
+        "binding": null,
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.save",
+        "keys": []
+      },
+      {
+        "id": "edrv.quickOpen",
+        "binding": null,
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.quickOpen",
+        "keys": []
+      },
+      {
+        "id": "edrv.searchInFiles",
+        "binding": null,
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.searchInFiles",
+        "keys": []
+      },
+      {
+        "id": "edrv.toggleMarkdownPreview",
+        "binding": null,
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.toggleMarkdownPreview",
+        "keys": []
+      },
+      {
+        "id": "edrv.navigateBack",
+        "binding": null,
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.navigateBack",
+        "keys": []
+      },
+      {
+        "id": "edrv.navigateForward",
+        "binding": null,
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.navigateForward",
+        "keys": []
+      },
+      {
+        "id": "edrv.nextTab",
+        "binding": null,
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.nextTab",
+        "keys": []
+      },
+      {
+        "id": "edrv.prevTab",
+        "binding": null,
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.prevTab",
+        "keys": []
+      },
+      {
+        "id": "edrv.goToLine",
+        "binding": null,
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.goToLine",
+        "keys": []
+      },
+      {
+        "id": "edrv.showCommands",
+        "binding": null,
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.showCommands",
+        "keys": []
+      },
+      {
+        "id": "edrv.nextEditorRow",
+        "binding": null,
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.nextEditorRow",
+        "keys": []
+      },
+      {
+        "id": "edrv.prevEditorRow",
+        "binding": null,
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.prevEditorRow",
+        "keys": []
+      },
+      {
+        "id": "edrv.addSelectionRef",
+        "binding": null,
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.addSelectionRef",
+        "keys": []
+      },
+      {
+        "id": "edrv.closeTab",
+        "binding": null,
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.closeTab",
+        "keys": []
+      },
+      {
+        "id": "edrv.debugToggleBreakpoint",
+        "binding": null,
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.debugToggleBreakpoint",
+        "keys": []
+      },
+      {
+        "id": "edrv.debugStartContinue",
+        "binding": null,
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.debugStartContinue",
+        "keys": []
+      },
+      {
+        "id": "edrv.debugStepOver",
+        "binding": null,
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.debugStepOver",
+        "keys": []
+      },
+      {
+        "id": "edrv.debugStepInto",
+        "binding": null,
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.debugStepInto",
+        "keys": []
+      },
+      {
+        "id": "edrv.debugStepOut",
+        "binding": null,
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.debugStepOut",
+        "keys": []
+      },
+      {
+        "id": "edrv.debugStop",
+        "binding": null,
+        "modified": false,
+        "issue": null,
+        "conflicts": [],
+        "label": "edrv.debugStop",
+        "keys": []
+      }
+    ]
+  }
+}

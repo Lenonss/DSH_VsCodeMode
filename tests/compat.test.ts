@@ -184,12 +184,12 @@ describe('版本上界与 Config volatile 告警', () => {
     number() { return { default: (value: unknown) => this.lift({ value }) } },
   }
 
-  it('0.1.7-alpha.2 不再报「高于已实测版本」；alpha.3 报且带上界新值', async () => {
+  it('0.1.7-rc.2 不再报「高于已实测版本」；更高预发布仍报且带上界新值', async () => {
     resetConfigVolatileState()
-    const ok = await buildReport(ctx, { depsAvailable: true, version: '9.9.9', dshVersion: '0.1.7-alpha.2' })
+    const ok = await buildReport(ctx, { depsAvailable: true, version: '9.9.9', dshVersion: '0.1.7-rc.2' })
     expect(ok.warnings.some((w) => w.includes('高于已实测版本'))).toBe(false)
-    const next = await buildReport(ctx, { depsAvailable: true, version: '9.9.9', dshVersion: '0.1.7-alpha.3' })
-    expect(next.warnings.some((w) => w.includes('0.1.7-alpha.2'))).toBe(true)
+    const next = await buildReport(ctx, { depsAvailable: true, version: '9.9.9', dshVersion: '0.1.7-rc.3' })
+    expect(next.warnings.some((w) => w.includes('0.1.7-rc.2'))).toBe(true)
   })
 
   it('volatile 标记不完整且在 0.1.7 线 → 显式告警 + 适配行红', async () => {

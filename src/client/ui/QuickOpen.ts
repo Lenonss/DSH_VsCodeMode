@@ -9,7 +9,8 @@
  */
 import React from 'react'
 import { rpc } from '../rpc.js'
-import { chordOf, useKeybindingsVersion } from '../keybindings.js'
+import { bindPanelCommand } from '../panelCommands.js'
+import { ariaOf, chordOf, useKeybindingsVersion } from '../keybindings.js'
 import { stepIndex } from './searchNav.js'
 
 /**
@@ -66,19 +67,18 @@ export function QuickOpen(props) {
     }
     // Esc 关闭（仅收起浮窗；历史 capture 行为保留，不参与命令派发、不吞键）
     const onEscape = (e) => {
-      if (e.key !== 'Escape') return
+      if (e.isComposing || e.keyCode === 229 || e.getModifierState?.('AltGraph') || e.key !== 'Escape') return
       setOpen(false)
       inputRef.current?.blur?.()
     }
-    // 快速打开键位（Ctrl+P）已归官方 shortcuts 机制派发：官方 resolve → 注册表 run →
-    // 派发 `edrv.command.quickOpen` 事件到此处（历史窗口 capture 键位自检移除，防双开）。
+    // 官方与旧版键位统一走会话级命令接收器；挂载时只消费本会话的待打开请求。
     window.addEventListener('keydown', onEscape, true)
-    window.addEventListener('edrv.command.quickOpen', openBox)
+    const offCommand = bindPanelCommand('quickOpen', { sessionId }, openBox)
     return () => {
       window.removeEventListener('keydown', onEscape, true)
-      window.removeEventListener('edrv.command.quickOpen', openBox)
+      offCommand()
     }
-  }, [])
+  }, [sessionId])
 
   // 高亮项滚入浮窗可视区（候选集或高亮变化时；nearest 避免整页跳动）
   React.useEffect(() => {
@@ -99,7 +99,7 @@ export function QuickOpen(props) {
    * @param e 输入框键盘事件
    */
   const onInputKey = (e) => {
-    if (e.nativeEvent?.isComposing) return
+    if (e.nativeEvent?.isComposing || e.nativeEvent?.keyCode === 229 || e.getModifierState?.('AltGraph')) return
     if (e.key === 'Escape') { setOpen(false); return }
     if (!showPop || !list.length) return
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
@@ -135,7 +135,8 @@ export function QuickOpen(props) {
 
   return React.createElement('div', { className: 'edrv-search-wrap' },
     React.createElement('input', {
-      ref: inputRef, className: 'edrv-search', placeholder: '搜索文件 (' + (chordOf('edrv.quickOpen') ?? 'Ctrl+P') + ')',
+      ref: inputRef, className: 'edrv-search', placeholder: '搜索文件' + (chordOf('edrv.quickOpen') ? ' (' + chordOf('edrv.quickOpen') + ')' : ''),
+      'aria-keyshortcuts': ariaOf('edrv.quickOpen'),
       value: q,
       role: 'combobox',
       'aria-expanded': showPop && list.length > 0,

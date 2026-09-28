@@ -1,0 +1,103 @@
+// Verbatim @deepseek-ai/dsh-client-ui-workspace 0.1.7-rc.2 installWorkspaceShortcuts, MIT. Captured 2026-09-28.
+function installWorkspaceShortcuts(ctx, navigation, controls, archiveSession) {
+	const t = ctx.locale.bind("workspace");
+	const current = () => Object.values(ctx.sessions.list.getSnapshot().byId).find((row) => (row.retainedBy.mainView ?? 0) > 0);
+	const addReason = () => ctx.slots.entries("sidebar.workspaces.directoryFlow").length === 0 ? t("shortcut.noPicker") : controls.state.getSnapshot().directoryBusy ? t("shortcut.directoryBusy") : null;
+	const register = (id, label, aliases, code, modifiers, webModifiers, resolve) => {
+		ctx.effect(() => ctx.shortcuts.register({
+			id,
+			label,
+			aliases,
+			defaults: {
+				"desktop:macos": {
+					code,
+					modifiers
+				},
+				"desktop:windows": {
+					code,
+					modifiers
+				},
+				"desktop:linux": {
+					code,
+					modifiers
+				},
+				"web:macos": {
+					code,
+					modifiers: webModifiers
+				},
+				"web:windows": {
+					code,
+					modifiers: webModifiers
+				}
+			},
+			regions: ["page", "editable"],
+			modals: [],
+			resolve
+		}), `ui-workspace: ${id}`);
+	};
+	register("session.new", () => t("session.new"), ["new session", "new chat"], "KeyN", ["primary"], ["primary", "alt"], () => ({
+		status: "handled",
+		run: () => {
+			navigation.startSession();
+		}
+	}));
+	register("session.search", () => t("search.sessions.aria"), ["search sessions"], "KeyK", ["primary"], ["primary", "alt"], () => ({
+		status: "handled",
+		run: controls.search
+	}));
+	register("workspace.add", () => t("workspace.add"), ["add workspace", "open folder"], "KeyO", ["primary"], ["primary", "alt"], () => {
+		const reason = addReason();
+		return reason === null ? {
+			status: "handled",
+			run: controls.add
+		} : {
+			status: "blocked",
+			reason
+		};
+	});
+	register("session.rename", () => t("rename.session.title"), ["rename session"], "KeyR", ["primary", "alt"], ["primary", "shift"], () => {
+		const target = current();
+		return target === void 0 ? {
+			status: "blocked",
+			reason: t("shortcut.noSession")
+		} : {
+			status: "handled",
+			run: () => {
+				controls.rename(target.id, target.displayTitle);
+			}
+		};
+	});
+	register("session.fork", () => t("menu.fork"), ["fork session"], "KeyF", ["primary", "alt"], ["primary", "shift"], () => {
+		const target = current();
+		if (target === void 0) return {
+			status: "blocked",
+			reason: t("shortcut.noSession")
+		};
+		if (target.blank) return {
+			status: "blocked",
+			reason: t("shortcut.noCompletedTurn")
+		};
+		return {
+			status: "handled",
+			run: () => {
+				navigation.forkSession(target.id).catch((error) => {
+					const unavailable = error instanceof Error && error.name === "SessionForkError" && error.rpcError.code === "session/fork-unavailable";
+					controls.forkFailed(unavailable ? "unavailable" : "failed");
+					if (!unavailable) console.warn("session fork rejected:", error);
+				});
+			}
+		};
+	});
+	register("session.archive", () => t("menu.archiveSession"), ["archive session"], "KeyA", ["primary", "shift"], ["primary", "alt"], () => {
+		const target = current();
+		return target === void 0 ? {
+			status: "blocked",
+			reason: t("shortcut.noSession")
+		} : {
+			status: "handled",
+			run: () => {
+				archiveSession(target.id);
+			}
+		};
+	});
+}

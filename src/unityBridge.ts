@@ -7,10 +7,14 @@
  * package.json name 不是本包 → 拒绝覆盖。纯路径构造与项目特征判定可单测。
  * 作者 ddj 2026-09-07
  */
-import { cp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { cp, mkdir, readFile, readdir, rm, writeFile, rename } from 'node:fs/promises'
 import { basename, dirname, join, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { dshHome, PLUGIN_ID } from './paths.js'
+import { randomUUID } from 'node:crypto'
+import { ensureOpenBridge } from './openBridge.js'
+import { checkOpenPath } from './openInbox.js'
+import type { Ctx } from './store.js'
 import { UNITY_PACKAGE_NAME } from './shared/integration.js'
 import type { UnityListPayload, UnityProjectEntry } from './shared/integration.js'
 
@@ -20,6 +24,8 @@ const UNITY_MARKERS = ['Assets', 'ProjectSettings']
 const PROJECTS_FILE = 'unity-projects.json'
 /** 包源目录相对插件包根的位置。 */
 const UNITY_DIR_NAME = 'unity'
+
+export interface UnityBridgeOpts { ctx: Ctx; baseUrl: string }
 
 /**
  * 包源目录（随插件包分发的 unity/com.dsh.editor 绝对路径）。
@@ -192,15 +198,17 @@ export async function unityRemove(rawPath: string, home = dshHome()): Promise<vo
  * @param moduleUrl 模块 URL（测试注入）
  * @returns 安装后项目状态
  */
-export async function unityInstall(rawPath: string, moduleUrl: string = import.meta.url): Promise<UnityProjectEntry> {
+export async function unityInstall(rawPath: string, moduleUrl: string = import.meta.url, bridge?: UnityBridgeOpts): Promise<UnityProjectEntry> {
   const root = normalizeUnityRoot(rawPath)
   const source = unitySourceDir(moduleUrl)
   const target = unityTargetOf(root)
   await validateInstallTarget(root, source, target)
+  const bridgeConfigPath = bridge ? await ensureOpenBridge(bridge.ctx, bridge.baseUrl) : undefined
   await rm(target, { recursive: true, force: true })
   await mkdir(join(target, '..'), { recursive: true })
   await cp(source, target, { recursive: true })
-  return unityEntryOf(root, moduleUrl)
+  if (bridgeConfigPath) await writeUnityHint(root, bridgeConfigPath)
+  return { ...(await unityEntryOf(root, moduleUrl)), bridgeConfigPath }
 }
 
 /**
@@ -231,4 +239,19 @@ async function validateInstallTarget(root: string, source: string, target: strin
     name = (JSON.parse(text) as { name?: unknown }).name
   } catch { /* 解析失败按未知包处理 */ }
   if (name !== UNITY_PACKAGE_NAME) throw new Error('目标目录已存在且不是 DSH 包，拒绝覆盖：' + target)
+}
+
+/** @private @author ddj 2026年09月28号
+ * Bind a project's machine-local configuration to its selected profile bridge.
+ * @param root Validated Unity project root.
+ * @param configPath Absolute profile bridge INI path.
+ */
+async function writeUnityHint(root: string, configPath: string): Promise<void> {
+  const dir = join(root, 'UserSettings')
+  await mkdir(dir, { recursive: true })
+  await checkOpenPath(dir)
+  const target = join(dir, 'dsh-editor.ini')
+  const temporary = target + '.' + randomUUID() + '.tmp'
+  await writeFile(temporary, '[dsh]\nconfig=' + configPath + '\n', { flag: 'wx', mode: 0o600 })
+  try { await rename(temporary, target) } finally { await rm(temporary, { force: true }) }
 }

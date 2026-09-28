@@ -44,9 +44,11 @@ function parsePairs(text) {
   }))
 }
 
-/** 服务状态文案。 */
+/** @author ddj 2026年09月28号 @param server Server lifecycle snapshot. @returns User-facing status. */
 function statusOf(server) {
-  return server.status === 'connected' ? '在线' : server.status === 'connecting' ? '连接中' : server.status === 'disabled' ? '已禁用' : '错误'
+  if (!server.enabled || server.status === 'disabled') return '已禁用'
+  const labels = { connected: '在线', connecting: '装配中', configured: '已配置，等待会话', unverified: '已加载，连接未确认', error: '错误' }
+  return labels[server.status] ?? '状态未知'
 }
 
 /** MCP 服务卡片（全局与项目共用）。 */
@@ -60,7 +62,8 @@ function ServerCard({ server, onRefresh, onToggle, onRemove }) {
         React.createElement('button', { className: 'vsm-switch ' + (server.enabled ? 'on' : ''), onClick: () => onToggle(server), 'aria-label': server.enabled ? '禁用' : '启用' }, server.enabled ? '●' : '○'),
       ),
     ),
-    React.createElement('div', { className: 'vsm-mcp-meta' }, statusOf(server), ' · ', server.toolCount, ' 个工具 · ', server.transport),
+    React.createElement('div', { className: 'vsm-mcp-meta' }, statusOf(server), ' · ', server.toolCount, ' 个工具 · ', server.transport,
+      server.instanceCount !== undefined ? ' · ' + server.instanceCount + ' 个会话实例（各自连接）' : ''),
     server.error && React.createElement('div', { className: 'vsm-mcp-error' }, server.error),
     React.createElement('div', { className: 'vsm-mcp-tools' }, server.tools.map((tool) => React.createElement('span', { key: tool.name, className: 'vsm-mcp-chip', title: tool.description || tool.name }, tool.name))),
   )

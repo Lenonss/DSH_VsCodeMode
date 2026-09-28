@@ -8,7 +8,7 @@
  */
 import { rpc } from './rpc.js'
 import { chooseWorkspace } from './chooseDialog.js'
-import { emitOpenAt, openEditorView } from './events.js'
+import { requestOpen } from './openReceipt.js'
 import { toastDom } from './externalOpen.js'
 import { createAddToConversation } from './addToConversation.js'
 import type { AddOutcome, CtxLike } from './addToConversation.js'
@@ -47,7 +47,7 @@ export interface OpenDeps {
   openSession(id: string): void
   reference(sessionId: string, path: string, appearance: 'file' | 'folder'): Promise<boolean>
   choose(title: string, folder: string): Promise<'recent' | 'create' | null>
-  openEditor(path: string | null, line?: number, column?: number): void
+  openEditor(path: string | null, line?: number, column?: number, sessionId?: string): Promise<boolean>
   schedule(fn: () => void, ms: number): void
   notify(text: string): void
 }
@@ -57,8 +57,6 @@ const READY_TIMEOUT_MS = 15000
 const READY_TICK_MS = 300
 const REF_RETRY_MAX = 20
 const REF_RETRY_MS = 300
-const REST_STEP_MS = 150
-const LINE_AT_DELAY_MS = 200
 
 /**
  * 路径规范化：`\→/`、小写、去尾分隔符（Windows 大小写不敏感前缀匹配用）。
@@ -124,11 +122,11 @@ export function pickRule(kind: PathKind, matched: boolean, hasSession: boolean):
  * @param params 深链参数（首路径驱动规则）
  * @param overrides 依赖覆盖（测试注入）
  */
-export async function openDeepLink(ctx: unknown, params: OpenParams, overrides: Partial<OpenDeps> = {}): Promise<void> {
+export async function openDeepLink(ctx: unknown, params: OpenParams, overrides: Partial<OpenDeps> = {}): Promise<boolean> {
   const deps = realDeps(ctx, overrides)
   if (!(await waitListsReady(deps))) {
     deps.notify('DSH 会话列表未就绪，请稍后重试')
-    return
+    return false
   }
   const primary = params.paths[0]
   const kind = await deps.stat(primary).catch(() => 'missing' as PathKind)
@@ -137,14 +135,16 @@ export async function openDeepLink(ctx: unknown, params: OpenParams, overrides: 
   try {
     if (rule === 'abort') {
       deps.notify('路径不存在：' + primary)
-      return
+      return false
     }
-    if (rule === 'choose') return await runChoose(deps, primary, params)
-    if (rule === 'folderNew') return await runFolderNew(deps, primary, params)
-    if (rule === 'fileRecent') return await runFileRecent(deps, primary, params)
-    return await runFileBootstrap(deps, primary, params)
+    if (rule === 'choose') await runChoose(deps, primary, params)
+    else if (rule === 'folderNew') await runFolderNew(deps, primary, params)
+    else if (rule === 'fileRecent') await runFileRecent(deps, primary, params)
+    else await runFileBootstrap(deps, primary, params)
+    return true
   } catch (error) {
     deps.notify('打开失败：' + String((error as Error)?.message ?? error))
+    return false
   }
 }
 
@@ -162,12 +162,12 @@ async function runChoose(deps: OpenDeps, folder: string, params: OpenParams): Pr
   const matches = matchWorkspaces(deps.workspaces().items, folder)
   const best = bestMatch(deps, matches)
   const choice = await deps.choose(best?.title ?? '工作区', folder)
-  if (choice === null) return
+  if (choice === null) throw new Error('用户取消打开')
   if (choice === 'create') return runFolderNew(deps, folder, params)
   const ws = best ?? deps.workspaces().items[0]
   const sessionId = await spawnInWorkspace(deps, ws.workspaceId, undefined)
   await settleRef(deps, sessionId, folder, 'folder')
-  deps.openEditor(null)
+  await openChecked(deps, sessionId, null)
   await openRest(deps, sessionId, params, 1)
 }
 
@@ -178,21 +178,21 @@ async function runFileRecent(deps: OpenDeps, file: string, params: OpenParams): 
     const anchor = recentSessionIn(deps, ws)
     if (anchor) {
       deps.openSession(anchor.id)
-      deps.openEditor(file, params.line, params.column)
+      await openChecked(deps, anchor.id, file, params.line, params.column)
       await openRest(deps, anchor.id, params, 1)
       return
     }
     // 文件所属工作区存在但无会话 → 在该工作区新建对话 + 文件引用
     const sessionId = await spawnInWorkspace(deps, ws.workspaceId, undefined)
     await settleRef(deps, sessionId, file, 'file')
-    deps.openEditor(file, params.line, params.column)
+    await openChecked(deps, sessionId, file, params.line, params.column)
     await openRest(deps, sessionId, params, 1)
     return
   }
   const anchor = recentSession(deps.sessions().byId, deps.sessions().ids)
   if (!anchor) return runFileBootstrap(deps, file, params)
   deps.openSession(anchor.id)
-  deps.openEditor(file, params.line, params.column)
+  await openChecked(deps, anchor.id, file, params.line, params.column)
   await openRest(deps, anchor.id, params, 1)
 }
 
@@ -228,7 +228,7 @@ async function runFileBootstrap(deps: OpenDeps, file: string, params: OpenParams
   const ws = await deps.createWorkspace(dirnameOf(file))
   const sessionId = await spawnInWorkspace(deps, ws.workspaceId, undefined)
   await settleRef(deps, sessionId, file, 'file')
-  deps.openEditor(file, params.line, params.column)
+  await openChecked(deps, sessionId, file, params.line, params.column)
   await openRest(deps, sessionId, params, 1)
 }
 
@@ -237,7 +237,7 @@ async function runFolderNew(deps: OpenDeps, folder: string, params: OpenParams):
   const ws = await deps.createWorkspace(folder)
   const sessionId = await spawnInWorkspace(deps, ws.workspaceId, undefined)
   await settleRef(deps, sessionId, folder, 'folder')
-  deps.openEditor(null)
+  await openChecked(deps, sessionId, null)
   await openRest(deps, sessionId, params, 1)
 }
 
@@ -264,17 +264,20 @@ async function settleRef(deps: OpenDeps, sessionId: string, path: string, appear
     if (await deps.reference(sessionId, path, appearance)) return
     await sleep(deps, REF_RETRY_MS)
   }
+  throw new Error('引用插入未完成')
 }
 
 /** 其余路径：文件进编辑器（步进），文件夹补文件夹引用。 */
 async function openRest(deps: OpenDeps, sessionId: string | null, params: OpenParams, from: number): Promise<void> {
   const rest = params.paths.slice(from)
-  for (const [index, path] of rest.entries()) {
+  for (const path of rest) {
     const kind = await deps.stat(path).catch(() => 'missing' as PathKind)
     if (kind === 'file') {
-      deps.schedule(() => deps.openEditor(path), REST_STEP_MS * (index + 1))
+      await openChecked(deps, sessionId ?? undefined, path)
     } else if (kind === 'directory' && sessionId) {
       await settleRef(deps, sessionId, path, 'folder')
+    } else {
+      throw new Error('路径不存在：' + path)
     }
   }
 }
@@ -316,16 +319,21 @@ function realDeps(ctx: unknown, overrides: Partial<OpenDeps> = {}): OpenDeps {
       return outcome === 'ok' || outcome === 'busy'
     },
     choose: (title, folder) => chooseWorkspace(title, folder),
-    openEditor: (path, line, column) => {
-      if (path == null) {
-        openEditorView(null)
-        return
-      }
-      openEditorView(path)
-      if (line != null) setTimeout(() => emitOpenAt(path, line, column), LINE_AT_DELAY_MS)
-    },
+    openEditor: requestOpen,
     schedule: (fn, ms) => setTimeout(fn, ms),
     notify: (text) => toastDom(text),
   }
   return { ...base, ...overrides }
+}
+
+/** @private @author ddj 2026年09月28号
+ * Await actual editor completion and propagate failure to the request result.
+ * @param deps Open dependencies.
+ * @param sessionId Target session.
+ * @param path Target file or editor mount.
+ * @param line Optional line.
+ * @param column Optional column.
+ */
+async function openChecked(deps: OpenDeps, sessionId: string | undefined, path: string | null, line?: number, column?: number): Promise<void> {
+  if (!(await deps.openEditor(path, line, column, sessionId))) throw new Error('编辑器打开未完成：' + (path ?? '工作区'))
 }

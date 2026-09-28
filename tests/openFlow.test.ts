@@ -2,7 +2,7 @@
  * client/openFlow.ts 测试：路径匹配/最近会话/规则分派纯函数 + openDeepLink 编排（mock deps 全分支）。
  * 作者 ddj 2026-09-07
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   containsPath,
   dirnameOf,
@@ -57,7 +57,7 @@ function makeDeps(state: MockState): OpenDeps {
       state.chosenTitle = title
       return state.choice
     },
-    openEditor: (path, line, column) => state.editors.push({ path, line, column }),
+    openEditor: async (path, line, column) => { state.editors.push({ path, line, column }); return true },
     schedule: (fn) => fn(),
     notify: (t) => state.notified.push(t),
   }
@@ -256,5 +256,49 @@ describe('openDeepLink 编排', () => {
     await openDeepLink({}, { paths: ['D:\\gone'] }, makeDeps(st))
     expect(st.notified).toHaveLength(1)
     expect(st.created).toEqual([])
+  })
+})
+
+
+describe('actual completion outcomes', () => {
+  it('waits each file receipt before opening the next and reporting success', async () => {
+    const state = baseState()
+    state.ids = ['s1']; state.byId = { s1: { id: 's1' } }
+    state.kinds = { '/a': 'file', '/b': 'file' }
+    const calls: string[] = []
+    const finish: Array<(value: boolean) => void> = []
+    const deps = makeDeps(state)
+    deps.openEditor = (path, _line, _column, sessionId) => {
+      expect(sessionId).toBe('s1')
+      calls.push(path!)
+      return new Promise((resolve) => finish.push(resolve))
+    }
+    let completed = false
+    const task = openDeepLink({}, { paths: ['/a', '/b'] }, deps).then((result) => { completed = true; return result })
+    await vi.waitFor(() => expect(calls).toEqual(['/a']))
+    expect(completed).toBe(false)
+    finish[0](true)
+    await vi.waitFor(() => expect(calls).toEqual(['/a', '/b']))
+    expect(completed).toBe(false)
+    finish[1](true)
+    expect(await task).toBe(true)
+  })
+
+  it('returns false on failed editor completion instead of acknowledging success', async () => {
+    const state = baseState()
+    state.ids = ['s1']; state.byId = { s1: { id: 's1' } }; state.kinds = { '/a': 'file' }
+    const deps = makeDeps(state)
+    deps.openEditor = async () => false
+    expect(await openDeepLink({}, { paths: ['/a'] }, deps)).toBe(false)
+    expect(state.notified[0]).toContain('编辑器打开未完成')
+  })
+
+  it('returns false when later paths are missing or the workspace choice is cancelled', async () => {
+    const state = baseState()
+    state.ids = ['s1']; state.byId = { s1: { id: 's1' } }; state.kinds = { '/a': 'file' }
+    expect(await openDeepLink({}, { paths: ['/a', '/missing'] }, makeDeps(state))).toBe(false)
+    state.items = [{ workspaceId: 'w', path: '/project', title: 'Project' }]
+    state.kinds['/project'] = 'directory'
+    expect(await openDeepLink({}, { paths: ['/project'] }, makeDeps(state))).toBe(false)
   })
 })

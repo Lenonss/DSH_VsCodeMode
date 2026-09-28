@@ -1,19 +1,8 @@
-// DshCodeEditor.cs — DSH 文件编辑 Unity 外部脚本编辑器集成。
-// 机制：[InitializeOnLoad] 注册 IExternalCodeEditor，Preferences → External Tools 的
-// External Script Editor 下拉出现「DSH 文件编辑」（虚拟安装，无本地 exe）。
-// OpenProject：优先把打开请求移交 host（edrv.external.handoff）——已打开的 DSH 页面
-// （3s 移交轮询）就地执行打开规则，不重复开新页；无活跃页面/2s 未领取（页面刚关）则
-// 回退 Application.OpenURL 深链。移交全程后台线程（不阻塞编辑器主线程），
-// 回退开浏览器经 EditorApplication.delayCall 切回主线程。
-// 深链契约见插件 src/shared/externalOpen.ts（edrvOpen/edrvPaths/edrvLine/edrvColumn）。
-// 过滤：Unity 对双击的任何资产（含 prefab/scene）都会回调 OpenProject；仅放行文本/代码类
-// 扩展名（白名单 + Project Settings 用户扩展），其余返回 false 交还 Unity 原生处理
-// （双击预制体进预制体模式、双击场景开场景），对齐 DefaultExternalCodeEditor 行为。
-// 作者 ddj 2026-09-08
+// DSH external editor: current-user private OPEN REQUEST/ACK queue.
+// Unity API and preferences stay on the main thread; the worker uses the installed producer.
+// @author ddj 2026-09-28
 using System;
 using System.IO;
-using System.Net;
-using System.Text;
 using System.Threading;
 using UnityEditor;
 using UnityEngine;
@@ -26,11 +15,10 @@ namespace Dsh.EditorIntegration
     {
         private const string EditorName = "DSH 文件编辑";
         private const string VirtualPath = "dsh-editor://vscode-mode";
-        private const string BaseUrlPref = "DshEditor.BaseUrl";
-        private const string DefaultBaseUrl = "http://127.0.0.1:3080";
-        private const string DshVersion = "0.2.4";
+        private const string DshVersion = "0.3.0";
         internal const string VersionText = DshVersion;
 
+        /// <summary>Register this editor without changing the user's selection. @author ddj 2026-09-28</summary>
         static DshCodeEditor()
         {
             try
@@ -38,20 +26,16 @@ namespace Dsh.EditorIntegration
                 CodeEditor.Register(new DshCodeEditor());
                 Debug.Log("[DshCodeEditor] 已注册为 Unity 外部脚本编辑器（v" + DshVersion + "）");
             }
-            catch (Exception e)
-            {
-                Debug.LogError("[DshCodeEditor] 注册失败：" + e);
-            }
+            catch (Exception error) { Debug.LogError("[DshCodeEditor] 注册失败：" + error); }
         }
 
         public CodeEditor.Installation[] Installations
         {
-            // Path 指向真实存在的 Unity.exe：部分 Unity 版本会过滤「路径不存在」的安装条目；
-            // 打开逻辑全在本类（OpenProject），该路径仅作占位与选中态回读。
             get { return new[] { new CodeEditor.Installation { Name = EditorName, Path = RealPath() } }; }
         }
 
-        /// <summary>本包声明的安装路径（真实存在的 Unity.exe；取不到时回退虚拟路径）。</summary>
+        /// <summary>Use a real installation path for Unity's dropdown. @author ddj 2026-09-28</summary>
+        /// <returns>Unity executable or the legacy virtual identifier.</returns>
         internal static string RealPath()
         {
             try
@@ -59,31 +43,36 @@ namespace Dsh.EditorIntegration
                 var path = EditorApplication.applicationPath;
                 return string.IsNullOrEmpty(path) ? VirtualPath : path;
             }
-            catch (Exception)
-            {
-                return VirtualPath;
-            }
+            catch (Exception) { return VirtualPath; }
         }
 
-        public void Initialize(string editorInstallationPath)
-        {
-        }
+        /// <summary>Unity callback; no project mutation is needed. @author ddj 2026-09-28</summary>
+        /// <param name="editorInstallationPath">Unity-selected installation.</param>
+        public void Initialize(string editorInstallationPath) { }
 
+        /// <summary>Select bridge metadata independently for each project. @author ddj 2026-09-28</summary>
         public void OnGUI()
         {
-            var url = EditorGUILayout.TextField("DSH 服务地址", EditorPrefs.GetString(BaseUrlPref, DefaultBaseUrl));
-            if (GUI.changed) EditorPrefs.SetString(BaseUrlPref, url.Trim().TrimEnd('/'));
-            if (GUILayout.Button("测试：在 DSH 中打开当前项目")) BeginOpen(ResolveAbsolute(Application.dataPath), 0, 0);
+            string key = ConfigKey();
+            string selected = EditorPrefs.GetString(key, string.Empty);
+            string value = EditorGUILayout.TextField("DSH 桥接配置", selected);
+            if (value != selected) EditorPrefs.SetString(key, value.Trim());
+            EditorGUILayout.HelpBox("留空时自动读取本项目 UserSettings/dsh-editor.ini；没有安装提示时使用 DSH_HOME 中的旧 shell 配置。填写绝对路径可覆盖自动选择。请求须收到 ACK 才确认成功。", MessageType.Info);
+            if (GUILayout.Button("测试：在 DSH 中打开当前项目")) BeginOpen(ProjectRoot(), 0, 0);
         }
 
-        public void SyncAll()
-        {
-        }
+        /// <summary>Unity callback; DSH does not generate project files. @author ddj 2026-09-28</summary>
+        public void SyncAll() { }
 
-        public void SyncIfNeeded(string[] addedFiles, string[] deletedFiles, string[] movedFiles, string[] movedFromFiles, string[] importedFiles)
-        {
-        }
+        /// <summary>Unity callback; no generated solution needs synchronization. @author ddj 2026-09-28</summary>
+        /// <param name="addedFiles">Added assets.</param><param name="deletedFiles">Deleted assets.</param>
+        /// <param name="movedFiles">Moved assets.</param><param name="movedFromFiles">Previous paths.</param>
+        /// <param name="importedFiles">Imported assets.</param>
+        public void SyncIfNeeded(string[] addedFiles, string[] deletedFiles, string[] movedFiles, string[] movedFromFiles, string[] importedFiles) { }
 
+        /// <summary>Recognize the real or legacy virtual installation. @author ddj 2026-09-28</summary>
+        /// <param name="editorPath">Selected path.</param><param name="installation">Matching entry.</param>
+        /// <returns>Whether this editor owns the selection.</returns>
         public bool TryGetInstallationForPath(string editorPath, out CodeEditor.Installation installation)
         {
             if (string.Equals(editorPath, VirtualPath, StringComparison.OrdinalIgnoreCase)
@@ -96,25 +85,22 @@ namespace Dsh.EditorIntegration
             return false;
         }
 
+        /// <summary>Dispatch supported text assets; empty paths open the project. @author ddj 2026-09-28</summary>
+        /// <param name="path">Asset path or empty project request.</param><param name="line">One-based line.</param>
+        /// <param name="column">One-based column.</param><returns>Whether the asset belongs to this editor.</returns>
         public bool OpenProject(string path, int line, int column)
         {
-            // Open C# Project（Assets 菜单）传入空路径：视为打开 Unity 项目根（按文件夹规则路由）
             if (string.IsNullOrEmpty(path))
             {
                 BeginOpen(ProjectRoot(), line, column);
                 return true;
             }
-
-            // 非文本/代码文件（prefab/scene/asset/模型/纹理等）不交 DSH：返回 false 交还 Unity 原生
-            // 处理（双击预制体进预制体模式、双击场景开场景），否则 Unity 双击资产会被本编辑器劫持。
-            var absPath = ResolveAbsolute(path);
-            if (!IsSupportedFile(absPath)) return false;
-
-            BeginOpen(absPath, line, column);
+            string absolute = ResolveAbsolute(path);
+            if (!IsSupportedFile(absolute)) return false;
+            BeginOpen(absolute, line, column);
             return true;
         }
 
-        /// <summary>文本/代码类扩展名白名单：官方 DefaultExternalCodeEditor 支持集 + 常见文本/脚本类型。</summary>
         private static readonly string[] SupportedExtensions =
         {
             "cs", "txt", "log", "json", "xml", "md", "yaml", "yml", "meta", "ini", "csv", "tsv",
@@ -124,190 +110,100 @@ namespace Dsh.EditorIntegration
             "asmdef", "asmref", "uxml", "uss"
         };
 
-        /// <summary>
-        /// 判定文件是否支持交 DSH 打开：白名单命中，或 Unity Project Settings 用户自定义扩展命中。
-        /// @author ddj 2026年09月22号
-        /// </summary>
-        /// <param name="absPath">资产绝对路径</param>
-        /// <returns>true = 支持 DSH 打开；false = 交还 Unity 原生处理</returns>
-        private static bool IsSupportedFile(string absPath)
+        /// <summary>Keep native prefab/scene handling and the existing text whitelist. @author ddj 2026-09-28</summary>
+        /// <param name="absolute">Absolute asset path.</param><returns>True for supported text assets.</returns>
+        private static bool IsSupportedFile(string absolute)
         {
-            var ext = Path.GetExtension(absPath);
-            if (string.IsNullOrEmpty(ext)) return false;
-            ext = ext.Substring(1).ToLowerInvariant();
-            if (Array.IndexOf(SupportedExtensions, ext) >= 0) return true;
-
-            var userExts = EditorSettings.projectGenerationUserExtensions;
-            if (userExts == null) return false;
-            foreach (var userExt in userExts)
+            string extension = Path.GetExtension(absolute);
+            if (string.IsNullOrEmpty(extension)) return false;
+            extension = extension.Substring(1).ToLowerInvariant();
+            if (extension == "prefab" || extension == "unity") return false;
+            if (Array.IndexOf(SupportedExtensions, extension) >= 0) return true;
+            var custom = EditorSettings.projectGenerationUserExtensions;
+            if (custom == null) return false;
+            foreach (string value in custom)
             {
-                if (string.Equals(userExt, ext, StringComparison.OrdinalIgnoreCase)) return true;
-                if (string.Equals(userExt, "." + ext, StringComparison.OrdinalIgnoreCase)) return true;
+                if (string.Equals(value, extension, StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(value, "." + extension, StringComparison.OrdinalIgnoreCase)) return true;
             }
             return false;
         }
 
-        /// <summary>
-        /// 后台线程执行移交/回退（不阻塞编辑器主线程）。
-        /// ⚠️ EditorPrefs 仅主线程可读：baseUrl 必须在主线程（BeginOpen 调用点）读好后闭包捕获，
-        /// 后台线程只做网络 IO 与纯计算。
-        /// @author ddj 2026年09月08号
-        /// </summary>
-        private static void BeginOpen(string absPath, int line, int column)
+        /// <summary>Capture preferences on the main thread before starting disk IO. @author ddj 2026-09-28</summary>
+        /// <param name="path">Absolute target.</param><param name="line">One-based line.</param><param name="column">One-based column.</param>
+        private static void BeginOpen(string path, int line, int column)
         {
-            string baseUrl = BaseUrl();
-            var thread = new Thread(() =>
-            {
-                try
-                {
-                    if (HandoffToOpenPage(baseUrl, absPath, line, column)) return;
-                    OpenUrlOnMain(BuildOpenUrl(baseUrl, absPath, line, column));
-                }
-                catch (Exception)
-                {
-                    OpenUrlOnMain(BuildOpenUrl(baseUrl, absPath, line, column));
-                }
-            }) { IsBackground = true };
+            string config = EditorPrefs.GetString(ConfigKey(), string.Empty);
+            var worker = new DshOpenWorker(config, path, line, column, ProjectRoot(), LegacyConfig());
+            var thread = new Thread(worker.Run) { IsBackground = true };
             thread.Start();
         }
 
-        /// <summary>移交到已打开页面；返回 true = 已确认由页面执行。无活跃页面/2s 未领取 → false。</summary>
-        private static bool HandoffToOpenPage(string baseUrl, string absPath, int line, int column)
+        /// <summary>Derive a project-specific preference key. @author ddj 2026-09-28</summary>
+        /// <returns>Project-local editor preference key.</returns>
+        private static string ConfigKey() { return "DshEditor.Config." + ProjectRoot(); }
+
+        /// <summary>Read the project's installed profile hint on the worker. @author ddj 2026-09-28</summary>
+        /// <param name="root">Project root captured on the main thread.</param><param name="fallback">Legacy shell INI.</param>
+        /// <returns>The hinted absolute INI, or legacy path only when the hint is absent.</returns>
+        /// <exception cref="InvalidDataException">The installed hint is malformed.</exception>
+        internal static string DefaultConfig(string root, string fallback)
         {
-            string resp = PostRpc(baseUrl, "edrv.external.handoff", HandoffArgs(absPath, line, column));
-            if (ExtractInt(resp, "clients") <= 0) return false;
-            Thread.Sleep(2000);
-            string token = ExtractString(resp, "token");
-            string state = PostRpc(baseUrl, "edrv.external.pendingState",
-                "{\"token\":" + JsonEscape(token) + ",\"take\":true}");
-            return ExtractBool(state, "delivered");
+            string hint = Path.Combine(Path.Combine(root, "UserSettings"), "dsh-editor.ini");
+            try
+            {
+                if (new FileInfo(hint).Length > 65536) throw new InvalidDataException("DSH project bridge hint exceeds 64 KiB.");
+                foreach (string text in File.ReadAllLines(hint))
+                {
+                    int equal = text.IndexOf('=');
+                    if (equal < 0 || !string.Equals(text.Substring(0, equal).Trim(), "config", StringComparison.OrdinalIgnoreCase)) continue;
+                    string value = text.Substring(equal + 1).Trim();
+                    if (string.IsNullOrEmpty(value) || !Path.IsPathRooted(value))
+                        throw new InvalidDataException("DSH project bridge hint requires an absolute config path.");
+                    return Path.GetFullPath(value);
+                }
+                throw new InvalidDataException("DSH project bridge hint is missing config=. Reinstall the DSH Unity bridge or select an explicit configuration.");
+            }
+            catch (FileNotFoundException) { return fallback; }
+            catch (DirectoryNotFoundException) { return fallback; }
         }
 
-        /// <summary>移交载荷：行列仅在有值时附带（与 URL 深链契约一致）。</summary>
-        private static string HandoffArgs(string absPath, int line, int column)
+        /// <summary>Honor custom DSH_HOME for legacy installations. @author ddj 2026-09-28</summary>
+        /// <returns>Legacy installed shell INI path, without filesystem IO.</returns>
+        private static string LegacyConfig()
         {
-            var json = "{\"paths\":[" + JsonEscape(absPath) + "]";
-            if (line > 0) json += ",\"line\":" + line;
-            if (column > 0) json += ",\"column\":" + column;
-            return json + "}";
+            string home = Environment.GetEnvironmentVariable("DSH_HOME");
+            if (string.IsNullOrEmpty(home)) home = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".dsh");
+            return Path.Combine(Path.Combine(Path.Combine(home, "dsh-vscode-mode"), "shell"), "dsh-open.ini");
         }
 
-        /// <summary>POST /edrv/rpc；失败返回 null（调用方回退深链，不阻塞）。</summary>
-        private static string PostRpc(string baseUrl, string method, string argsJson)
+        /// <summary>Resolve asset paths from the Unity project root. @author ddj 2026-09-28</summary>
+        /// <param name="path">Asset path.</param><returns>Absolute path.</returns>
+        private static string ResolveAbsolute(string path)
+        {
+            return Path.GetFullPath(Path.IsPathRooted(path) ? path : Path.Combine(ProjectRoot(), path));
+        }
+
+        /// <summary>Read the current project root on the main thread. @author ddj 2026-09-28</summary>
+        /// <returns>Assets parent directory.</returns>
+        private static string ProjectRoot() { return Directory.GetParent(Application.dataPath).FullName; }
+    }
+
+    internal static class DshCodeEditorBoot
+    {
+        /// <summary>Schedule fallback registration after Unity initializes. @author ddj 2026-09-28</summary>
+        [InitializeOnLoadMethod]
+        private static void EnsureRegistered() { EditorApplication.delayCall += Register; }
+
+        /// <summary>Register only when another instance has not done so. @author ddj 2026-09-28</summary>
+        private static void Register()
         {
             try
             {
-                var req = (HttpWebRequest)WebRequest.Create(baseUrl.TrimEnd('/') + "/edrv/rpc");
-                req.Method = "POST";
-                req.ContentType = "application/json";
-                req.Timeout = 4000;
-                req.Proxy = null;
-                byte[] body = Encoding.UTF8.GetBytes("{\"method\":\"" + method + "\",\"args\":" + argsJson + "}");
-                req.ContentLength = body.Length;
-                using (var stream = req.GetRequestStream()) stream.Write(body, 0, body.Length);
-                using (var res = req.GetResponse())
-                using (var reader = new StreamReader(res.GetResponseStream(), Encoding.UTF8))
-                    return reader.ReadToEnd();
+                if (CodeEditor.Editor.GetCodeEditorForPath(DshCodeEditor.RealPath()) is DshCodeEditor) return;
+                CodeEditor.Register(new DshCodeEditor());
             }
-            catch (Exception) { return null; }
-        }
-
-        /// <summary>回退开浏览器需主线程：经 delayCall 切回。</summary>
-        private static void OpenUrlOnMain(string url)
-        {
-            EditorApplication.delayCall += () => Application.OpenURL(url);
-        }
-
-        /// <summary>拼深链 URL（行列仅在有值时附带）。</summary>
-        private static string BuildOpenUrl(string baseUrl, string absPath, int line, int column)
-        {
-            var url = baseUrl.TrimEnd('/') + "/?edrvOpen=1&edrvPaths=" + Uri.EscapeDataString(absPath);
-            if (line > 0) url += "&edrvLine=" + line;
-            if (column > 0) url += "&edrvColumn=" + column;
-            return url;
-        }
-
-        /// <summary>相对路径 → 绝对路径（基于 Unity 项目根补全）。</summary>
-        private static string ResolveAbsolute(string path)
-        {
-            return Path.IsPathRooted(path) ? path : Path.GetFullPath(Path.Combine(ProjectRoot(), path));
-        }
-
-        /// <summary>Unity 项目根（Assets 的父目录）。</summary>
-        private static string ProjectRoot()
-        {
-            return Directory.GetParent(Application.dataPath).FullName;
-        }
-
-        /// <summary>读取 EditorPrefs 的 DSH 服务地址（空回退默认）。</summary>
-        private static string BaseUrl()
-        {
-            var stored = EditorPrefs.GetString(BaseUrlPref, DefaultBaseUrl);
-            return string.IsNullOrEmpty(stored) ? DefaultBaseUrl : stored;
-        }
-
-        /// <summary>极简 JSON int 字段提取（缺失/失败 → -1）。起点 = 匹配串长度 key.Length+3（"key":）。</summary>
-        private static int ExtractInt(string json, string key)
-        {
-            if (string.IsNullOrEmpty(json)) return -1;
-            int at = json.IndexOf("\"" + key + "\":", StringComparison.Ordinal);
-            if (at < 0) return -1;
-            at += key.Length + 3;
-            int end = at;
-            while (end < json.Length && (char.IsDigit(json[end]) || (end == at && json[end] == '-'))) end++;
-            int value;
-            return int.TryParse(json.Substring(at, end - at), out value) ? value : -1;
-        }
-
-        /// <summary>极简 JSON string 字段提取（缺失/失败 → null）。起点 = 匹配串长度 key.Length+4（"key":"）。</summary>
-        private static string ExtractString(string json, string key)
-        {
-            if (string.IsNullOrEmpty(json)) return null;
-            int at = json.IndexOf("\"" + key + "\":\"", StringComparison.Ordinal);
-            if (at < 0) return null;
-            at += key.Length + 4;
-            int end = json.IndexOf('"', at);
-            return end < 0 ? null : json.Substring(at, end - at);
-        }
-
-        /// <summary>极简 JSON bool 字段提取（缺失 → false）。起点 = 匹配串长度 key.Length+3（"key":）。</summary>
-        private static bool ExtractBool(string json, string key)
-        {
-            if (string.IsNullOrEmpty(json)) return false;
-            int at = json.IndexOf("\"" + key + "\":", StringComparison.Ordinal);
-            return at >= 0 && json.IndexOf("true", at, StringComparison.Ordinal) == at + key.Length + 3;
-        }
-
-        /// <summary>JSON 字符串转义（反斜杠 + 引号）。</summary>
-        private static string JsonEscape(string value)
-        {
-            return "\"" + (value ?? string.Empty).Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
-        }
-    }
-
-    /// <summary>
-    /// 注册兜底：独立类的 InitializeOnLoadMethod——主类静态构造异常导致注册缺失时补注册。
-    /// @author ddj 2026-09-08
-    /// </summary>
-    internal static class DshCodeEditorBoot
-    {
-        [InitializeOnLoadMethod]
-        private static void EnsureRegistered()
-        {
-            EditorApplication.delayCall += () =>
-            {
-                try
-                {
-                    var existing = CodeEditor.Editor.GetCodeEditorForPath(DshCodeEditor.RealPath());
-                    if (existing is DshCodeEditor) return;
-                    CodeEditor.Register(new DshCodeEditor());
-                    Debug.Log("[DshCodeEditor] 兜底注册完成（v" + DshCodeEditor.VersionText + "）");
-                }
-                catch (Exception e)
-                {
-                    Debug.LogError("[DshCodeEditor] 兜底注册失败：" + e);
-                }
-            };
+            catch (Exception error) { Debug.LogError("[DshCodeEditor] 注册失败：" + error); }
         }
     }
 }

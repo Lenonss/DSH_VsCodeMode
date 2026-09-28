@@ -13,6 +13,7 @@ import type { TreeMenuItem, TreeMenuTarget } from '../src/client/sidebar/context
 import type { SidebarCtx } from '../src/client/sidebar/types.js'
 import type { SvnChangeEntry, SvnStatusPayload } from '../src/shared/svn.js'
 import { clearFileClip, fileClipOf, setFileClip } from '../src/client/fileClipboard.js'
+import { rpcResponse } from './fixtures/rpcResponse.js'
 
 /** 按 id 索引内置菜单项。 */
 const byId = (): Record<string, TreeMenuItem> =>
@@ -257,7 +258,7 @@ describe('SVN CLI 三项（与基线比较 / 加入版本控制 / 还原）状�
     // svnAdd 会走 client rpc（fetch 出口）：桩掉 fetch 避免真实网络请求，并让链路可确定落定
     const originalFetch = (globalThis as unknown as { fetch?: unknown }).fetch
     ;(globalThis as unknown as { fetch: unknown }).fetch = vi.fn(() =>
-      Promise.resolve({ json: () => Promise.resolve({ ok: true, count: 1, summary: '加入版本控制完成（1 项）', output: '' }) }))
+      Promise.resolve(rpcResponse({ ok: true, count: 1, summary: '加入版本控制完成（1 项）', output: '' })))
     try {
       const openSvnDiff = vi.fn()
       const refreshSvnChanges = vi.fn()
@@ -365,7 +366,7 @@ describe('文件管理动作执行（新建/重命名/删除/粘贴的 RPC 接�
     const calls: Array<{ method: string; args: Record<string, unknown> }> = []
     ;(globalThis as { fetch: unknown }).fetch = vi.fn((_url: string, init: { body: string }) => {
       calls.push(JSON.parse(init.body))
-      return Promise.resolve({ json: () => Promise.resolve(result) })
+      return Promise.resolve(rpcResponse(result))
     })
     return { calls, restore: () => { (globalThis as { fetch?: unknown }).fetch = original } }
   }

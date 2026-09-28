@@ -133,6 +133,13 @@ export function takePendingSideOpen(sessionId?: string): { path: string | null; 
  * @param focusDiff 是否聚焦首个差异
  * @returns 是否路由成功
  */
+/**
+ * Check the installed editor route without opening any UI.
+ * @author ddj 2026年09月28号
+ * @returns Whether a mounted sidebar adapter owns editor navigation.
+ */
+export function hasSideRoute(): boolean { return ensureSideEditor !== null }
+
 export function routeSideEditor(path: string | null, focusDiff: boolean): boolean {
   if (typeof ensureSideEditor !== 'function') return false
   try {

@@ -4,6 +4,7 @@
  * 诊断开关运行时化：内存缓存 + localStorage 持久（日志弹窗开关即改即生效，免刷新）。
  * 作者 ddj 2026-08-20 / 2026-09-17
  */
+import { appUrl } from '../shared/appUrl.js'
 import { RPC_PATH } from '../shared/rpc.js'
 import type { RpcMethod, RpcRequestMap, RpcResult } from '../shared/rpc.js'
 import type { LoggerLevel } from '../shared/logger.js'
@@ -35,13 +36,38 @@ export function setDebugEnabled(on: boolean): void {
   } catch (e) { /* 无 localStorage 环境：仅内存生效 */ }
 }
 
-/** 同源 RPC 调用（host /edrv/rpc 精确路由）。 */
-export function rpc<M extends RpcMethod>(method: M, args: RpcRequestMap[M]): Promise<RpcResult<M>> {
-  return fetch(RPC_PATH, {
+/**
+ * Call the authenticated RPC route using the current application base.
+ * @author ddj 2026年09月28号
+ * @param method Typed business method.
+ * @param args Business arguments.
+ * @param signal Optional cancellation signal.
+ * @returns A validated business result; transport failures reject with a readable error.
+ */
+export async function rpc<M extends RpcMethod>(method: M, args: RpcRequestMap[M], signal?: AbortSignal): Promise<RpcResult<M>> {
+  const res = await fetch(appUrl(RPC_PATH), {
     method: 'POST',
+    credentials: 'same-origin',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ method, args }),
-  }).then((res) => res.json()) as Promise<RpcResult<M>>
+    signal,
+  })
+  if (!res.ok) {
+    const message = res.status === 401 ? 'DSH 登录已失效，请重新打开已登录的应用页面'
+      : res.status === 403 ? 'DSH 拒绝了当前页面的访问'
+      : res.status === 413 ? '请求超过支持的文件大小'
+      : res.status === 503 ? 'DSH 认证服务尚未就绪'
+      : 'DSH 请求失败（HTTP ' + res.status + '）'
+    throw new Error(message)
+  }
+  if (!/^application\/json(?:\s*;|\s*$)/i.test(res.headers.get('content-type') ?? '')) {
+    throw new Error('DSH 返回了非 JSON 响应，请检查应用地址和代理配置')
+  }
+  const value: unknown = await res.json()
+  if (!value || typeof value !== 'object' || typeof (value as { ok?: unknown }).ok !== 'boolean') {
+    throw new Error('DSH RPC 响应格式不正确')
+  }
+  return value as RpcResult<M>
 }
 
 /**

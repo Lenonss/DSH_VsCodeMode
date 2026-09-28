@@ -7,6 +7,8 @@
  * React 状态，因此指令系统可在编辑器挂载前装配、卸载后仍安全。
  * 作者 ddj 2026年09月10号 / 2026年10月
  */
+import { setPanelRoute } from './panelCommands.js'
+import type { PanelRoute } from './panelCommands.js'
 import { BRIDGE_COMMANDS, EDITOR_COMMANDS, showCommandsDef } from './ui/commandCatalog.js'
 import { createCommandRegistry } from './commandRegistry.js'
 import type { CommandRegistry } from './commandRegistry.js'
@@ -25,12 +27,14 @@ export interface CommandBridge {
 
 /**
  * 创建指令执行桥：注册内置指令 + 命令栏自身，注入命令栏执行器。
- * @author ddj 2026年09月10号
+ * @author ddj 2026年09月28号
+ * @param panelRoute 当前会话读取器与已有侧栏打开能力（首次打开命令使用）
  * @returns 指令执行桥句柄
  */
-export function createCommandBridge(): CommandBridge {
+export function createCommandBridge(panelRoute?: PanelRoute): CommandBridge {
   const registry = createCommandRegistry()
   const disposers: Array<() => void> = []
+  if (panelRoute) disposers.push(setPanelRoute(panelRoute))
   const palette = showCommandsDef(() => openCommandPalette('command'))
   for (const command of [...EDITOR_COMMANDS, ...BRIDGE_COMMANDS]) {
     disposers.push(registry.register(command))

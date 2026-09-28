@@ -7,8 +7,10 @@
  * 作者 ddj 2026-09-22
  */
 
-/** vendor 根（routes.ts /edrv/vendor 前缀路由分发 assets/vendor/*）。 */
-export const PDFJS_BASE = '/edrv/vendor/pdfjs'
+import { appUrl } from '../../shared/appUrl.js'
+
+/** vendor 根，保留官方桌面协议及反向代理前缀。 */
+export const PDFJS_BASE = appUrl('/edrv/vendor/pdfjs')
 /** pdf.js Worker 地址（GlobalWorkerOptions.workerSrc）。 */
 export const PDFJS_WORKER_SRC = PDFJS_BASE + '/build/pdf.worker.mjs'
 /** CJK 字符映射目录（中文 PDF 渲染必需，尾斜杠固定）。 */

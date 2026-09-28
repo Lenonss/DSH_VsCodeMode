@@ -22,6 +22,7 @@ import type { AiConfigPatch, AiConfigView, AiDirectoryView, AiInlineRequest, AiI
 import type { SvnAction, SvnAiPlan, SvnChangeEntry, SvnConflictArtifact, SvnDiffRevResult, SvnIgnoreItem, SvnLogEntry, SvnRemoteOutdatedEntry, SvnStatusPayload, SvnSumEntry, SvnUpdatePoll, SvnUpdateResult, SvnUpdateState } from './svn.js'
 import type { DapAction, DapAdapterInfo, DapBreakpointAck, DapBreakpointInput, DapConfigSnippet, DapConfigSource, DapDebugConfig, DapFrameView, DapPhase, DapPollResult, DapProcessInfo, DapScopeView, DapVariableView } from './dap.js'
 import { DAP_ACTIONS } from './dap.js'
+import { appUrl } from './appUrl.js'
 import type { LoggerLevel } from './logger.js'
 
 /** webServer 精确路由。 */
@@ -133,7 +134,7 @@ export async function readBinaryPreview(
  */
 async function tryBinaryRead(args: RpcRequestMap['edrv.readBinary']): Promise<PreviewRead | null> {
   try {
-    const res = await fetch(RPC_PATH, {
+    const res = await fetch(appUrl(RPC_PATH), {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ method: 'edrv.readBinary', args }),
@@ -382,7 +383,8 @@ export interface RpcRequestMap {
   'edrv.unity.install': { path: string }
   'edrv.externalStat': { path: string }
   'edrv.external.handoff': { paths: string[]; line?: number; column?: number }
-  'edrv.external.pending': {}
+  'edrv.external.pending': { clientId: string; busy?: boolean }
+  'edrv.external.ack': { token: string; clientId: string; leaseId: string; success: boolean; error?: string }
   'edrv.external.pendingState': { token: string; take?: boolean }
   'vscode.devFormGet': {}
   'vscode.devFormSet': { enabled: boolean; path?: string }
@@ -535,8 +537,9 @@ export interface RpcOkMap {
   'edrv.unity.install': { project: UnityProjectEntry }
   'edrv.externalStat': { kind: 'file' | 'directory' | 'missing' }
   'edrv.external.handoff': { clients: number; token: string }
-  'edrv.external.pending': { open: { paths: string[]; line?: number; column?: number } | null }
-  'edrv.external.pendingState': { delivered: boolean }
+  'edrv.external.pending': { open: { paths: string[]; line?: number; column?: number; token: string; leaseId: string } | null }
+  'edrv.external.ack': { accepted: boolean }
+  'edrv.external.pendingState': { delivered: boolean; completed?: boolean; error?: string }
   'vscode.devFormGet': { devForm: DevFormInfo }
   'vscode.devFormSet': { devForm: DevFormInfo; restart: boolean }
   'compat': { report: CompatReport }

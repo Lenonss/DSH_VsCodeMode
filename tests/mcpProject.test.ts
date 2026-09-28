@@ -57,9 +57,8 @@ describe('serversOf', () => {
     expect(() => serversOf({ mcpServers: [1] })).toThrow()
   })
 
-  it('跳过非对象 server 定义', () => {
-    const out = serversOf({ mcpServers: { good: { command: 'x' }, bad: 'str', n: null, arr: [] } })
-    expect(Object.keys(out)).toEqual(['good'])
+  it('拒绝非对象 server 定义，避免 reconcile 擦除已有连接', () => {
+    expect(() => serversOf({ mcpServers: { good: { command: 'x' }, bad: 'str', n: null, arr: [] } })).toThrow('MCP 定义必须是对象')
   })
 })
 

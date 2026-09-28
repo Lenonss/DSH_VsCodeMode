@@ -9,7 +9,6 @@
  * 作者 ddj
  */
 import { rpc } from '../rpc.js'
-import { RPC_PATH } from '../../shared/rpc.js'
 import {
   AI_PREFIX_MAX, AI_SUFFIX_MAX, inlineWorth, trimInlineWindow,
 } from '../../shared/ai.js'
@@ -145,13 +144,7 @@ export function registerAiInline(monaco) {
           inFlight = controller
           emitAiStatus('busy')
           try {
-            const res = await fetch(RPC_PATH, {
-              method: 'POST',
-              headers: { 'content-type': 'application/json' },
-              body: JSON.stringify({ method: 'edrv.ai.inline', args: { path, prefix: trimmed.prefix, suffix: trimmed.suffix } }),
-              signal: controller.signal,
-            })
-            const data = await res.json()
+            const data = await rpc('edrv.ai.inline', { path, prefix: trimmed.prefix, suffix: trimmed.suffix }, controller.signal)
             if (mySeq !== seq || !data?.ok || typeof data.text !== 'string' || !data.text) {
               cache.set(key, { items: [], at: Date.now() })
               if (data?.note) emitAiStatus('error', { note: String(data.note) })

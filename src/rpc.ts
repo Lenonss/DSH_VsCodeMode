@@ -38,7 +38,7 @@ import { normalizeFileOpenTool, FILE_OPEN_DEFAULT, FILE_OPEN_SETTINGS_NS, sectio
 import { INTEGRATION_BASE_DEFAULT } from './shared/integration.js'
 import { shellMenuRegister, shellMenuRemove, shellMenuStatus } from './integrate.js'
 import { unityAdd, unityInstall, unityList, unityRemove } from './unityBridge.js'
-import { handoffOpen, pendingState, pollPending } from './externalHandoff.js'
+import { ackPending, handoffOpen, pendingState, pollPending } from './externalHandoff.js'
 import { buildReport } from './compat.js'
 import { findProfileDir, readDevForm, setDevForm } from './devForm.js'
 import { normalizeRel } from './tree.js'
@@ -296,8 +296,8 @@ function activeSessionIds(ctx: Ctx): Set<string> {
 }
 
 /** profile patch 文件定位（依赖本插件的 profile，同 devForm）。 */
-async function patchFileInfo(): Promise<{ profileDir?: string; patchPath?: string }> {
-  const profileDir = findProfileDir()
+async function patchFileInfo(ctx: Ctx): Promise<{ profileDir?: string; patchPath?: string }> {
+  const profileDir = findProfileDir(ctx)
   if (!profileDir) return {}
   return { profileDir, patchPath: join(profileDir, 'cordis.patch.yml') }
 }
@@ -1009,12 +1009,12 @@ export function buildHandlers(
       return { ok: true, fileOpenTool: normalizeFileOpenTool(value?.fileOpenTool), integrationBaseUrl: await integrationBaseUrlOf(ctx), revision: section?.revision }
     },
     'compat': async () => ({ ok: true, report: await buildReport(ctx) }),
-    'vscode.devFormGet': async () => ({ ok: true, devForm: readDevForm() }),
+    'vscode.devFormGet': async () => ({ ok: true, devForm: readDevForm(ctx) }),
     'vscode.devFormSet': async (args) => {
       try {
         const result = await setDevForm(ctx, args.enabled === true, args.path)
         if (!result.ok) return { ok: false, error: result.error ?? '切换开发形态失败' }
-        return { ok: true, devForm: readDevForm(), restart: result.restart }
+        return { ok: true, devForm: readDevForm(ctx), restart: result.restart }
       } catch (error) {
         return { ok: false, error: String(error) }
       }
@@ -1064,7 +1064,7 @@ export function buildHandlers(
     },
     'edrv.unity.install': async (args) => {
       try {
-        return { ok: true, project: await unityInstall(args.path) }
+        return { ok: true, project: await unityInstall(args.path, undefined, { ctx, baseUrl: await integrationBaseUrlOf(ctx) }) }
       } catch (error) {
         return { ok: false, error: String(error) }
       }
@@ -1086,10 +1086,11 @@ export function buildHandlers(
       ok: true,
       ...handoffOpen({ paths: args.paths, line: args.line, column: args.column }),
     }),
-    'edrv.external.pending': async () => ({ ok: true, open: pollPending() }),
+    'edrv.external.pending': async (args) => ({ ok: true, open: pollPending(args) }),
+    'edrv.external.ack': async (args) => ({ ok: true, accepted: ackPending(args) }),
     'edrv.external.pendingState': async (args) => ({
       ok: true,
-      delivered: pendingState(args.token, args.take === true).delivered,
+      ...pendingState(args.token, args.take === true),
     }),
     'edrv.perf.inventory': async () => {
       try {
@@ -1163,7 +1164,7 @@ export function buildHandlers(
     },
     'edrv.perf.configGet': async () => {
       try {
-        const { profileDir, patchPath } = await patchFileInfo()
+        const { profileDir, patchPath } = await patchFileInfo(ctx)
         const block = perfConfigBlock()
         if (!patchPath) return { ok: true, applied: false, block }
         const text = await readFile(patchPath, 'utf8').catch(() => '')
@@ -1175,7 +1176,7 @@ export function buildHandlers(
     },
     'edrv.perf.configApply': async () => {
       try {
-        const { patchPath } = await patchFileInfo()
+        const { patchPath } = await patchFileInfo(ctx)
         if (!patchPath) return { ok: false, error: '未找到依赖本插件的 profile（检查 DSH_HOME/profiles）' }
         const text = await readFile(patchPath, 'utf8').catch(() => '')
         const backup = patchPath + '.bak-' + Date.now()
@@ -1189,7 +1190,7 @@ export function buildHandlers(
     },
     'edrv.perf.configUndo': async () => {
       try {
-        const { patchPath } = await patchFileInfo()
+        const { patchPath } = await patchFileInfo(ctx)
         if (!patchPath) return { ok: false, error: '未找到依赖本插件的 profile（检查 DSH_HOME/profiles）' }
         const backup = await latestPatchBackup(patchPath)
         if (backup) {
@@ -1305,7 +1306,7 @@ export async function handleRpc<M extends RpcMethod>(
   dapHandlers?: Partial<RpcHandlerMap>,
 ): Promise<RpcResult<M>> {
   const handlers = buildHandlers(ctx, registry, searcher, contentSearcher, lspHandlers, aiHandlers, fileVersions, svnHandlers, dapHandlers)
-  const handler = handlers[method]
-  if (!handler) return { ok: false, error: '未知方法: ' + String(method) } as RpcResult<M>
+  const handler = Object.hasOwn(handlers, method) ? handlers[method] : undefined
+  if (typeof handler !== 'function') return { ok: false, error: '未知方法: ' + String(method) } as RpcResult<M>
   return handler(args)
 }

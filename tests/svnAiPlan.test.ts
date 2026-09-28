@@ -254,11 +254,12 @@ describe('buildAgentPrompt', () => {
     expect(prompt).toContain('D:/wc/Repo')
   })
 
-  it('投递命令完整可执行：URL + svn.aiPlanSubmit + sessionId 内嵌', () => {
-    expect(prompt).toContain('http://127.0.0.1:3080/edrv/rpc')
-    expect(prompt).toContain('svn.aiPlanSubmit')
+  it('通过会话工具投递方案，不生成固定端口或裸 HTTP 命令', () => {
+    expect(prompt).toContain('svn_plan_submit')
     expect(prompt).toContain('session-abc')
-    expect(prompt).toContain('Invoke-RestMethod')
+    expect(prompt).toContain('"plan": <PLAN_JSON>')
+    expect(prompt).not.toContain('http://127.0.0.1:3080')
+    expect(prompt).not.toContain('Invoke-RestMethod')
   })
 
   it('分析要求：借 codegraph/读文件/sub agent 深度分析', () => {

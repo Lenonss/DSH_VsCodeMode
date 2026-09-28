@@ -32,7 +32,7 @@ import { openEditorView } from './events.js'
 import { setupExtOpen } from './externalOpen.js'
 import { SettingsContext } from './settingsContext.js'
 import { SIDEBAR_PLUGIN, registerSlotSafely, settingsBridge } from './compat.js'
-import { detectSidebarService, installSideEditor, setEnsureSideEditor, SIDEBAR_INSTALL_CMD } from './sidebarBridge.js'
+import { detectSidebarService, hasSideRoute, installSideEditor, routeSideEditor, setEnsureSideEditor, SIDEBAR_INSTALL_CMD } from './sidebarBridge.js'
 import { detectOfficial, installOfficial, registerOfficialFileClaim, OFFICIAL_TAB_KIND, OFFICIAL_TAB_TITLE, isEditorTabActive, restoreEditorTab, buildFileAddress } from './officialSidebar.js'
 import { setNativeCsv, setNativeOpenHandler, resetNativeOpen } from './nativeOpenStore.js'
 import { SideEditorTab } from './ui/SideEditorTab.js'
@@ -88,7 +88,13 @@ let commandsBridge: CommandBridge | null = null
  */
 function setupCommands(ctx: any): CommandBridge {
   if (commandsBridge) return commandsBridge
-  const bridge = createCommandBridge()
+  /** @author ddj 2026年09月28号 @returns Current session/workspace for command ownership. */
+  const readScope = () => readSessionScope(ctx)
+  /** @author ddj 2026年09月28号 @returns Whether an installed sidebar can mount the editor. */
+  const canOpen = () => hasSideRoute()
+  /** @author ddj 2026年09月28号 @returns Whether the current editor route accepted the request. */
+  const open = () => routeSideEditor(null, false)
+  const bridge = createCommandBridge({ readScope, canOpen, open })
   commandsBridge = bridge
   ctx.provide(REGISTRY_GLOBAL, bridge.registry)
   // 无条件镜像到 window（DSH 不创建 window.dsh，旧条件式赋值是死代码 → 命令栏空表）
@@ -143,7 +149,7 @@ export function apply(ctx: any): void {
   const sessions = ctx.get('sessions')
 
   // 外部深链落地：Windows 右键菜单 / Unity 外部编辑器 → 浏览器 URL 参数 → 打开规则路由
-  setupExtOpen(ctx)
+  ctx.effect(() => setupExtOpen(ctx), 'vscode-mode: external open')
 
   // Monaco 加载时机：不再 DSH 启动即预热，改为进入会话界面（当前会话出现）后再后台加载，
   // 用户点开「文件编辑」页签即用；空闲时仍由 EditorView 挂载兜底加载。
@@ -258,7 +264,7 @@ export function apply(ctx: any): void {
     return sidebar ? registry.register(sidebar) : undefined
   }, 'vscode-mode: sidebar file opener')
   // 官方侧边栏正文组件装配（页类型正文；兼作 file 认领转发失败时的兜底正文）
-  const officialRenderTab = (props: Record<string, unknown>) => React.createElement(OfficialSideTab, Object.assign({}, props, { schedule, addToConversation, sidebarPanels, outlineSources, fileMenuItems, fileOpeners: registry, sessions }))
+  const officialRenderTab = (props: Record<string, unknown>) => React.createElement(OfficialSideTab, Object.assign({}, props, { schedule, addToConversation, sidebarPanels, outlineSources, fileMenuItems, fileOpeners: registry, sessions, readSessionScope: () => readSessionScope(ctx) }))
   /** 官方 file 地址认领同步：自动/VSCodeMode 档认领（转发进单一编辑器页签），其余交官方查看器。 */
   const syncFileClaim = (): void => {
     const official = officialService

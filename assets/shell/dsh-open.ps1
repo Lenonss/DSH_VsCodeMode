@@ -1,52 +1,33 @@
-# dsh-open.ps1 — DSH 文件编辑 shell launcher（csc 不可用时的降级版，轻微控制台闪窗）。
-# 行为与 dsh-open.cs 一致：读 dsh-open.ini base → 探测端口 → 投递待打开请求（有已打开
-# DSH 页面时由其就地执行，2s 未领取取回并回退开新页）。
-# 由 dsh-vscode-mode 设置页一键注册写入 HKCU\...\shell\DSHEditor\command。
-# 作者 ddj 2026-09-08
-param([string[]]$Path)
+# Windows fallback launcher. The shared helper validates the private queue and waits for ACK.
+# @author ddj 2026-09-28
+param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Path)
 $ErrorActionPreference = 'Stop'
-$base = 'http://127.0.0.1:3080'
-$ini = Join-Path $PSScriptRoot 'dsh-open.ini'
-if (Test-Path $ini) {
-    foreach ($line in Get-Content $ini) {
-        if ($line -match '^\s*base\s*=\s*(.+?)\s*$') { $base = $Matches[1]; break }
-    }
-}
-
-$alive = $false
+if (-not $Path -or $Path.Count -eq 0) { exit 0 }
 try {
-    $uri = [Uri]$base
-    $port = if ($uri.IsDefaultPort) { if ($uri.Scheme -ieq 'https') { 443 } else { 80 } } else { $uri.Port }
-    $client = New-Object Net.Sockets.TcpClient
-    $alive = $client.ConnectAsync($uri.Host, $port).Wait(1000) -and $client.Connected
-    $client.Close()
-} catch { $alive = $false }
-
-if (-not $alive) {
+    $ini = Join-Path $PSScriptRoot 'dsh-open.ini'
+    $config = @{}
+    foreach ($line in [IO.File]::ReadAllLines($ini)) {
+        $equal = $line.IndexOf('=')
+        if ($equal -gt 0) { $config[$line.Substring(0, $equal).Trim()] = $line.Substring($equal + 1).Trim() }
+    }
+    foreach ($key in @('node', 'helper')) {
+        $value = $config[$key]
+        if (-not $value -or -not [IO.Path]::IsPathRooted($value) -or
+            [IO.Path]::GetFullPath($value) -ine $value -or -not [IO.File]::Exists($value)) {
+            throw "Missing absolute $key in DSH bridge configuration."
+        }
+    }
+    if ([IO.Path]::GetExtension($config.node) -ine '.exe') { throw 'A stored Node or Electron executable is required.' }
+    if ($config.nodeMode -notin @('node', 'electron')) { throw 'Missing nodeMode in DSH bridge configuration.' }
+    if ($config.nodeMode -eq 'electron') { $env:ELECTRON_RUN_AS_NODE = '1' }
+    else { Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue }
+    $absolute = @($Path | ForEach-Object { [IO.Path]::GetFullPath($_) })
+    & $config.node $config.helper --config $ini -- @absolute
+    if ($LASTEXITCODE -ne 0) { throw 'DSH OPEN was not confirmed. See the producer error above.' }
+    exit 0
+} catch {
+    [Console]::Error.WriteLine($_.Exception.Message)
     Add-Type -AssemblyName System.Windows.Forms
-    [System.Windows.Forms.MessageBox]::Show(
-        "DSH Web UI 未运行（$base）。`n请先启动 DSH，再使用「在 DSH 文件编辑中打开」。",
-        'DSH 文件编辑') | Out-Null
+    [System.Windows.Forms.MessageBox]::Show($_.Exception.Message, 'DSH 文件编辑') | Out-Null
     exit 1
 }
-
-$paths = @($Path | Where-Object { $_ } | ForEach-Object { [IO.Path]::GetFullPath($_) })
-if (-not $paths -or $paths.Count -eq 0) { exit 0 }
-
-# 复用已有页面：投递待打开请求，clients>0 表示有页面在（2s 后确认领取，未领取取回回退）
-$handoff = $null
-try {
-    $rpcBase = $base.TrimEnd('/') + '/edrv/rpc'
-    $body = @{ method = 'edrv.external.handoff'; args = @{ paths = $paths } } | ConvertTo-Json -Depth 4 -Compress
-    $handoff = Invoke-RestMethod -Uri $rpcBase -Method Post -ContentType 'application/json' -Body $body -TimeoutSec 4
-    if ($handoff.clients -gt 0) {
-        Start-Sleep -Milliseconds 2000
-        $stateBody = @{ method = 'edrv.external.pendingState'; args = @{ token = $handoff.token; take = $true } } | ConvertTo-Json -Depth 4 -Compress
-        $state = Invoke-RestMethod -Uri $rpcBase -Method Post -ContentType 'application/json' -Body $stateBody -TimeoutSec 4
-        if ($state.delivered) { exit 0 }
-    }
-} catch { # 移交失败回退开新页
-}
-
-$encoded = @($paths | ForEach-Object { [Uri]::EscapeDataString($_) }) -join ','
-Start-Process ($base.TrimEnd('/') + '/?edrvOpen=1&edrvPaths=' + $encoded)

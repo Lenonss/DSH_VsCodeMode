@@ -8,6 +8,7 @@
  * 作者 ddj 2026年09月09号 / 2026年09月10号
  */
 import React from 'react'
+import { pickSessionScope } from '../sessionScope.js'
 import { EditorView } from './EditorView.js'
 import { setSideEditorMounted } from '../sidebarBridge.js'
 import { editorMountEpoch, markEditorActive, markEditorMounted, parseOfficialFileAddress, resolveNavLine, resolveNavOpen } from '../officialSidebar.js'
@@ -48,8 +49,10 @@ export function OfficialSideTab(props) {
       const schedule = props?.schedule
       const decide = () => {
         if (editorMountEpoch() !== epoch) return
-        const current = props?.sessions?.list?.getSnapshot?.()?.current
-        markEditorActive(current === self)
+        const current = typeof props?.readSessionScope === 'function'
+          ? props.readSessionScope().sessionId
+          : pickSessionScope({ list: props?.sessions?.list?.getSnapshot?.() }).sessionId
+        markEditorActive(Boolean(current && current !== self))
       }
       if (typeof schedule === 'function') schedule(decide, 0)
       else decide()

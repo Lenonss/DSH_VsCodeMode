@@ -132,8 +132,10 @@ export function detectGuards(ctx: Ctx): CompatAdapter[] {
   ]
 }
 
-/** 已实测覆盖的最高 DSH 版本（适配矩阵上界，超过则提示，见 buildReport）。 */
-const TESTED_DSH_MAX = '0.1.7-alpha.2'
+/** 已实测覆盖的最高 DSH 版本（适配矩阵上界，超过则提示，见 buildReport）。
+ * 0.1.7-rc.2 已在官方已签名打包 Desktop 上实机装配（认证路由、同源 RPC、项目 MCP
+ * 与私有打开队列均生效）；更高版本仍按能力探测运行并提示。 */
+const TESTED_DSH_MAX = '0.1.7-rc.2'
 
 /** Config volatile 标记起效的版本线（此前设置走 section 安装，与 volatile 无关）。 */
 const CONFIG_VOLATILE_MIN = '0.1.7-alpha.1'
@@ -210,7 +212,7 @@ export async function buildReport(
     guards,
     adapters,
     warnings,
-    devForm: readDevForm(),
+    devForm: readDevForm(ctx),
     dshVersion,
   }
 }

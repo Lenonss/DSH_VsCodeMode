@@ -44,8 +44,8 @@
   保存·全部关闭（`Ctrl+F4` 关当前）/ 复制路径·复制相对路径 / 在文件资源管理器
   （视图）中显示。关闭前未保存页签静默落盘；浏览器无法实现的条目（向右拆分 /
   新窗口）不提供。
-- **工作区搜索填充**：编辑器有选中时按 `Ctrl+Shift+F`，选中文本自动填入搜索框并
-  立即搜索（多行选区取首行；填入后全选，便于直接改写）。
+- **工作区搜索填充**：编辑器有选中时执行「工作区搜索」（当前键位见官方快捷键目录），
+  选中文本自动填入搜索框并立即搜索（多行选区取首行；填入后全选，便于直接改写）。
 - **Markdown 预览**（v0.5.3）：打开 `.md` / `.markdown` 后，工具栏「预览」按钮、
   `Ctrl+Shift+V` 或命令栏「切换 Markdown 预览」切入 GFM 渲染（标题/列表/表格/代码块/
   引用/KaTeX），「以源码打开」切回编辑。渲染走官方 `MarkdownText` 原语，零新增依赖、
@@ -166,8 +166,8 @@ cmaps 支持中文渲染）；工具条进入注释编辑：✎ 文本框 / 🖌
 ### 9. 文件管理侧边栏（类 VSCode 活动栏 + 面板）
 
 编辑器内嵌活动栏 + 可拖拽调宽面板区；首期「资源管理器」= 懒加载目录树
-（展开实时读取、点文件打开、差异角标、活动文件高亮、`edrv:refresh` / 手动 ⟳、
-`Ctrl+B` 显隐并持久化），侧栏形态默认收起以节省面板宽度。
+（展开实时读取、点文件打开、差异角标、活动文件高亮、`edrv:refresh` / 手动 ⟳，
+可通过命令栏切换显隐并持久化），侧栏形态默认收起以节省面板宽度。
 
 - 拖拽调宽下限 = 最小宽度（默认 300，设置 → VSCodeMode → 通用「编辑器」
   可调 180–560），拖拽低于最小宽度自动收起。
@@ -209,8 +209,19 @@ cmaps 支持中文渲染）；工具条进入注释编辑：✎ 文本框 / 🖌
 ### 11. MCP 可视化管理（设置 → VSCodeMode）
 
 子 Tab「我的 MCP」（profile 全局）+「项目 MCP」（各项目根 `.mcp.json`，
-对齐 Claude Code / Cursor，随仓库共享）：查看各项目连接状态 / 工具、添加
-（stdio / streamable-http）、刷新、启用 / 禁用、删除。工具全局生效。
+对齐 Claude Code / Cursor，随仓库共享）：支持 stdio / streamable-http 的新增、
+刷新、启停、删除和运行状态查看。
+
+- **项目作用域**（v0.13.0）：工具、资源与服务器指令均按 agent 所属工作区隔离；
+  跨工作区子会话不会因继承父 scope 而获得外项目 MCP。全局 MCP 保持全局可用。
+- **实例与状态**：每个活动 agent、每个启用项目服务各有一个插件实例；没有活动
+  agent 时只保存配置（`configured`、实例数 0）。`instanceCount` 是挂载实例数，
+  `unverified` 表示没有公开连接状态证据，不能把 fiber ACTIVE 当成已连接。
+  零工具可能是合法的纯资源服务器。
+- **配置保护**：reconcile 尊重 `disabled`；读取/解析错误保留最后有效连接，
+  不把不可读文件当成空配置。保存保留未知字段和未改动的脱敏凭据。
+
+完整配置、迁移与排错见随包 [MCP 技能](skills/dsh-vscodemode-mcp/SKILL.md)。
 
 ### 12. 插件自带技能组（v0.3.3）
 
@@ -274,85 +285,67 @@ DSH 启动回放 `~/.dsh/sessions` 全部会话（V8 展开约 10×，可能 OOM
   选择重新加载或用编辑器内容覆盖；冲突未处理期间自动保存被抑制。
 - 老 host（无该 RPC）自动降级为无同步、无护栏，不报错。
 
-### 15. 系统集成（v0.1.53）
+### 15. 系统集成（v0.1.53；v0.13.0 更新打开链路）
 
-设置 → VSCodeMode → 通用 →「系统集成」卡片，两项能力：
+设置 → VSCodeMode → 通用 →「系统集成」卡片提供文件管理器右键菜单与 Unity
+外部脚本编辑器。两者现在共用按 profile 隔离的本机私有 OPEN 请求/ACK 通道，
+无需向 launcher 或 Unity 提供 Host Cookie，也不依赖固定 HTTP 端口。
 
-**① 文件管理器右键菜单**——一键把「在 DSH 文件编辑中打开」注册进系统：
-Windows 资源管理器三类入口 / Linux Nautilus + Dolphin / macOS Automator 配方；
-插件卸载自动清理、更新自动恢复；点击经 launcher 打开默认浏览器深链，编辑器
-直接打开所选文件；DSH 未运行时弹提示。
+**① 文件管理器右键菜单**
 
-**② Unity 外部脚本编辑器**——内置 UPM 包 `com.dsh.editor`（参照
-com.unity.ide.traeCN 机制实现 `IExternalEditor` 虚拟安装，无需本地 exe），
-设置页一键安装 / 更新为 Unity 内嵌包（复制到 `<项目>/Packages/com.dsh.editor`，
-自动发现、不改 manifest.json）；Unity Preferences → External Tools 选
-「DSH 文件编辑」后，双击脚本 / Console 报错跳转即在浏览器打开对应文件与行列。
+- Windows 提供文件、目录、目录空白处三类入口；Linux 提供 Nautilus 脚本与
+  Dolphin 服务菜单；macOS 提供 Finder Automator 快速操作配方。
+- **注册和移除必须由用户在设置页显式操作**。插件 reload/更新只升级已注册的
+  launcher 文件及配置，保留所选 profile；不会自动重注册或撤销系统菜单。
+  卸载插件前如需清理菜单，请先点「移除注册」。
+- Windows 优先使用编译后的 C# launcher，缺少编译器时回退 PowerShell；
+  POSIX 使用 Bash launcher。三个入口统一调用随包 `dsh-open.mjs` producer，
+  从配置读取所选 profile、私有收件箱和运行程序。
+- 已打开的客户端可以领取请求并就地打开。需要唤起时，Desktop 使用官方
+  `dsh://open` 入口，Web 使用用户选定的完整应用地址（含实际端口和部署子路径）。
+  **唤起窗口或领取请求本身不代表打开成功**。
 
-**深链契约**（launcher / Unity 包 / client 三端共用）：
+**打开与回执规则**
 
-```
-http://127.0.0.1:3080/?edrvOpen=1&edrvPaths=<enc1>[,<enc2>…][&edrvLine=N][&edrvColumn=M]
-```
-
-每段路径独立 `encodeURIComponent`、逗号连接；client 解析后按下方「打开规则」
-路由，处理完剥离参数防刷新重开，跨源 referrer 守卫防外部网页诱导。
-
-**打开规则（智能路由）**——按首路径类型分派（其余路径：文件进编辑器、
-文件夹补引用）：
-
-| 首路径 | 行为 |
+| 阶段 | 行为 |
 |---|---|
-| 文件夹，在已注册工作区内 | 弹窗二选一：**使用最近的工作区**（跳转 + 新增对话 + 文件夹引用 + 编辑页）/ **新建工作区**；取消则中止 |
-| 文件夹，不在任何工作区 | 不弹窗，以该文件夹为根注册新工作区 + 新增对话 + 引用 + 编辑页 |
-| 文件，在已注册工作区内 | 有会话 → 打开最近对话 + 编辑器展开（行列透传）；无会话 → 新建对话 + 文件引用 + 展开 |
-| 文件，不在任何工作区 | 打开最近一次对话 + 编辑器展开 |
-| 文件，无任何工作区 / 对话 | 以文件父目录注册工作区 + 新建对话 + 引用 + 编辑器打开 |
+| 投递 | producer 将带请求 id、目标 profile、路径和可选行列的 OPEN 请求写入当前用户私有队列 |
+| 领取 | 客户端领取带 lease 的请求，按工作区/会话路由到文件编辑器 |
+| 确认 | 只有目标路径对应的实际 Monaco model 或预览内容成功就绪，才提交匹配请求与 lease 的成功 ACK |
+| 失败/超时 | 返回失败或未确认；不会把一个已展开的空页签视为成功 |
 
-**页面复用**：launcher 先向 host 投递待打开请求（`edrv.external.handoff`）——
-已打开的 DSH 页面（3s 移交轮询）就地执行打开规则，**不重复开新页**；2s 未领取
-（页面刚关 / 后台节流）或无活跃页面时回退打开新页（URL 深链）。时序：等待会话 /
-工作区列表就绪（≤15s）；`sessions.create / workspaces.create` 为 DSH 官方服务
-方法；引用插入轮询输入门面就绪（忙态自动降级纯文本）。
+请求按 profile 与请求身份匹配，队列内容受类型、大小、时效和本机权限检查约束；
+producer 只承担「打开」请求，不是通用 RPC 代理。旧 `edrvOpen/edrvPaths` URL
+参数仍作为兼容入口保留，已不是 launcher 和 Unity 的当前主链。
 
-**各平台注册细节**：
+文件与目录仍按现有工作区路由：工作区内文件进入相应会话；无会话时可创建会话；
+目录根据是否位于已注册工作区内选择复用或新建。选择取消会结束该请求。行列定位
+与真正加载的目标文件绑定，避免切换文件时把其他 model 的内容当成完成证据。
 
-- **Windows**：`assets/shell/dsh-open.cs` 复制到 `~/.dsh/dsh-vscode-mode/shell/`
-  并用 .NET Framework 4.x `csc.exe` 编译为 `dsh-open.exe`（WinExe 无闪窗；
-  csc 缺失自动降级 `dsh-open.ps1`）；写三类 HKCU 键
-  `HKCU\Software\Classes\{\*,Directory,Directory\Background}\shell\DSHEditor`
-  （显示名 + Icon `dsh-whale.ico` + command，首次注册前 `reg export` 备份）。
-  全部 reg/csc 调用走 host `subprocess.spawn` argv 数组（stdio `inherit`，
-  受管环境禁管道），无 shell 插值。
-- **Linux**（纯文件写入，无需管理员）：Nautilus 右键脚本（`NAUTILUS_SCRIPT_SELECTED_FILE_PATHS`
-  多选）+ KDE Dolphin 服务菜单（`%F` 多选，兼容旧 `kservices5/ServiceMenus/`）。
-- **macOS**：Finder 菜单不做自动生成——设置页「复制 Automator 配方」按步骤创建
-  快速操作（约 1 分钟，脚本指向 `shell/dsh-open.sh`），创建后面板自动检测显示 ✓；
-  「移除注册」仅删除引用本插件 launcher 的 workflow。
-- **行为**：launcher 读同目录 `dsh-open.ini`（`base=` 深链基址，注册时按设置写入）
-  → 探测端口（Windows TcpClient / POSIX curl，1s）→ 未运行弹提示（MessageBox /
-  osascript / notify-send / zenity）→ 路径编码合并为一个 URL 交给默认浏览器
-  （POSIX 侧 `LC_ALL=C` 逐字节 percent-encode，中文 / 空格 / 任意字符安全）；
-  改「DSH 服务地址」后点「注册」刷新 ini。
-- **生命周期**：注册成功写 marker（`shell/registered.json`）→ 插件卸载 / reload
-  自动清理注册痕迹，重启 / 更新后自动恢复（开发态反复 reload 不丢注册）；点
-  「移除注册」删除 marker，此后不再自动恢复；强杀进程跳过清理时残留键由下一次
-  启动的幂等重写与「移除注册」兜底。
-- RPC：`edrv.integration.status / register / unregister`。
+**② Unity 外部脚本编辑器（内嵌包 `com.dsh.editor` 0.3.0）**
 
-**Unity 包细节**：包源随插件分发于 `unity/com.dsh.editor/`（`package.json` +
-`Editor/DshCodeEditor.cs` + asmdef，`"unity": "2019.4"` 基线；虚拟安装
-`dsh-editor://vscode-mode`，`OpenProject` → `Application.OpenURL(深链)`，不生成
-csproj）；**打开过滤**：仅文本 / 代码类扩展名（白名单 + `EditorSettings.projectGenerationUserExtensions`
-用户自定义扩展）交 DSH 打开，其余返回 `false` 交还 Unity 原生（双击预制体进
-预制体模式、双击场景开场景），对齐官方 `DefaultExternalCodeEditor` 行为；
-安装 / 更新 = 整目录复制 / 替换为 `<项目>/Packages/com.dsh.editor`（目标已存在
-且 name 不是 `com.dsh.editor` 时拒绝覆盖），Unity 已打开时切回窗口自动刷新；
-卸载 = 删除该目录；手动兜底：Package Manager → Add package from disk 选
-`unity/com.dsh.editor`；登记清单存 `~/.dsh/dsh-vscode-mode/unity-projects.json`；
-RPC：`edrv.unity.list / add / remove / install`。
-安全说明：深链可在编辑器中查看任意绝对路径文件（与用户手动打开等价）；保存仍
-受会话沙箱 `policyOf` 约束，工作区外保存被拒是预期行为。
+1. 在设置卡片中选择 Unity 项目，执行安装/更新，将随包 UPM 目录复制到
+   `<项目>/Packages/com.dsh.editor`；无需修改项目 manifest。
+2. 首次安装会自动准备当前 profile 的独立 bridge，并写入本机项目提示
+   `<项目>/UserSettings/dsh-editor.ini`；**无需先注册系统右键菜单**。
+3. 在 Unity Preferences → External Tools 选择「DSH 文件编辑」。双击文本脚本、
+   Console 报错行列或使用打开项目入口，会通过统一 producer 等待 ACK。
+4. Unity 的「DSH 桥接配置」可填写绝对路径覆盖自动选择。优先级为：UI 显式覆盖 →
+   项目 UserSettings 提示 → 提示缺失时的旧 shell 配置回退；损坏提示会报错，
+   不会静默切换到另一个 profile。
+
+UserSettings 提示包含本机 profile 路径，不适合作为团队共享配置。换机器或切换
+profile 后应重新安装/更新桥接，或在 Unity UI 中显式指定对应 bridge 配置。
+
+Unity 包保留文本/代码扩展名白名单与用户自定义扩展；Prefab、场景等资产仍交还
+Unity 原生处理，不生成 csproj。Unity API 与 EditorPrefs 在主线程使用；后台任务
+负责 producer 与 IO。安装目标已有同名目录但不是本包时拒绝覆盖，卸载仅删除该包目录。
+
+- 管理 RPC：`edrv.integration.status/register/unregister`、`edrv.unity.list/add/remove/install`。
+- 保存文件仍遵循当前会话沙箱策略；外部打开成功不扩大文件写入权限。
+- 当前验证边界：Windows 官方 Desktop 已完成隔离启动与侧栏挂载等检查；Unity
+  仅有 C# 编译桩与 9 项 hint 探针，尚未执行真实 Unity EditMode。Linux/macOS
+  尚无本轮现场验证。具体完成项与待验收项见 [0.13 发布说明](docs/release-0.13.0.md)。
 
 ### 16. SVN 集成（v0.5.0）
 
@@ -432,17 +425,19 @@ TortoiseSVN（`TortoiseProc.exe`）仅作 Windows 过渡增强：自研能力覆
 
 ## 安装
 
-官方 `dsh plugin` 方式，三选一：
+官方 `dsh plugin` 方式，三选一。下面以 `web` profile 为例；Desktop 或其他命名
+profile 请替换为实际目标，不要把示例目录当成当前运行 profile。升级前可阅读
+[0.13.0 发布与迁移说明](docs/release-0.13.0.md)。
 
 ```bash
 # ① Git 安装（clone + prepare 构建；推荐打固定 tag）
-dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.12.0
+dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.13.0
 
 # ② npm 注册表（发布到 npm 后）
 dsh plugin --profile web add dsh-vscode-mode
 
 # ③ GitHub Release tgz 直装
-dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.12.0/dsh-vscode-mode-0.12.0.tgz
+dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.13.0/dsh-vscode-mode-0.13.0.tgz
 ```
 
 > `dsh plugin ...` 是 pnpm 转发器：git 安装会克隆仓库、执行该包 `prepare` 脚本
@@ -479,8 +474,8 @@ bundles 层后重启 DSH 即自动把插件行挂进 loader 树。**不要**再�
 
 - **文件树**：资源管理器面板点击打开；**文件链接**（DSH 0.1.5+）：聊天 / 文件树
   里的文件链接直达右侧栏编辑器（含行号定位）。
-- **快速打开**：`Ctrl+P`（QuickOpen）——`↑↓` 选择、`Enter` 打开高亮项、
-  `Esc` 关闭，鼠标悬停与高亮同步。
+- **快速打开**：执行插件 QuickOpen 命令（键位见「设置 → 快捷键」）——`↑↓` 选择、
+  `Enter` 打开高亮项、`Esc` 关闭，鼠标悬停与高亮同步；`Ctrl+P` 由官方文件切换使用。
 - **差异入口**：对话输入框上方 dock 的「差异 N 个文件 · 查看下一个」按钮。
 
 ### 快捷键速查
@@ -498,7 +493,7 @@ bundles 层后重启 DSH 即自动把插件行挂进 loader 树。**不要**再�
 | `F12` / `Shift+F12` | 转到定义 / 查找所有引用 |
 | `Ctrl+点击` / `Ctrl+hover` | 引用导航 / 可导航标识符提示 |
 | 自定义键位 | 切换文件管理侧边栏（`Ctrl+B` 与 DSH 自身侧栏命令冲突，插件默认不绑定） |
-| `Ctrl+Shift+F` | 工作区搜索（有选中则把选中文本填入搜索框） |
+| 以当前官方目录为准（Web 采用平台允许的组合） | 工作区搜索（有选中则填入搜索框）；不保证所有平台都使用 `Ctrl+Shift+F` |
 | `Ctrl+Shift+V` | 切换 Markdown 预览（仅活动文件为 .md 时生效） |
 | `Ctrl+F4` | 关闭当前页签 |
 | `Alt+←` / `Alt+→` | 后退 / 前进（跨文件恢复焦点位置） |
@@ -536,6 +531,12 @@ shortcuts 服务持久化（Desktop：`userData/keybindings.json`；Web：
 `localStorage` 的 `dsh.keybindings.v1`）。旧版插件 `keybindings` 配置的单候选自定义值
 按当前平台一次性尝试迁入官方存储；旧配置始终保留供其他平台及人工恢复，
 多候选、冲突、不支持或未绑定的旧值不会被部分迁入或删除。
+
+v0.13.0 在 0.12 官方接管的基础上修正真实 `normalized` 绑定与物理 Control/Meta
+的转换；录制先进入官方 recording 状态，并在确认、取消、失败、失焦及卸载等退出
+路径收尾，避免原生快捷键拦截长期停用。首次打开命令面板/QuickOpen 等入口按当前
+会话 scope 路由，不要求编辑器先挂载。Web 工作区搜索使用官方当前平台允许的
+三修饰符组合，最终显示与冲突判断以官方目录为准。
 
 设置 →「VSCodeMode」页：
 
@@ -575,21 +576,27 @@ npm pack              # 产物 tgz（含 lib/assets/src/cordis.patch.yml）
 
 ### 开发形态（devForm）
 
-开发 = profile 中以 `link:` 依赖 + junction 指向工作区的安装。设置 → 通用在开发
-形态开启时显示「关闭开发形态」开关（切回正式版安装，重启生效）；AI 后续开发时
-可经 RPC 自动开启 / 关闭：
+开发形态 = 当前运行 profile 以 `link:` 依赖和链接入口指向源码目录。设置 → 通用
+可查看和切换形态；切换成功后需要重启 DSH 才能加载新的 Host 代码。
 
-```bash
-# 读取当前形态（compat 报告亦含 devForm 字段）
-curl -s -X POST http://127.0.0.1:3080/edrv/rpc -H 'content-type: application/json' \
-  -d '{"method":"vscode.devFormGet","args":{}}'
-# 开启开发形态（link 到工作区；path 必填，重启后生效）
-curl -s -X POST http://127.0.0.1:3080/edrv/rpc -H 'content-type: application/json' \
-  -d '{"method":"vscode.devFormSet","args":{"enabled":true,"path":"D:/Work/ToolsDev/DeepSeekHarnessPlugin/packages/dsh-edit-review"}}'
-# 关闭开发形态（改回 ^<version> + 删 junction + pnpm install，重启后生效）
-curl -s -X POST http://127.0.0.1:3080/edrv/rpc -H 'content-type: application/json' \
-  -d '{"method":"vscode.devFormSet","args":{"enabled":false}}'
-```
+- **定位当前 profile**：优先使用官方 `profileContext.dir`；旧宿主仅在依赖本插件的
+  profile 候选唯一时回退。服务信息无效或候选有歧义时拒绝切换，不猜测 `web` 目录。
+- **失败恢复**：写入前备份 manifest、lockfile 和原安装入口；安装失败时恢复原内容
+  与链接身份。若恢复本身失败，会保留备份位置供处理，不能宣称已经恢复成功。
+- **开发目录校验**：要求绝对路径、正确包身份，且不位于被替换的 profile
+  `node_modules` 内；移除链接只处理链接本身，不递归删除源码。
+- **运行程序**：有官方 `profileContext.packageManager` 时使用它提供的程序、参数和
+  显式环境（含 Desktop 自带运行方式）；旧宿主再回退 PATH。
+
+程序化调用继续使用插件已有 RPC，但须经当前已鉴权应用的同源通道；未携带有效
+Host 身份的裸 HTTP/curl 请求不再是支持的接入方式。请求地址应保留应用子路径，
+Desktop 应沿用当前 `dsh-app:` 应用上下文，不拼接固定 `localhost` 端口。
+
+| 方法 | `args` | 行为 |
+|---|---|---|
+| `vscode.devFormGet` | `{}` | 读取当前形态，兼容性报告也包含 `devForm` |
+| `vscode.devFormSet` | `{ "enabled": true, "path": "<源码绝对路径>" }` | 开启开发形态；按返回的 `restart` 重启 |
+| `vscode.devFormSet` | `{ "enabled": false }` | 切回当前插件版本的正式依赖；按返回的 `restart` 重启 |
 
 ### 源码结构
 
@@ -637,8 +644,11 @@ pdf.js vendor + 图标 + launcher）、`skills/`（插件技能组）、`src/`�
 - **持久化**：工作区旁车 `.dsh-edit-review.json`（version 2，按 cwd 分桶，写前
   合并，v1 自动迁移）；归档 `.dsh-edit-review-archive.json`（按 path+batch
   合并批次，含每 hunk 决策与 before）。
-- **RPC**：静态包经 webServer 精确路由 `/edrv/rpc`，Client 同源 fetch，载荷形状
-  由 `shared/rpc` 类型化。
+- **RPC 与资源路由**：`/edrv` 接口先经官方 `connection.requestRejection(req)`
+  校验 Host 身份，认证能力缺失时拒绝请求。RPC 校验方法、JSON content-type、
+  envelope 和对象参数，同时检查 Content-Length 与实际读取字节上限；响应不缓存。
+  Client 按应用 document base 解析 RPC、资源与 vendor URL，保留反向代理子路径，
+  支持 HTTP(S) 和 Desktop 的 `dsh-app:` 来源。
 - **批次 / 融合 / 归档**：每次新 edit/write 递增文件 batch，早于最新批次的未归档
   差异自动"融合"归档；每条差异处理完成立即单条归档；DiffLauncher「归档」页按
   批次浏览 + 回滚。
@@ -659,8 +669,15 @@ pdf.js vendor + 图标 + launcher）、`skills/`（插件技能组）、`src/`�
   `client/` 加组件，其余模块零改动；`monaco/*` 是可复用的编辑器服务（资源树 /
   对比 / 诊断面板共用）；`edrvSidebarPanels` 注册表承载后续面板（搜索 / 差异 /
   时间线），`edrv.listDir` 为通用目录树 API。
-- ⚠️ **Host 改动需重启 DSH 应用**（Node ESM 模块缓存）；Client 经
-  `dsh-client-hmr` 热重载。
+- **Host 模块来源**：动态加载优先锚定运行中 DSH 的入口安装树；已解析模块的执行
+  错误不会被旧开发依赖副本掩盖。本轮官方 Host 审计与现场基线是 `0.1.7-rc.2`，
+  依赖声明、源码能力探测和现场验证是不同层次，详见 [版本适配矩阵](docs/version-adaptation.md)。
+- **子进程环境与回收**：LSP/DAP 等共用环境清理，按变量名排除父环境中的
+  KEY/PASSWORD/SECRET/TOKEN 与 `DSH_*` 隐式信息；用户显式配置的环境仍会传递。
+  Windows 使用进程树终止，POSIX 使用独立进程组；回收是 best effort，不能保证
+  清除主动脱离进程组或受系统权限限制的后代进程。
+- **代码更新生效**：Host 改动需要重启 DSH；Client 需要重建产物并刷新原应用页面。
+  只有对应开发构建 watcher 和 HMR 接收端同时工作时，才可依赖自动更新。
 
 ### CI（GitHub Actions）
 
@@ -746,6 +763,15 @@ Keep All / Undo All 却是亮的。修复：单文件 Keep / Undo 覆盖冲突�
 完整变更见 [GitHub Releases](https://github.com/Lenonss/DSH_VsCodeMode/releases)。
 近期关键版本：
 
+- **v0.13.0**：**Host 鉴权与 Desktop 适配、项目 MCP 三面隔离、外部打开回执**——
+  `/edrv` 路由接入官方认证与有界请求体读取，URL 保留应用子路径并支持 `dsh-app:`；
+  项目 MCP 改为每 agent 挂载，隔离工具/资源/指令，新增配置态、未验证状态与实例数；
+  开发形态切换使用实际 `profileContext` 并支持失败恢复；子进程环境清理与进程树
+  回收收敛；在 **0.12 已有官方快捷键接管**上修复 normalized 绑定、录制收尾及
+  按会话 scope 首开。C#/PowerShell/Bash launcher 与 Unity 0.3.0 共用私有
+  OPEN/lease ACK 链路，真正加载目标 model/预览后才确认；Unity 首装自动配置
+  profile bridge，无需注册 OS 菜单。迁移、部署、回滚和验证边界见
+  [0.13.0 发布说明](docs/release-0.13.0.md)。
 - **v0.12.0**：**用户规则双目录兼容 + 官方快捷键接管**——用户规则同时读取
   `DSH_HOME/rules/` 和 `~/.dsh/rules/`，同名以当前目录为准，旧规则原地管理，
   列表与提示词注入采用同一优先级；快捷键迁移到 DSH 官方 shortcuts 目录及独立设置页，

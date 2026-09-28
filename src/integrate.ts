@@ -4,17 +4,19 @@
  *   ~/.dsh/dsh-vscode-mode/shell/，HKCU\Software\Classes 三类菜单键（`*`/Directory/Directory\Background）。
  * - Linux：dsh-open.sh + GNOME Files（Nautilus）右键脚本 + KDE Dolphin 服务菜单（纯文件写入）。
  * - macOS：dsh-open.sh（Finder 快速操作由用户按配方手动创建，自动检测/移除）。
- * 生命周期：注册成功写 marker（shell/registered.json）→ 插件卸载/reload 清理注册痕迹，
- * 启动时 marker 存在则自动恢复（更新插件不丢注册）；用户显式「移除注册」删 marker 永不自动恢复。
+ * 生命周期：注册成功写 marker；启动按 marker 升级 launcher 文件，不反复重写系统注册。
+ * 用户显式「移除注册」删 marker，后续启动不会恢复。
  * 所有 reg/csc 调用经 subprocess 服务 argv 数组（卸载清理用 child_process 直调，teardown 可靠）。
  * 纯函数（键路径/命令行/ini/脚本内容）可单测。
  * 作者 ddj 2026-09-07
  */
-import { spawn } from 'node:child_process'
+import { childEnv } from './childEnv.js'
 import { chmod, copyFile, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { assetsDirOf, dshHome, PLUGIN_ID } from './paths.js'
+import { findProfileDir } from './devForm.js'
+import { openIni, writeOpenConfig } from './openBridge.js'
 import { INTEGRATION_BASE_DEFAULT, SHELL_MENU_LEAF } from './shared/integration.js'
 import { unitySourceDir } from './unityBridge.js'
 import type { ShellIntegrationStatus, ShellLauncherState, ShellMenuEntry } from './shared/integration.js'
@@ -53,7 +55,7 @@ export const WHALE_ICO = 'dsh-whale.ico'
 interface RunOutcome { code: number | null; output: string }
 
 /** 注册 marker 内容。 */
-interface RegistrationMarker { baseUrl: string; at: string }
+interface RegistrationMarker { baseUrl: string; at: string; transport?: number; profile?: string }
 
 /**
  * reg.exe 路径（SystemRoot 派生；env 可注入便于测试）。
@@ -172,8 +174,8 @@ export function ps1CommandValue(ps1Path: string, token: string = FILE_TOKEN, pow
  * @param baseUrl 深链基址
  * @returns ini 文件全文
  */
-export function iniContent(baseUrl: string): string {
-  return '[dsh]\nbase=' + (baseUrl.trim() || INTEGRATION_BASE_DEFAULT) + '\n'
+export function iniContent(baseUrl: string, metadata: Record<string, string> = {}): string {
+  return openIni(baseUrl, metadata)
 }
 
 /**
@@ -186,7 +188,7 @@ export function nautilusScript(launcherPath: string): string {
   return [
     '#!/usr/bin/env bash',
     '# 由 dsh-vscode-mode 生成：GNOME Files（Nautilus）右键脚本 → DSH 文件编辑',
-    'launcher="$HOME/.dsh/dsh-vscode-mode/shell/' + LAUNCHER_SH + '"',
+    'launcher=' + "'" + launcherPath.replace(/'/g, "'\"'\"'") + "'",
     'args=()',
     'while IFS= read -r line; do',
     '  [ -n "$line" ] && args+=("$line")',
@@ -251,6 +253,7 @@ async function runArgv(ctx: Ctx, argv: string[], cwd = dshHome()): Promise<RunOu
     handle = sub.spawn({
       argv,
       cwd,
+      env: childEnv(),
       stdio: { stdout: 'inherit', stderr: 'inherit', stdin: 'ignore' },
       graceMs: 10000,
     })
@@ -292,17 +295,17 @@ async function keyExists(ctx: Ctx, key: string): Promise<boolean> {
 /** 读注册 marker（缺失/非法 → null）。 */
 async function readMarker(home = dshHome()): Promise<RegistrationMarker | null> {
   try {
-    const data = JSON.parse(await readFile(markerFile(home), 'utf8')) as { baseUrl?: unknown; at?: unknown }
+    const data = JSON.parse(await readFile(markerFile(home), 'utf8')) as { baseUrl?: unknown; at?: unknown; transport?: unknown; profile?: unknown }
     if (typeof data?.baseUrl !== 'string' || !data.baseUrl) return null
-    return { baseUrl: data.baseUrl, at: typeof data.at === 'string' ? data.at : '' }
+    return { baseUrl: data.baseUrl, at: typeof data.at === 'string' ? data.at : '', transport: typeof data.transport === 'number' ? data.transport : undefined, profile: typeof data.profile === 'string' ? data.profile : undefined }
   } catch {
     return null
   }
 }
 
 /** 写注册 marker（父目录已存在）。 */
-async function saveMarker(baseUrl: string, home = dshHome()): Promise<void> {
-  const data: RegistrationMarker = { baseUrl, at: new Date().toISOString() }
+async function saveMarker(baseUrl: string, home = dshHome(), profile?: string): Promise<void> {
+  const data: RegistrationMarker = { baseUrl, at: new Date().toISOString(), transport: 1, profile }
   await writeFile(markerFile(home), JSON.stringify(data, null, 2) + '\n', 'utf8')
 }
 
@@ -310,8 +313,8 @@ async function saveMarker(baseUrl: string, home = dshHome()): Promise<void> {
 async function installPosix(dir: string, baseUrl: string): Promise<void> {
   await copyFile(join(assetsDirOf(import.meta.url), 'shell', LAUNCHER_SH), join(dir, LAUNCHER_SH))
   await chmod(join(dir, LAUNCHER_SH), 0o755)
-  await writeFile(join(dir, INI_NAME), iniContent(baseUrl), 'utf8')
 }
+
 
 /** 写 Nautilus 右键脚本（父目录按需创建 + 执行位）。 */
 async function writeNautilus(home: string, launcherPath: string): Promise<void> {
@@ -346,19 +349,6 @@ async function dropFinderMenu(home: string): Promise<void> {
   }
   if (!text.includes('dsh-open')) return
   await rm(dir, { recursive: true, force: true })
-}
-
-/** 卸载清理专用：直调 reg delete（subprocess 服务在 teardown 可能已卸载）。⚠️ stdio 'ignore'：受管环境禁管道。 */
-function regDeleteDirect(key: string): Promise<void> {
-  return new Promise((resolve) => {
-    try {
-      const child = spawn(regExe(), ['delete', key, '/f'], { windowsHide: true, timeout: 5000, stdio: 'ignore' })
-      child.once('close', () => resolve())
-      child.once('error', () => resolve())
-    } catch {
-      resolve()
-    }
-  })
 }
 
 /**
@@ -412,7 +402,6 @@ export async function shellMenuRegister(ctx: Ctx, baseUrl: string): Promise<Shel
   const dir = shellInstallDir()
   await mkdir(dir, { recursive: true })
   if (process.platform === 'win32') {
-    await writeFile(join(dir, INI_NAME), iniContent(baseUrl), 'utf8')
     await installIcon(dir)
     const compiled = await installLauncher(ctx, dir, true)
     if (!(await readMarker())) await backupKeys(ctx, dir)
@@ -426,7 +415,8 @@ export async function shellMenuRegister(ctx: Ctx, baseUrl: string): Promise<Shel
     // macOS 菜单由用户按 Automator 配方手动创建（UI 提供一键复制）；这里仅安装 launcher
     await installPosix(dir, baseUrl)
   }
-  await saveMarker(baseUrl)
+  await writeOpenConfig(ctx, dir, baseUrl)
+  await saveMarker(baseUrl, dshHome(), findProfileDir(ctx))
   return shellMenuStatus(ctx, baseUrl)
 }
 
@@ -454,38 +444,40 @@ export async function shellMenuRemove(ctx: Ctx, baseUrl: string): Promise<ShellI
 
 /**
  * 系统集成生命周期（index.ts 经 ctx.effect 挂载）：
- * 启动时 marker 存在 → 幂等自动恢复注册（插件更新/reload 不丢注册）；
- * 返回的 disposer 在插件卸载/reload 时清理注册痕迹（marker 保留供下次恢复）。
+ * 启动时仅升级用户已注册的 launcher 文件与配置；保留系统注册和明确选中的 profile。
+ * 卸载时取消后续迁移步骤；移除系统注册只由用户显式操作触发。
  * @author ddj 2026年09月07号
  * @param ctx DSH 上下文
  * @returns 卸载清理 disposer
  */
 export function shellMenuLifecycle(ctx: Ctx): () => void {
-  void restoreOnLoad(ctx).catch(() => {})
-  return () => {
-    void cleanupOnUnload().catch(() => {})
-  }
+  let disposed = false
+  void restoreOnLoad(ctx, () => disposed).catch((error) => console.warn('[dsh-vscode-mode] launcher migration failed:', error))
+  return () => { disposed = true }
 }
 
-/** 启动自动恢复：marker 存在才执行（幂等；exe 已存在跳过编译）。 */
-async function restoreOnLoad(ctx: Ctx): Promise<void> {
+/** @private @author ddj 2026年09月28号
+ * Upgrade installed assets only; OS registration remains user-owned across reloads.
+ * @param ctx Host profile context.
+ * @param disposed Whether lifecycle disposal has started.
+ */
+async function restoreOnLoad(ctx: Ctx, disposed: () => boolean): Promise<void> {
   const marker = await readMarker()
-  if (!marker) return
-  await shellMenuRegister(ctx, marker.baseUrl)
-}
-
-/** 卸载清理：marker 存在 → 按平台移除注册痕迹（launcher 文件与 marker 保留）。 */
-async function cleanupOnUnload(): Promise<void> {
-  const marker = await readMarker()
-  if (!marker) return
-  if (process.platform === 'win32') {
-    const paths = menuKeyPaths()
-    for (const key of [paths.files, paths.dir, paths.background]) await regDeleteDirect(key)
-  } else if (process.platform === 'linux') {
-    await removePosixFiles(homedir())
-  } else if (process.platform === 'darwin') {
-    await dropFinderMenu(homedir())
+  if (!marker || disposed()) return
+  const profile = findProfileDir(ctx)
+  if (!profile || (marker.profile && marker.profile !== profile)) return
+  const dir = shellInstallDir()
+  const baseUrl = await storedOpenBase(dir, marker.baseUrl)
+  if (marker.transport !== 1) {
+    if (process.platform === 'win32') {
+      const hadExe = await fileExists(join(dir, LAUNCHER_EXE))
+      const compiled = await installLauncher(ctx, dir, true)
+      if (hadExe && !compiled) throw new Error('旧 launcher 编译升级失败，请在设置中重新注册')
+    } else await installPosix(dir, baseUrl)
   }
+  if (disposed()) return
+  await writeOpenConfig(ctx, dir, baseUrl)
+  if (!disposed()) await saveMarker(baseUrl, dshHome(), profile)
 }
 
 /**
@@ -500,6 +492,7 @@ async function installLauncher(ctx: Ctx, dir: string, force: boolean): Promise<b
   const exe = join(dir, LAUNCHER_EXE)
   if (!force && await fileExists(exe)) return true
   const shellAssets = join(assetsDirOf(import.meta.url), 'shell')
+  await copyFile(join(shellAssets, LAUNCHER_PS1), join(dir, LAUNCHER_PS1))
   for (const candidate of cscCandidates()) {
     if (!(await fileExists(candidate))) continue
     try {
@@ -573,4 +566,17 @@ async function addMenuKey(ctx: Ctx, key: string, iconPath: string, command: stri
   await runArgv(ctx, [reg, 'add', key, '/ve', '/t', 'REG_SZ', '/d', MENU_LABEL, '/f'])
   await runArgv(ctx, [reg, 'add', key, '/v', REG_VALUE_NAME_ICON, '/t', 'REG_SZ', '/d', iconPath, '/f'])
   await runArgv(ctx, [reg, 'add', key + '\\command', '/ve', '/t', 'REG_SZ', '/d', command, '/f'])
+}
+
+/** @private @author ddj 2026年09月28号
+ * Preserve a manually configured public URL during launcher migration.
+ * @param dir Launcher directory.
+ * @param fallback Registered legacy address.
+ * @returns Existing base value, or the marker's address.
+ */
+async function storedOpenBase(dir: string, fallback: string): Promise<string> {
+  try {
+    const text = await readFile(join(dir, INI_NAME), 'utf8')
+    return /^base\s*=\s*(.+)$/im.exec(text)?.[1]?.trim() || fallback
+  } catch { return fallback }
 }

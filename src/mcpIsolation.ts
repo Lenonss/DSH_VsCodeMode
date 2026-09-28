@@ -1,155 +1,264 @@
-/**
- * dsh-vscode-mode host — 项目 MCP 的 agent 级隔离。
- * 项目 MCP 连接仍由 Host 维护，但每个 agent 只继承当前 workspace 的项目工具；
- * tools.restrict() 负责模型可见性，tools.guard() 负责执行层兜底拒绝。
- * 作者 ddj 2026年08月22号
- */
+/** Project MCP visibility, instruction shadows, and execution guards. @author ddj 2026年09月28号 */
+import { posix, win32 } from 'node:path'
 import { LEGACY_PROJECT_PREFIX, entryHash, isProjectEntryId } from './compat.js'
 import { entriesOf } from './mcp.js'
 import { hashWorkspace } from './mcpProject.js'
+import { runtimeOf } from './mcpRuntime.js'
 import type { Ctx } from './store.js'
-import { log } from './log.js'
 
 const UNKNOWN_PROJECT = '__unknown_project__'
-
+const RESOURCE_TOOLS = new Set(['list_mcp_resources', 'list_mcp_resource_templates', 'read_mcp_resource'])
 type ToolProjects = Map<string, string>
-type AgentState = { dispose?: () => void; denyKey: string }
+type AgentState = { dispose?: () => void; denyKey: string; shadows: Map<string, () => void> }
 
-/** 统一 workspace 路径，供 cwd 父路径匹配。 */
+/**
+ * Normalize path separators and Windows case while retaining POSIX case sensitivity.
+ * @public @author ddj 2026年09月28号
+ * @param path Workspace or agent cwd.
+ * @returns Comparable path with a stable root representation.
+ */
 export function normalizePath(path: string): string {
-  const value = String(path ?? '').replace(/\\/g, '/').replace(/\/+/g, '/')
-  return value.replace(/\/$/, '').toLowerCase()
+  const raw = String(path ?? '').replace(/\\/g, '/')
+  const windows = /^[a-z]:/i.test(raw) || raw.startsWith('//')
+  const normalized = (windows ? win32.normalize(raw) : posix.normalize(raw)).replace(/\\/g, '/')
+  const value = normalized.replace(/\/+$/, '') || '/'
+  return windows ? value.toLowerCase() : value
 }
 
-/** 在已注册 workspace 中匹配 cwd，优先最长父路径。 */
+/**
+ * Match the most specific registered parent workspace.
+ * @public @author ddj 2026年09月28号
+ * @param cwd Agent working directory.
+ * @param paths Registered workspace paths.
+ * @returns Matching original path, or undefined.
+ */
 export function matchWorkspace(cwd: string | undefined, paths: string[]): string | undefined {
   if (!cwd) return undefined
   const target = normalizePath(cwd)
   const matches = paths.filter((path) => {
     const root = normalizePath(path)
-    return target === root || target.startsWith(root + '/')
+    return target === root || target.startsWith(root === '/' ? root : root + '/')
   })
   matches.sort((a, b) => normalizePath(b).length - normalizePath(a).length)
   return matches[0]
 }
 
-/** 根据 entry id 判断是否为新旧格式项目 MCP（兼容层统一判定）。 */
 export const isProjectEntry = isProjectEntryId
-
-/** 兼容：旧版前缀常量名（mcpIsolation 历史导出，语义不变）。 */
 export const LEGACY_PREFIX = LEGACY_PROJECT_PREFIX
 
-/** 返回一个 agent 不应继承的项目工具名。 */
+/**
+ * Select foreign project tool names.
+ * @public @author ddj 2026年09月28号
+ * @param toolProjects Tool ownership map.
+ * @param currentPath Matching workspace.
+ * @returns Sorted deny list.
+ */
 export function denyTools(toolProjects: ToolProjects, currentPath: string | undefined): string[] {
-  return [...toolProjects.entries()].filter(([, owner]) => owner !== currentPath).map(([name]) => name).sort()
+  return [...toolProjects].filter(([, owner]) => owner !== currentPath).map(([name]) => name).sort()
 }
 
-/** 从 loader entry 和工具注册表建立工具到项目路径的映射。 */
-function projectTools(ctx: Ctx): ToolProjects {
-  const result: ToolProjects = new Map()
-  const registry = ctx.get('workspaceRegistry')
-  const workspaces = registry?.list?.() ?? []
-  const byHash: Map<string, string> = new Map(workspaces.map((ws: { path: string }) => [hashWorkspace(ws.path), ws.path] as [string, string]))
-  const visible = ctx.get('tools')?.view?.(void 0)?.visible
-  if (!(visible instanceof Map)) return result
+/**
+ * Include historical global entries in ownership until migration has disposed them.
+ * @public @author ddj 2026年09月28号
+ * @param ctx Host services.
+ * @returns Server-to-workspace ownership map.
+ */
+export function serverOwners(ctx: Ctx): Map<string, string> {
+  const result = runtimeOf(ctx).owners()
+  const workspaces = ctx.get('workspaceRegistry')?.list?.() ?? []
+  const hashes = new Map(workspaces.map((ws: { path: string }) => [hashWorkspace(ws.path), ws.path]))
   for (const entry of entriesOf(ctx)) {
     const id = String(entry.id ?? entry.options?.id ?? '')
-    if (!isProjectEntry(id)) continue
-    const hash = entryHash(id)
-    const owner = hash ? byHash.get(hash) ?? UNKNOWN_PROJECT : UNKNOWN_PROJECT
-    const serverName = entry.options?.config?.serverName
-    if (typeof serverName !== 'string') continue
-    const prefix = `mcp__${serverName}__`
-    for (const name of visible.keys()) if (String(name).startsWith(prefix)) result.set(String(name), owner)
+    const name = entry.options?.config?.serverName
+    if (!isProjectEntry(id) || typeof name !== 'string') continue
+    result.set(name, String(hashes.get(entryHash(id)) ?? UNKNOWN_PROJECT))
   }
   return result
 }
 
-/** 取得 agent 当前 cwd 所属 workspace。 */
-function agentWorkspace(ctx: Ctx, agent: any): string | undefined {
-  const cwd = agent?.session?.header?.cwd
-  const paths = (ctx.get('workspaceRegistry')?.list?.() ?? []).map((ws: { path: string }) => ws.path)
-  return matchWorkspace(cwd, paths)
+/**
+ * Resolve managed server attribution for namespaced tools and shared resource calls.
+ * @public @author ddj 2026年09月28号
+ * @param exec Tool execution with arguments.server for shared resource tools.
+ * @returns Attributed server name, or undefined for unrelated tools.
+ */
+export function callServer(exec: any): string | undefined {
+  const name = String(exec?.name ?? '')
+  if (RESOURCE_TOOLS.has(name)) return typeof exec?.arguments?.server === 'string' ? exec.arguments.server : undefined
+  return /^mcp__(.+?)__/.exec(name)?.[1]
 }
 
-/** 同步一个 agent 的项目工具 deny 列表。 */
-function syncAgent(ctx: Ctx, state: AgentState, agent: any, tools: ToolProjects): void {
-  const current = agentWorkspace(ctx, agent)
-  const denied = denyTools(tools, current)
-  const nextKey = denied.join('\n')
-  if (state.denyKey === nextKey) return
+/**
+ * Check workspace ownership before any tool or resource network operation.
+ * @public @author ddj 2026年09月28号
+ * @param ctx Host services.
+ * @param exec Caller and tool arguments.
+ * @returns A denial message, or undefined for an allowed/global call.
+ */
+export function guardMcp(ctx: Ctx, exec: any): string | undefined {
+  const name = String(exec?.name ?? '')
+  if (!RESOURCE_TOOLS.has(name) && !name.startsWith('mcp__')) return undefined
+  const server = callServer(exec)
+  const owners = serverOwners(ctx)
+  const current = runtimeOf(ctx).workspace(exec.agent)
+  const owned = RESOURCE_TOOLS.has(name) ? [...owners].filter(([key]) => key === server)
+    : [...owners].filter(([key]) => name.startsWith('mcp__' + key + '__'))
+  if (!owned.some(([, owner]) => owner !== current)) return undefined
+  return current === undefined ? '项目 MCP 需要在已注册工作区的对话中使用' : '已拒绝：当前对话工作区不能使用其他项目的 MCP'
+}
+
+/**
+ * Restrict inherited names using the public restrictableNames set, even after already hidden.
+ * @private @author ddj 2026年09月28号
+ * @param ctx Host services.
+ * @param agent Target scope.
+ * @param state Owned restriction disposers.
+ * @param owners Server ownership.
+ * @sideEffects Replaces only this plugin's scoped restriction.
+ */
+function syncTools(ctx: Ctx, agent: any, state: AgentState, owners: Map<string, string>): void {
+  const tools = agent.ctx.get('tools')
+  const view = tools?.view?.(agent)
+  const names: Iterable<string> = view?.restrictableNames ?? view?.knownNames ?? view?.visible?.keys?.() ?? []
+  const current = runtimeOf(ctx).workspace(agent)
+  const denied = [...names].filter((name) => {
+    return [...owners].some(([server, owner]) => name.startsWith('mcp__' + server + '__') && owner !== current)
+  }).sort()
+  const key = denied.join('\n')
+  if (key === state.denyKey) return
+  state.denyKey = key
+  let dispose: (() => void) | undefined
+  try { dispose = denied.length > 0 ? tools.restrict({ deny: denied }) : undefined }
+  catch (error) { state.denyKey = ''; throw error }
   state.dispose?.()
-  state.dispose = undefined
-  if (denied.length > 0) {
-    try {
-      state.dispose = agent.ctx.tools.restrict({ deny: denied })
-    } catch (error) {
-      log.warn('MCP agent restriction failed: ' + String(error))
-      return
-    }
-  }
-  state.denyKey = nextKey
+  state.dispose = dispose
 }
 
-/** 为当前 Host 安装项目 MCP 的 agent restriction 与执行 guard。 */
+/**
+ * Filter the official assembled server list, retaining unmanaged and resource-only providers.
+ * @public @author ddj 2026年09月28号
+ * @param ctx Host services.
+ * @param agent Actual assembly scope, including a descendant of the listening scope.
+ * @param text Official mcp-resource-servers section text.
+ * @returns Scope-visible resource help; unfamiliar list formats fail closed for foreign projects.
+ */
+export function filterResources(ctx: Ctx, agent: any, text: string): string {
+  const current = runtimeOf(ctx).workspace(agent)
+  const owners = serverOwners(ctx)
+  const foreign = new Set([...owners].filter(([, owner]) => owner !== current).map(([name]) => name))
+  if (!foreign.size || !text) return text
+  const match = /(\[[^\n]*\])\.\s*$/.exec(text)
+  if (!match) return ''
+  let names: unknown
+  try { names = JSON.parse(match[1]) } catch { return '' }
+  if (!Array.isArray(names) || names.some((name) => typeof name !== 'string')) return ''
+  const visible = names.filter((name) => !foreign.has(name))
+  return visible.length ? text.slice(0, match.index) + JSON.stringify(visible) + '.' : ''
+}
+
+/**
+ * Apply scope-specific resource visibility to the public assembled prompt snapshot.
+ * @private @author ddj 2026年09月28号
+ * @param ctx Host services.
+ * @param assembly Downstream assembly result.
+ * @param agent Actual viewing scope.
+ * @returns Detached section list; all unrelated sections retain their original identity.
+ */
+function filterAssembly(ctx: Ctx, assembly: any, agent: any): any {
+  const sections = assembly.sections.map((section: any) => section.name === 'mcp-resource-servers'
+    ? { ...section, text: filterResources(ctx, agent, section.text) } : section)
+  return { ...assembly, sections }
+}
+
+/**
+ * Shadow inherited foreign instructions without changing the scope's parent chain.
+ * @private @author ddj 2026年09月28号
+ * @param ctx Host services.
+ * @param agent Target scope.
+ * @param state Owned prompt registrations.
+ * @param owners Current project server ownership.
+ * @sideEffects Registers blank foreign instruction sections in the exact agent scope.
+ */
+function syncPrompts(ctx: Ctx, agent: any, state: AgentState, owners: Map<string, string>): void {
+  const prompt = agent.ctx.get('systemPrompt')
+  if (!prompt) return
+  const current = runtimeOf(ctx).workspace(agent)
+  const foreign = new Set([...owners].filter(([, path]) => path !== current).map(([name]) => name))
+  for (const [name, dispose] of state.shadows) {
+    if (foreign.has(name)) continue
+    dispose()
+    state.shadows.delete(name)
+  }
+  const order = prompt.getSectionOrder('MCP_SERVERS')
+  for (const name of foreign) {
+    if (state.shadows.has(name)) continue
+    state.shadows.set(name, prompt.section({ name: 'mcp:' + name, order, interpolate: false, text: '' }))
+  }
+}
+
+/**
+ * Dispose only isolation effects owned for one agent.
+ * @private @author ddj 2026年09月28号
+ * @param state Stored effect handles.
+ * @sideEffects Removes restrictions, blank instruction shadows, and resource help override.
+ */
+function clearState(state: AgentState): void {
+  state.dispose?.()
+  for (const dispose of state.shadows.values()) dispose()
+  state.shadows.clear()
+}
+
+/**
+ * Install synchronous creation isolation and guards before installing the MCP runtime.
+ * @public @author ddj 2026年09月28号
+ * @param ctx Host lifecycle context.
+ * @sideEffects Owns per-agent restrictions and prompt shadows plus a global execution guard.
+ */
 export function installIsolation(ctx: Ctx): void {
   const tools = ctx.get('tools')
   const agents = ctx.get('agents')
   if (!tools || !agents) return
   const states = new Map<any, AgentState>()
-  let toolProjects = projectTools(ctx)
-  let scheduled = false
   let syncing = false
-
+  const syncAgent = (agent: any) => {
+    const state = states.get(agent) ?? { denyKey: '', shadows: new Map() }
+    states.set(agent, state)
+    const owners = serverOwners(ctx)
+    syncTools(ctx, agent, state, owners)
+    syncPrompts(ctx, agent, state, owners)
+  }
   const syncAll = () => {
     if (syncing) return
     syncing = true
-    try {
-      toolProjects = projectTools(ctx)
-      for (const agent of agents.list?.() ?? []) {
-        const state = states.get(agent) ?? { denyKey: '' }
-        states.set(agent, state)
-        syncAgent(ctx, state, agent, toolProjects)
-      }
-    } finally {
-      syncing = false
-    }
+    try { for (const agent of agents.list?.() ?? []) syncAgent(agent) }
+    finally { syncing = false }
   }
-  const scheduleSync = () => {
-    if (scheduled) return
-    scheduled = true
-    queueMicrotask(() => {
-      scheduled = false
-      syncAll()
-    })
-  }
-  const onCreated = ctx.on('agent/created', ({ agent }: { agent: any }) => {
-    const state = { denyKey: '' }
-    states.set(agent, state)
-    syncAgent(ctx, state, agent, toolProjects)
-  })
-  const onDisposed = ctx.on('agent/disposed', ({ agent }: { agent: any }) => {
+  const onCreated = ({ agent }: { agent: any }) => { syncAgent(agent) }
+  const onDisposed = ({ agent }: { agent: any }) => {
     const state = states.get(agent)
-    state?.dispose?.()
+    if (state) clearState(state)
     states.delete(agent)
-  })
-  const onToolsChange = ctx.on('tools/change', scheduleSync)
-  const stopGuard = tools.guard((exec: any) => {
-    const owner = toolProjects.get(String(exec?.name ?? ''))
-    if (!owner) return undefined
-    const current = agentWorkspace(ctx, exec.agent)
-    if (owner === current) return undefined
-    return current === undefined
-      ? '项目 MCP 需要在已注册工作区的对话中使用'
-      : '已拒绝：当前对话工作区不能使用其他项目的 MCP'
-  })
-  syncAll()
-  ctx.effect(() => () => {
-    onCreated?.()
-    onDisposed?.()
-    onToolsChange?.()
-    stopGuard?.()
-    for (const state of states.values()) state.dispose?.()
+  }
+  const guard = (exec: any) => guardMcp(ctx, exec)
+  /**
+   * Filter the completed assembly using its actual viewing scope.
+   * @private @author ddj 2026年09月28号
+   * @param assembly Initial prompt snapshot.
+   * @param context Assembly scope.
+   * @param next Downstream assembly continuation.
+   * @returns Completed prompt with foreign project resource names removed.
+   */
+  const filterPrompt = async (assembly: any, context: any, next: () => Promise<any>) => {
+    return filterAssembly(ctx, await next(), context.scope)
+  }
+  const disposers = [ctx.on('agent/created', onCreated), ctx.on('agent/disposed', onDisposed),
+    ctx.on('tools/change', syncAll), ctx.on('vscode-mode/mcp-change', syncAll),
+    ctx.on('system-prompt/assemble', filterPrompt), tools.guard(guard)]
+  const cleanup = () => {
+    for (const dispose of disposers) dispose?.()
+    for (const state of states.values()) clearState(state)
     states.clear()
-  }, 'vscode-mode:mcp-isolation')
+  }
+  ctx.effect(() => cleanup, 'vscode-mode:mcp-isolation')
+  syncAll()
 }

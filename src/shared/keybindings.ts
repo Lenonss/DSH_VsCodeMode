@@ -165,8 +165,9 @@ export function chordToBinding(chord: string): OfficialBinding | null {
 }
 
 /**
- * 官方绑定 → 插件显示键位弦（primary 显示为 Ctrl，与历史 tooltip 文案保持一致）。
- * @author ddj 2026年10月
+ * 官方绑定 → 可读键位弦，保留规范化后的 Control/Meta 物理区别。
+ * 官方目录展示优先使用官方 keys；此函数仅作为缺少展示字段时的回落。
+ * @author ddj 2026年09月28号
  * @param binding 官方绑定
  * @returns 插件弦（不可表示 → null）
  */
@@ -181,7 +182,8 @@ export function bindingToChord(binding: OfficialBinding): string | null {
     suffix = '+' + secondKey
   }
   const parts: string[] = []
-  if (binding.modifiers.includes('primary')) parts.push('Ctrl')
+  if (binding.modifiers.includes('primary') || binding.modifiers.includes('control')) parts.push('Ctrl')
+  if (binding.modifiers.includes('meta')) parts.push('Meta')
   if (binding.modifiers.includes('shift')) parts.push('Shift')
   if (binding.modifiers.includes('alt')) parts.push('Alt')
   return [...parts, key + suffix].join('+')
@@ -217,12 +219,13 @@ export const SHORTCUT_PROFILES: Record<string, ShortcutProfiles> = {
     'web:macos': bind('KeyP', ['primary', 'alt', 'shift']),
     'web:windows': bind('KeyP', ['primary', 'alt', 'shift']),
   },
+  // 官方 session.fork 占用两种 Web primary+shift+F；加 Alt 避开联合目录冲突。
   'edrv.searchInFiles': {
     'desktop:macos': bind('KeyF', ['primary', 'shift']),
     'desktop:windows': bind('KeyF', ['primary', 'shift']),
     'desktop:linux': bind('KeyF', ['primary', 'shift']),
-    'web:macos': bind('KeyF', ['primary', 'shift']),
-    'web:windows': bind('KeyF', ['primary', 'shift']),
+    'web:macos': bind('KeyF', ['primary', 'alt', 'shift']),
+    'web:windows': bind('KeyF', ['primary', 'alt', 'shift']),
   },
   // Ctrl+Shift+V（primary+KeyV）在 linux 为保留键（官方 bindingIssue 不豁免 shift），desktop:linux 不声明
   'edrv.toggleMarkdownPreview': {

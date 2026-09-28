@@ -14,6 +14,7 @@ import {
   svnChangesCapped,
 } from '../src/client/svnStatus.js'
 import type { SvnChangeEntry } from '../src/shared/svn.js'
+import { rpcResponse } from './fixtures/rpcResponse.js'
 
 /** 一条变更条目（缺省 modified + 受版本控制）。 */
 const entry = (path: string, over: Partial<SvnChangeEntry> = {}): SvnChangeEntry => ({
@@ -51,7 +52,7 @@ function stubFetch(bodies: unknown[]) {
     calls.push(String(init?.body ?? ''))
     const body = bodies[Math.min(at, bodies.length - 1)]
     at += 1
-    return Promise.resolve({ json: () => Promise.resolve(body) })
+    return Promise.resolve(rpcResponse(body))
   })
   ;(globalThis as unknown as { fetch: unknown }).fetch = fetchMock
   return { calls, fetchMock, getCount: () => at }

@@ -11,6 +11,7 @@
  */
 import { spawn } from 'node:child_process'
 import { dirname } from 'node:path'
+import { childEnv } from './childEnv.js'
 
 /** reveal 结果（沿 revert.ts 的 Result 风格）。 */
 export type RevealResult = { ok: true } | { ok: false; error: string }
@@ -42,12 +43,13 @@ export function revealCommand(absPath: string, isDir: boolean, platform: NodeJS.
  * 构造 opener 子进程启动选项。
  * `windowsHide` 必须为 **false**：置 true 会把 Explorer 等 GUI 窗口一起隐藏，
  * 症状即「RPC 回 ok:true 但窗口不出现」（本文件头注释记录的回归）。
- * @author ddj 2026年09月20号
+ * @public
+ * @author ddj 2026年09月28号
  * @param cwd 子进程工作目录（打开文件时用其父目录）
  * @returns child_process.spawn 选项
  */
-export function revealSpawnOpts(cwd: string): { cwd: string; stdio: 'ignore'; windowsHide: false; detached: true } {
-  return { cwd, stdio: 'ignore', windowsHide: false, detached: true }
+export function revealSpawnOpts(cwd: string): { cwd: string; stdio: 'ignore'; windowsHide: false; detached: true; env: NodeJS.ProcessEnv } {
+  return { cwd, stdio: 'ignore', windowsHide: false, detached: true, env: childEnv() }
 }
 
 /**

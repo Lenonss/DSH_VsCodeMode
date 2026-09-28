@@ -8,6 +8,9 @@
  * 作者 ddj 2026-08-20
  */
 import React from 'react'
+import { useOpenReceipt } from '../useOpenReceipt.js'
+import { acceptsLoad, receiptErrorFor, receiptPath, receiptReadyFor, receiptTabPath } from '../receiptState.js'
+import { bindPanelCommand } from '../panelCommands.js'
 import { dbg, rpc } from '../rpc.js'
 import { emitFileChanged, emitRefresh } from '../events.js'
 import { langOf, loadMonaco, snippetLanguageOf } from '../monaco/loader.js'
@@ -235,6 +238,7 @@ export function EditorView(props) {
   const [dirtyMap, setDirtyMap] = React.useState({})
   const [content, setContent] = React.useState(null)
   const [contentPath, setContentPath] = React.useState(null)
+  const [receiptLoad, setReceiptLoad] = React.useState(null) // { sessionId, path, sequence, status, error }
   const [imageSrc, setImageSrc] = React.useState(null) // 图片预览 data URL（图片 tab 专用，文本 tab 恒为 null）
   const [imgSize, setImgSize] = React.useState(null) // 图片自然尺寸 { w, h }（路径栏 meta）
   const [imgBroken, setImgBroken] = React.useState(false) // 图片解码失败（onError），显示占位与重试
@@ -805,6 +809,87 @@ export function EditorView(props) {
   }
 
   /**
+   * Reject callbacks for a replaced file or loader generation.
+   * @private @author ddj 2026年09月28号
+   * @param path Normalized tab path.
+   * @param sequence Loader generation.
+   * @returns Whether this load still owns the active view.
+   */
+  function loadCurrent(path, sequence) {
+    return sequence === loadSeqRef.current && path === activeRef.current
+  }
+
+  /**
+   * Commit receipt metadata in the same React batch as loaded content.
+   * @private @author ddj 2026年09月28号
+   * @param path Loaded tab path.
+   * @param sid Session owning the operation.
+   * @param sequence Loader generation.
+   * @param failure Optional target-specific read/render error.
+   */
+  function stampLoad(path, sid, sequence, failure) {
+    if (!loadCurrent(path, sequence)) return
+    setReceiptLoad({ path, cwd, sessionId: sid, sequence, status: failure ? 'error' : 'ready', error: failure })
+  }
+
+  /**
+   * Report a read failure without attributing another operation's error to the file.
+   * @private @author ddj 2026年09月28号
+   * @param path Failed tab path.
+   * @param sid Session owning the load.
+   * @param sequence Loader generation.
+   * @param message Read failure description.
+   */
+  function failLoad(path, sid, sequence, message) {
+    if (!loadCurrent(path, sequence)) return
+    stampLoad(path, sid, sequence, message)
+    setLoadError(message)
+    setError(message)
+    setStatus('读取失败')
+  }
+
+  /**
+   * Attribute a preview decoder failure only to its still-current byte generation.
+   * @private @author ddj 2026年09月28号
+   * @param path Rendered file path.
+   * @param sid Rendering session.
+   * @param sequence Byte-load generation captured by the renderer.
+   * @param message Decoder failure.
+   */
+  function renderLoadFail(path, sid, sequence, message) {
+    if (!loadCurrent(path, sequence)) return
+    /** @author ddj 2026年09月28号 @param current Committed load state. @returns Correlated failure or unchanged state. */
+    const reject = (current) => acceptsLoad(current, sid, path, sequence, loadSeqRef.current)
+      ? { ...current, status: 'error', error: String(message) } : current
+    setReceiptLoad(reject)
+  }
+
+  /**
+   * Revalidate clean cached text without replacing edits made during the request.
+   * @private @author ddj 2026年09月28号
+   * @param model Cached text model.
+   * @param path Normalized target path.
+   * @param sid Session owning the read.
+   * @param sequence Loader generation.
+   * @param mark Existing disk-version bookkeeping callback.
+   */
+  function checkCached(model, path, sid, sequence, mark) {
+    if (dirtyRef.current[path]) return
+    const before = model.getValue()
+    /** @author ddj 2026年09月28号 @param res Disk content for a still-clean cached model. */
+    const accept = (res) => {
+      if (!loadCurrent(path, sequence) || dirtyRef.current[path] || model.getValue() !== before) return
+      if (!res?.ok) return
+      mark(res.version)
+      if (res.content === before) return
+      saveViewState(path)
+      setContent(res.content)
+      setStatus('已加载')
+    }
+    rpc('edrv.read', { sessionId: sid, path }).then(accept).catch(() => {})
+  }
+
+  /**
    * 加载文件内容（对齐 VSCode model 复用：会话内已打开的 model 直接秒显，
    * 后台静默 RPC 校验防陈旧；首次打开走原读取流程）。
    * 每条成功分支都记下磁盘版本基线：外部改动轮询据此判断缓冲是否已陈旧，
@@ -817,6 +902,8 @@ export function EditorView(props) {
    */
   const loadContent = (path, sid, force, version) => {
     const seq = ++loadSeqRef.current
+    setReceiptLoad({ path, cwd, sessionId: sid, sequence: seq, status: 'loading' })
+    setLoadError(null)
     /**
      * 记下磁盘版本基线；markRead=true 表示本次真的从磁盘读了内容
      * （已读版本台账随之失效，下一轮轮询按新版本重新比对）。
@@ -845,25 +932,18 @@ export function EditorView(props) {
       setContentPath(path)
       setLoadStage((prev) => ({ progress: Math.max(84, prev.progress), message: '文件已读取，准备创建编辑器…' }))
       setStatus('已加载')
-      rpc('edrv.read', { sessionId: sid, path }).then((res) => {
-        if (seq !== loadSeqRef.current || path !== active) return
-        if (res && res.ok) mark(res.version)
-        if (res && res.ok && res.content !== cachedModel.getValue()) {
-          saveViewState(path) // 内容更新前保留当前视图位置
-          setContent(res.content)
-          setStatus('已加载')
-        }
-      }).catch(() => { /* 校验失败保留缓存内容 */ })
+      stampLoad(path, sid, seq)
+      checkCached(cachedModel, path, sid, seq, mark)
       return
     }
-    setLoadError(null)
     setLoadStage({ progress: monaco ? 72 : 12, message: '读取文件内容…' })
     rpc('edrv.read', { sessionId: sid, path }).then((res) => {
-      if (seq !== loadSeqRef.current || path !== active) return
+      if (!loadCurrent(path, seq)) return
       if (res && res.ok) {
         mark(res.version, true)
         setContent(res.content)
         setContentPath(path)
+        stampLoad(path, sid, seq)
         setLoadStage((prev) => ({ progress: Math.max(84, prev.progress), message: '文件已读取，准备创建编辑器…' }))
         setStatus('已加载')
       } else {
@@ -871,16 +951,12 @@ export function EditorView(props) {
         dapTrace('read-failed', { path, error: base, resolvedPath: res?.resolvedPath, cwd })
         // 带出 host 解析后的真实路径：跳转失败时一眼看出是路径解析错还是目标不存在
         const message = res?.resolvedPath ? base + '：' + relativeOf(String(res.resolvedPath), cwd) : base
-        setLoadError(message)
-        setError(message)
-        setStatus('读取失败')
+        failLoad(path, sid, seq, message)
       }
     }).catch((e) => {
-      if (seq !== loadSeqRef.current) return
+      if (!loadCurrent(path, seq)) return
       const message = 'read异常:' + String(e)
-      setLoadError(message)
-      setError(message)
-      setStatus('读取失败')
+      failLoad(path, sid, seq, message)
     })
   }
 
@@ -898,12 +974,13 @@ export function EditorView(props) {
     setImgBroken(false)
     setLoadStage({ progress: monaco ? 72 : 12, message: '读取图片…' })
     readBinaryPreview(rpc, { sessionId: sid, path }).then((out) => {
-      if (seq !== loadSeqRef.current || path !== active) return
+      if (!loadCurrent(path, seq)) return
       if (out.ok && out.via === 'binary') {
         // 新通道：原始字节本地组 data URL（线上省 base64，本地编码为 img src 所需不可省）
         recordBaseline(scope, path, out.version || version)
         clearReadVersion(scope, path) // 刚读过内容：已读版本台账失效，下一轮按新版本比对
         setImageSrc(dataUrlOf(bytesToBase64(out.bytes), out.mime))
+        stampLoad(path, sid, seq)
         setLoadStage({ progress: 100, message: '图片已就绪' })
         setStatus('已加载')
         return
@@ -911,15 +988,14 @@ export function EditorView(props) {
       noteBinFallback(sid, out)
       if (out.ok && out.via === 'base64') {
         if (!out.mime) {
-          setLoadError('host 版本过旧：图片响应缺少 mime')
-          setError('host 版本过旧：图片响应缺少 mime')
-          setStatus('读取失败')
+          failLoad(path, sid, seq, 'host 版本过旧：图片响应缺少 mime')
           return
         }
         const imgVersion = out.version ?? version
         recordBaseline(scope, path, imgVersion)
         clearReadVersion(scope, path) // 刚读过内容：已读版本台账失效，下一轮按新版本比对
         setImageSrc(dataUrlOf(out.content, out.mime))
+        stampLoad(path, sid, seq)
         setLoadStage({ progress: 100, message: '图片已就绪' })
         setStatus('已加载')
         return
@@ -927,15 +1003,11 @@ export function EditorView(props) {
       const base = out.error ? String(out.error) : '读取失败'
       // 带出 host 解析后的真实路径：跳转失败时一眼看出是路径解析错还是目标不存在
       const message = out.resolvedPath ? base + '：' + String(out.resolvedPath) : base
-      setLoadError(message)
-      setError(message)
-      setStatus('读取失败')
+      failLoad(path, sid, seq, message)
     }).catch((e) => {
-      if (seq !== loadSeqRef.current) return
+      if (!loadCurrent(path, seq)) return
       const message = 'read异常:' + String(e)
-      setLoadError(message)
-      setError(message)
-      setStatus('读取失败')
+      failLoad(path, sid, seq, message)
     })
   }
 
@@ -959,12 +1031,13 @@ export function EditorView(props) {
       cache.delete(path)
       cache.set(path, hit)
       setPdfBytes(base64ToBytes(hit))
+      stampLoad(path, sid, seq)
       setLoadStage({ progress: 100, message: 'PDF 已就绪' })
       setStatus('已加载')
       return
     }
     readBinaryPreview(rpc, { sessionId: sid, path }).then((out) => {
-      if (seq !== loadSeqRef.current || path !== active) return
+      if (!loadCurrent(path, seq)) return
       if (out.ok && out.via === 'binary') {
         const pdfVersion = out.version || version
         recordBaseline(scope, path, pdfVersion)
@@ -973,6 +1046,7 @@ export function EditorView(props) {
         cache.set(path, bytesToBase64(out.bytes))
         while (cache.size > 6) cache.delete(cache.keys().next().value)
         setPdfBytes(out.bytes)
+        stampLoad(path, sid, seq)
         setLoadStage({ progress: 100, message: 'PDF 已就绪' })
         setStatus('已加载')
         return
@@ -985,21 +1059,18 @@ export function EditorView(props) {
         cache.set(path, out.content)
         while (cache.size > 6) cache.delete(cache.keys().next().value)
         setPdfBytes(base64ToBytes(out.content))
+        stampLoad(path, sid, seq)
         setLoadStage({ progress: 100, message: 'PDF 已就绪' })
         setStatus('已加载')
         return
       }
       const base = out.error ? String(out.error) : '读取失败'
       const message = out.resolvedPath ? base + '：' + String(out.resolvedPath) : base
-      setLoadError(message)
-      setError(message)
-      setStatus('读取失败')
+      failLoad(path, sid, seq, message)
     }).catch((e) => {
-      if (seq !== loadSeqRef.current) return
+      if (!loadCurrent(path, seq)) return
       const message = 'read异常:' + String(e)
-      setLoadError(message)
-      setError(message)
-      setStatus('读取失败')
+      failLoad(path, sid, seq, message)
     })
   }
 
@@ -1373,6 +1444,8 @@ export function EditorView(props) {
     setTimeout(() => window.dispatchEvent(new CustomEvent('edrv:search-focus')), 0)
   }
 
+  React.useEffect(() => bindPanelCommand('searchInFiles', { sessionId, cwd: cwd ?? undefined }, openSearchPanel), [sessionId, cwd])
+
   // Ctrl+Shift+F / Ctrl+Shift+V / Alt+←→ / Ctrl+Alt+←→ 的 capture 监听已随官方派发改造移除（见上）。
 
   // 整行上下移动的实现见下方「指令系统接线」effect（moveRow 单点定义，命令栏与键位共用）。
@@ -1457,7 +1530,6 @@ export function EditorView(props) {
       ['edrv.command.save', () => { if (editorRef.current?.getModel?.()) { flushSave(); doSaveRef.current?.(false) } }],
       // 快速打开由 QuickOpen 自己接该事件（它持有搜索框 ref），此处不重复实现
       ['edrv.command.toggleSidebar', () => setSidebarOn((v) => !v)],
-      ['edrv.command.searchInFiles', () => openSearchPanel()],
       ['edrv.command.toggleMarkdownPreview', () => {
         const path = activeRef.current
         if (!isMarkdownPath(path)) { setStatus('当前文件不是 Markdown'); return }
@@ -1753,6 +1825,23 @@ export function EditorView(props) {
     return true
   }
 
+  /**
+   * Apply a save completion only to the unchanged model that supplied its text.
+   * @private @author ddj 2026年09月28号
+   * @param path Saved tab path.
+   * @param text Text actually sent to disk.
+   * @param model Model captured before the save request.
+   */
+  function acceptSaved(path, text, model) {
+    if (!model || modelsRef.current.get(path) !== model || model.isDisposed?.() || model.getValue() !== text) return
+    setDirtyMap((current) => ({ ...current, [path]: false }))
+    if (activeRef.current !== path) return
+    setContent(text)
+    setContentPath(path)
+    setStatus('已保存 ' + new Date().toTimeString().slice(0, 8))
+    setDiskFlag((prev) => (prev && prev.path === path ? null : prev))
+  }
+
   const doSave = (silent) => {
     if (!active) return
     // 外部改动待处理：自动保存（silent）直接放弃，避免陈旧缓冲覆盖磁盘；
@@ -1770,6 +1859,7 @@ export function EditorView(props) {
     if (!ed) return
     if (isImageActive) { setStatus('图片只读预览'); return }
     const text = ed.getValue()
+    const savedModel = ed.getModel?.()
     const path = active
     if (!silent) setStatus('保存中…')
     // 在途登记：关闭路径的 persistDirty 据此跳过重复提交（内容在同一 tick 内取，必然相同）
@@ -1782,13 +1872,7 @@ export function EditorView(props) {
         recordBaseline(scope, path, res.rev)
         markReadVersion(scope, path, res.rev, true) // 缓冲即磁盘内容：同版本无需再读盘
         clearSync(scope, path)
-        setContent(text)
-        setContentPath(path)
-        setDirtyMap((d) => Object.assign({}, d, { [path]: false }))
-        if (path === active) {
-          setStatus('已保存 ' + new Date().toTimeString().slice(0, 8))
-          setDiskFlag((prev) => (prev && prev.path === path ? null : prev))
-        }
+        acceptSaved(path, text, savedModel)
         refreshRecords()
         emitRefresh()
         // 片段配置文件保存后失效补全缓存（下次补全即读到新片段）
@@ -1879,7 +1963,7 @@ export function EditorView(props) {
     syncTypeSuggest(ed, monaco)
     restoreViewState(active)
     setLoadStage((prev) => ({ progress: Math.max(96, prev.progress), message: '创建编辑器视图…' }))
-  }, [monaco, active, content, contentReady, mdPreviewing])
+  }, [monaco, active, content, contentReady, mdPreviewing, svnDiff])
 
   // PDF 面板外壳 ref 回调（div 仅在 PDF 分支渲染，refs 先于 effect 就绪）
   const ensurePdfHost = (node) => { pdfHostRef.current = node }
@@ -1889,21 +1973,32 @@ export function EditorView(props) {
     const host = pdfHostRef.current
     if (!isPdfActive || !pdfBytes || !host) return
     const path = active
+    const sequence = receiptLoad?.sequence
+    if (!acceptsLoad(receiptLoad, sessionId, path, sequence, loadSeqRef.current)) return
+    let mounting = true
+    /** @author ddj 2026年09月28号 @param message PDF error; only startup failures affect an open receipt. */
+    const pdfError = (message) => {
+      setError(message)
+      if (mounting && message) renderLoadFail(path, sessionId, sequence, message)
+    }
+    /** @author ddj 2026年09月28号 End startup error attribution before later save operations. */
+    const mounted = () => { mounting = false }
     const ctl = createPdfPanel({
       sessionId,
       path,
       setStatus,
-      setError,
+      setError: pdfError,
       onDirtyChange: (d) => setDirtyMap((prev) => Object.assign({}, prev, { [path]: d })),
       onReload: () => loadContent(path, sessionId, true),
     })
     pdfCtlRef.current.set(path, ctl)
-    void ctl.mount(host, pdfBytes)
+    void ctl.mount(host, pdfBytes).then(mounted, pdfError)
     return () => {
+      mounting = false
       ctl.destroy()
       if (pdfCtlRef.current.get(path) === ctl) pdfCtlRef.current.delete(path)
     }
-  }, [isPdfActive, pdfBytes, active])
+  }, [isPdfActive, pdfBytes, active, receiptLoad?.sequence])
 
   // 行内差异自绘（decorations / view zones / minus overlay）→ diffRenderer
   // ⚠️ 依赖含 mdPreviewing：切回源码时编辑器实例被重建（见上方 model 同步 effect 的说明），
@@ -1912,7 +2007,7 @@ export function EditorView(props) {
     if (!monaco || !editorRef.current || !active || content === null) return
     diffRendererRef.current.render(monaco, editorRef.current, pendingRegions, sessionId)
     setLoadStage({ progress: 100, message: '编辑器已就绪' })
-  }, [monaco, active, content, pendingRegions, mdPreviewing])
+  }, [monaco, active, content, pendingRegions, mdPreviewing, svnDiff])
 
   React.useEffect(() => () => {
     flushSave()
@@ -2289,7 +2384,7 @@ export function EditorView(props) {
     ed.revealLineInCenter(Math.max(1, target.start ?? 1))
     ed.setPosition({ lineNumber: Math.max(1, target.start ?? 1), column: 1 })
     ed.focus()
-  }, [active, content, contentReady, pendingRegions, focusRequest, monaco, mdPreviewing])
+  }, [active, content, contentReady, pendingRegions, focusRequest, monaco, mdPreviewing, svnDiff])
 
   const jumpTo = (region) => {
     if (editorRef.current) {
@@ -2474,6 +2569,16 @@ export function EditorView(props) {
   }
 
   /**
+   * Preserve image UI behavior while attributing decoder failure to its rendered load.
+   * @private @author ddj 2026年09月28号
+   */
+  function imageFailed() {
+    if (!receiptLoad || !loadCurrent(receiptLoad.path, receiptLoad.sequence)) return
+    setImgBroken(true)
+    renderLoadFail(receiptLoad.path, receiptLoad.sessionId, receiptLoad.sequence, '图片解码失败')
+  }
+
+  /**
    * 图片预览面板：工具条（尺寸 meta / 缩放 −＋适应宽度 / SVG 文本切换 / 刷新）+ 棋盘底图片。
    * 初始适应宽度（等价 PDF page-width，0.1.7 官方统一缩放）；按钮样式与 PDF 工具条同款。
    * @author ddj 2026年09月08号 / 2026年09月22号
@@ -2510,13 +2615,14 @@ export function EditorView(props) {
         : React.createElement('img', {
             className: 'edrv-imgview-img',
             ref: imgElRef,
+            key: active + ':' + (receiptLoad?.sequence ?? 0),
             src: imageSrc,
             alt: active || '',
             style: (imgZoom !== null && imgSize)
               ? { width: Math.round(imgSize.w * imgZoom) + 'px', maxWidth: 'none', maxHeight: 'none' }
               : undefined,
             onLoad: (e) => { setImgBroken(false); setImgSize({ w: e.target.naturalWidth, h: e.target.naturalHeight }) },
-            onError: () => setImgBroken(true),
+            onError: imageFailed,
           }))))
 
   /**
@@ -3118,12 +3224,88 @@ export function EditorView(props) {
     // G9：同 openFile，先归一再进页签，保证待跳转路径与 active 同形态
     const normalized = addTabNorm(path, true)
     if (!normalized) return
+    stageFileAt(normalized, line, column, endLine, endColumn)
+  }
+
+  /**
+   * Stage a normalized navigation target using the existing reload-safe handoff.
+   * @private @author ddj 2026年09月28号
+   * @param normalized Exact tab path.
+   * @param line Optional line.
+   * @param column Optional column.
+   * @param endLine Optional range end line.
+   * @param endColumn Optional range end column.
+   */
+  function stageFileAt(normalized, line, column, endLine, endColumn) {
     pendingFocusRef.current = { path: normalized, region: null, line: line ?? null, column: column ?? 1, endLine: endLine ?? null, endColumn: endColumn ?? null }
-    // 第三次事故（2026-09-23）：插件 HMR 热重载会重挂载本组件、挂载级 ref 随旧实例销毁 →
-    // 落点意图丢失。同步落 window 槽（跨热重载存活）做交接，落点成功后与 ref 一并清。
     putPendingNav({ path: normalized, line: line ?? null, column: column ?? 1, endLine: endLine ?? null, endColumn: endColumn ?? null })
     setFocusRequest((value) => value + 1)
   }
+
+  /**
+   * Open a receipt target without losing edits or leaving the requested source hidden.
+   * @private @author ddj 2026年09月28号
+   * @param request Claimed external open request.
+   */
+  function openReceiptFile(request) {
+    if (!request.path) return
+    let path = receiptTabPath(request.path, cwd)
+    const existing = tabsRef.current.find((tab) => receiptPath(tab.path, cwd) === receiptPath(path, cwd))
+    if (existing) path = existing.path
+    flushSave()
+    saveViewState(active)
+    recordNav()
+    setSvnDiff(null)
+    const positioned = request.line != null || request.column != null
+    if (positioned && mdPreviewRef.current.has(path)) toggleMdPreview(path)
+    setError(null)
+    if (monacoErr) setMonacoErr(null)
+    addTab(path, true)
+    if (positioned) stageFileAt(path, request.line ?? 1, request.column ?? 1)
+    const moved = receiptLoad && receiptPath(receiptLoad.path, receiptLoad.cwd) !== receiptPath(path, cwd)
+    if (path !== active || !(loadError || receiptLoad?.status === 'error' || moved)) return
+    if (pdfCtlRef.current.get(path)?.isDirty?.()) return
+    pdfB64CacheRef.current.delete(path)
+    loadContent(path, sessionId, false)
+  }
+
+  /**
+   * Build facts from the current render; model identity is the exact cached instance.
+   * @private @author ddj 2026年09月28号
+   * @param request Claimed target and optional position.
+   * @returns State consumed by the tested receipt predicates.
+   */
+  function receiptView(request) {
+    const ed = editorRef.current
+    const model = ed?.getModel?.()
+    const modelMatches = Boolean(model && modelsRef.current.get(active) === model)
+    let positionMatches = false
+    if (modelMatches && (request.line != null || request.column != null)) {
+      const expected = model.validatePosition({ lineNumber: request.line ?? 1, column: request.column ?? 1 })
+      const actual = ed.getPosition()
+      positionMatches = actual?.lineNumber === expected.lineNumber && actual?.column === expected.column
+    }
+    const image = imgElRef.current
+    return {
+      sessionId, cwd, active, sequence: loadSeqRef.current, load: receiptLoad,
+      mounted: Boolean(viewRootRef.current), blocked: Boolean(svnDiff),
+      kind: isImageActive ? 'image' : isPdfActive ? 'pdf' : mdPreviewing ? 'markdown' : 'text',
+      contentPath, contentReady, modelMatches, positionMatches,
+      imageLoaded: Boolean(imageSrc && !imgBroken && image?.getAttribute('src') === imageSrc && image.complete && image.naturalWidth > 0),
+      pdfLoaded: Boolean(pdfBytes && pdfHostRef.current?.querySelector('.page[data-loaded="true"]')),
+      engineError: monacoErr ? String(monacoErr) : null,
+    }
+  }
+
+  /** @private @author ddj 2026年09月28号 @param request Claimed target. @returns Correlated actual readiness. */
+  function receiptReady(request) {
+    return receiptReadyFor(request, receiptView(request))
+  }
+  /** @private @author ddj 2026年09月28号 @param request Claimed target. @returns Only its current load/render error. */
+  function receiptError(request) {
+    return receiptErrorFor(request, receiptView(request))
+  }
+  useOpenReceipt({ sessionId, open: openReceiptFile, ready: receiptReady, error: receiptError })
 
   // 停帧跳转/调试命令监听（openFileAt 每渲染重建，经 ref 让空依赖监听读最新闭包）
   const dapOpenRef = React.useRef(null)
@@ -3420,7 +3602,7 @@ export function EditorView(props) {
   } else if (isImageActive) {
     body = loadingBody(loadStage.message || '读取图片…', loadStage.progress)
   } else if (isPdfActive && pdfBytes) {
-    body = React.createElement('div', { className: 'edrv-pdf-host', ref: ensurePdfHost, key: active })
+    body = React.createElement('div', { className: 'edrv-pdf-host', ref: ensurePdfHost, key: active + ':' + (receiptLoad?.sequence ?? 0) })
   } else if (isPdfActive) {
     body = loadingBody(loadStage.message || '读取 PDF…', loadStage.progress)
   } else if (mdPreviewing && contentReady) {

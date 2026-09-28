@@ -22,6 +22,14 @@ describe('matchWorkspace', () => {
     expect(matchWorkspace('D:/repository/file.ts', projects)).toBeUndefined()
   })
 
+  it('preserves POSIX case and resolves parent-directory segments', () => {
+    expect(matchWorkspace('/Alpha/src', ['/alpha'])).toBeUndefined()
+    expect(matchWorkspace('/alpha/../beta', ['/alpha', '/beta'])).toBe('/beta')
+    expect(matchWorkspace('D:/repo/../other', ['D:/repo', 'D:/other'])).toBe('D:/other')
+    expect(matchWorkspace('d:/repo', ['D:/'])).toBe('D:/')
+    expect(matchWorkspace('/anywhere', ['/'])).toBe('/')
+  })
+
   it('无 cwd 时安全返回 undefined', () => {
     expect(matchWorkspace(undefined, projects)).toBeUndefined()
   })

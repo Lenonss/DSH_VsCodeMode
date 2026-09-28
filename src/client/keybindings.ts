@@ -32,6 +32,22 @@ const MODIFIERS: Record<string, 'ctrl' | 'shift' | 'alt' | 'meta'> = {
 
 /** 弦表（官方 catalog 派生：id → 显示键位弦）。官方目录就绪前为空（tooltip 走各自的兜底文案）。 */
 let current: Record<string, string> = {}
+let currentAria: Record<string, string | undefined> = {}
+
+/**
+ * Read official accessibility metadata without deriving it from visual keycaps.
+ * @author ddj 2026年09月28号
+ * @param id Command identifier.
+ * @returns Official single-key ARIA shortcut, absent for two-key chords.
+ */
+export function ariaOf(id: string): string | undefined { return currentAria[id] }
+
+/**
+ * Replace accessibility metadata from the official catalog.
+ * @author ddj 2026年09月28号
+ * @param aria Complete catalog ARIA map, applied before display notification.
+ */
+export function applyKeyAria(aria: Record<string, string | undefined>): void { currentAria = { ...aria } }
 const listeners = new Set<() => void>()
 
 /**
@@ -162,7 +178,8 @@ export function formatChord(binding: Binding): string {
  * @param bindings 解析键位或键位数组（null/空 = 未绑定，永不命中）
  * @returns 是否命中
  */
-export function matchEvent(e: { ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean; altKey?: boolean; key?: string }, bindings: Binding | Binding[] | null): boolean {
+export function matchEvent(e: { ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean; altKey?: boolean; key?: string; isComposing?: boolean; keyCode?: number; defaultPrevented?: boolean; getModifierState?: (key: string) => boolean }, bindings: Binding | Binding[] | null): boolean {
+  if (e.defaultPrevented || e.isComposing || e.keyCode === 229 || e.key === 'Dead' || e.getModifierState?.('AltGraph')) return false
   const list = Array.isArray(bindings) ? bindings : bindings ? [bindings] : []
   for (const binding of list) {
     if (Boolean(e.ctrlKey || e.metaKey) !== (binding.ctrl || binding.meta)) continue

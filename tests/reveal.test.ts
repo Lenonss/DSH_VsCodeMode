@@ -4,7 +4,7 @@
  * 以及 windowsHide 回归（置 true 会让 Explorer 窗口不出现）。
  * 作者 ddj 2026-08-27 / 2026-09-20
  */
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { revealCommand, revealSpawnOpts } from '../src/reveal.js'
 
 describe('revealCommand', () => {
@@ -40,6 +40,14 @@ describe('revealCommand', () => {
  * 作者 ddj 2026-09-20
  */
 describe('revealSpawnOpts', () => {
+  afterEach(() => vi.unstubAllEnvs())
+  it('does not pass host credentials to the GUI opener', () => {
+    vi.stubEnv('DEEPSEEK_API_KEY', 'host')
+    vi.stubEnv('ELECTRON_RUN_AS_NODE', '1')
+    const env = revealSpawnOpts('/work').env
+    expect(env.DEEPSEEK_API_KEY).toBeUndefined()
+    expect(env.ELECTRON_RUN_AS_NODE).toBe('1')
+  })
   it('keeps GUI windows visible (windowsHide must be false)', () => {
     const opts = revealSpawnOpts('C:\\work\\src')
     expect(opts.windowsHide).toBe(false)

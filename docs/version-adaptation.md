@@ -1,88 +1,134 @@
 # DSH 版本适配机制（dsh-vscode-mode）
 
-> 机制目的：DSH 以 alpha/rc 高频发布（0.1.2-alpha.x 起几乎每日一发且 Web 端自动更新拉取），
-> 插件需在"影响性版本线"上自动切换 API 策略，失败一律安全降级并把状态写进
-> 「设置 → VSCodeMode → 兼容性」报告与启动日志，而不是等用户回滚 DSH。
-> 作者 ddj 2026-09-02 · 随 0.1.43 落地
+> 更新于 2026-09-28，面向插件 0.13.0。历史机制始于 0.1.43。
+> 本轮源码审计与有限现场验证基线：官方 DSH `0.1.7-rc.2`。
+> API 能力探测、包版本范围、自动化测试和真实应用验收分别记录；其中任何一项都不能替代其他项。
 
-## 一、机制骨架
+## 1. 适配入口与证据来源
 
-```
-src/dshVersion.ts            版本探测 + semver 比较/区间（createRequire 解析
-                             @deepseek-ai/dsh-settings/package.json，候选降级）
-src/fileOpenSettings.ts      runSettingsInstall：四策略分派（见下），模块级观测
-                             状态 settingsInstallStrategy()/settingsInstallNote()
-src/compat.ts                buildReport：报告并入 dshVersion + 版本适配行 +
-                             高于实测版本 / 安装不可用 警告
-src/client/ui/McpSettings.ts 兼容性页签新增「版本适配」分组与 DSH 版本标题
-scripts/audit-dsh-compat.mjs 双树导出面/服务面例行比对（新 alpha 发布后跑）
-docs/version-adaptation.md   本文档（版本线 × 影响 × 适配器矩阵）
-```
+| 位置 | 职责 |
+|---|---|
+| [dshVersion.ts](../src/dshVersion.ts) | 从运行中 Host 安装树探测版本，比较版本先后与内部适配区间 |
+| [hostImport.ts](../src/hostImport.ts) | 动态加载优先锚定 `process.argv[1]`，避免开发目录中的旧副本抢先命中 |
+| [fileOpenSettings.ts](../src/fileOpenSettings.ts) | `legacy / service / forms / none` 设置策略与状态观测 |
+| [compat.ts](../src/compat.ts) | 汇总能力、版本与配置诊断；维护报告告警上界 `TESTED_DSH_MAX` |
+| [httpGuard.ts](../src/httpGuard.ts)、[appUrl.ts](../src/shared/appUrl.ts) | 官方 HTTP 认证、请求体限制与应用基址解析 |
+| [mcpRuntime.ts](../src/mcpRuntime.ts)、[mcpIsolation.ts](../src/mcpIsolation.ts) | 项目 MCP 的 agent 生命周期，以及工具、资源、指令隔离 |
+| [devForm.ts](../src/devForm.ts) | 当前运行 profile 定位与开发形态切换事务 |
+| [audit-dsh-compat.mjs](../scripts/audit-dsh-compat.mjs) | 已安装目录的导出面、服务名、UI 原语候选比对；可选配置 schema 检查 |
 
-### 设置 section 安装四策略（runSettingsInstall）
+以实际安装树的包元数据和实现为依据；有类型声明时同时核对声明。发行包缺少某些
+声明文件时，不把本插件的旧 devDependency 类型当成当前 Host 契约。
+
+动态加载优先从 Host 入口解析；只有解析失败才回退普通包名。**已成功解析的模块
+执行失败不会被回退到旧副本所掩盖**。本轮实际 Host 模块锚定为 `0.1.7-rc.2`；
+这是本轮环境事实，不表示任意用户环境都运行该版本。
+
+## 2. 0.13.0 当前适配面
+
+以下接口在已安装的 `0.1.7-rc.2` 实现中完成核对；表格不主张它们都首次出现于该版本。
+
+| 接口或边界 | 本插件处理 | 验证/能力边界 |
+|---|---|---|
+| `connection.requestRejection(req)` | `/edrv` 路由在读取请求体及派发前使用官方认证；认证服务缺失或失败时拒绝请求 | 不再支持未鉴权裸 curl；不能把 loopback 地址本身当作身份 |
+| RPC 请求体 | 校验方法、JSON content-type、envelope、对象参数；同时限制 Content-Length 与实际流式字节数，响应 `no-store` | 限额包含文本 JSON 转义与二进制 base64 开销；不是无限制上传接口 |
+| 应用 URL | RPC、资产和 vendor 路径根据应用 document base 解析，保留反向代理子路径，支持 HTTP(S) 与 `dsh-app:` | 任意外部 URL 不能作为插件内部资源路径；不拼接固定端口 |
+| 官方 MCP scope | 使用 `agent.ctx.plugin(officialMcp, config)`，启动前移除旧全局项目 entry；等待串行 `agent/created`，并挂载已存在 agent | 每个活动 agent/server 一份实例；无 agent 时仅 configured；更新/禁用/删除/卸载释放实例 |
+| scope 继承 | 限制继承的外项目工具；共享资源工具按 `arguments.server` 检查归属；为外项目指令注册空 scope section，过滤实际查看 scope 的资源列表 | 保留全局和独立 agent preset 的资源；不修改 parent 链；官方资源列表格式无法识别时安全隐藏该提示列表 |
+| MCP 状态 | `instanceCount`、`configured`、`unverified`；读取失败保留最后有效配置，尊重 disabled | `failOnStartupError=false` 时 ACTIVE 不证明连接成功；零工具允许为纯资源服务 |
+| `profileContext` | 优先读取真实 `dir` 与 `packageManager`；旧宿主仅允许唯一 profile 候选回退 | 无效/歧义时拒绝猜测；安装失败恢复 manifest、lockfile 和原入口；恢复失败保留备份位置 |
+| shortcuts | 对齐官方返回的 normalized 绑定，保留物理 Control/Meta 区别；录制前后正确切换 recording；命令首开使用当前会话 scope | 0.12 已引入官方接管；0.13 修正转换和生命周期。Web 搜索绑定以当前官方平台目录为准 |
+| 外部打开 | 本机私有、按 profile 隔离的 OPEN 请求与 lease/ACK；各 launcher 和 Unity 共用 producer | 只有目标实际 model/预览内容加载完成才确认成功；旧 URL 深链仅作兼容入口 |
+| Unity bridge | 内嵌包 0.3.0，首次安装自动准备 profile bridge 并写项目 UserSettings hint；UI 覆盖优先 | 不依赖 OS 菜单注册；没有真实 Unity EditMode 验证，不能据编译桩声称完整 Unity 运行通过 |
+| 子进程 | 共用 `childEnv` 清理隐式凭据/DSH 环境，显式配置保留；LSP/DAP 按平台回收进程树/进程组 | 清理依赖变量名规则，进程树回收是 best effort；Linux/macOS 本轮未现场验证 |
+
+### 设置策略仍按能力选择
 
 | 策略 | 触发条件 | 行为 |
 |---|---|---|
-| `legacy` | 动态导入的 `@deepseek-ai/dsh-settings` 仍导出 `installSettingsSection` | 原样调用 free function（rc 线，行为与 0.1.42 一致） |
-| `service` | 导出已移除（0.1.2-alpha 起）→ `ctx.inject(['settings'])` 后探测 `provider.installSection` | 调用服务方法 `installSection(ctx, ns, schema, entry, hooks)`（等义封装：base 层 + fiber 卸载回退） |
-| `forms` | `installSection` 已移除（0.1.7 起）且 `describe+update` 在场（SettingsForms） | 不装 section（设置并入插件 `export const Config` schema）；订阅 `settings/document-updated` 推 hooks（disposer 经 ctx.effect 随 fiber 卸载） |
-| `none` | 两路皆不可用 | 仅告警并记录；fileOpenTool/keybindings/LSP 设置按配置值运行 |
+| `legacy` | `dsh-settings` 仍导出 `installSettingsSection` | 使用旧 free function 安装 section |
+| `service` | free function 已移除，但 provider 有 `installSection` | 使用服务方法安装 section |
+| `forms` | 无 installSection，存在 `describe + update` | 设置来自 loader entry Config；订阅文档更新并跟随 fiber 清理 |
+| `none` | 上述能力均不可用 | 记录诊断，按配置值降级；不产生未处理的异步 rejection |
 
-全程 try/catch，**不产生未捕获 rejection**（0.1.2-alpha.2 曾因直接调用已移除导出
-导致异步抛错 + `void` 调用 → unhandled rejection，即 restore 记录里的插件破坏根因）。
+0.1.7 的 Config 表单要求 volatile 字段。插件 Config 与旧 section schema 共用字段定义，
+但仅 Config 侧按能力标记 `.volatile()`，读取时解引用 Cordis volatile 值。client 设置桥
+继续做 `configForms → webUiSettings → settingsScope` 能力探测，不把互斥的可选服务
+写成硬注入依赖。
 
-## 二、版本线 × 影响 × 适配矩阵（实证基准：rc.2 ↔ 0.1.2-alpha.2 双树比对）
+## 3. 历史版本线
 
-| 版本线 | 影响性变化（实证） | 插件影响 | 适配器/状态 |
-|---|---|---|---|
-| `0.1.0-rc.7/rc.8`、`0.1.1-rc.1/rc.2`（08-17~08-21） | 基线：`dsh-settings` 导出 `installSettingsSection/settingsNamespace/deepEqualJson`；`slots`/`conversationEvents`/`conversationViews` 服务由 `dsh-client-runtime` 提供 | 无（插件诞生基线） | `legacy` 策略 · **rc.2 现网验证中** |
-| `0.1.2-alpha.1`（08-28）起 alpha 线 | ① `dsh-settings` 移除 `installSettingsSection/settingsNamespace/deepEqualJson`，SettingsProvider 新增 `installSection(owner, ns, schema, entry, hooks)` 方法；② `dsh-client-runtime`、`dsh-host-apiproxy` 包从核心树移除（slots 服务改由 `dsh-client-ui-renderer` 提供；新增 api/sdk/controller 系列）；③ 部署期 apiproxy `WEB_SETTINGS_NAMESPACES` 白名单补丁不再适用（api-settings-controller 自动暴露） | ① host 两处设置 section 注册崩溃点 → **0.1.43 已适配（service 策略）**；② 插件 client 源码零静态依赖 @deepseek-ai 包、服务级 inject 9 名全部有同名提供者 → 加载关通过（审计表见下）；`dsh.client.inject` 收敛为空（图排序不校验 inject 存在性，实证自 dsh-client-modules 源码）；③ 无代码影响，部署脚本不再需要白名单补丁 | `service` 策略 · **待 alpha 实测闭环**（见第五节） |
-| `0.1.2-alpha.3`（08-31） | 移除可选 SQLite Session 持久化后端 | 插件用 JSONL 会话、`sessions.list` 摘要 → 无影响 | 监控项 M1 |
-| `0.1.2-alpha.4`（09-01） | `Session.events` → `seq/eventAt()/snapshotEvents()`；`SessionSeq`/`SessionLogOffset` 强类型 | 插件不消费 Session 事件流 → 无影响；未来接入会话日志按新 API | 监控项 M2 |
-| `0.1.5-alpha.1` 起 | 官方右侧 Sidebar（`sidebarRight`/`sidebarRightTabs`）+ `sidebar.panellist` | 编辑区改住官方右侧 Sidebar Tab；`dsh-resource://file/**` 认领转发 | **0.1.44+ 已适配** |
-| `0.1.6-alpha.1` | MCP SDK v2；Web 侧边栏终端；文件链接默认侧栏预览 | 版本探测宿主锚点修正（避免 dev-link 命中 rc 副本） | **0.4.4 已适配** |
-| `0.1.6-alpha.2`（09-17）线 | ① **`sessions.list` 移除 `current`/`currentAddress`**（客户端 Session 多实例共存）；② 新增回合作产物：`dsh-workspace-changes` 回合改动卡片 + `dsh-client-ui-deliverables` 侧边栏逐文件审阅；③ 侧栏 Office 预览（`ui-sidebar-documentpreview`）；④ 侧栏浏览器 Tab；⑤ 侧栏布局持久化；⑥ 插件依赖改运行时解析 + 支持运行时卸载；⑦ 默认模型移除 V4 Flash 系列 | ① **命中 4 处读取**（Monaco 预热 / LSP 会话同步 / 编辑 Tab 跨会话恢复 / 文件链接上下文）→ 新增 `src/client/sessionScope.ts` 三级取值链（`uiSession.current` → `list.current` → `byId.retainedBy.mainView`）+ 订阅合流；② 数据源关系见 `plans/version-adapt-0.1.6-alpha.2/`（官方为回合级只读聚合，不可替代自有调用级记录源，仅作补充覆盖）；③ **命中冲突**：本插件 `extension` 档全量认领 `file/**` 会盖过官方 Office/builtin 渲染器 → `deferToOfficial()` 后缀 carve-out 让位（Office 11 项 + 官方不可预览 52 项，例外保留 `avif` 图片预览）；④⑤ 与自研 `sidebar.right.pane.tab` 不冲突，但恢复路径不得依赖内存态；⑥ 卸载洁净度审计（模块级单例复位）；⑦ `aiProvider/aiModel` 指向已下架模型时给降级提示 | **已适配（0.5.1）** · `service` 策略不变 |
-| `0.1.5-0`+ 起（**包改名**） | vendored `schemastery` 改名为 **`@deepseek-ai/schemastery`**，全树 60+ 官方包统一 `import z from "@deepseek-ai/schemastery"`；安装树**不再有**裸 `schemastery`（rc 线仍有，且 rc.8 `dsh-settings` 的 peer 写的就是旧名） | **命中**：`fileOpenSettings.loadSettingsDeps` 用 `Promise.all([hostImport('@deepseek-ai/dsh-settings'), hostImport('schemastery')])`，裸名在 npm 安装树下解析失败 → 整体 reject → `installOpenSettingsSection` 早退 → **「设置 section 尚未装配」**（开发形态因插件自带 devDependency 副本而不复现） | **已适配（0.5.2）**：schema 库改候选链解析（新名优先、回退旧名），`dsh-settings` 独立解析且不再拖垮整体；命中库名进兼容性报告 |
-| `0.1.7-alpha.1`（09-22）线 | ① **`settings.installSection` 移除**：settings.yaml 一次性导入 profile 插件配置，设置值 = loader entry Config（`SettingsForms.describe/update`，ns=profile entry id，revision 冲突抛 `SettingsConflictError`）；② **client `settingsScope` 服务移除** → 新 `configForms`（`ctx.configForms.get(entryId)` → `ConfigForm` 快照/写队列），官方包改走 `remote.settings` 镜像；③ 会话日志 V4（文件名 `session.jsonl[.zstd]` 不变，perf 仅 stat）；④ 官方新增 Excel 预览（含 **CSV/TSV**）与 `archiveSession(stopActivity)/pin/unpin`（持久标志位 `archivedSessionIds`，**不搬目录**，与插件 sessions-archive 搬移双轨）；⑤ 插件 manifest 可声明 `icon`（SVG/PNG/JPEG/WebP ≤256KiB）+ **包根 `locale/<lang>.json`**（en 必须，平面键 `title/description`，fallback 到 package.json name/description，实证 `readPluginMeta`/`dictionariesOf`）；⑥ Config schema 字段级 `.volatile()` 免重载；⑦ `--dump-config-schema` 导出 patch JSON Schema；⑧ Remote 二进制传输 | ① **命中**：`runSettingsInstall` 恒降级 `none` → **新增 forms 策略**：describe+update 在场即记 forms、订阅 document-updated 推 hooks；插件新增 **`export const Config = buildSettingsSchema(z)`**（与 section schema 同源，全字段默认值 → undefined/空配置经 schemastery 自动填充，rc/alpha 两代 cordis 启动校验实测必过）；读写统一 `sectionOf`（ns+形状双校验）与 `updateSection`（冲突重读重试一次）；② **命中 P0**：client inject 含 `settingsScope` = 整客户端停等 → 移出 inject + `compat.settingsBridge` 四级探测（configForms→webUiSettings→settingsScope→无）+ 15×2s 晚到重试 + `mountSettingsSyncs` 就绪重挂；③ 无影响；④ CSV/TSV **决策：不让位**（可编辑性优先，同 avif 例外先例，注释+测试落码）；perf 恢复接 `unarchiveOfficial` 幂等清官方标志 + 面板行 `archived/pinned` 徽标（`registryFlags/markOfficialFlags`，缺服务/字段静默降级）；⑤ **已落** `package.json icon`（assets/icon.svg 669B）+ `locale/en.json`/`locale/zh.json`（files 已含 locale）+ 设置字段 `nativeOpenExts`（shared/nativeOpen.ts 单一事实源：文件树原生打开 + claim canOpen 同步让位，默认=让位清单并集）；⑥ 无自定义 config 字段 → patch 注释预留写法；⑦ `audit-dsh-compat.mjs --dump-config-schema` 子命令（flag 预检 + 拿不到优雅跳过）；⑧ 新增 `edrv.readBinary`（octet-stream + x-edrv-* 头）+ 任何失败自动回退 base64 路径，routes.ts 已接线；⑨ 图片缩放对齐官方统一缩放（适应宽度默认/±10%/页签记忆），PDF 补百分比指示 | **已适配（0.7.x / 0.1.7-alpha.1 批次）** · forms + configForms 双策略 |
-| `0.1.7-alpha.2`（09-23 实测） | `SettingsForms.describe` 按 **`volatileForm(schema)` 门槛**下发 entry：Config schema 无任何 `.volatile()` 字段 → **整条 entry 被跳过**（ns 不出现在 describe、`update/mutate` 抛 `has no volatile fields`）。该门槛 alpha.1 即存在（unpkg 源码逐字比对），alpha.1 批次 E2E 未闭环故未暴露；alpha.2 的 configForms API 与 alpha.1 一致，无其他新增破坏 | **命中 P0**：插件 12 字段全未标 + `@deepseek-ai/schemastery` 仅在 peerDependencies 且实际解析到 **3.18.1（无 `.volatile()` 方法）** → client `configForms` 恒 `status='unavailable'` → 设置页「设置服务暂不可用，当前使用自动选择」+ 控件禁用；host 写入同抛错 | **已适配（0.8.x）**：`buildSettingsSchema(z, { volatile: true })`（`markVolatile` 能力守卫：缺方法/抛错降级、模块加载不炸）+ 配置读点收敛 `configField/unref`（cordis `resolveConfig` 把 volatile 字段解析成稳定引用，不解引用则回退值全落默认）+ settings 初值直读（不赌 document-updated 首事件时序）+ `@deepseek-ai/schemastery` 移入 dependencies 钉 `~3.18.4` + `TESTED_DSH_MAX=0.1.7-alpha.2` + 兼容页「Config volatile 字段」行与条件告警；**section 安装（legacy/service）schema 不标**——旧线无门槛且避免 `scope.get()` 返回引用污染读取 |
-| 高于已实测版本 | 未知 | 能力探测降级 + 报告警告「高于已实测版本 0.1.7-alpha.2」 | 例行适配（见第四节） |
+此表保留适配来源，**不代表 0.13 在每一条旧版本线上重新完成了现场回归**。
 
-### 加载关审计表（回答"运行时适配能否过加载关"）
+| DSH 版本线 | 当时核对的变化 | 插件处理历史 |
+|---|---|---|
+| `0.1.0/0.1.1` rc | 旧 `installSettingsSection`；客户端 runtime 提供基础服务 | legacy 设置策略，插件早期基线 |
+| `0.1.2-alpha.1` 起 | 设置安装转为 provider 方法；客户端服务提供包拆分 | 0.1.43 增加 service 策略，调整装载兼容 |
+| `0.1.2-alpha.3/.4` | 可选 SQLite 后端变化、Session 事件 API 调整 | 当时插件未依赖相应接口；未来新增依赖须重新检查 |
+| `0.1.5-alpha.1` 起 | 官方右侧 Sidebar 与文件资源打开入口 | 官方侧栏优先，旧形态保留回退 |
+| `0.1.5` 安装树 | vendored schema 包迁到 `@deepseek-ai/schemastery` | 新旧包名候选解析，避免 npm 安装态缺裸包 |
+| `0.1.6-alpha.1` | MCP SDK v2、文件链接与终端能力变化 | Host 入口锚点解析，避免命中开发副本 |
+| `0.1.6-alpha.2` | 客户端会话多实例、list.current 移除、官方 Office 预览等 | `uiSession.current` 优先的会话取值链；Office 等类型让位；卸载清理复核 |
+| `0.1.7-alpha.1` | 设置转为 profile Config / SettingsForms；client configForms；二进制与预览能力变化 | forms 策略、可选设置桥、二进制读取通道与图标候选兼容 |
+| `0.1.7-alpha.2` 核对 | Config 无 volatile 字段会导致表单不可用；该门槛 alpha.1 已存在 | Config volatile、读取解引用、schema 依赖钉定及诊断；不误归因为 alpha.2 首次引入 |
+| `0.1.7-rc.2` 本轮基线 | 官方认证、profile、shortcut、scope/资源/指令等实际契约 | 0.13 增量见第二节，现场完成范围见第五节 |
 
-| 关口 | rc.2（现网） | alpha.2（备份树实证） | 结论 |
-|---|---|---|---|
-| host 静态导入 | 对 `@deepseek-ai/*` 零静态导入 | 同 | 两版皆过 |
-| host 服务级 inject（sessions/fs/webServer/loader/tools/workspaceRegistry/agents） | 提供者：dsh-session/dsh-fs/dsh-host-webserver/…/dsh-workspace | **同名同提供者** | 两版皆过 |
-| client 模块加载 | `__ModuleLoader__.load`，源码零 `@deepseek-ai` require | 同 | 两版皆过 |
-| client 服务级 inject（slots/timer/locale/connection/remote/workspaces/sessions/conversation；**设置桥服务全部移出 inject**——0.1.6 `settingsScope` / 0.1.7 `configForms` 桥名互斥，写死任一都会在另一版本停等 → `compat.settingsBridge` 探测 + 15×2s 有界重试 + whenReady 重挂同步） | slots←dsh-client-runtime | slots←dsh-client-ui-renderer；workspaces←dsh-api-workspace-controller；其余同名 | 两版皆过（0.1.7 复验：settingsScope 提供方包已删该服务） |
-| `dsh.client.inject`（包名清单） | runtime/ui-slots | 已亡 id | 收敛为空 + rc.2 实证回滚门（`docs` 记录于 0.1.43 交付时复验） |
+## 4. 版本与依赖范围不能混为一谈
 
-## 三、版本探测约定
+- **版本探测**：优先从运行 Host 入口解析 `dsh-settings` 元数据，再按
+  `dsh-web-app → dsh-base → dsh` 候选回退；全部失败报告未知并使用能力探测。
+- **运行时告警**：`TESTED_DSH_MAX` 是兼容报告的验证上界，不是 npm peer 区间。
+  发布前需将它与最终验收记录一起核对；有限现场通过不意味着所有功能或平台都通过。
+- **npm SemVer**：默认排除未明确纳入对应版本元组的预发布版本。
+  例如单独的 `>=0.1.0-rc.1 <0.2.0-0` 不自动覆盖 `0.1.7-rc.2`，需要相应
+  `>=0.1.7-0` 分支。上界 `<0.2.0-0` 继续排除未适配的 0.2.0 预发布和正式版。
+- **DSH gate**：其 `includePrerelease` 行为与 npm 默认检查分别验证；
+  [peerDeps.test.ts](../tests/peerDeps.test.ts) 使用真实 semver 包测试两个判据，
+  不用自写字符串比较代替 npm 的范围语义。
+- **本轮 lockfile**：变更包含 schema/cosmokit 去重与开发测试依赖 `semver@7.8.5`，
+  并未把已锁定的 DSH 包统一升级到 rc.2。旧开发依赖混线产生的 peer warnings 是既有
+  依赖树现象；既不能据此断言当前 Host 运行旧版，也不能把扩展 peer 声明当成升级完成。
 
-- 以运行时解析的 `@deepseek-ai/dsh-settings` 版本代表 DSH 核心版本：核心包发布锁步同版
-  （rc.2 / alpha.2 全树同版实证）；候选降级链 `dsh-settings → dsh-web-app → dsh-base → dsh`。
-- 解析失败返回空串：报告「未探测到版本号」，功能按能力探测运行。
-- 上界常量 `TESTED_DSH_MAX = '0.1.7-alpha.2'`（src/compat.ts）：超过则报告警告，驱动例行适配。
+审计脚本扫描已安装包的导出/服务/UI 原语，不计算 npm peer 范围，也不是安全或完整
+运行验收工具；其输出“审计通过”只针对脚本检查的项目。本轮无需修改该脚本。
 
-## 四、新 DSH 版本发布后的例行适配清单
+## 5. 本轮验证记录与未完成项
 
-1. 读 release notes（https://github.com/deepseek-ai/deepseek-harness/releases）中「其他变更/破坏性」条目；
-2. `node scripts/audit-dsh-compat.mjs <旧树> <新树>`（新树可从 `_backup`/`npm pack` 取），看导出面/服务面差异；
-3. 对照第二节矩阵逐行评估：命中「影响」列即新增/调整适配器（改 `runSettingsInstall` 分派或在
-   `src/dshVersion.ts` 增判定），并补单测（tests/dshVersion.test.ts、tests/settingsAdaptive.test.ts）；
-4. 更新本文档矩阵、`TESTED_DSH_MAX`，跑 `npx tsc --noEmit` + `npx vitest run` + `npm run pack`；
-5. 用户侧重启后查看兼容性报告与日志（应显示 `DSH <版本> · <策略>`，无「设置 section 安装」警告）。
+已记录的现场范围为 **Windows 官方已签名打包 Desktop 的隔离启动、插件侧栏挂载，
+以及已鉴权同源 MCP/devForm 接口访问**。这不是替代 Desktop 的开发服务器验证。
 
-## 五、0.1.43 交付验证记录
+| 项目 | 本轮记录 |
+|---|---|
+| 官方安装树 | Host 模块锚点 `0.1.7-rc.2`；与插件旧 devDependencies 区分 |
+| Desktop 启动、侧栏、同源接口 | 已进行上述限定范围的真实应用检查 |
+| 最终保存、预览、设置读写 | **待发布维护者完成现场验收并补结果** |
+| 最终编译/定向回归/build/打包统计 | **待发布维护者在最终合并树补充命令、范围、数量、结果和耗时** |
+| Unity | 证据限于 C# 编译桩与 9 项 hint 探针；**未运行真实 Unity EditMode** |
+| Linux/macOS | **本轮未进行现场验收**，不能宣称全平台实测 |
+| 0.12 发布基线 | `v0.12.0`，tag 对应 `618fcbb`；该基线的 CI 与 GitHub Release 已确认通过 |
 
-- [x] typecheck / 新增单测 / 全量 vitest（402 通过；3 失败均为本机 VS Code 真实
-      tangzx.emmylua 扩展干扰的环境前置问题，与本次改动无关）
-- [x] audit 双树断言通过（rc.2 ↔ 0.1.2-alpha.2）
-- [ ] rc.2 现网 E2E：swap-vscode-mode.ps1 → 重启 → 设置持久化 / 兼容报告（`0.1.1-rc.2 · legacy`）
-- [ ] alpha 实测闭环（Web 自动更新拉取 alpha 时）：兼容报告应显示 `0.1.2-alpha.x · service`，
-      设置持久化可用；若 client 装配异常请回报（ADAPT-002 决策点：dsh.client.inject 是否需要按版本区分）
+最终状态集中记录于 [0.13.0 发布说明](release-0.13.0.md)，不要把历史通过数挪作本版
+统计，也不要把部署、同源 RPC 成功或一次编译扩大解释为完整用户流程成功。
 
-## 六、回滚
+## 6. 后续版本适配流程
 
-改动前备份在 `plans/version-adapt/backup-<ts>/`；发布态回退 = 安装既有 `dsh-vscode-mode-0.1.42.tgz`。
-`dsh.client.inject` 收敛若在 rc.2 出现 web boot pending/槽位缺失 → 恢复备份 package.json 原清单重建。
+1. 阅读官方发布说明并核对实际安装树，区分新增 API 与已经存在但此前遗漏的能力。
+2. 运行 `node scripts/audit-dsh-compat.mjs <旧树> <新树>`；这里的目录直接包含
+   `dsh-settings` 等包，通常是安装根下的 `node_modules/@deepseek-ai`。
+3. 按影响面检查认证、URL、profile、设置、shortcuts、MCP scope、生命周期等契约，
+   为命中的分支补最小回归；无需跑全量测试来替代影响面分析。
+4. 运行类型检查、明确指定文件的定向测试，以及受影响产物构建/打包检查；可通过
+   `--dump-config-schema <包目录> [profile]` 做可选 schema 检查，跳过不等于验证通过。
+5. 重启或刷新**原应用入口**验证对应流程，记录操作、数据状态与错误日志。
+   只有对应 watcher 和 HMR 均工作时才依赖客户端自动更新。
+6. 更新本矩阵、告警上界与发布说明；声明尚未现场覆盖的版本和平台。
+
+真实官方 MCP 集成用例使用 `DSH_MCP_HOST_ROOT` 指向 **harness 根目录**，与审计脚本
+的 `node_modules/@deepseek-ai` 参数层级不同；未提供该环境变量时会跳过该集成用例。
+
+## 7. 部署与回滚
+
+0.13 升级、profile 备份、项目 MCP 迁移、launcher/Unity 更新及回退 0.12 的步骤见
+[发布说明中的迁移和回滚](release-0.13.0.md#迁移与部署)。Host 代码变更需要重启 DSH；
+回退代码不能自动撤销外部配置和桥接文件变化，须按所选 profile 与备份恢复，不能
+把历史 0.1.43 的临时备份路径当成当前机器可用的恢复点。

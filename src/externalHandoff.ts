@@ -1,70 +1,111 @@
-/**
- * dsh-vscode-mode host — 深链移交（避免重复打开 DSH 页面）。
- * launcher 投递待打开请求（edrv.external.handoff）→ 已打开页面 3s 轮询领取（edrv.external.pending）
- * 并就地执行打开规则；15s 内无页面轮询过 = 无活跃页面 → launcher 回退打开新页。
- * token 防多实例串扰；TTL 兜底防陈旧悬挂。模块级状态（host 单进程单例）。
- * 作者 ddj 2026-09-08
- */
 import { randomUUID } from 'node:crypto'
+import { OPEN_TTL_MS } from './shared/externalOpen.js'
 
-/** 一次外部打开请求（launcher 投递）。 */
-export interface ExternalOpenRequest {
-  paths: string[]
-  line?: number
-  column?: number
+export interface ExternalOpenRequest { paths: string[]; line?: number; column?: number }
+export interface OpenClaim extends ExternalOpenRequest { token: string; leaseId: string }
+export interface OpenReceipt { token: string; clientId: string; leaseId: string; success: boolean; error?: string }
+interface Pending extends ExternalOpenRequest {
+  token: string; at: number; clientId?: string; leaseId?: string; leaseAt?: number
+  success?: boolean; error?: string
 }
-
-/** 待打开 TTL：超时未领取即丢弃（launcher 回退已自行处理）。 */
-const PENDING_TTL_MS = 60_000
-/** 活跃页面判定窗口：窗口内有过 pending 轮询 = 有页面在。 */
-const PRESENCE_WINDOW_MS = 15_000
-
-let pending: (ExternalOpenRequest & { token: string; at: number }) | null = null
+const pending = new Map<string, Pending>()
+const LEASE_MS = 30_000
 let lastPollAt = 0
 
-/**
- * 投递一次外部打开请求；返回活跃页面数（0 = launcher 应回退开新页）与移交 token。
- * @author ddj 2026年09月08号
- * @param req 打开请求
- * @returns 活跃页面数与 token
+/** @public @author ddj 2026年09月28号
+ * Queue a bounded request without replacing earlier opens.
+ * @param req Paths and navigation coordinates.
+ * @param token Optional inbox request ID.
+ * @param createdAt Original producer timestamp; queue ingestion never extends it.
+ * @returns Presence and stable request token.
  */
-export function handoffOpen(req: ExternalOpenRequest): { clients: number; token: string } {
-  const token = randomUUID()
-  pending = { ...req, token, at: Date.now() }
-  return { token, clients: clientsAlive() ? 1 : 0 }
+export function handoffOpen(req: ExternalOpenRequest, token: string = randomUUID(), createdAt = Date.now()): { clients: number; token: string } {
+  prunePending()
+  const clients = Date.now() - lastPollAt <= 15_000 ? 1 : 0
+  if (!Number.isSafeInteger(createdAt) || createdAt + OPEN_TTL_MS <= Date.now()) return { token, clients }
+  if (!pending.has(token)) {
+    if (pending.size >= 128) throw new Error('外部打开队列已满')
+    pending.set(token, { ...req, paths: [...req.paths], token, at: createdAt })
+  }
+  return { token, clients }
 }
 
-/**
- * 页面轮询：刷新活跃态并领取待打开请求（取走即清，多页面仅一方执行）。
- * @author ddj 2026年09月08号
- * @returns 待打开请求或 null
+/** @public @author ddj 2026年09月28号
+ * Claim one request; repeated heartbeats renew this client's active lease.
+ * @param args Authenticated page identity.
+ * @returns A leased request or null.
  */
-export function pollPending(): ExternalOpenRequest | null {
+export function pollPending(args: { clientId: string; busy?: boolean }): OpenClaim | null {
   lastPollAt = Date.now()
-  if (!pending) return null
-  if (Date.now() - pending.at > PENDING_TTL_MS) {
-    pending = null
+  prunePending()
+  if (!args?.clientId || args.clientId.length > 128) return null
+  const active = [...pending.values()].find((row) => row.clientId === args.clientId && row.success === undefined)
+  if (active && Date.now() - (active.leaseAt ?? 0) < LEASE_MS) {
+    active.leaseAt = Date.now()
     return null
   }
-  const taken: ExternalOpenRequest = { paths: pending.paths, line: pending.line, column: pending.column }
-  pending = null
-  return taken
+  if (args.busy) return null
+  for (const row of pending.values()) {
+    if (row.success !== undefined || (row.leaseAt && Date.now() - row.leaseAt < LEASE_MS)) continue
+    row.clientId = args.clientId
+    row.leaseId = randomUUID()
+    row.leaseAt = Date.now()
+    return { paths: row.paths, line: row.line, column: row.column, token: row.token, leaseId: row.leaseId }
+  }
+  return null
 }
 
-/**
- * 查询移交是否已被页面领取（take=true 时未领取则取走清除，供 launcher 回退开新页）。
- * @author ddj 2026年09月08号
- * @param token 移交 token
- * @param take 未领取时是否取走清除
- * @returns delivered=true = 已有页面领取（或已被更新的请求取代）
+/** @public @author ddj 2026年09月28号
+ * Accept only the current lease's actual editor completion.
+ * @param receipt Claimed request identity and result.
+ * @returns Whether the receipt was accepted.
  */
-export function pendingState(token: string, take: boolean): { delivered: boolean } {
-  const delivered = pending === null || pending.token !== token
-  if (take && !delivered) pending = null
-  return { delivered }
+export function ackPending(receipt: OpenReceipt): boolean {
+  prunePending()
+  const row = pending.get(receipt.token)
+  if (!row || Date.now() >= row.at + OPEN_TTL_MS || row.clientId !== receipt.clientId || row.leaseId !== receipt.leaseId) return false
+  if (!row.leaseAt || Date.now() - row.leaseAt >= LEASE_MS) return false
+  if (row.success !== undefined) return row.success === receipt.success
+  row.success = receipt.success === true
+  row.error = receipt.error?.slice(0, 1000)
+  return true
 }
 
-/** 活跃页面判定。 */
-function clientsAlive(): boolean {
-  return Date.now() - lastPollAt <= PRESENCE_WINDOW_MS
+/** @public @author ddj 2026年09月28号
+ * Inspect completion; absence and mere delivery never imply success.
+ * @param token Request identity.
+ * @param take Legacy cancellation flag, only cancels unclaimed requests.
+ * @returns Terminal completion state.
+ */
+export function pendingState(token: string, take = false): { delivered: boolean; completed: boolean; error?: string } {
+  prunePending()
+  const row = pending.get(token)
+  if (take && row && !row.leaseId) cancelPending(token, '打开已取消')
+  return { delivered: row?.success === true, completed: row?.success !== undefined, error: row?.error }
 }
+
+/** @public @author ddj 2026年09月28号
+ * Cancel queued or claimed work while retaining its identity against replay.
+ * @param token Original request ID.
+ * @param error Terminal diagnostic.
+ */
+export function cancelPending(token: string, error = '打开超时，请重试'): void {
+  const row = pending.get(token)
+  if (!row) return
+  if (row.success === undefined) { row.success = false; row.error = error }
+  row.clientId = undefined
+  row.leaseId = undefined
+  row.leaseAt = undefined
+}
+
+/** @private @author ddj 2026年09月28号 Expire at the original deadline and retain bounded replay tombstones. */
+function prunePending(): void {
+  const now = Date.now()
+  for (const [key, row] of pending) {
+    if (now >= row.at + OPEN_TTL_MS && row.success === undefined) cancelPending(key)
+    if (now >= row.at + OPEN_TTL_MS * 2) pending.delete(key)
+  }
+}
+
+/** @public @author ddj 2026年09月28号 Release profile-scoped state during host disposal. */
+export function clearPending(): void { pending.clear(); lastPollAt = 0 }

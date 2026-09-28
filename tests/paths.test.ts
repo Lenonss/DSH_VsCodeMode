@@ -5,8 +5,8 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { mkdtemp, mkdir, readdir, rm, utimes, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { homedir, tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
 import {
   DSH_HOME_ENV,
   TREE_CACHE_SCHEMA,
@@ -34,9 +34,16 @@ afterEach(async () => {
 })
 
 describe('dshHome', () => {
-  it('DSH_HOME 优先（去空白）', () => {
-    expect(dshHome({ [DSH_HOME_ENV]: 'D:/Custom' })).toBe('D:/Custom')
-    expect(dshHome({ [DSH_HOME_ENV]: '  C:/WS  ' })).toBe('  C:/WS  ')
+  it('DSH_HOME 使用官方 resolve 语义且保留非空路径中的空白', () => {
+    expect(dshHome({ [DSH_HOME_ENV]: home })).toBe(resolve(home))
+    expect(dshHome({ [DSH_HOME_ENV]: '  custom-home  ' })).toBe(resolve('  custom-home  '))
+  })
+  it('展开支持的 tilde 前缀并将相对路径转为绝对路径', () => {
+    expect(dshHome({ DSH_HOME: '~' })).toBe(resolve(homedir()))
+    expect(dshHome({ DSH_HOME: '~/.dsh-desktop' })).toBe(resolve(homedir(), '.dsh-desktop'))
+    expect(dshHome({ DSH_HOME: '~\\.dsh-desktop' })).toBe(resolve(homedir(), '.dsh-desktop'))
+    expect(dshHome({ DSH_HOME: '~//nested' })).toBe(resolve(join(homedir(), '/nested')))
+    expect(dshHome({ DSH_HOME: './relative-home' })).toBe(resolve('relative-home'))
   })
   it('空/空白视为未设置 → 默认 ~/.dsh', () => {
     const h = dshHome({ [DSH_HOME_ENV]: '' })

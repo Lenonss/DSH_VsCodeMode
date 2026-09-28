@@ -1,16 +1,9 @@
 /**
- * peerDependencies 卫生与预发布区间守卫（G5：DSH 版本适配）。
- *
- * 背景：本插件跨 rc / alpha 多条版本线运行，而 semver 有个易踩的规则 ——
- * 比较器若不含预发布标识（如 `>=0.1.0-rc.1`），则**任何**预发布版本都不满足该区间。
- * 实测：`satisfies('0.1.6-alpha.2', '>=0.1.0-rc.1 <0.2.0-0') === false`。
- * 即原 peer 区间表面覆盖 alpha 线，实际一个都匹配不上；故每条 alpha 版本线都要
- * 显式写成 `<主>.<次>-0` 形式（如 `>=0.1.6-0 <0.2.0-0`）才真正放行预发布。
- *
- * 本测试不依赖 semver（插件树未安装该依赖），改为断言区间字符串包含所需的
- * 预发布比较器 —— 足以守住「区间必须对 alpha 线可见」这一契约。
- * 作者 ddj 2026年09月18号
+ * Test peer declarations using real semver rules.
+ * npm excludes undeclared prerelease tuples; DSH's compatibility gate passes includePrerelease.
+ * @author ddj 2026年09月28号
  */
+import { satisfies } from 'semver'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -23,7 +16,20 @@ const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as {
 }
 
 /** 本插件实际需要跨版本运行的 DSH alpha 版本线（0.1.2 起为 alpha 线）。 */
-const ALPHA_LINES = ['0.1.2', '0.1.3', '0.1.4', '0.1.5', '0.1.6']
+const ALPHA_LINES = ['0.1.2', '0.1.3', '0.1.4', '0.1.5', '0.1.6', '0.1.7']
+
+for (const [name, range] of Object.entries(pkg.peerDependencies ?? {}).filter(([key]) => key.startsWith('@deepseek-ai/dsh-'))) {
+  describe(name + ' semantic range', () => {
+    it.each(['0.1.5-rc.3', '0.1.6-alpha.2', '0.1.7-alpha.2', '0.1.7-rc.1', '0.1.7-rc.2'])('accepts %s in npm and the DSH gate', (version) => {
+      expect(satisfies(version, range)).toBe(true)
+      expect(satisfies(version, range, { includePrerelease: true })).toBe(true)
+    })
+    it.each(['0.2.0-alpha.1', '0.2.0', '1.0.0'])('rejects unadapted %s', (version) => {
+      expect(satisfies(version, range)).toBe(false)
+      expect(satisfies(version, range, { includePrerelease: true })).toBe(false)
+    })
+  })
+}
 
 describe('peerDependencies', () => {
   const peers = pkg.peerDependencies ?? {}

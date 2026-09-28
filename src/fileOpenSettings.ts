@@ -8,8 +8,7 @@
  * 全程 try/catch，不产生未捕获 rejection。
  * 作者 ddj 2026年08月24号 / 2026年08月26号 / 2026年09月02号 / 2026年09月22号 / 2026年09月23号
  */
-import { createRequire } from 'node:module'
-import { pathToFileURL } from 'node:url'
+import { loadHostModule as hostImport } from './hostImport.js'
 import type { Ctx } from './store.js'
 import { KEYBINDING_DEFAULTS } from './shared/keybindings.js'
 import { EDITOR_LIMIT_DEFAULT } from './shared/editorLimit.js'
@@ -55,28 +54,6 @@ export interface SettingsDeps {
 export type SettingsDepsLoader = () => Promise<SettingsDeps | null>
 
 let depsPromise: Promise<SettingsDeps | null> | undefined
-
-/**
- * 宿主锚点动态导入：先经 process.argv[1]（DSH 启动脚本所在树）解析并加载目标包，
- * 避开本插件自身 node_modules 的 dev 依赖副本（dev-link 下 import() 相对插件位置
- * 解析，会命中 rc 线旧包 dsh-settings@0.1.0-rc.8）；argv[1] 缺失或解析失败回退
- * 普通 specifier import。
- * @author ddj 2026年09月15号
- * @param specifier 包名
- * @returns 加载的模块命名空间
- */
-async function hostImport(specifier: string): Promise<unknown> {
-  const entry = process.argv[1]
-  if (entry) {
-    try {
-      const resolved = createRequire(entry).resolve(specifier)
-      return await import(pathToFileURL(resolved).href)
-    } catch {
-      /* 锚点不可用：回退普通 import */
-    }
-  }
-  return import(specifier)
-}
 
 /**
  * schema 库候选名（新名在前）。

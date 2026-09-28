@@ -18,6 +18,8 @@
  * 作者 ddj 2026年09月29号 / 2026年09月21号
  */
 import { spawn, type ChildProcess } from 'node:child_process'
+import { childEnv } from '../childEnv.js'
+import { stopTree } from '../processTree.js'
 import { join } from 'node:path'
 import { createFrameParser, encodeMessage } from '../lsp/jsonrpc.js'
 import { sourceBaseOf, sourceKeyOf, sourcePathOf, normalizeSourcePath } from './sourcePath.js'
@@ -288,9 +290,18 @@ export class DapSession {
 
   // ---------------------------------------------------------------- 内部实现
 
-  /** spawn 适配器进程并接好帧解析。 */
+  /**
+   * 启动独立适配器进程组并接入协议，清理隐式宿主凭据。
+   * @private
+   * @author ddj 2026年09月28号
+   * @param spec 适配器规格
+   * @throws spawn 同步失败
+   */
   private spawnAdapter(spec: DapAdapterSpec): void {
-    const child = spawn(spec.command, spec.args, { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true })
+    const child = spawn(spec.command, spec.args, {
+      stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
+      detached: process.platform !== 'win32', env: this.adapterEnv(),
+    })
     this.child = child
     const parser = createFrameParser()
     child.stdout?.on('data', (chunk: Buffer) => {
@@ -300,11 +311,16 @@ export class DapSession {
       log.debug('[dap-adapter] ' + chunk.toString('utf8').trim())
       this.stderrTail = (this.stderrTail + chunk.toString('utf8')).slice(-STDERR_TAIL_CAP)
     })
-    child.on('error', (error) => this.fail('适配器进程错误：' + String(error)))
+    child.on('error', (error) => {
+      if (this.child === child) this.fail('适配器进程错误：' + String(error))
+    })
+    child.stdin?.on('error', (error) => {
+      if (this.child === child) this.fail('适配器 stdin 错误：' + String(error))
+    })
     child.on('exit', (code) => {
-      if (this.child === child && this.phase !== 'idle' && this.phase !== 'terminated') {
-        this.fail('适配器退出（code=' + code + '）' + this.stderrSuffix())
-      }
+      if (this.child !== child) return
+      if (this.phase === 'idle' || this.phase === 'terminated') this.killChild()
+      else this.fail('适配器退出（code=' + code + '）' + this.stderrSuffix())
     })
   }
 
@@ -529,18 +545,35 @@ export class DapSession {
     this.setPhase('terminated')
   }
 
-  /** 杀适配器进程树（Windows taskkill /T /F，同 LSP transport 口径）。 */
+  /**
+   * 清理父环境后合并 launch 配置显式 env，null 表示移除该项。
+   * @private
+   * @author ddj 2026年09月28号
+   * @returns 适配器的环境副本
+   */
+  private adapterEnv(): NodeJS.ProcessEnv {
+    const explicit: NodeJS.ProcessEnv = {}
+    const raw = this.config?.raw?.env
+    if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+      for (const [key, value] of Object.entries(raw)) {
+        if (typeof value === 'string' || value === null) explicit[key] = value ?? undefined
+      }
+    }
+    return childEnv(explicit)
+  }
+
+  /**
+   * 解除会话拥有权并终止适配器进程树；不先杀根进程。
+   * @private
+   * @author ddj 2026年09月28号
+   * @description 同时清理所有待处理请求与计时器。
+   */
   private killChild(): void {
     const child = this.child
     this.child = null
     for (const entry of this.pending.values()) { clearTimeout(entry.timer); entry.resolve(null) }
     this.pending.clear()
-    if (!child) return
-    try { child.kill() } catch { /* 忽略 */ }
-    if (process.platform === 'win32' && child.pid) {
-      try { spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' }) } catch { /* 忽略 */ }
-    }
-    setTimeout(() => { try { child.kill('SIGKILL') } catch { /* 忽略 */ } }, 1500).unref?.()
+    if (child) stopTree(child, (line) => log.warn('[dap] ' + line))
   }
 
   /** 相位切换（running→running 等幂等跳过）。 */

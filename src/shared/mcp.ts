@@ -1,7 +1,7 @@
 /** dsh-vscode-mode MCP 管理共享数据契约。作者 ddj 2026年08月22号 */
 
 export type MpcTransport = 'stdio' | 'streamable-http'
-export type MpcStatus = 'connected' | 'connecting' | 'error' | 'disabled'
+export type MpcStatus = 'connected' | 'connecting' | 'error' | 'disabled' | 'configured' | 'unverified'
 
 export interface MpcTool {
   name: string
@@ -18,6 +18,7 @@ export interface MpcConfig {
   url?: string
   headers?: Record<string, string>
   toolCallTimeoutMs?: number
+  maxInstructionBytes?: number
   failOnStartupError?: boolean
   reconnect?: Record<string, unknown>
 }
@@ -29,6 +30,8 @@ export interface MpcServer {
   transport: MpcTransport
   config: MpcConfig
   status: MpcStatus
+  /** Mounted official plugin fibers, not verified live connections. */
+  instanceCount?: number
   toolCount: number
   tools: MpcTool[]
   error?: string

@@ -6,7 +6,9 @@
  */
 import { applyOfficial, registerThemes } from './theme.js'
 
-export const MONACO_BASE = '/edrv/vendor/monaco/vs'
+import { appUrl } from '../../shared/appUrl.js'
+
+export const MONACO_BASE = appUrl('/edrv/vendor/monaco/vs')
 let monacoPromise = null
 let monacoStage = { phase: 'idle', progress: 0, message: '准备加载 Monaco…' }
 const stageListeners = new Set()

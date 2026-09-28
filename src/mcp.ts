@@ -12,6 +12,7 @@ import {
 } from './compat.js'
 import type { MpcConfig, MpcServer, MpcTool } from './shared/mcp.js'
 import type { Ctx } from './store.js'
+import { checkMcpName } from './mcpProject.js'
 
 export { LEGACY_PROJECT_PREFIX, MCP_PACKAGE, PROJECT_ENTRY_PREFIX, isProjectEntryId }
 
@@ -31,10 +32,17 @@ export function publicConfig(config: Record<string, unknown>): MpcConfig {
   return out as unknown as MpcConfig
 }
 
-/** 从工具注册表读取服务器命名空间下的工具摘要。 */
-export function toolsOf(ctx: Ctx, serverName: string): MpcTool[] {
+/**
+ * Read tool summaries from the caller's exact visible scope.
+ * @public @author ddj 2026年09月28号
+ * @param ctx Host tools service.
+ * @param serverName Server namespace.
+ * @param agent Optional agent scope; omitted for global entries.
+ * @returns Scoped tool summaries, allowing resource-only servers to have zero tools.
+ */
+export function toolsOf(ctx: Ctx, serverName: string, agent?: any): MpcTool[] {
   const tools = ctx.get('tools')
-  const view = tools?.view?.(void 0)
+  const view = tools?.view?.(agent)
   const visible = view?.visible
   if (!(visible instanceof Map)) return []
   const prefix = `mcp__${serverName}__`
@@ -44,7 +52,37 @@ export function toolsOf(ctx: Ctx, serverName: string): MpcTool[] {
   }))
 }
 
-/** 将 loader entry 映射为设置页摘要。 */
+/**
+ * Restore unchanged masked values without inventing credentials for new keys.
+ * @public @author ddj 2026年09月28号
+ * @param next Submitted configuration, including editable unknown fields.
+ * @param previous Last persisted configuration.
+ * @returns Detached configuration with unchanged secrets restored; throws for an orphan mask.
+ */
+export function mergeSecrets(next: Record<string, unknown>, previous: Record<string, unknown>): Record<string, unknown> {
+  const merged = { ...next }
+  for (const field of ['env', 'headers']) {
+    const values = next[field]
+    if (!values || typeof values !== 'object' || Array.isArray(values)) continue
+    const old = previous[field] as Record<string, unknown> | undefined
+    const restored: Record<string, unknown> = Object.create(null)
+    for (const [key, value] of Object.entries(values)) {
+      if (value !== '••••••') { restored[key] = value; continue }
+      if (!old || !Object.hasOwn(old, key)) throw new Error('脱敏凭据没有原值，请重新填写：' + key)
+      restored[key] = old[key]
+    }
+    merged[field] = restored
+  }
+  return merged
+}
+
+/**
+ * Summarize a global entry without treating plugin activation as a successful handshake.
+ * @public @author ddj 2026年09月28号
+ * @param ctx Host services.
+ * @param entry Global loader entry.
+ * @returns Masked status and globally visible tools.
+ */
 export function serverOf(ctx: Ctx, entry: any): MpcServer {
   const config = (entry.options?.config ?? {}) as Record<string, unknown>
   const serverName = typeof config.serverName === 'string' ? config.serverName : entry.options?.id ?? 'unknown'
@@ -53,10 +91,12 @@ export function serverOf(ctx: Ctx, entry: any): MpcServer {
   return {
     id: String(entry.id ?? entry.options?.id ?? serverName),
     serverName,
-    enabled: entry.disabled !== true,
+    enabled: entry.disabled !== true && entry.options?.disabled !== true,
     transport: config.transport === 'streamable-http' ? 'streamable-http' : 'stdio',
     config: publicConfig(config),
-    status: state === 2 ? 'connected' : state === 1 ? 'connecting' : 'error',
+    status: entry.disabled === true || entry.options?.disabled === true ? 'disabled'
+      : state === 2 ? 'unverified' : state === 1 || state === 0 ? 'connecting' : state === 3 ? 'error' : 'configured',
+    instanceCount: entry.fiber ? 1 : 0,
     toolCount: tools.length,
     tools,
     error: state === 3 ? 'MCP 插件未正常运行' : undefined,
@@ -75,17 +115,26 @@ export function listMcp(ctx: Ctx): { servers: MpcServer[] } {
   return { servers: entriesOf(ctx).filter((entry) => !isProjectEntryId(String(entry.id ?? entry.options?.id ?? ''))).map((entry) => serverOf(ctx, entry)) }
 }
 
-/** 保存 MCP 服务配置并触发 loader 热更新。 */
+/**
+ * Save a global loader entry while preserving advanced options and unchanged secrets.
+ * @public @author ddj 2026年09月28号
+ * @param ctx Host loader context.
+ * @param config Submitted global configuration.
+ * @returns Masked server status; project name collisions reject before writing.
+ */
 export async function saveMcp(ctx: Ctx, config: MpcConfig): Promise<MpcServer> {
   validateConfig(config)
+  await checkMcpName(ctx, config.serverName)
   const loader = ctx.get('loader')
   if (!loader) throw new Error('缺少 loader 服务')
   const existing = entriesOf(ctx).find((entry) => !isProjectEntryId(String(entry.id ?? entry.options?.id ?? '')) && entry.options?.config?.serverName === config.serverName)
+  const previous = existing?.options?.config ?? {}
+  const next = mergeSecrets({ ...previous, ...config }, previous)
   if (existing) {
-    await loader.update(existing.id, { config: { ...config } })
+    await loader.update(existing.id, { config: next })
     return serverOf(ctx, loader.resolve(existing.id))
   }
-  const id = await loader.create({ name: MCP_PACKAGE, config: { ...config } })
+  const id = await loader.create({ name: MCP_PACKAGE, config: next })
   return serverOf(ctx, loader.resolve(id))
 }
 

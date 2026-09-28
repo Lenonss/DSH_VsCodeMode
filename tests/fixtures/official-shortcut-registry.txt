@@ -1,0 +1,703 @@
+// Verbatim @deepseek-ai/dsh-client-shortcuts 0.1.7-rc.2 binding/protocol/persistence/registry implementation, MIT. Captured 2026-09-28.
+const keyNames = {
+	Slash: "/",
+	Comma: ",",
+	Period: ".",
+	Backslash: "\\",
+	Backquote: "`",
+	Minus: "-",
+	Equal: "=",
+	BracketLeft: "[",
+	BracketRight: "]",
+	Semicolon: ";",
+	Quote: "'",
+	Enter: "Enter",
+	Escape: "Esc",
+	Space: "Space",
+	Tab: "Tab",
+	Backspace: "Backspace",
+	Delete: "Delete",
+	ArrowUp: "↑",
+	ArrowDown: "↓",
+	ArrowLeft: "←",
+	ArrowRight: "→"
+};
+const modifierOrder = [
+	"control",
+	"alt",
+	"shift",
+	"meta"
+];
+/**
+* Expand logical modifiers, deduplicate, and validate the physical code.
+* @param binding - declared binding.
+* @param platform - receiving device platform.
+* @returns canonical binding; unsupported codes throw during registration.
+*/
+function normalizeBinding(binding, platform) {
+	const codes = [binding.code, ...binding.secondCode === void 0 ? [] : [binding.secondCode]];
+	codes.sort();
+	for (const code of codes) if (!/^(Key[A-Z]|Digit[0-9]|F([1-9]|1[0-9]|2[0-4]))$/u.test(code) && !Object.hasOwn(keyNames, code)) throw new Error(`Unsupported shortcut code: ${code}`);
+	if (codes.length === 2 && codes[0] === codes[1]) throw new Error("Shortcut keys must be distinct");
+	const modifiers = new Set(binding.modifiers.map((value) => value === "primary" ? platform === "macos" ? "meta" : "control" : value));
+	return {
+		code: codes[0],
+		...codes[1] === void 0 ? {} : { secondCode: codes[1] },
+		modifiers: modifierOrder.filter((value) => modifiers.has(value))
+	};
+}
+/**
+* Produce an exact-match index from a normalized binding.
+* @param binding - normalized physical key and modifiers.
+* @returns stable index used for both matching and conflict checks.
+*/
+function bindingKey(binding) {
+	const codes = binding.secondCode === void 0 ? [binding.code] : [binding.code, binding.secondCode].sort();
+	return [...binding.modifiers, ...codes].join("+");
+}
+/**
+* Format keycaps and ARIA; Windows separates modifiers with plus signs, while chord keys remain adjacent.
+* @param binding - normalized binding, or null for an unbound command.
+* @param platform - receiving device platform.
+* @returns visible keycaps; two-key chords omit ARIA shortcuts, which only support one non-modifier key.
+*/
+function presentBinding(binding, platform) {
+	if (binding === null) return {
+		keys: [],
+		aria: void 0
+	};
+	const key = keyNames[binding.code] ?? binding.code.replace(/^(Key|Digit)/u, "");
+	const symbols = platform === "macos" ? {
+		control: "⌃",
+		alt: "⌥",
+		shift: "⇧",
+		meta: "⌘"
+	} : {
+		control: "Ctrl",
+		alt: "Alt",
+		shift: "Shift",
+		meta: "Meta"
+	};
+	const ariaNames = {
+		control: "Control",
+		alt: "Alt",
+		shift: "Shift",
+		meta: "Meta"
+	};
+	const ariaKey = binding.code === "Space" ? "Space" : binding.code === "Escape" ? "Escape" : binding.code.startsWith("Arrow") ? binding.code : key;
+	const second = binding.secondCode === void 0 ? [] : [keyNames[binding.secondCode] ?? binding.secondCode.replace(/^(Key|Digit)/u, "")];
+	const keys = [...binding.modifiers.map((value) => symbols[value]), key];
+	return {
+		keys: [...platform === "windows" ? keys.flatMap((label, index) => index === 0 ? [label] : ["+", label]) : keys, ...second],
+		aria: binding.secondCode === void 0 ? [...binding.modifiers.map((value) => ariaNames[value]), ariaKey].join("+") : void 0
+	};
+}
+/**
+* Check Web combinations: Windows and macOS also admit any three or four modifiers; Linux retains the limited set.
+* @param binding - normalized candidate.
+* @param platform - receiving device platform.
+* @returns whether this combination is admitted; admission does not guarantee browser or system delivery.
+*/
+function isWebBindingAllowed(binding, platform) {
+	if (binding.secondCode !== void 0) return false;
+	if (platform === "windows" || platform === "macos") {
+		if (binding.modifiers.length >= 3) return true;
+		const primary = platform === "macos" ? "meta" : "control";
+		if (binding.modifiers.length === 1 && (["Comma", "Backslash"].includes(binding.code) && binding.modifiers[0] === primary || binding.code === "Backquote" && binding.modifiers[0] === "control")) return true;
+		if (binding.modifiers.length === 2 && binding.modifiers.includes(primary) && (binding.modifiers.includes("alt") || binding.modifiers.includes("shift"))) return true;
+	}
+	return [
+		{
+			code: "Slash",
+			modifiers: ["primary"]
+		},
+		{
+			code: "Comma",
+			modifiers: ["primary", "shift"]
+		},
+		{
+			code: "Period",
+			modifiers: ["primary", "shift"]
+		}
+	].some((candidate) => bindingKey(binding) === bindingKey(normalizeBinding(candidate, platform)));
+}
+//#endregion
+//#region ../../util/values/lib/index.js
+/** Duplicate-install-safe JSON and immutable-value helpers. @module @deepseek-ai/dsh-util-values */
+/**
+* Mark an unreachable closed-union branch.
+* @param value - impossible value; an unhandled typed variant fails at the call site.
+* @param context - optional switch-site label included in the failure message.
+* @returns never; a runtime value that escaped its type always throws.
+*/
+function assertNever(value, context) {
+	const rendered = JSON.stringify(value) ?? String(value);
+	throw new Error(`unreachable variant${context ? ` in ${context}` : ""}: ${rendered}`);
+}
+//#endregion
+//#region lib/types/configuration.js
+/** Validated preference documents and deterministic conflict resolution, without browser dependencies. */
+const record = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+const commandPattern = /^[a-z][a-zA-Z0-9-]*(?:\.[a-zA-Z][a-zA-Z0-9-]*)+$/u;
+/**
+* Validate JSON binding fields before normalization; unknown fields are rejected to prevent lossy rewrites.
+* @param value - file or IPC input.
+* @returns a binding with a supported physical code, or null for explicit removal.
+*/
+function parseBinding(value) {
+	if (value === null) return null;
+	if (!record(value) || Object.keys(value).some((key) => key !== "code" && key !== "secondCode" && key !== "modifiers") || typeof value.code !== "string" || !Array.isArray(value.modifiers) || Object.hasOwn(value, "secondCode") && typeof value.secondCode !== "string" || !value.modifiers.every((modifier) => typeof modifier === "string" && [
+		"primary",
+		"control",
+		"alt",
+		"shift",
+		"meta"
+	].includes(modifier))) throw new Error("Invalid shortcut binding");
+	const binding = {
+		code: value.code,
+		modifiers: value.modifiers,
+		...typeof value.secondCode === "string" ? { secondCode: value.secondCode } : {}
+	};
+	normalizeBinding(binding, "windows");
+	return binding;
+}
+/**
+* Decode the complete document while preserving dormant command overrides.
+* @param raw - stored JSON, or null for a missing document.
+* @returns the accepted document or a classified read failure.
+*/
+function parseShortcutDocument(raw) {
+	if (raw === null) return {
+		schemaVersion: 1,
+		profiles: {}
+	};
+	try {
+		const value = JSON.parse(raw);
+		if (!record(value)) return "invalid";
+		if (typeof value.schemaVersion === "number" && value.schemaVersion > 2) return "future";
+		if (value.schemaVersion !== 1 && value.schemaVersion !== 2 || !record(value.profiles) || Object.keys(value).some((key) => key !== "schemaVersion" && key !== "profiles")) return "invalid";
+		const profiles = {};
+		for (const [profile, overrides] of Object.entries(value.profiles)) {
+			if (!/^(desktop|web):(macos|windows|linux)$/u.test(profile) || !record(overrides)) return "invalid";
+			const bindings = {};
+			for (const [id, binding] of Object.entries(overrides)) {
+				if (!commandPattern.test(id)) return "invalid";
+				const parsed = parseBinding(binding);
+				if (value.schemaVersion === 1 && parsed?.secondCode !== void 0) return "invalid";
+				bindings[id] = parsed;
+			}
+			profiles[profile] = bindings;
+		}
+		return {
+			schemaVersion: value.schemaVersion,
+			profiles
+		};
+	} catch (_error) {
+		return "invalid";
+	}
+}
+/**
+* Check system, editor, and browser reservations using expanded physical modifiers.
+* @param binding - normalized candidate.
+* @param runtime - receiving application shell.
+* @param platform - receiving device.
+* @returns the rejection reason, or null when this combination is allowed.
+*/
+function bindingIssue(binding, runtime, platform) {
+	const { code, modifiers } = binding;
+	if (runtime === "desktop" && (platform === "windows" || platform === "macos")) return null;
+	if (binding.secondCode !== void 0) return "unsupported-key";
+	if (modifiers.length === 0 || modifiers.every((modifier) => modifier === "shift")) return "modifier-required";
+	if ((platform === "windows" || platform === "macos") && modifiers.length >= 3) return null;
+	if (runtime === "web" && (platform === "windows" || platform === "macos") && isWebBindingAllowed(binding, platform)) return null;
+	const primary = modifiers.includes(platform === "macos" ? "meta" : "control");
+	if ([
+		"Escape",
+		"Tab",
+		"Space",
+		"Backspace",
+		"Delete",
+		"ArrowUp",
+		"ArrowDown",
+		"ArrowLeft",
+		"ArrowRight"
+	].includes(code) || code === "Enter" && !modifiers.includes("alt") || primary && [
+		"KeyC",
+		"KeyV",
+		"KeyX",
+		"KeyZ",
+		"KeyY",
+		"KeyQ",
+		"KeyH"
+	].includes(code) || primary && code === "KeyA" && !modifiers.includes("shift") || platform !== "macos" && (modifiers.includes("meta") || modifiers.includes("alt") && ["F4", "F2"].includes(code)) || platform === "macos" && modifiers.includes("control") && modifiers.includes("meta") || platform === "macos" && modifiers.includes("alt") && !primary) return "reserved";
+	if (runtime === "web" && !isWebBindingAllowed(binding, platform)) return "unsupported-browser";
+	return null;
+}
+/**
+* Select the command owner's explicit default for one device profile.
+* @param definition - command identity and per-profile defaults.
+* @param runtime - receiving shell.
+* @param platform - receiving device.
+* @returns the declared physical binding, or undefined for an unbound action.
+*/
+function resolveShortcutDefault(definition, runtime, platform) {
+	return definition.defaults[`${runtime}:${platform}`];
+}
+/**
+* Resolve overrides and conflicts independently of registration order. Explicit overrides displace defaults.
+* @param definitions - active commands.
+* @param document - accepted preferences.
+* @param runtime - receiving shell.
+* @param platform - receiving device.
+* @returns every active command, including unavailable conflicting bindings.
+*/
+function effectiveShortcuts(definitions, document, runtime, platform) {
+	const overrides = document.profiles[`${runtime}:${platform}`] ?? {};
+	const fixed = definitions.flatMap((row) => row.fixed?.map((binding) => ({
+		id: row.id,
+		binding: normalizeBinding(binding, platform)
+	})) ?? []);
+	const rows = definitions.filter((row) => row.fixed === void 0).map(({ id, defaults }) => {
+		const modified = Object.hasOwn(overrides, id);
+		const candidate = modified ? overrides[id] : resolveShortcutDefault({
+			id,
+			defaults
+		}, runtime, platform);
+		const binding = candidate == null ? null : normalizeBinding(candidate, platform);
+		return {
+			id,
+			binding,
+			modified,
+			issue: binding === null ? null : bindingIssue(binding, runtime, platform)
+		};
+	});
+	return rows.map((row) => {
+		const binding = row.binding;
+		return {
+			...row,
+			conflicts: binding === null ? [] : [...new Set([...rows.filter((other) => other.id !== row.id && other.binding !== null && other.issue === null && overlappingBindings(other.binding, binding) && (!row.modified || other.modified)).map((other) => other.id), ...fixed.filter((other) => overlappingBindings(other.binding, binding)).map((other) => other.id)])]
+		};
+	});
+}
+/**
+* Detect identical combinations or a single key contained in a two-key chord.
+* @param left - normalized candidate.
+* @param right - normalized occupied binding.
+* @returns whether both bindings require the same modifiers and overlap.
+*/
+function overlappingBindings(left, right) {
+	if (left.modifiers.join("+") !== right.modifiers.join("+")) return false;
+	if (left.secondCode !== void 0 && right.secondCode !== void 0) return bindingKey(left) === bindingKey(right);
+	return [left.code, left.secondCode].some((code) => code !== void 0 && (code === right.code || code === right.secondCode));
+}
+/**
+* Apply an edit without modifying other profiles or dormant overrides.
+* @param document - accepted document.
+* @param edit - validated operation.
+* @param runtime - current shell.
+* @param platform - current device.
+* @returns the candidate document, pending conflict checks and durable storage.
+*/
+function editShortcutDocument(document, edit, runtime, platform) {
+	const schemaVersion = runtime === "desktop" && (platform === "macos" || platform === "windows") ? 2 : document.schemaVersion;
+	const profile = `${runtime}:${platform}`;
+	let overrides = { ...document.profiles[profile] };
+	switch (edit.type) {
+		case "set":
+			overrides[edit.id] = edit.binding;
+			break;
+		case "reset": {
+			const { [edit.id]: _removed, ...remaining } = overrides;
+			overrides = remaining;
+			break;
+		}
+		case "reset-all":
+			overrides = {};
+			break;
+		/* v8 ignore next -- parseShortcutEdit validates this closed union before persistence. */
+		default: return assertNever(edit, "shortcut edit");
+	}
+	return {
+		schemaVersion,
+		profiles: {
+			...document.profiles,
+			[profile]: overrides
+		}
+	};
+}
+//#endregion
+//#region ../../util/crypto/lib/index.js
+/**
+* Random v4 UUID, minted from `crypto.getRandomValues`.
+* @returns the UUID string.
+*/
+function randomUUID() {
+	const bytes = globalThis.crypto.getRandomValues(new Uint8Array(16));
+	const hex = Array.from(bytes, (byte, index) => {
+		return (index === 6 ? byte & 15 | 64 : index === 8 ? byte & 63 | 128 : byte).toString(16).padStart(2, "0");
+	}).join("");
+	return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+//#endregion
+//#region lib/types/persistence.js
+/** Serialized preference transactions; storage owners publish only accepted writes or read diagnostics. */
+/**
+* Create a disabled initial snapshot for asynchronous adapter startup.
+* @returns a fresh configuration with no accepted persisted state.
+*/
+function initialShortcutConfig() {
+	return {
+		revision: randomUUID(),
+		sequence: 0,
+		document: {
+			schemaVersion: 1,
+			profiles: {}
+		},
+		status: "loading",
+		error: null,
+		usingDefaults: true
+	};
+}
+/** Single-writer coordinator shared by localStorage and Electron's atomic file adapter. */
+var ShortcutPersistence = class {
+	storage;
+	runtime;
+	platform;
+	rereadBeforeWrite;
+	publish;
+	snapshot = initialShortcutConfig();
+	raw;
+	queue = Promise.resolve();
+	definitions = null;
+	active = true;
+	constructor(storage, runtime, platform, rereadBeforeWrite, publish) {
+		this.storage = storage;
+		this.runtime = runtime;
+		this.platform = platform;
+		this.rereadBeforeWrite = rereadBeforeWrite;
+		this.publish = publish;
+	}
+	/**
+	* Install or revoke a product catalog and invalidate drafts from its previous lifetime.
+	* @param definitions - current trusted definitions, or null while the product is not ready.
+	*/
+	setDefinitions(definitions) {
+		this.definitions = definitions;
+		this.accept({ ...this.snapshot });
+	}
+	/** Stop accepting edits or publishing late completions. */
+	dispose() {
+		this.active = false;
+	}
+	/**
+	* Read the current file; failures retain the last accepted document and disable ordinary writes.
+	* @returns the accepted snapshot or diagnostic snapshot.
+	*/
+	readCurrent() {
+		return this.serialize(() => this.read());
+	}
+	/**
+	* Compare the draft revision, validate the complete candidate, then persist before publishing.
+	* @param edit - constrained preference operation.
+	* @param revision - state against which the user reviewed the edit.
+	* @returns a classified outcome and the currently accepted snapshot.
+	*/
+	edit(edit, revision) {
+		return this.serialize(async () => {
+			if (this.rereadBeforeWrite) await this.read();
+			const result = (status) => ({
+				status,
+				snapshot: this.snapshot
+			});
+			if (!this.active || this.definitions === null || this.snapshot.status === "loading") return result("not-ready");
+			if (revision !== this.snapshot.revision) return result("stale");
+			if (this.snapshot.status === "unreadable") return result("unreadable");
+			if ((edit.type === "set" || edit.type === "reset") && !this.definitions.some((row) => row.id === edit.id && row.fixed === void 0)) return result("not-ready");
+			const document = editShortcutDocument(this.snapshot.document, edit, this.runtime, this.platform);
+			const rows = effectiveShortcuts(this.definitions, document, this.runtime, this.platform);
+			const invalid = rows.find((row) => (edit.type === "reset-all" || row.id === edit.id) && (row.issue !== null || row.conflicts.length > 0));
+			const displaced = edit.type === "set" ? rows.find((row) => row.conflicts.includes(edit.id)) : void 0;
+			if (invalid !== void 0 || displaced !== void 0) return {
+				...result("conflict"),
+				...invalid?.issue ? { issue: invalid.issue } : {},
+				conflicts: invalid?.conflicts.length ? invalid.conflicts : displaced === void 0 ? [] : [displaced.id]
+			};
+			try {
+				const raw = `${JSON.stringify(document, null, 2)}\n`;
+				await this.storage.write(raw);
+				this.raw = raw;
+				this.accept({
+					...this.snapshot,
+					document,
+					status: "ready",
+					error: null,
+					usingDefaults: false
+				});
+				return result("saved");
+			} catch (_error) {
+				return result("write-failed");
+			}
+		});
+	}
+	serialize(operation) {
+		const next = this.queue.then(operation);
+		this.queue = next.catch(() => void 0);
+		return next;
+	}
+	accept(snapshot) {
+		this.snapshot = {
+			...snapshot,
+			sequence: this.snapshot.sequence + 1,
+			revision: randomUUID()
+		};
+		if (!this.active) return;
+		try {
+			this.publish(this.snapshot);
+		} catch (error) {
+			console.error("Shortcut configuration subscriber failed:", error);
+		}
+	}
+	async read() {
+		let raw;
+		try {
+			raw = await this.storage.read();
+		} catch (_error) {
+			if (this.snapshot.error !== "read") this.accept({
+				...this.snapshot,
+				status: "unreadable",
+				error: "read"
+			});
+			return this.snapshot;
+		}
+		if (raw === this.raw && this.snapshot.error !== "read") return this.snapshot;
+		this.raw = raw;
+		const document = parseShortcutDocument(raw);
+		if (typeof document === "string") this.accept({
+			...this.snapshot,
+			status: "unreadable",
+			error: document
+		});
+		else this.accept({
+			...this.snapshot,
+			document,
+			status: "ready",
+			error: null,
+			usingDefaults: raw === null
+		});
+		return this.snapshot;
+	}
+};
+//#endregion
+//#region lib/types/client/registry.js
+/** Command registration, normalized default bindings, and synchronous dispatch. */
+/** Application command registry; adapters own event listeners, feature plugins own actions. */
+var ShortcutRegistry = class {
+	runtime;
+	platform;
+	commands = /* @__PURE__ */ new Map();
+	fixedCommands = /* @__PURE__ */ new Map();
+	conflicts = /* @__PURE__ */ new Map();
+	bindings = /* @__PURE__ */ new Map();
+	state;
+	/** Effective localized rows derived from the accepted configuration. */
+	catalog;
+	/** Accepted preferences and visible read diagnostics. */
+	config;
+	/** Fixed local operations whose owning plugins are mounted. */
+	fixedCatalog = (0, _deepseek_ai_dsh_client_store.createSnapshotStore)([]);
+	constructor(runtime, platform, config = {
+		...initialShortcutConfig(),
+		status: "ready"
+	}) {
+		this.runtime = runtime;
+		this.platform = platform;
+		this.state = (0, _deepseek_ai_dsh_client_store.createSnapshotStore)({
+			catalog: [],
+			config
+		});
+		this.catalog = {
+			getSnapshot: () => this.state.getSnapshot().catalog,
+			subscribe: (listener) => this.state.subscribe(listener)
+		};
+		this.config = {
+			getSnapshot: () => this.state.getSnapshot().config,
+			subscribe: (listener) => this.state.subscribe(listener)
+		};
+	}
+	/**
+	* Return the serializable active catalog for storage validation.
+	* @returns definitions without callbacks or localized labels.
+	*/
+	definitions() {
+		return [...[...this.commands.values()].map(({ id, defaults }) => ({
+			id,
+			defaults
+		})), ...[...this.fixedCommands.values()].map(({ id, bindings }) => ({
+			id,
+			defaults: {},
+			fixed: bindings
+		}))];
+	}
+	/**
+	* Register a read-only input action whose keys cannot be assigned to editable commands.
+	* @param command - owner-localized action and readable sequence.
+	* @returns idempotent disposer removing its reference row.
+	*/
+	registerFixed(command) {
+		if (this.fixedCommands.has(command.id) || this.commands.has(command.id)) throw new Error(`Duplicate shortcut command: ${command.id}`);
+		for (const binding of command.bindings) normalizeBinding(binding, this.platform);
+		this.fixedCommands.set(command.id, command);
+		this.refreshLabels();
+		return () => {
+			if (this.fixedCommands.get(command.id) !== command) return;
+			this.fixedCommands.delete(command.id);
+			this.refreshLabels();
+		};
+	}
+	refreshFixedLabels() {
+		this.fixedCatalog.set([...this.fixedCommands.values()].map((command) => ({
+			id: command.id,
+			label: command.label(),
+			keys: command.keys,
+			group: command.group,
+			bindings: command.bindings.map((binding) => normalizeBinding(binding, this.platform))
+		})));
+	}
+	/**
+	* Publish accepted preferences and all derived labels atomically.
+	* @param config - storage owner's latest accepted snapshot.
+	*/
+	configure(config) {
+		const current = this.config.getSnapshot();
+		if (config.revision === current.revision && config.status === current.status && config.error === current.error) return;
+		this.refreshLabels(config);
+	}
+	/**
+	* Register atomically after checking defaults for all supported platforms and shells.
+	* @param command - feature-owned command definition.
+	* @returns idempotent disposer removing both matching and catalog entries.
+	*/
+	register(command) {
+		if (this.commands.has(command.id) || this.fixedCommands.has(command.id)) throw new Error(`Duplicate shortcut command: ${command.id}`);
+		for (const runtime of ["desktop", "web"]) for (const platform of [
+			"macos",
+			"windows",
+			"linux"
+		]) {
+			const candidate = resolveShortcutDefault(command, runtime, platform);
+			if (candidate === void 0) continue;
+			const binding = normalizeBinding(candidate, platform);
+			if (runtime === "web" && !isWebBindingAllowed(binding, platform)) throw new Error(`Unsupported Web shortcut: ${command.id}`);
+			if (bindingIssue(binding, runtime, platform) !== null) throw new Error(`Reserved shortcut default: ${command.id}`);
+			for (const existing of this.commands.values()) {
+				const other = resolveShortcutDefault(existing, runtime, platform);
+				if (other !== void 0 && overlappingBindings(binding, normalizeBinding(other, platform))) throw new Error(`Conflicting shortcut defaults: ${command.id} and ${existing.id} (${runtime}:${platform})`);
+			}
+		}
+		this.commands.set(command.id, command);
+		this.refreshLabels();
+		return () => {
+			if (this.commands.get(command.id) !== command) return;
+			this.commands.delete(command.id);
+			this.refreshLabels();
+		};
+	}
+	/**
+	* Recompute effective bindings when preferences, commands, or locale change.
+	* @param config - accepted configuration, defaulting to the current snapshot.
+	*/
+	refreshLabels(config = this.config.getSnapshot()) {
+		this.bindings.clear();
+		this.conflicts.clear();
+		const catalog = effectiveShortcuts(this.definitions(), config.document, this.runtime, this.platform).map((row) => {
+			const command = this.commands.get(row.id);
+			const enabled = config.status !== "loading" && row.issue === null && row.conflicts.length === 0;
+			if (enabled && row.binding !== null) this.bindings.set(bindingKey(row.binding), command);
+			if (config.status !== "loading" && row.issue === null && row.conflicts.length > 0 && row.binding !== null) this.conflicts.set(bindingKey(row.binding), command);
+			return {
+				...row,
+				label: command.label(),
+				aliases: command.aliases,
+				...presentBinding(row.binding, this.platform),
+				aria: enabled ? presentBinding(row.binding, this.platform).aria : void 0
+			};
+		});
+		this.state.set({
+			config,
+			catalog
+		});
+		this.refreshFixedLabels();
+	}
+	/**
+	* Invoke a native menu selection independently of its optional key binding.
+	* @param id - registered product command.
+	* @param context - live input owner and modal state.
+	*/
+	invoke(id, context) {
+		const command = this.commands.get(id);
+		if (command === void 0 || context.modal !== null && !command.modals.includes(context.modal)) return;
+		const result = command.resolve({
+			...context,
+			source: "menu"
+		});
+		if (result.status === "handled") result.run();
+	}
+	/**
+	* Windows/macOS Desktop bindings override local regions and modal controls independently of their configuration source.
+	* @param gesture - normalized DOM/native input facts.
+	* @param context - synchronous input and modal owner.
+	* @param consume - adapter's preventDefault, called before business execution.
+	* @returns handled, blocked with a reason, or pass for local/system input.
+	*/
+	dispatch(gesture, context, consume) {
+		if (gesture.defaultPrevented || gesture.composing) return { status: "pass" };
+		const modifiers = [
+			"control",
+			"alt",
+			"shift",
+			"meta"
+		].filter((value) => gesture[value]);
+		const pairKey = bindingKey({
+			code: gesture.code,
+			modifiers,
+			...gesture.secondCode === void 0 ? {} : { secondCode: gesture.secondCode }
+		});
+		const key = this.bindings.has(pairKey) || this.conflicts.has(pairKey) ? pairKey : bindingKey({
+			code: gesture.code,
+			modifiers
+		});
+		const command = this.bindings.get(key) ?? this.conflicts.get(key);
+		const priority = this.runtime === "desktop" && (this.platform === "windows" || this.platform === "macos");
+		if (command === void 0 || !priority && !command.regions.includes(context.region)) return { status: "pass" };
+		if (!priority && context.region === "terminal" && gesture.control && !gesture.meta && !gesture.alt && !gesture.shift && (gesture.code === "KeyW" || gesture.code === "KeyR")) return { status: "pass" };
+		if (!this.bindings.has(key)) {
+			consume();
+			return {
+				status: "blocked",
+				commandId: command.id,
+				reason: "conflict"
+			};
+		}
+		if (!priority && context.modal !== null && !command.modals.includes(context.modal)) {
+			consume();
+			return {
+				status: "blocked",
+				commandId: command.id,
+				reason: "modal"
+			};
+		}
+		const resolution = command.resolve(context);
+		if (resolution.status === "pass") return resolution;
+		consume();
+		if (resolution.status === "blocked") return {
+			...resolution,
+			commandId: command.id
+		};
+		if (!gesture.repeat) resolution.run();
+		return {
+			status: "handled",
+			commandId: command.id
+		};
+	}
+};
+//#endregion

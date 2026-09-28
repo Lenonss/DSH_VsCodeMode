@@ -1,23 +1,18 @@
-/**
- * @dsh-external 生态 → dsh-vscode-mode：DSH 上的类 VSCode 编码体验（Host 半入口）。
- * 职责：装配 capture（tools/result 捕获 edit/write 差异）、RPC 分发（edrv.* / mcp.* / vscode.* / compat）、
- *       webServer 路由（/edrv/rpc、/edrv/assets/*、/edrv/vendor/*）、工作区旁车持久化、
- *       兼容层装配（依赖守卫 + 重复装配自诊断 + 启动日志兼容性报告）。
- * 结构：shared/（双面契约） + model/store/capture/workspace/revert/registry/rpc/routes/compat（host 模块）
- *       + log/debugLog（统一日志：bindHostLog 绑定 ctx.logger，edrv.debug 诊断文件通道）。
- * 作者 ddj 2026-08-20
- */
+/** dsh-vscode-mode Host composition. @author ddj 2026年09月28号 */
 import { registerRoutes } from './routes.js'
 import { captureToolResult } from './capture.js'
 import { handleRpc } from './rpc.js'
 import { newSearcher } from './search/orchestrator.js'
 import { newContentSearcher } from './search/content.js'
 import { installIsolation } from './mcpIsolation.js'
+import { installMcpRuntime } from './mcpRuntime.js'
 import { cwdOf } from './registry.js'
 import { setupOpenSettings, buildSettingsSchema } from './fileOpenSettings.js'
 import type { SettingsDeps } from './fileOpenSettings.js'
 import z from '@deepseek-ai/schemastery'
 import { shellMenuLifecycle } from './integrate.js'
+import { startOpenInbox } from './openInbox.js'
+import { installPlanTool } from './svnPlanTool.js'
 import { disposeIndex } from './treeIndex.js'
 import { sweepTreeCache } from './paths.js'
 import { buildReport } from './compat.js'
@@ -31,125 +26,139 @@ import { createSvnRpc } from './svn.js'
 import { createDapRpc } from './dap/rpc.js'
 import { installRulesSection } from './rules.js'
 import { installSkillGroup } from './skills.js'
-import type { RpcHandlerMap } from './shared/rpc.js'
+import type { RpcHandlerMap, RpcMethod, RpcRequestMap } from './shared/rpc.js'
 import type { Registry } from './registry.js'
 import type { Ctx } from './store.js'
 
-export const name = "dsh-vscode-mode"
+export const name = 'dsh-vscode-mode'
 export const inject = ['sessions', 'fs', 'webServer', 'loader', 'tools', 'workspaceRegistry', 'agents']
-
-/**
- * 插件 Config schema（cordis 从 module 导出读 `plugin.Config` 做启动校验；
- * DSH 0.1.7 起设置页按此 schema 自动生成表单，设置值 = profile 插件配置）。
- * 字段集与 installOpenSettingsSection 的 section schema 同源（buildSettingsSchema），
- * 全字段带默认值——undefined/空配置经 schemastery 校验自动填充（rc/alpha 两代
- * cordis 均读该导出，实测 4.0.0-rc.8 与 0.1.7 行为一致，校验必过）。
- * volatile: true —— 0.1.7 的 SettingsForms.describe 只下发含 volatile 字段的 entry
- * （volatileForm 门槛），漏标则 ns 不出现 → client configForms 恒 unavailable →
- * 设置页「设置服务暂不可用」；同时 volatile 字段由 Loader 就地提交免重载。
- * 运行时解析：@deepseek-ai/schemastery 经插件自身 dependencies（link/dev/npm 安装
- * 三形态一致，钉 ~3.18.4 —— 3.18.1 起才有 .volatile()，低版本经 markVolatile 守卫降级）。
- * @author ddj 2026年09月22号（2026年09月23号 增补 volatile 标记）
- */
+/** Shared settings schema; volatile fields remain live across supported Host generations. */
 export const Config = buildSettingsSchema(z as unknown as SettingsDeps['z'], { volatile: true })
+type Runtime = ReturnType<typeof createRuntime>
 
+// #region Owned services
 /**
- * 装配插件：挂事件监听、注册路由、安装兼容层。
- * @author ddj 2026年08月20号
- * @param ctx DSH 上下文（sessions/fs/webServer 由 inject 提供；sandboxPolicy/subprocess 惰性获取）
- * @param config 插件配置（可选 imageDir 覆盖图标目录）
+ * Create the managers shared by RPC routes, tools and lifecycle callbacks.
+ * @author ddj 2026年09月28号
+ * @param ctx Host context.
+ * @param config Plugin configuration.
+ * @returns One owned set of managers for this plugin instance.
  */
-export function apply(ctx: Ctx, config?: unknown): void {
-  // 统一日志出口：全部 host 日志经 ctx.logger（缺失时回退 console），此后任何模块 log.* 即生效
-  bindHostLog(ctx)
+function createRuntime(ctx: Ctx, config: unknown) {
   const registry: Registry = new Map()
   const searcher = newSearcher(ctx)
   const contentSearcher = newContentSearcher(ctx)
-  /** LSP 服务器管理器（语言智能：跳转/引用/大纲；诊断行带模块内前缀如 [lsp-manager]）。 */
+  const settings = setupOpenSettings(ctx, config, () => {})
   const lspManager = createLspManager((line) => log.debug(line))
-  /** 兼容性警告收集（route 护栏等写入，启动日志一并输出）。 */
-  const warnings: string[] = []
-  /** 设置状态（fileOpenTool + AI 补全配置读写；settings 不可用时内存态降级）。 */
-  const openSettings = setupOpenSettings(ctx, config, () => {})
-  /** LSP 配置为配置值模式：插件组合配置 + 会话内运行时覆盖（原 settings section 命名空间不合法，见 lsp/config.ts）。 */
-  /** 规则注入 section（~/.dsh/rules 与 <工作区>/.dsh/rules；旧版 DSH 无 systemPrompt 时静默降级）。 */
-  const rulesInstalled = installRulesSection(ctx)
-  if (!rulesInstalled) log.warn('未检测到 systemPrompt 服务，规则仅可管理不注入')
-  /** 插件自带技能组（<包根>/skills，惰性获取 skills 服务；返回值仅表示"已调度"，实际结果见 skillGroupState）。 */
-  const skillsDispatched = installSkillGroup(ctx)
-  if (!skillsDispatched) log.warn('技能组未调度，插件技能组不可用')
-  /** LSP RPC 与会话清理（一次性创建，tracker 状态跨请求保留）。 */
   const lspRpc = createLspRpc({ ctx, pluginConfig: config, manager: lspManager })
-  const lspHandlers: Partial<RpcHandlerMap> = lspRpc.handlers
-  /** AI 内联补全 RPC（settings 状态桥接 + llm 惰性获取）。 */
-  const aiRpc = createAiRpc({ ctx, settings: openSettings })
-  const aiHandlers: Partial<RpcHandlerMap> = aiRpc.handlers
-  /** SVN RPC（检测/更新/Tortoise 发射；settings 提供 svnPath/tortoisePath）。 */
-  const svnRpc = createSvnRpc({ ctx, settings: openSettings })
-  const svnHandlers: Partial<RpcHandlerMap> = svnRpc.handlers as Partial<RpcHandlerMap>
-  /** 调试 RPC（DAP 桥单例：spawn 扩展适配器 + 事件缓冲 + findFile 反向匹配）。 */
+  const aiRpc = createAiRpc({ ctx, settings })
+  const svnRpc = createSvnRpc({ ctx, settings })
   const dapRpc = createDapRpc(ctx)
-  const dapHandlers: Partial<RpcHandlerMap> = dapRpc.handlers
-  /** 文件磁盘新鲜度观察器（客户端轮询 edrv.versions；变化时顺带失效目录树缓存）。 */
   const fileVersions = createFileVersions(ctx)
-
-  ctx.on('tools/result', (exec: unknown, result: unknown) => {
-    void captureToolResult(ctx, registry, exec, result)
-  })
-
-  ctx.on('session/disposed', (session: unknown) => {
-    const cwd = cwdOf(session as never)
-    if (cwd) {
-      registry.delete(cwd)
-      searcher.dispose(cwd)
-      contentSearcher.dispose(cwd)
-      disposeIndex(cwd)
-    }
-    const sid = (session as { id?: unknown })?.id
-    if (typeof sid === 'string') lspRpc.disposeSession(sid)
-  })
-
-  registerRoutes(ctx, config, (method, args) => handleRpc(ctx, registry, method, args, searcher, contentSearcher, lspHandlers, aiHandlers, fileVersions, svnHandlers, dapHandlers), (warning) => warnings.push(warning))
-  installIsolation(ctx)
-  // 系统集成生命周期：启动自动恢复右键菜单注册（marker 存在时）；插件卸载/reload 清理注册痕迹
-  ctx.effect(() => shellMenuLifecycle(ctx))
-  // 启动清理缓存目录：非当前 schema / 超保留期 / 未知残留（best-effort，不阻塞装配）
-  void sweepTreeCache()
-  void logCompatSummary(ctx, warnings)
-  // 卸载/重启时强杀 LSP 子进程（防残留）
-  ctx.effect(() => () => {
-    void lspManager.disposeAll().catch(() => {})
-    disposeAllServers()
-  })
-  // 卸载时清空文件版本基准表（观察器为模块内单例，不清会跨装配残留陈旧版本）
-  ctx.effect(() => () => fileVersions.dispose())
-  // 卸载时结束仍在运行的 SVN 更新，避免无主工作副本更新继续写入
-  ctx.effect(() => () => svnRpc.dispose())
-  // 卸载/重启时结束调试会话并强杀适配器子进程（防残留注入器/适配器孤儿）
-  ctx.effect(() => () => dapRpc.dispose())
-  // 宿主进程退出回收：ctx.effect 清理不覆盖进程退出，缺此注册会留下跨重启的孤儿服务器
-  hookExitReclaim()
-
-  log.info('编辑差异审查已装配（/edrv/rpc 路由就绪，项目 MCP 隔离已启用，语言服务器 LSP 已接入，规则注入' + (rulesInstalled ? '已接入' : '未接入') + '，技能组' + (skillsDispatched ? '装配中' : '未装配') + '）')
+  return { registry, searcher, contentSearcher, lspManager, lspRpc, aiRpc, svnRpc, dapRpc, fileVersions }
 }
 
 /**
- * 异步输出兼容性报告摘要（含重复装配/路由冲突自诊断）。
- * @author ddj 2026年08月24号
- * @param ctx DSH host 上下文
- * @param warnings 装配期收集的兼容性警告
+ * Own tool capture, per-session caches, and process cleanup under one Host fiber.
+ * @author ddj 2026年09月28号
+ * @param ctx Host context.
+ * @param runtime Managers created by this instance.
+ */
+function attachRuntime(ctx: Ctx, runtime: Runtime): void {
+  /** @author ddj 2026年09月28号 @param exec Tool execution. @param result Tool result. */
+  function onResult(exec: unknown, result: unknown): void {
+    void captureToolResult(ctx, runtime.registry, exec, result)
+  }
+  /** @author ddj 2026年09月28号 @param session Disposed session. */
+  function onDisposed(session: { id?: unknown }): void {
+    const cwd = cwdOf(session)
+    if (cwd) {
+      runtime.registry.delete(cwd)
+      runtime.searcher.dispose(cwd)
+      runtime.contentSearcher.dispose(cwd)
+      disposeIndex(cwd)
+    }
+    if (typeof session.id === 'string') runtime.lspRpc.disposeSession(session.id)
+  }
+  /** @author ddj 2026年09月28号 Release every manager even if another cleanup rejects. */
+  async function cleanup(): Promise<void> {
+    runtime.fileVersions.dispose()
+    disposeAllServers()
+    const tasks = [() => runtime.lspManager.disposeAll(), () => runtime.svnRpc.dispose(), () => runtime.dapRpc.dispose()]
+    await Promise.allSettled(tasks.map((run) => Promise.resolve().then(run)))
+  }
+  ctx.on('tools/result', onResult)
+  ctx.on('session/disposed', onDisposed)
+  ctx.effect(() => cleanup, 'vscode-mode:runtime')
+  hookExitReclaim()
+}
+
+/**
+ * Add user rules and bundled skills without requiring them on older Hosts.
+ * @author ddj 2026年09月28号
+ * @param ctx Host context.
+ */
+function installContent(ctx: Ctx): void {
+  if (!installRulesSection(ctx)) log.warn('未检测到 systemPrompt 服务，规则仅可管理不注入')
+  if (!installSkillGroup(ctx)) log.warn('技能组未调度，插件技能组不可用')
+}
+// #endregion
+
+/**
+ * Activate authenticated routes, scoped MCP, analysis submission and private file opens.
+ * @author ddj 2026年09月28号
+ * @param ctx Injected Host context.
+ * @param config Validated live plugin configuration.
+ * @returns Startup readiness; owned effects are released on activation failure or unload.
+ */
+export async function apply(ctx: Ctx, config?: unknown): Promise<void> {
+  bindHostLog(ctx)
+  const runtime = createRuntime(ctx, config)
+  const warnings: string[] = []
+  attachRuntime(ctx, runtime)
+  installContent(ctx)
+  /** @author ddj 2026年09月28号 @param method RPC name. @param args Typed request. @returns RPC result. */
+  function dispatch<M extends RpcMethod>(method: M, args: RpcRequestMap[M]) {
+    const { registry, searcher, contentSearcher, lspRpc, aiRpc, fileVersions, svnRpc, dapRpc } = runtime
+    return handleRpc(ctx, registry, method, args, searcher, contentSearcher, lspRpc.handlers,
+      aiRpc.handlers, fileVersions, svnRpc.handlers as Partial<RpcHandlerMap>, dapRpc.handlers)
+  }
+  /** @author ddj 2026年09月28号 @param warning Startup compatibility diagnostic. */
+  function noteWarning(warning: string): void { warnings.push(warning) }
+  /** @author ddj 2026年09月28号 @returns Private inbox disposer, or a reported disabled capability. */
+  async function mountInbox(): Promise<() => void> {
+    try { return await startOpenInbox(ctx) } catch (error) {
+      noteWarning('外部打开通道未启用：' + String(error))
+      return () => {}
+    }
+  }
+  registerRoutes(ctx, config, dispatch, noteWarning)
+  installIsolation(ctx)
+  await installMcpRuntime(ctx)
+  /** @author ddj 2026年09月28号 @param args Session-bound plan. @returns Validated inbox result. */
+  function submitPlan(args: RpcRequestMap['svn.aiPlanSubmit']) { return dispatch('svn.aiPlanSubmit', args) }
+  await installPlanTool(ctx, submitPlan)
+  ctx.effect(mountInbox, 'vscode-mode:open-inbox')
+  ctx.effect(() => shellMenuLifecycle(ctx), 'vscode-mode:integration')
+  void sweepTreeCache()
+  await logCompatSummary(ctx, warnings)
+  log.info('编辑差异审查已装配（认证路由、项目 MCP 作用域、SVN 方案工具与外部打开通道）')
+}
+
+/**
+ * Log the actual compatibility report without turning a reporting failure into boot failure.
+ * @author ddj 2026年09月28号
+ * @param ctx Host context.
+ * @param warnings Activation diagnostics.
  */
 async function logCompatSummary(ctx: Ctx, warnings: string[]): Promise<void> {
   try {
     const report = await buildReport(ctx)
-    for (const warning of warnings) report.warnings.push(warning)
+    report.warnings.push(...warnings)
     const dsh = report.dshVersion ? 'DSH ' + report.dshVersion : 'DSH 未探测'
     const head = '兼容性：' + dsh + ' · ' + report.external.length + ' 项外部适配 / ' + report.guards.length + ' 项护栏 / ' + (report.adapters?.length ?? 0) + ' 项版本适配'
-    if (report.warnings.length) {
-      log.warn(head + '，警告 ' + report.warnings.length + ' 条：' + report.warnings.join('；'))
-    } else {
-      log.info(head + '，无警告')
-    }
+    if (report.warnings.length) log.warn(head + '，警告 ' + report.warnings.length + ' 条：' + report.warnings.join('；'))
+    else log.info(head + '，无警告')
   } catch (error) {
     log.warn('兼容性报告生成失败：' + String(error))
   }

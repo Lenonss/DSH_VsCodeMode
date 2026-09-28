@@ -799,18 +799,15 @@ export function ignoreItemsOf(paths: readonly string[]): SvnIgnoreItem[] {
   return [...byDir.entries()].map(([dir, names]) => ({ dir, names }))
 }
 
-/** 深度分析投递口地址（host RPC 本地免鉴权；agent 用 shell 直接 POST）。 */
-const AGENT_SUBMIT_URL = 'http://127.0.0.1:3080/edrv/rpc'
-
 /**
  * 会话 agent 深度分析任务文本（混合通道 02-deep-session-prompt 修正版）。
  * 在**独立新会话**草稿箱填入后由用户发送；agent 自跑只读 `svn status` 取清单
  * （prompt 定长瘦身，不随变更数膨胀），借 codegraph/读文件/sub agent 深度分析，
- * 产出方案经免鉴权 RPC `svn.aiPlanSubmit` 投递回面板收件箱——确认与执行仍全部
+ * 产出方案经当前会话的 svn_plan_submit 工具投递回面板收件箱，确认与执行仍全部
  * 走面板（agent 禁写、只读放行）。
- * @author ddj 2026年09月23号
+ * @author ddj 2026年09月28号
  * @param wcRoot 工作副本根（取数指引内嵌）
- * @param sessionId 会话 id（投递命令内嵌；host 按它解析工作副本）
+ * @param sessionId 分析会话 id（仅作说明，不参与工具授权）
  * @returns 任务文本（定长 ~1KB：取数指引/分析要求/投递命令/硬约束）
  */
 export function buildAgentPrompt(wcRoot: string, sessionId: string): string {
@@ -838,8 +835,9 @@ export function buildAgentPrompt(wcRoot: string, sessionId: string): string {
     '3. 组名用简短英文、不以 - 开头；',
     '4. 只使用 `svn status` 实际返回的路径，绝不虚构或改写路径。',
     '',
-    '分析完成后，用 shell 执行下面的命令把方案投递回面板（把 <PLAN_JSON> 替换为方案 JSON）：',
-    'Invoke-RestMethod -Uri ' + AGENT_SUBMIT_URL + ' -Method Post -ContentType \'application/json\' -Body (@{ method = \'svn.aiPlanSubmit\'; args = @{ sessionId = \'' + sessionId + '\'; plan = <PLAN_JSON> } } | ConvertTo-Json -Depth 8)',
+    '分析完成后，调用 svn_plan_submit 工具，把方案 JSON 作为 plan 参数投递回面板。',
+    '工具只接收 { "plan": <PLAN_JSON> }，自动使用当前执行会话；不要传入其他 sessionId。',
+    '当前分析会话：' + sessionId + '。工具仅保存待审方案，不执行方案中的文件操作。',
     '',
     '投递成功会返回 { ok, accepted, dropped }；随后我会在面板弹窗中确认执行，你无需再做任何操作。',
   ].join('\n')

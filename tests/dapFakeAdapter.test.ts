@@ -218,6 +218,8 @@ describe('DapSession emmylua 参数注入（回归：attach 必带 extensionPath
     expect(args.extensionPath).toBe('/fake/ext/root')
     expect(args.pid).toBe(1234)
     expect(args.sourcePaths).toEqual(['C:/ws'])
+    // output 与 initialized 可以分批送达；等待所断言的协议状态。
+    await waitFor(() => session.stateOf().phase === 'running')
     expect(session.stateOf().phase).toBe('running')
   }, 15000)
 })

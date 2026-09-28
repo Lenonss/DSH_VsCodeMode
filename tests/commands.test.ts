@@ -96,13 +96,13 @@ describe('装配层接线（client/index.ts 契约）', () => {
   const source = readFileSync(new URL('../src/client/index.ts', import.meta.url), 'utf8')
 
   it('装配指令桥并对外 provide 指令注册表', () => {
-    expect(source).toContain('createCommandBridge()')
+    expect(source).toMatch(/createCommandBridge\(/)
     expect(source).toContain('ctx.provide(REGISTRY_GLOBAL, bridge.registry)')
     expect(source).toContain('setupCommands(ctx)')
   })
 
   it('命令栏与指令桥同源装配（索引层不留命令列表硬编码）', () => {
-    expect(source).toContain('createCommandBridge()')
+    expect(source).toMatch(/createCommandBridge\(/)
     expect(source).toContain('setupCommands(ctx)')
   })
 
@@ -239,12 +239,11 @@ describe('createCommandBridge 装配（键位派发归官方机制）', () => {
     // 未挂载编辑器（无 document 探测命中）时编辑器态指令不可用
     expect(bridge.registry.run('edrv.save')).toBe(false)
     expect(bridge.registry.run('edrv.nextEditorRow')).toBe(false)
-    // 始终可用的指令照常派发
-    expect(bridge.registry.run('edrv.quickOpen')).toBe(true)
+    // 没有挂载接收者或可用打开路由时不吞键。
+    expect(bridge.registry.run('edrv.quickOpen')).toBe(false)
     expect(bridge.registry.run('edrv.toggleSidebar')).toBe(true)
-    expect(bridge.registry.run('edrv.searchInFiles')).toBe(true)
-    expect(win.sent.map((event) => event.type))
-      .toEqual(['edrv.command.quickOpen', 'edrv.command.toggleSidebar', 'edrv.command.searchInFiles'])
+    expect(bridge.registry.run('edrv.searchInFiles')).toBe(false)
+    expect(win.sent.map((event) => event.type)).toEqual(['edrv.command.toggleSidebar'])
     bridge.dispose()
   })
 })

@@ -6,6 +6,8 @@
  * 作者 ddj 2026-08-25
  */
 
+import { appUrl } from '../shared/appUrl.js'
+
 /** 文件引用可选的行区间（选中内容用）。 */
 export interface RefRange {
   startLine: number
@@ -320,7 +322,7 @@ function rpcOk(res: unknown): { ok: boolean; value?: unknown } {
  * @returns 新会话 id（失败空串）
  */
 async function apiSessionCreate(cwd: string | undefined): Promise<string> {
-  const res = await fetch(SESSION_CREATE_PATH, {
+  const res = await fetch(appUrl(SESSION_CREATE_PATH), {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -347,7 +349,7 @@ async function apiSessionCreate(cwd: string | undefined): Promise<string> {
 export async function apiSessionPrompt(sessionId: string, text: string): Promise<boolean> {
   try {
     const payload = { sessionId, mode: 'queue', content: [{ type: 'text', text }] }
-    const res = await fetch(SESSION_PROMPT_PATH, {
+    const res = await fetch(appUrl(SESSION_PROMPT_PATH), {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
