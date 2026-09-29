@@ -10,7 +10,12 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
   三门本地全绿（typecheck 0 / **179 文件通过 + 2 跳过；2377 通过 + 12 跳过** /
   `node --test tests/nativeOpen.test.mjs` 9/9 / tsdown 双面：host 734144 B、client 1499417 B）；
   `release` 一次过 **5m46s**，但**同 commit 的 CI 首跑挂 `tests/dapFakeAdapter.test.ts:26` `waitFor 超时`**
-  （又是那个老抖动）→ `gh run rerun --failed` 一次即绿，别去改该测试。四向闭环一次对齐：
+  （又是那个老抖动）→ `gh run rerun --failed` 一次即绿，别去改该测试。
+  **注意 main 上共有两个时间敏感用例会抖**，另一种是 `tests/treeIndex.test.ts:195`
+  （后台自愈用例 `expect(healed).not.toBeNull()`：fake 时间推进 + 真实 fs IO，靠 200×10ms 轮询等自愈完成）——
+  docs-only 提交 `8f1be85` 的 CI 首跑挂的就是它，第 1 次 rerun 又挂回 `dapFakeAdapter:26`，
+  第 2 次 rerun 才全绿。所以看到 main 变红先看是不是这两个用例，**别急着自己改代码**。
+  四向闭环一次对齐：
   registry 0.14.0 `gitHead==dc16351`、`dist-tags.latest=0.14.0`、tag 同 commit、
   Release 挂 tgz（7,246,248 B，sha256:ab61d315…）。改动 = host 新增 `src/uiState.ts` +
   `paths.ts` 的 `uiStateFile`/`uiGlobalsFile`（`cache/workspace/<hash>/ui.v1.json`、
