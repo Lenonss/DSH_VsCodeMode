@@ -97,6 +97,16 @@ describe('familyLabel', () => {
     expect(familyLabel('0.1.6-alpha.2')).not.toContain('0.1.7')
   })
 
+  it('0.2.0-rc.1 单独标记，不将后续未适配版本误标为 0.1.7', () => {
+    expect(familyLabel('0.2.0-rc.1')).toContain('0.2.0-rc.1')
+    expect(familyLabel('0.2.0-rc.1')).toContain('按能力探测')
+    for (const version of ['0.2.0-rc.2', '0.2.0']) {
+      expect(familyLabel(version)).toContain('未经逐版适配')
+      expect(familyLabel(version)).not.toContain('0.1.7')
+    }
+    expect(familyLabel('0.1.7-rc.2')).toContain('0.1.7')
+  })
+
   it('中间线仍归 0.1.3 版本线', () => {
     expect(familyLabel('0.1.4-rc.1')).toContain('0.1.3-alpha')
     expect(familyLabel('0.1.3-alpha.2')).toContain('0.1.3-alpha')

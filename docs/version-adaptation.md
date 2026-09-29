@@ -1,7 +1,7 @@
 # DSH 版本适配机制（dsh-vscode-mode）
 
-> 更新于 2026-09-28，面向插件 0.13.0。历史机制始于 0.1.43。
-> 本轮源码审计与有限现场验证基线：官方 DSH `0.1.7-rc.2`。
+> 更新于 2026-09-29；第 1～7 节记录插件 0.13.0 对 DSH `0.1.7-rc.2` 的历史基线，
+> 第 8 节另列插件 0.14.1 对 Web DSH `0.2.0-rc.1` 的限定适配。
 > API 能力探测、包版本范围、自动化测试和真实应用验收分别记录；其中任何一项都不能替代其他项。
 
 ## 1. 适配入口与证据来源
@@ -81,7 +81,8 @@
   发布前需将它与最终验收记录一起核对；有限现场通过不意味着所有功能或平台都通过。
 - **npm SemVer**：默认排除未明确纳入对应版本元组的预发布版本。
   例如单独的 `>=0.1.0-rc.1 <0.2.0-0` 不自动覆盖 `0.1.7-rc.2`，需要相应
-  `>=0.1.7-0` 分支。上界 `<0.2.0-0` 继续排除未适配的 0.2.0 预发布和正式版。
+  `>=0.1.7-0` 分支。历史 `0.13.0` 的上界 `<0.2.0-0` 排除 0.2.0 预发布和正式版；
+  `0.14.1` 仅以独立 `=0.2.0-rc.1` 分支额外放行该精确版本，不放行 rc.2 或正式版。
 - **DSH gate**：其 `includePrerelease` 行为与 npm 默认检查分别验证；
   [peerDeps.test.ts](../tests/peerDeps.test.ts) 使用真实 semver 包测试两个判据，
   不用自写字符串比较代替 npm 的范围语义。
@@ -132,3 +133,24 @@
 [发布说明中的迁移和回滚](release-0.13.0.md#迁移与部署)。Host 代码变更需要重启 DSH；
 回退代码不能自动撤销外部配置和桥接文件变化，须按所选 profile 与备份恢复，不能
 把历史 0.1.43 的临时备份路径当成当前机器可用的恢复点。
+
+## 8. 0.14.1 对 Web DSH 0.2.0-rc.1 的限定适配（2026-09-29）
+
+- 实际运行的 Web 入口为 `@deepseek-ai/dsh@0.2.0-rc.1`；六个受本插件 peer
+  约束的官方包同版。Desktop 打包树仍为 `0.1.7-rc.2`，本轮不改动 Desktop。
+- 双树审计中，插件消费的 10 个官方 UI 原语均可找到，`sessions/fs/webServer/tools/
+  workspaceRegistry/agents` 等硬注入服务及客户端侧栏、会话、设置、快捷键候选面
+  均存在；`dsh-settings` 的 `describe/update`、`configForms` 的读写面、侧栏
+  `register/openTab`、`uiSession.current`、`connection.requestRejection` 在新树均可核对。
+  `codeRuntime` 服务消失但本插件未使用；新增的 otel / productAnalytics /
+  productTelemetry 非本插件硬依赖。这是静态/API 审计，不代替逐功能现场验收。
+- `package.json` 六个 DSH peer 均保留原 0.1.x 范围，另以 `|| =0.2.0-rc.1`
+  精确纳入新版；`pnpm-lock.yaml` importer 同步，锁定的旧开发依赖**没有升级**。
+  [peerDeps.test.ts](../tests/peerDeps.test.ts) 对 npm 默认与 DSH `includePrerelease`
+  两种规则分别断言：接受 rc.1，拒绝 alpha.1、rc.2、正式版和 1.0.0。
+- `familyLabel` 将 0.2.0-rc.1 单列，未来 0.2 版本不再误标成 0.1.7；
+  `TESTED_DSH_MAX` 暂保留 `0.1.7-rc.2`：已验证 Web 安装与基础挂载，但未
+  逐项验收全部能力，报告仍应提醒高于完整实测上界的版本。
+- 打包、Web 安装与原页面冒烟的证据/限制见 [0.14.1 适配与发布说明](release-0.14.1.md)。
+  `v0.14.1` 的发布须以 GitHub Actions 和 npm 注册表的实际结果为准；旧版
+  `0.14.0` 的 peer 仍会被 Web DSH `0.2.0-rc.1` 拒绝。

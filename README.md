@@ -451,19 +451,25 @@ DSH 每次启动监听随机端口，`http://127.0.0.1:<port>` 就是浏览器 o
 
 官方 `dsh plugin` 方式，三选一。下面以 `web` profile 为例；Desktop 或其他命名
 profile 请替换为实际目标，不要把示例目录当成当前运行 profile。升级前可阅读
-[0.13.0 发布与迁移说明](docs/release-0.13.0.md)。
+[0.14.1 适配与发布说明](docs/release-0.14.1.md)。
 
 ```bash
 # ① Git 安装（clone + prepare 构建；推荐打固定 tag）
-dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.13.1
+dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.14.1
 
 # ② npm 注册表（发布到 npm 后）
-dsh plugin --profile web add dsh-vscode-mode
+dsh plugin --profile web add dsh-vscode-mode@0.14.1
 
-# ③ GitHub Release tgz 直装
-dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.13.1/dsh-vscode-mode-0.13.1.tgz
+# ③ GitHub Release tgz 直装（Release asset 可用后）
+dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.14.1/dsh-vscode-mode-0.14.1.tgz
 ```
 
+> **DSH 0.2.0-rc.1 安装修复**：`0.14.1` 仅精确放行此 DSH 版本；旧版
+> `0.14.0` 仍会被其 peer 门禁拒绝，其他 0.2 版本须另行适配。Tag 推送后需等
+> GitHub Actions 发布完成，npm 还须确认该版本可查询；在产物未就绪时，可依
+> [0.14.1 适配与发布说明](docs/release-0.14.1.md) 构建并安装本地包。若添加 bundle 后尚未激活，
+> 在方便时重启目标 DSH Host 并刷新原页面（本次 Web profile 已即时挂载）。
+>
 > `dsh plugin ...` 是 pnpm 转发器：git 安装会克隆仓库、执行该包 `prepare` 脚本
 > （tsdown 双面构建）后安装，再按 `dsh.bundle` 声明自动加入 profile 的 bundles
 > 层。若 pnpm 提示构建脚本需批准，把 key 加到
@@ -791,6 +797,10 @@ Keep All / Undo All 却是亮的。修复：单文件 Keep / Undo 覆盖冲突�
 完整变更见 [GitHub Releases](https://github.com/Lenonss/DSH_VsCodeMode/releases)。
 近期关键版本：
 
+- **v0.14.1**：**DSH Web 0.2.0-rc.1 安装兼容**——六项 DSH peer 精确加入
+  `=0.2.0-rc.1`，保留已有 0.1.x 范围，继续拒绝其他未经适配的 0.2 版本；
+  版本线报告单列 rc.1。已完成 Web 安装、挂载与编辑器基础冒烟，完整功能和
+  Desktop 等其他平台尚未逐项验收。详见 [0.14.1 适配与发布说明](docs/release-0.14.1.md)。
 - **v0.14.0**：**界面状态跨 DSH 重启恢复**——DSH 每次启动端口随机，origin 一变
   `localStorage` 就换了一份空的，插件的页签、光标、侧栏、编辑 Tab 等全部界面状态都
   随之丢失。本版把界面状态镜像到 DSH home（`cache/workspace/<hash>/ui.v1.json` 与
