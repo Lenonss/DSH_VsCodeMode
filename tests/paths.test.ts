@@ -9,14 +9,19 @@ import { homedir, tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import {
   DSH_HOME_ENV,
+  LSP_SPEC_CACHE_SCHEMA,
   TREE_CACHE_SCHEMA,
   TREE_RETENTION_MS,
+  UI_STATE_SCHEMA,
   dshHome,
   hashOf,
+  isCurrentCacheFile,
   pluginCacheRoot,
   sweepTreeCache,
   treeCacheFile,
   treeSchemaOf,
+  uiGlobalsFile,
+  uiStateFile,
   userCacheDir,
   workspaceCacheDir,
 } from '../src/paths.js'
@@ -80,6 +85,22 @@ describe('treeCacheFile / 分级目录', () => {
   })
 })
 
+describe('uiStateFile / uiGlobalsFile', () => {
+  it('UI 状态镜像：工作区级带 schema 版本，全局键落用户级', () => {
+    expect(uiStateFile('D:/ws', home)).toBe(join(workspaceCacheDir(hashOf('D:/ws'), home), 'ui.v' + UI_STATE_SCHEMA + '.json'))
+    expect(uiGlobalsFile(home)).toBe(join(userCacheDir(home), 'ui-globals.v' + UI_STATE_SCHEMA + '.json'))
+    expect(uiStateFile('D:/ws', home)).not.toBe(treeCacheFile('D:/ws', home))
+  })
+  it('isCurrentCacheFile：已登记当前版本 → true，其余 → false', () => {
+    expect(isCurrentCacheFile('tree.v' + TREE_CACHE_SCHEMA + '.json')).toBe(true)
+    expect(isCurrentCacheFile('ui.v' + UI_STATE_SCHEMA + '.json')).toBe(true)
+    expect(isCurrentCacheFile('ui-globals.v' + UI_STATE_SCHEMA + '.json')).toBe(true)
+    expect(isCurrentCacheFile('ui.v' + (UI_STATE_SCHEMA + 1) + '.json')).toBe(false)
+    expect(isCurrentCacheFile('unknown.v1.json')).toBe(false)
+    expect(isCurrentCacheFile('junk.bin')).toBe(false)
+  })
+})
+
 describe('treeSchemaOf', () => {
   it('解析文件名版本；不匹配 → null', () => {
     expect(treeSchemaOf('tree.v1.abc.json')).toBe(1)
@@ -114,6 +135,25 @@ describe('sweepTreeCache', () => {
     const wsA = await readdir(join(pluginCacheRoot(home), 'workspace', 'ws-a'))
     expect(wsA).toEqual(['tree.v' + TREE_CACHE_SCHEMA + '.json'])
     await expect(readdir(join(pluginCacheRoot(home), 'workspace', 'ws-b'))).rejects.toThrow()
+  })
+
+  it('UI 状态镜像与 LSP 缓存属已登记缓存，不被当作未知残留清理', async () => {
+    await makeWsFile('ws-a', 'ui.v' + UI_STATE_SCHEMA + '.json', 0)
+    const userDir = userCacheDir(home)
+    await mkdir(userDir, { recursive: true })
+    await writeFile(join(userDir, 'ui-globals.v' + UI_STATE_SCHEMA + '.json'), '{}')
+    await writeFile(join(userDir, 'lsp-specs.v' + LSP_SPEC_CACHE_SCHEMA + '.json'), '{}')
+
+    expect(await sweepTreeCache(home)).toEqual([])
+    expect(await readdir(join(pluginCacheRoot(home), 'workspace', 'ws-a'))).toEqual(['ui.v' + UI_STATE_SCHEMA + '.json'])
+    expect((await readdir(userDir)).sort()).toEqual(
+      ['lsp-specs.v' + LSP_SPEC_CACHE_SCHEMA + '.json', 'ui-globals.v' + UI_STATE_SCHEMA + '.json'].sort(),
+    )
+  })
+
+  it('UI 状态镜像旧版本 → 清理', async () => {
+    await makeWsFile('ws-a', 'ui.v0.json', 0)
+    expect(await sweepTreeCache(home)).toEqual(['ui.v0.json'])
   })
 
   it('根级残留（迁移前扁平格式/未知文件）删除', async () => {

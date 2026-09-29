@@ -46,7 +46,8 @@ import { baseNameOf, checkNewName, checkRenameName, isSubPath, joinRelPath, pare
 import { invalidateIndex, listDirCached } from './treeIndex.js'
 import { findRemoteWs, remoteDisplayOf, type RemoteWs } from './remoteWorkspace.js'
 import { revealInExplorer } from './reveal.js'
-import { dshHome, debugLogFile, pluginLogRoot } from './paths.js'
+import { dshHome, debugLogFile, pluginLogRoot, uiGlobalsFile, uiStateFile } from './paths.js'
+import { readUiState, writeUiState } from './uiState.js'
 import { clearDebugLog, debugRecord, isDebugLogName, listDebugLogs, readDebugLog } from './debugLog.js'
 import { markActiveSessions, markOfficialFlags, moveOutSessions, planMoveOut, purgeArchive, restoreSession, scanSessionInventory, sessionsArchiveRoot, sessionSizeOf, sidecarSummaryOf, unarchiveOfficial } from './perf.js'
 import { patchHasPerfConfig, patchInsertPerfConfig, patchRemovePerfConfig, perfConfigBlock } from './perfPatch.js'
@@ -57,6 +58,12 @@ import { settingsDocPath } from './settingsDocPath.js'
 const staleCheckedAt = new Map<string, number>()
 /** stale 自动清理最小间隔。 */
 const STALE_CHECK_MIN_MS = 10_000
+/**
+ * 无会话期诊断的伪 cwd：冷启动早期本插件客户端就会上报界面状态镜像事件
+ * （此时 `sessions` 可能尚未就绪，`requireSession` 会失败），退回本固定值落盘
+ * `logs/debug.<hashOf(该值)>.log`，保证「换 origin 后没恢复」这类问题的诊断不丢。
+ */
+const UI_AUDIT_CWD = 'ui-state'
 
 /** 记录 → 客户端视图（不含 before 全文，仅长度）；远程工作区附远端展示路径（issue #7）。 */
 function recView(record: DiffRecord, ws: RemoteWs | null = null): RecordView {
@@ -465,6 +472,40 @@ export function buildHandlers(
       out.sort((a, b) => (a.at < b.at ? -1 : 1))
       return { ok: true, records: out }
     },
+    /**
+     * 界面状态镜像读取：回填换 origin（Web GUI 重启换端口）后丢失的 localStorage 界面状态。
+     * 文件缺失/损坏 → 空表（客户端自然不动作）。
+     * @author ddj 2026年09月28号
+     */
+    'edrv.uiState.get': async (args) => {
+      const sc = await requireSession(ctx, args.sessionId)
+      if ('err' in sc) return { ok: false, error: sc.err }
+      const keys = await readUiState(uiStateFile(sc.cwd))
+      const globals = await readUiState(uiGlobalsFile())
+      return { ok: true, keys, globals }
+    },
+    /**
+     * 界面状态镜像写入：把客户端改动过的 `edrv.*` 键增量同步到 host 文件（空补丁不落盘）。
+     * 失败时写一条诊断日志（默认静默的客户端 dbg 之外的可查证据），并如实回错误由客户端逐键回退。
+     * @author ddj 2026年09月28号 / 2026年09月29号
+     */
+    'edrv.uiState.set': async (args) => {
+      const sc = await requireSession(ctx, args.sessionId)
+      if ('err' in sc) return { ok: false, error: sc.err }
+      const tasks: Array<Promise<{ ok: true } | { ok: false; error: string }>> = []
+      if (args.keys && Object.keys(args.keys).length) tasks.push(writeUiState(uiStateFile(sc.cwd), args.keys))
+      if (args.globals && Object.keys(args.globals).length) tasks.push(writeUiState(uiGlobalsFile(), args.globals))
+      const results = await Promise.all(tasks)
+      const failed = results.find((item) => !item.ok)
+      if (failed && !failed.ok) {
+        const keyCount = Object.keys(args.keys ?? {}).length
+        const globalCount = Object.keys(args.globals ?? {}).length
+        debugRecord(ctx, sc.cwd, '界面状态镜像写入失败: ' + failed.error
+          + '（keys=' + keyCount + ' 键, globals=' + globalCount + ' 键）', 'warn')
+        return { ok: false, error: failed.error }
+      }
+      return { ok: true }
+    },
     'edrv.accept': async (args) => {
       const sc = await requireSession(ctx, args.sessionId)
       if ('err' in sc) return { ok: false, error: sc.err }
@@ -749,9 +790,15 @@ export function buildHandlers(
     'edrv.debug': async (args) => {
       // 诊断日志：client 上报 → debugLog 模块缓冲批量落盘 ~/.dsh/dsh-vscode-mode/logs/
       // （console 不一定落盘，文件可靠）。只出现在调试开关开启时（client dbg 默认关）。
+      const text = String(args.text ?? '')
       const sc = await requireSession(ctx, args.sessionId)
-      if ('err' in sc) return { ok: false, error: sc.err }
-      debugRecord(ctx, sc.cwd, String(args.text ?? ''), args.level)
+      if ('err' in sc) {
+        // 会话未就绪（冷启动早期、界面状态镜像水合期）也必须能落盘：否则换 origin 后的
+        // 「水合失败/放弃」诊断全部丢失，只剩「界面没恢复」这个不可观测的现象。
+        debugRecord(ctx, UI_AUDIT_CWD, text, args.level)
+        return { ok: true }
+      }
+      debugRecord(ctx, sc.cwd, text, args.level)
       return { ok: true }
     },
     'edrv.dlog.list': async (args) => {

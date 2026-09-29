@@ -25,6 +25,8 @@ export const DSH_DIR_NAME = '.dsh'
 export const DSH_HOME_ENV = 'DSH_HOME'
 /** 树缓存 schema 版本（文件名携带；版本递增即触发旧版清理）。 */
 export const TREE_CACHE_SCHEMA = 1
+/** UI 状态镜像 schema 版本（文件名携带；版本递增即触发旧版清理）。 */
+export const UI_STATE_SCHEMA = 1
 /** LSP provider 发现缓存 schema 版本（格式变更即递增，旧文件自动失效）。 */
 export const LSP_SPEC_CACHE_SCHEMA = 4
 /** 树缓存保留期：超期文件视为废弃（工作区搬迁/废弃残留）。 */
@@ -161,6 +163,31 @@ export function treeCacheFile(cwd: string, home = dshHome(), schema = TREE_CACHE
   return join(workspaceCacheDir(hashOf(cwd), home), 'tree.v' + schema + '.json')
 }
 
+/**
+ * 每工作区 UI 状态镜像文件（工作区级：workspace/<id>/ui.v<schema>.json）。
+ * 存编辑器页签/侧栏/预览态等界面状态的 localStorage 原值副本，供换 origin 后回填。
+ * @author ddj 2026年09月28号
+ * @param cwd 工作区绝对路径
+ * @param home DSH home（测试可注入）
+ * @param schema schema 版本（缺省 UI_STATE_SCHEMA）
+ * @returns UI 状态镜像文件绝对路径
+ */
+export function uiStateFile(cwd: string, home = dshHome(), schema = UI_STATE_SCHEMA): string {
+  return join(workspaceCacheDir(hashOf(cwd), home), 'ui.v' + schema + '.json')
+}
+
+/**
+ * 用户级 UI 状态镜像文件（跨工作区共享：user/ui-globals.v<schema>.json）。
+ * 存与工作区无关的全局键（侧栏提示已忽略、工作区折叠态等）。
+ * @author ddj 2026年09月28号
+ * @param home DSH home（测试可注入）
+ * @param schema schema 版本（缺省 UI_STATE_SCHEMA）
+ * @returns 全局 UI 状态镜像文件绝对路径
+ */
+export function uiGlobalsFile(home = dshHome(), schema = UI_STATE_SCHEMA): string {
+  return join(userCacheDir(home), 'ui-globals.v' + schema + '.json')
+}
+
 /** 每工作区 debug 日志文件（用户级日志根下，按 cwd hash 隔离）。 */
 export function debugLogFile(cwd: string, home = dshHome()): string {
   return join(pluginLogRoot(home), 'debug.' + hashOf(cwd) + '.log')
@@ -201,6 +228,37 @@ export function treeSchemaOf(filename: string): number | null {
   return m ? Number(m[1]) : null
 }
 
+/**
+ * 已知缓存文件种类 → 当前 schema 版本（sweep 判旧依据）。
+ * 新增缓存文件必须登记在此，否则被当作未知残留清理。
+ */
+const CACHE_SCHEMAS: Record<string, number> = {
+  tree: TREE_CACHE_SCHEMA,
+  'lsp-specs': LSP_SPEC_CACHE_SCHEMA,
+  ui: UI_STATE_SCHEMA,
+  'ui-globals': UI_STATE_SCHEMA,
+}
+
+/** 缓存文件名 → 种类与 schema 版本（`<kind>.v<schema>.json`；未登记种类/命名不合规 → null）。 */
+function parseCacheName(filename: string): { kind: string; schema: number } | null {
+  const m = /^([a-z-]+)\.v(\d+)\.json$/.exec(filename)
+  if (!m) return null
+  const kind = m[1]
+  if (CACHE_SCHEMAS[kind] === undefined) return null
+  return { kind, schema: Number(m[2]) }
+}
+
+/**
+ * 该缓存文件名是否为已登记种类的当前 schema 版本（sweep 判旧/判残留依据）。
+ * @author ddj 2026年09月28号
+ * @param filename 缓存文件名（不含目录）
+ * @returns 已登记种类且版本为当前版本
+ */
+export function isCurrentCacheFile(filename: string): boolean {
+  const parsed = parseCacheName(filename)
+  return parsed !== null && parsed.schema === CACHE_SCHEMAS[parsed.kind]
+}
+
 /** 按「schema 版本 + 保留期」清扫某目录内文件（目录级，返回相对路径清单）。 */
 async function sweepDirFiles(dir: string, removed: string[], now: number, dropAll: boolean): Promise<void> {
   const names = await readdir(dir).catch(() => [])
@@ -208,9 +266,7 @@ async function sweepDirFiles(dir: string, removed: string[], now: number, dropAl
     const full = join(dir, name)
     let drop = dropAll
     if (!drop) {
-      const schema = treeSchemaOf(name)
-      if (schema === null) drop = true // 未知残留
-      else if (schema !== TREE_CACHE_SCHEMA) drop = true // 旧版本
+      if (!isCurrentCacheFile(name)) drop = true // 未知残留 / 旧版本
       else {
         try {
           const info = await stat(full)

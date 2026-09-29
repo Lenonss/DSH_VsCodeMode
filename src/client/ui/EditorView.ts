@@ -50,12 +50,15 @@ import { editorHeight } from '../editorLayout.js'
 import { revealInExplorer as revealPathInExplorer } from '../fileReveal.js'
 import { setSidePending, SIDEBAR_INSTALL_CMD } from '../sidebarBridge.js'
 import { upsertViewState, viewStatesLoad, viewStatesSave } from '../state/viewStateCache.js'
+import { mdPreviewLoad, mdPreviewSave } from '../state/mdPreviewCache.js'
+import { onUiStateReady, reportUiStateEvent, uiStateSettled } from '../state/uiStatePersist.js'
 import { migrateScopedKeys, workspaceScopeOf } from '../state/scopeStore.js'
 import { modelsForScope, rememberModel } from '../state/modelCache.js'
 import { navFlashRangeOf } from '../navHighlight.js'
 import { chordOf, useKeybindingsVersion } from '../keybindings.js'
 import { getSidebarMinWidth } from '../sidebarMin.js'
 import { navHistoryFor } from '../navHistory.js'
+import { navStateLoad, navStateSave } from '../state/navStateCache.js'
 import { statusOfAdd } from '../addToConversation.js'
 import { setSearchScope, setSearchSeed } from '../searchSeed.js'
 import { CACHE_KEY } from '../paths.js'
@@ -324,6 +327,8 @@ export function EditorView(props) {
   const loadSeqRef = React.useRef(0)
   const programmaticRef = React.useRef(false)
   const restoredScopeRef = React.useRef(null) // 已恢复状态的作用域（cwd 晚到 sid→ws 时允许重恢复）
+  // 界面状态镜像迟到回填的触发器（重启换 origin：首帧 localStorage 为空，回填后需重跑恢复）
+  const [hydrateTick, setHydrateTick] = React.useState(0)
   const pendingFocusRef = React.useRef(null) // { path, region, line, column } 内容加载后跳转
   const navFlashRef = React.useRef([]) // 跳转目标高亮装饰 id（独立于 diff/下划线，随跳转替换）
   const navFlashTimerRef = React.useRef(null) // 跳转目标高亮自动清除计时器
@@ -1299,6 +1304,8 @@ export function EditorView(props) {
     // model 缓存跟随作用域（切工作区释放旧作用域模型；同工作区跨挂载复用）
     modelsRef.current = modelsForScope(scope)
     viewStatesRef.current = viewStatesLoad(scope)
+    // Markdown 预览态同样按作用域恢复（重启/换端口后由界面状态镜像回填，见 lateHydrateRef 分支）
+    mdPreviewRef.current = mdPreviewLoad(String(scope))
     try {
       // v3 优先；缺失时回读 v2（旧版纯路径数组）——normalizeTabs 兼容两种形状
       const raw = localStorage.getItem(CACHE_KEY.editor + String(scope))
@@ -1320,28 +1327,64 @@ export function EditorView(props) {
           const kept = plan.length ? restored.filter((tab) => !dropped.has(tab.path)) : restored
           setTabs(kept)
           setActive(kept.some((tab) => tab.path === activePath) ? activePath : (kept[0]?.path ?? null))
+          reportUiStateEvent(
+            '页签恢复（scope=' + String(scope) + '）：存档 ' + restored.length + ' 个、保留 ' + kept.length
+            + ' 个、活动 ' + String(activePath),
+          )
+        } else {
+          reportUiStateEvent('页签恢复（scope=' + String(scope) + '）：存档非空但归一化后为 0 个')
         }
+      } else {
+        reportUiStateEvent('页签恢复（scope=' + String(scope) + '）：localStorage 无存档')
       }
-    } catch (e) { /* 损坏忽略 */ }
-  }, [sessionId, scope])
+    } catch (e) {
+      reportUiStateEvent('页签恢复失败（scope=' + String(scope) + '）: ' + String(e), 'warn')
+    }
+  }, [sessionId, scope, hydrateTick])
+
+  // 镜像迟到回填：重启换 origin 时首帧读不到存档，host 回填完成后重跑一次恢复。
+  // 仅在本页签尚未恢复出任何内容时重跑（用户已打开/关闭过页签则不打扰）。
+  React.useEffect(() => onUiStateReady(() => {
+    if (tabsRef.current.length) return
+    restoredScopeRef.current = null
+    setHydrateTick((v) => v + 1)
+  }), [])
 
   // 导航历史按工作区作用域隔离：同工作区切换对话保留历史，跨工作区换实例
   React.useEffect(() => {
-    navRef.current = navHistoryFor(scope)
+    const history = navHistoryFor(scope)
+    // 空实例（首次创建/换作用域）才用存档恢复，避免覆盖本次会话已积累的历史；
+    // 换 origin 时存档由镜像迟到回填，hydrateTick 变化后再跑一次本效应
+    const current = history.snapshot()
+    if (!current.past.length && !current.future.length) {
+      const saved = navStateLoad(String(scope))
+      if (saved) history.restore(saved)
+      reportUiStateEvent(
+        '导航历史恢复（scope=' + String(scope) + '）：'
+        + (saved ? 'past=' + saved.past.length + ' future=' + saved.future.length : 'localStorage 无存档'),
+      )
+    }
+    navRef.current = history
     navPendingRef.current = null
     if (navCursorTimerRef.current) { clearTimeout(navCursorTimerRef.current); navCursorTimerRef.current = null }
     setNavTick((v) => v + 1)
-  }, [scope])
+  }, [scope, hydrateTick])
+
+  // 导航双栈落 localStorage（同原文去重写；镜像层负责跨重启）：刷新/重启后前进后退与当前位置仍在
+  React.useEffect(() => {
+    if (!sessionId || !uiStateSettled()) return
+    navStateSave(String(scope), navRef.current?.snapshot?.() ?? null)
+  }, [navTick, cursor, active, sessionId, scope, hydrateTick])
 
   React.useEffect(() => {
-    if (!sessionId) return
+    if (!sessionId || !uiStateSettled()) return
     try {
       // v3 写入：页签带 pinned（只写有值字段，减小体积）；固定态随工作区作用域持久化
       const payload = { tabs: tabs.map((t) => (t.pinned ? { path: t.path, pinned: true } : { path: t.path })), active }
       localStorage.setItem(CACHE_KEY.editor + String(scope), JSON.stringify(payload))
     }
     catch (e) { /* 忽略 */ }
-  }, [tabs, active, sessionId, scope])
+  }, [tabs, active, sessionId, scope, hydrateTick])
 
   /**
    * 标记页签为「最近使用」（LRU 序号单调递增；编辑动作也算使用，见 onEdit）。
@@ -1394,9 +1437,17 @@ export function EditorView(props) {
         if (typeof saved.on === 'boolean') setSidebarOn(saved.on)
         if (typeof saved.width === 'number') setSidebarW(Math.max(getSidebarMinWidth(), Math.min(560, saved.width)))
         if (typeof saved.panel === 'string') setActivePanel(saved.panel)
+        reportUiStateEvent(
+          '侧栏恢复（键 ' + sidebarKey + '）：on=' + String(saved.on) + ' width=' + String(saved.width)
+          + ' panel=' + String(saved.panel),
+        )
+      } else {
+        reportUiStateEvent('侧栏恢复（键 ' + sidebarKey + '）：localStorage 无存档')
       }
-    } catch (e) { /* 损坏忽略 */ }
-  }, [sessionId, sidebarKey])
+    } catch (e) {
+      reportUiStateEvent('侧栏恢复失败（键 ' + sidebarKey + '）: ' + String(e), 'warn')
+    }
+  }, [sessionId, sidebarKey, hydrateTick])
 
   // 侧边栏最小宽度设置变更（edrv:sidebar-min-width）→ 更新 minW 并重夹当前宽度
   const [sidebarMinW, setSidebarMinW] = React.useState(() => getSidebarMinWidth())
@@ -1411,10 +1462,10 @@ export function EditorView(props) {
 
   // 侧边栏状态持久化
   React.useEffect(() => {
-    if (!sessionId) return
+    if (!sessionId || !uiStateSettled()) return
     try { localStorage.setItem(sidebarKey, JSON.stringify({ on: sidebarOn, width: sidebarW, panel: activePanel })) }
     catch (e) { /* 忽略 */ }
-  }, [sidebarOn, sidebarW, activePanel, sessionId, sidebarKey])
+  }, [sidebarOn, sidebarW, activePanel, sessionId, sidebarKey, hydrateTick])
   // 编辑器键位（侧栏/保存/搜索/Markdown 预览/导航/页签循环）已归官方 shortcuts 机制派发：
   // 官方 resolve → 指令注册表 run → `edrv.command.*` 事件 → 下方「指令系统接线」表执行。
   // 历史 capture 监听移除（与官方派发并存会双执行）；Markdown 预览的「非 .md 不吞键」
@@ -2014,6 +2065,8 @@ export function EditorView(props) {
     // 卸载即切作用域/重挂载：先把待记录光标落进历史，再存当前文件视图状态
     //（经 ref 取最新闭包，修正旧实现捕获挂载时 active 的问题）
     flushNavCursor()
+    // 关页面/切作用域前把双栈落到 localStorage（镜像层 flush 负责写穿 host）
+    navStateSave(String(scope), navRef.current?.snapshot?.() ?? null)
     saveViewStateRef.current?.()
     diffRendererRef.current?.dispose?.()
     hideReferencesOverlay()
@@ -2536,6 +2589,8 @@ export function EditorView(props) {
       next.delete(path)
     }
     mdPreviewRef.current = next
+    // 预览态按作用域落 localStorage（镜像层写穿 host）：刷新/重启后仍以预览打开
+    mdPreviewSave(String(scope), next)
     setStatus(entering ? '已切换为 Markdown 预览' : '已切换为源码编辑')
   }
   toggleMdPreviewRef.current = toggleMdPreview

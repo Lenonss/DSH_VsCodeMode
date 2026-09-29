@@ -33,7 +33,7 @@ import { setupExtOpen } from './externalOpen.js'
 import { SettingsContext } from './settingsContext.js'
 import { SIDEBAR_PLUGIN, registerSlotSafely, settingsBridge } from './compat.js'
 import { detectSidebarService, hasSideRoute, installSideEditor, routeSideEditor, setEnsureSideEditor, SIDEBAR_INSTALL_CMD } from './sidebarBridge.js'
-import { detectOfficial, installOfficial, registerOfficialFileClaim, OFFICIAL_TAB_KIND, OFFICIAL_TAB_TITLE, isEditorTabActive, restoreEditorTab, buildFileAddress } from './officialSidebar.js'
+import { detectOfficial, installOfficial, registerOfficialFileClaim, OFFICIAL_TAB_KIND, OFFICIAL_TAB_TITLE, isEditorTabActive, markEditorActive, restoreEditorTab, buildFileAddress, readSavedTab, setEditorTabScope } from './officialSidebar.js'
 import { setNativeCsv, setNativeOpenHandler, resetNativeOpen } from './nativeOpenStore.js'
 import { SideEditorTab } from './ui/SideEditorTab.js'
 import { OfficialSideTab } from './ui/OfficialSideTab.js'
@@ -64,6 +64,8 @@ import { disposeSnippets } from './snippets/provider.js'
 import { disposeLaunchJson } from './dap/launchSnippetProvider.js'
 import { disposeAiInline } from './ai/inlineProvider.js'
 import { readSessionScope, subscribeScope } from './sessionScope.js'
+import { flushUiState, hydrateUiState, installUiStatePersist, onUiStateReady, reportUiStateEvent, uiStateSettled } from './state/uiStatePersist.js'
+import { workspaceScopeOf } from './state/scopeStore.js'
 import { dapStore } from './dap/store.js'
 import type { CompatAdapter } from '../shared/compat.js'
 
@@ -114,8 +116,48 @@ function setupCommands(ctx: any): CommandBridge {
  * @param ctx 客户端根上下文（slots + timer 服务）
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function apply(ctx: any): void {
+export async function apply(ctx: any): Promise<void> {
   const schedule = (fn: () => void, ms: number) => ctx.timeout(fn, ms)
+
+  /**
+   * 无门控上报界面状态镜像事件（绕过客户端 edrv.debug 开关，直接落 host 诊断日志）。
+   * 开关关闭时 dbg 直接 return，「重启后没恢复」这类问题会在客户端侧彻底无痕，故另开一条通路。
+   * @author ddj 2026年09月29号
+   * @param text 事件文本
+   * @param level 日志级别（缺省 'debug'）
+   */
+  const reportMirror = (text: string, level?: string): void => {
+    // 只认 host 侧已知级别，其余落 'debug'（镜像内部只发 'debug'/'warn'）
+    const lv = level === 'info' || level === 'warn' || level === 'error' ? level : 'debug'
+    try {
+      void rpc('edrv.debug', { sessionId: readSessionScope(ctx).sessionId, text: 'ui-state: ' + text, level: lv })
+        .catch(() => { /* 诊断上报失败忽略 */ })
+    } catch (error) { /* 会话未就绪等异常忽略 */ }
+  }
+
+  // 界面状态镜像：把 `edrv.*` 的 localStorage 状态写穿到 host，换 origin（重启换端口）后回填。
+  // 必须早于任何界面首次读写 localStorage（编辑器页签/侧栏/预览态的恢复逻辑都读它）。
+  if (installUiStatePersist(ctx, schedule, reportMirror)) {
+    reportMirror('镜像装配成功（origin=' + (typeof location === 'undefined' ? '?' : location.origin) + '）')
+    log.info('界面状态镜像已装配：界面状态随 host 持久化（重启/换端口可恢复）')
+  } else {
+    reportMirror('镜像装配失败：localStorage 不可用', 'warn')
+    log.warn('界面状态镜像不可用（无 localStorage）：界面状态仅存当前 origin')
+  }
+
+  // 争取「回填先于任何界面组件挂载」：面板/编辑器的恢复逻辑都在挂载时读 localStorage，
+  // 挂载后再回填只能靠 `edrv:ui-state-ready` 事件补跑（目前编辑器页签/侧栏已支持）。
+  // 已知会话时这次 RPC 是本地往返（通常几十毫秒），故短超时即可；会话未就绪则不在此等待，
+  // 交给镜像内部重试与迟到回填事件，避免拖慢启动。
+  if (readSessionScope(ctx).sessionId) {
+    try {
+      await Promise.race([
+        hydrateUiState(),
+        new Promise<void>((resolve) => { schedule(() => resolve(), 600) }),
+      ])
+    } catch (error) { /* 水合失败已在镜像内降级 */ }
+  }
+  ctx.effect(() => () => { void flushUiState() }, 'vscode-mode: ui state flush')
   ctx.effect(() => {
     let disposed = false
     let attempts = 0
@@ -482,6 +524,22 @@ export function apply(ctx: any): void {
       return
     }
     officialDisposer = ctx.effect(() => outcome, 'vscode-mode: official sidebar editor tab')
+    // 编辑 Tab 展开/激活态按工作区落 localStorage（镜像层写穿 host，重启/换端口后仍在）：
+    // 冷启动据此自动回到上次的编辑 Tab；官方 openTab 幂等，已激活时不重复调用。
+    setEditorTabScope(() => {
+      const scope = readSessionScope(ctx)
+      return workspaceScopeOf(scope.cwd, scope.sessionId)
+    })
+    const restoreActiveTab = (): void => {
+      const saved = readSavedTab()
+      const active = isEditorTabActive()
+      reportUiStateEvent('编辑 Tab 恢复：本地存档=' + String(saved) + '、当前激活=' + String(active))
+      if (!active && saved) markEditorActive(true)
+      restoreEditorTab(official.service, schedule)
+    }
+    restoreActiveTab()
+    // 换 origin 时本地 localStorage 为空：镜像回填完成后重判一次，迟到的回填同样能恢复编辑 Tab
+    ctx.effect(() => onUiStateReady(restoreActiveTab), 'vscode-mode: editor tab state hydration')
     // 官方打开器（下拉「官方侧边栏」选项，动态出现；openResource 能力缺失时跳过）+ 按当前设置同步 file 地址认领
     if (typeof official.service.openResource === 'function') {
       ctx.effect(() => registry.register(officialSidebarOpener(official.service)), 'vscode-mode: official sidebar opener')
@@ -593,4 +651,20 @@ export function apply(ctx: any): void {
     // 原生打开范围复位回默认集（handler 解绑已由其自身 ctx.effect disposer 承担）
     try { resetNativeOpen() } catch { /* 同上 */ }
   }, 'vscode-mode: monaco providers teardown')
+
+  // 会话晚到补试：冷启动早期 `sessions` 未就绪时 host 答「会话不存在」，首次水合会失败重试；
+  // 作用域变化（sid→ws）后同样补一次，保证界面状态尽早回填。
+  ctx.effect(() => subscribeScope(ctx, () => {
+    if (!uiStateSettled()) void hydrateUiState()
+  }), 'vscode-mode: ui state rehydrate')
+
+  // 争取「回填先于界面首次读 localStorage」：宿主若 await 本 apply，此处等到水合结束（或 1.2s 超时兜底）。
+  // 失败/超时不抛：镜像内部自带重试与结束事件，界面侧还有迟到回填重跑。
+  try {
+    await Promise.race([
+      hydrateUiState(),
+      new Promise<void>((resolve) => { schedule(() => resolve(), 1200) }),
+    ])
+  } catch (error) { /* 水合失败已在镜像内降级 */ }
+  reportUiStateEvent('客户端装配完成：水合' + (uiStateSettled() ? '已结束' : '仍在进行（界面稍后重跑恢复）'))
 }

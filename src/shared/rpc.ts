@@ -331,6 +331,24 @@ export interface DebugLogRead {
   truncated: boolean
 }
 
+/** 界面状态镜像快照（edrv.uiState.get）：界面状态键值表 + 跨工作区全局键值表。 */
+export interface UiStateSnapshot {
+  /** 工作区级键值表（localStorage 键 → 字符串原值）。 */
+  keys: Record<string, string>
+  /** 全局键值表（与工作区无关，跨工作区共享）。 */
+  globals: Record<string, string>
+}
+
+/** 界面状态镜像写入补丁（edrv.uiState.set）：值 null 表示删除该键。 */
+export interface UiStatePatchInput {
+  /** 会话 id（缺省取唯一活跃会话）。 */
+  sessionId?: string
+  /** 工作区级增量补丁。 */
+  keys?: Record<string, string | null>
+  /** 全局增量补丁。 */
+  globals?: Record<string, string | null>
+}
+
 /** 每个方法的请求参数（sessionId 为公共可选字段）。 */
 export interface RpcRequestMap {
   'edrv.list': { sessionId?: string; callIds?: string[]; skipStale?: boolean }
@@ -481,6 +499,10 @@ export interface RpcRequestMap {
   'edrv.dap.variables': { ref: number }
   'edrv.dap.evaluate': { expression: string; frameId?: number }
   'edrv.dap.command': { action: DapAction }
+  /** 界面状态镜像读取：回填换 origin（重启换端口）后丢失的 localStorage 界面状态。 */
+  'edrv.uiState.get': { sessionId?: string }
+  /** 界面状态镜像写入：把客户端改动过的 `edrv.*` 键增量同步到 host 文件。 */
+  'edrv.uiState.set': UiStatePatchInput
 }
 
 export type RpcMethod = keyof RpcRequestMap
@@ -632,6 +654,8 @@ export interface RpcOkMap {
   'edrv.dap.variables': { variables: DapVariableView[] }
   'edrv.dap.evaluate': { result: string; type?: string; ref: number }
   'edrv.dap.command': object
+  'edrv.uiState.get': UiStateSnapshot
+  'edrv.uiState.set': object
 }
 
 /** 统一响应：{ok:true, ...payload} 或 {ok:false, error}。 */

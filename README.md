@@ -424,6 +424,29 @@ TortoiseSVN（`TortoiseProc.exe`）仅作 Windows 过渡增强：自研能力覆
   `运行到行` = 临时断点 + 继续（命中/手动继续后自动清理，不污染用户断点表）；
   `添加触发的断点...` 当前适配器不支持 → 点击给出明确提示（不做静默失败的假功能）。
 
+### 18. 界面状态记忆（v0.14.0，跨重启）
+
+DSH 每次启动监听随机端口，`http://127.0.0.1:<port>` 就是浏览器 origin，**只写
+`localStorage` 的界面状态换一次启动就全丢**。本版把界面状态镜像到 DSH home，重启后
+自动恢复。
+
+- **记忆项**：打开的页签与活动页签（含固定态）、每个文件的光标与滚动位置（Monaco
+  `saveViewState()`）、侧栏开关/宽度/面板、资源管理器展开与工作区折叠、官方编辑 Tab
+  激活态、Markdown 预览态（按文件）、导航历史（前进/后退）、规则分页、搜索面板、
+  SVN 过滤与折叠、调试面板监视与折叠、DAP 四段分栏高度、断点（按适配器语言）。
+- **存储位置**：`DSH_HOME/dsh-vscode-mode/cache/workspace/<hashOf(cwd)>/ui.v1.json`
+  （工作区私有）与 `cache/user/ui-globals.v1.json`（跨工作区共享，如工作区折叠）。
+  写前合并，同一文件内多工作区/多键互不覆盖；单键超 64 KB 分片上传。
+- **不镜像**：目录条目缓存（`edrv.cache.entries.v2.*`，体积大且可重建）；临时弹窗、
+  未落盘的编辑缓冲不恢复。
+- **恢复语义**：启动时取回镜像回填 `localStorage`，**本地已有值一律保留**（不覆盖
+  当前 origin 的真实状态）；回填完成后广播 `edrv:ui-state-ready`，晚到的界面组件据此
+  重跑恢复。取回失败按 8×800ms 有界重试，重试耗尽则退回纯 `localStorage`（行为与
+  0.14.0 之前一致），不阻断插件加载、不拖慢启动（slot 注册前最多等 600ms）。
+- **自检**：设置页「兼容性」与 RPC `edrv.compat` 可查看运行时报告；镜像读写的时间线记在
+  `DSH_HOME/dsh-vscode-mode/logs/debug.<hashOf(cwd)>.log`（无会话期诊断落在
+  `debug.<hashOf('ui-state')>.log`）。
+
 ## 安装
 
 官方 `dsh plugin` 方式，三选一。下面以 `web` profile 为例；Desktop 或其他命名
@@ -768,6 +791,15 @@ Keep All / Undo All 却是亮的。修复：单文件 Keep / Undo 覆盖冲突�
 完整变更见 [GitHub Releases](https://github.com/Lenonss/DSH_VsCodeMode/releases)。
 近期关键版本：
 
+- **v0.14.0**：**界面状态跨 DSH 重启恢复**——DSH 每次启动端口随机，origin 一变
+  `localStorage` 就换了一份空的，插件的页签、光标、侧栏、编辑 Tab 等全部界面状态都
+  随之丢失。本版把界面状态镜像到 DSH home（`cache/workspace/<hash>/ui.v1.json` 与
+  `cache/user/ui-globals.v1.json`，写前合并），新增 RPC `edrv.uiState.get/set`，客户端
+  包装 `localStorage` 写口去抖推送、启动回填并广播 `edrv:ui-state-ready`；同时补上
+  官方编辑 Tab 激活态、Markdown 预览态与导航历史三项记忆。发布前两轮现场复盘修掉两个
+  并存根因：水合冷启动失败即永久放弃（现为 8×800ms 有界重试 + 重试耗尽也广播就绪）、
+  界面在回填前写空初值把存档覆盖掉（现为「水合结束前不写存档 + 迟到回填后重跑恢复」）。
+  详见 [0.14.0 发布说明](docs/release-0.14.0.md)。
 - **v0.13.1**：**快捷键入口收敛到官方弹窗**——移除插件自建的独立「快捷键」设置页
   （含行内录键编辑器与共享录制模块 `shortcutRecorder.ts`），改在 VSCodeMode → 通用页
   提供「打开官方快捷键配置」一键跳转（`openOfficialShortcuts()`；官方入口不可用时

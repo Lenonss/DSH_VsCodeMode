@@ -11,6 +11,7 @@
 
 import { log } from './log.js'
 import { setEnsureSideEditor } from './sidebarBridge.js'
+import { CACHE_KEY } from './paths.js'
 import { OFFICE_EXT, BLIND_EXT, suffixOf } from '../shared/nativeOpen.js'
 import { inNativePath } from './nativeOpenStore.js'
 
@@ -365,6 +366,61 @@ export function registerOfficialFileClaim(options: {
 let editorTabActive = false
 /** 正文挂载纪元（每次挂载自增；延迟判定期间有新挂载则放弃清除）。 */
 let mountEpoch = 0
+/** 作用域解析器（index.ts 装配时注入；未注入则不落盘，退回纯内存标记）。 */
+let tabScopeOf: (() => string) | null = null
+
+/**
+ * 注入编辑 Tab 状态的作用域解析器（index.ts 装配一次；键跟随会话/工作区切换）。
+ * @author ddj 2026年09月28号
+ * @param resolve 返回工作区作用域键（scopeStore.workspaceScopeOf 产物）
+ */
+export function setEditorTabScope(resolve: () => string): void {
+  tabScopeOf = resolve
+}
+
+/**
+ * 编辑 Tab 状态的作用域键（未注入/解析失败 → 空串，调用方跳过持久化）。
+ * @author ddj 2026年09月28号
+ * @returns localStorage 键
+ */
+function editorTabKey(): string {
+  if (!tabScopeOf) return ''
+  try {
+    const scope = tabScopeOf()
+    return scope ? CACHE_KEY.editorTab + scope : ''
+  } catch (error) {
+    return ''
+  }
+}
+
+/**
+ * 读回「上次退出时编辑 Tab 是否处于激活态」（供冷启动自动展开编辑 Tab）。
+ * @author ddj 2026年09月28号
+ * @returns 是否曾被激活（存储不可用/未注入 → false）
+ */
+export function readSavedTab(): boolean {
+  const key = editorTabKey()
+  if (!key) return false
+  try {
+    return localStorage.getItem(key) === '1'
+  } catch (error) {
+    return false
+  }
+}
+
+/**
+ * 持久化编辑 Tab 激活态（存储不可用静默；镜像层会把它写穿到 host 跨重启保留）。
+ * @author ddj 2026年09月28号
+ * @param active 是否激活
+ */
+export function saveTabActive(active: boolean): void {
+  const key = editorTabKey()
+  if (!key) return
+  try {
+    if (active) localStorage.setItem(key, '1')
+    else localStorage.removeItem(key)
+  } catch (error) { /* 存储不可用：仅内存标记生效 */ }
+}
 
 /**
  * 标记编辑 Tab 激活并推进挂载纪元（正文挂载时调用）。
@@ -377,11 +433,13 @@ export function markEditorMounted(): void {
 
 /**
  * 直接设置激活标记（正文卸载延迟判定用；测试 also 用作状态编排入口）。
- * @author ddj 2026年09月09号
+ * 同时写穿到 localStorage（镜像层负责跨重启保留），供下次冷启动恢复。
+ * @author ddj 2026年09月09号 / 2026年09月28号
  * @param active 是否激活
  */
 export function markEditorActive(active: boolean): void {
   editorTabActive = active
+  saveTabActive(active)
 }
 
 /**

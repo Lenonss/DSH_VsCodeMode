@@ -36,6 +36,10 @@ export interface NavHistory {
   peekBack(): NavEntry | null
   /** 前进目标条目（不改变状态；不可进 → null）。 */
   peekForward(): NavEntry | null
+  /** 导出双栈快照（浅拷贝；持久化用）。 */
+  snapshot(): NavState
+  /** 用存档恢复双栈（调用方仅在实例为空时调用；非法项丢弃、超限截断）。 */
+  restore(state: NavState | null | undefined): void
 }
 
 /** 后退栈默认容量上限（超出逐出最旧）。 */
@@ -43,6 +47,37 @@ export const NAV_HISTORY_CAP = 200
 
 /** 工作区历史实例缓存上限（FIFO 逐出最久未用作用域，防长期驻留泄漏）。 */
 export const NAV_SCOPE_CAP = 6
+
+/** 持久化单栈容量上限（存档只留最近若干条，防 localStorage 膨胀）。 */
+export const NAV_PERSIST_CAP = 30
+
+/** 导航历史双栈快照（持久化/恢复用；viewState 由 viewStateCache 按路径另行恢复）。 */
+export interface NavState {
+  past: NavEntry[]
+  future: NavEntry[]
+}
+
+/**
+ * 归一化条目数组：丢弃无路径项；line/column 仅保留正整数，剥掉 viewState（体积大且另有存档）；
+ * 超限时保留末尾（最近的）cap 条。
+ * @author ddj 2026年09月28号
+ * @param entries 待归一化的原始数组（非数组 → 空表）
+ * @param cap 单栈上限（默认 NAV_PERSIST_CAP）
+ * @returns 归一化条目数组
+ */
+export function cleanNavEntries(entries: unknown, cap = NAV_PERSIST_CAP): NavEntry[] {
+  if (!Array.isArray(entries)) return []
+  const out: NavEntry[] = []
+  for (const raw of entries) {
+    const entry = raw as NavEntry
+    if (!entry || typeof entry.path !== 'string' || !entry.path) continue
+    const item: NavEntry = { path: entry.path }
+    if (typeof entry.line === 'number' && Number.isInteger(entry.line) && entry.line > 0) item.line = entry.line
+    if (typeof entry.column === 'number' && Number.isInteger(entry.column) && entry.column > 0) item.column = entry.column
+    out.push(item)
+  }
+  return out.length > cap ? out.slice(out.length - cap) : out
+}
 
 /** scope → 导航历史实例（同工作区跨会话复用同一份历史）。 */
 const scopeHistories = new Map<string, NavHistory>()
@@ -105,6 +140,16 @@ export function createNavHistory(cap = NAV_HISTORY_CAP): NavHistory {
     },
     peekForward(): NavEntry | null {
       return future.length ? future[future.length - 1] : null
+    },
+    snapshot(): NavState {
+      return { past: past.map((entry) => ({ ...entry })), future: future.map((entry) => ({ ...entry })) }
+    },
+    restore(state: NavState | null | undefined): void {
+      if (!state) return
+      past.length = 0
+      future.length = 0
+      past.push(...cleanNavEntries(state.past, cap))
+      future.push(...cleanNavEntries(state.future, cap))
     },
   }
 }

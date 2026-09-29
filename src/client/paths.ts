@@ -30,6 +30,12 @@ export const CACHE_KEY = {
   rules: 'edrv.rules.v1.',
   /** SVN 变更面板 UI 状态（SvnPanel v1：未版本控制/忽略项显示开关，按作用域隔离）。 */
   svn: 'edrv.svn.v1.',
+  /** Markdown 预览态（EditorView v1：处于预览态的 Markdown 路径集合，按作用域隔离）。 */
+  mdPreview: 'edrv.md-preview.v1.',
+  /** 官方侧边栏「文件编辑」Tab 展开/激活态（officialSidebar v1：重启后自动回到编辑 Tab）。 */
+  editorTab: 'edrv.editor-tab.v1.',
+  /** 编辑器导航历史双栈（navStateCache v1：重启后前进/后退与当前位置仍在，按作用域隔离）。 */
+  navHistory: 'edrv.nav-history.v1.',
 } as const
 
 /** 按前缀拼作用域键（scopeStore 产出作用域；侧边栏/编辑器等需要布局段时自行拼接后传入）。 */
