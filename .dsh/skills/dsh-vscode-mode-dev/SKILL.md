@@ -5,7 +5,39 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
 
 # dsh-vscode-mode 开发/发布经验集（自我更新型技能）
 
-> updated: 2026-09-28 · 维护者：ddj（AI 会话按文末协议追加，保持精炼、去重）
+> updated: 2026-09-29 · 维护者：ddj（AI 会话按文末协议追加，保持精炼、去重）
+- 2026-09-29 实录（v0.14.0 发布：**界面状态跨 DSH 重启持久化**；基线 `v0.13.1` @ `c8d9843`）：
+  三门本地全绿（typecheck 0 / **179 文件通过 + 2 跳过；2377 通过 + 12 跳过** /
+  `node --test tests/nativeOpen.test.mjs` 9/9 / tsdown 双面：host 734144 B、client 1499417 B）；
+  `release` 一次过 **5m46s**，但**同 commit 的 CI 首跑挂 `tests/dapFakeAdapter.test.ts:26` `waitFor 超时`**
+  （又是那个老抖动）→ `gh run rerun --failed` 一次即绿，别去改该测试。四向闭环一次对齐：
+  registry 0.14.0 `gitHead==dc16351`、`dist-tags.latest=0.14.0`、tag 同 commit、
+  Release 挂 tgz（7,246,248 B，sha256:ab61d315…）。改动 = host 新增 `src/uiState.ts` +
+  `paths.ts` 的 `uiStateFile`/`uiGlobalsFile`（`cache/workspace/<hash>/ui.v1.json`、
+  `cache/user/ui-globals.v1.json`，写前合并、纳入 `CACHE_SCHEMAS` 白名单）+ RPC
+  `edrv.uiState.get/set`（工作区/全局两分区）；客户端新增 `state/uiStatePersist.ts`（包装
+  `localStorage` 写口去抖推送、启动回填、广播 `edrv:ui-state-ready`）、`mdPreviewCache.ts`、
+  `navStateCache.ts`，并补记官方编辑 Tab 激活态。
+  **坑（DSH home 看错目录，代价最高）**：本机 DSH **桌面端**的真实 home 是
+  `%APPDATA%\dsh-desktop`（即 `C:\Users\1\.dsh-desktop`，Electron userData），
+  `%USERPROFILE%\.dsh` 是 web profile / 手工安装的另一套。排查「host 没写盘」前**先用进程反查真实实例**：
+  `Get-CimInstance Win32_Process` 找 `dsh\lib\bin.js --profile web`、看监听端口与
+  `profiles\web\node_modules\<插件>` 指向哪；看错目录会让整份取证作废（本次就作废过一轮）。
+  **坑（跨重启持久化只能落 host 磁盘）**：DSH 每次启动端口随机，`http://127.0.0.1:<port>` 就是 origin，
+  只写 `localStorage` 的界面状态换一次启动即全丢；Electron `Local Storage\leveldb` 里并存十余个
+  随机端口 origin 就是判据（但 `LOCK`/`LOG`/`MANIFEST`/当前 `.log` 被进程占用读不出，只能在
+  其余 `.ldb` 上做字符串扫描）。
+  **坑（水合失败语义）**：`apply` 期 host `requireSession` 尚未就绪会答「会话不存在」→ 取回抛错。
+  水合必须**有界重试**（8×800ms），且**重试耗尽也要广播就绪**——别写 `if (filled > 0) emitReady()`，
+  否则界面侧的迟到回填永不触发、且没有任何报错。`edrv.debug` 同样先 `requireSession`，
+  冷启动期诊断要回退伪 cwd（`UI_AUDIT_CWD = 'ui-state'` → `logs/debug.<hashOf('ui-state')>.log`）才留得下。
+  **坑（回填被空初值反杀）**：回填遵守「本地已有值优先」，而界面挂载即把空初值写进 `localStorage`
+  （页签 `{"tabs":[],"active":null}` 仅 25 字符）→ 迟到回填永远填不进去。修法 = 写效应加
+  「水合未结束不写存档」门控 + 恢复效应依赖里带水合完成标记（**侧栏恢复效应原先缺这个依赖，
+  回填后不重读**）。这类「只有重启才复现」的问题**同 origin 刷新测不出来**，验证必须重启（换 origin）。
+  **事实（取证锚点）**：host `debugRecord` 无条件落盘（缓冲 32 KB / 空闲 1s flush），是端到端取证的
+  可靠锚点——设计任何跨进程记忆功能时，先给每个阶段埋无条件日志，再请用户重启一次，AI 自己读日志即可闭环，
+  不必让用户搬运产物。
 - 2026-09-28 实录（v0.13.1 发布：**快捷键入口收敛到官方弹窗**；基线 `v0.13.0` @ `75dd3d8`）：
   三门本地全绿（typecheck 0 / **175 文件通过 + 2 跳过；2326 通过 + 12 跳过**，连续两次一致 /
   `node --test tests/nativeOpen.test.mjs` 9/9 / tsdown 双面：host 726.52 kB、client 1.47 MB）；
