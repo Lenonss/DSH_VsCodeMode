@@ -3,8 +3,12 @@
  * 作者 ddj 2026-08-26
  */
 import { describe, expect, it, vi } from 'vitest'
+import { spawnSync } from 'node:child_process'
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { applyCaps, byteToUtf16Col, contentArgv, ContentSearcher, displayPathOf, parseRgJsonLines } from '../src/search/content.js'
-import { firstStderrLine, rgExitFailure } from '../src/search/ripgrep.js'
+import { firstStderrLine, rgExitFailure, ripgrepPath } from '../src/search/ripgrep.js'
 import { buildHandlers } from '../src/rpc.js'
 import { splitGlobs } from '../src/client/sidebar/panels/SearchPanel.js'
 import type { ContentSearchResult } from '../src/search/types.js'
@@ -84,6 +88,39 @@ describe('caps and argv', () => {
     expect(applyCaps(m, 10, 10)).toEqual({ matches: m, truncated: false })
   })
 
+  it('uses case-insensitive matching unless match case is enabled', () => {
+    const base = { ctx: null, session: null, cwd: 'C:/ws', query: 'Foo' }
+    for (const matchCase of [undefined, false]) {
+      const argv = contentArgv('rg', 'C:/ws', { ...base, matchCase })
+      expect(argv).toContain('--ignore-case')
+      expect(argv).not.toContain('--case-sensitive')
+    }
+    const sensitive = contentArgv('rg', 'C:/ws', { ...base, matchCase: true })
+    expect(sensitive).toContain('--case-sensitive')
+    expect(sensitive).not.toContain('--ignore-case')
+  })
+
+  it('matches lowercase content with uppercase query without making path globs insensitive', () => {
+    const binary = ripgrepPath()
+    if (!binary) return
+    const root = mkdtempSync(join(tmpdir(), 'edrv-content-case-'))
+    try {
+      mkdirSync(join(root, 'Assets', 'Module', 'Build'), { recursive: true })
+      mkdirSync(join(root, 'build'))
+      writeFileSync(join(root, 'Assets', 'Module', 'Build', 'source.txt'), 'foo\n')
+      writeFileSync(join(root, 'build', 'generated.txt'), 'foo\n')
+      const base = { ctx: null, session: null, cwd: root, query: 'Foo' }
+      const insensitive = spawnSync(binary, contentArgv(binary, root, base).slice(1), { encoding: 'utf8' })
+      expect(insensitive.status).toBe(0)
+      expect(parseRgJsonLines(insensitive.stdout, root).map((match) => match.path)).toEqual(['Assets/Module/Build/source.txt'])
+      const sensitive = spawnSync(binary, contentArgv(binary, root, { ...base, matchCase: true }).slice(1), { encoding: 'utf8' })
+      expect(sensitive.status).toBe(1)
+      expect(parseRgJsonLines(sensitive.stdout, root)).toEqual([])
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   it('builds argv with literal flags and fixed-strings by default', () => {
     const argv = contentArgv('rg', 'C:/ws', { ctx: null, session: null, cwd: 'C:/ws', query: 'foo', matchCase: true, wholeWord: true })
     expect(argv).toContain('--case-sensitive')
@@ -114,6 +151,12 @@ describe('caps and argv', () => {
     const globs = argv.slice(argv.indexOf('--glob'), argv.indexOf('--'))
     expect(globs).toContain('*.ts')
     expect(globs).not.toContain('!*.ts')
+    expect(argv).not.toContain('--glob-case-insensitive')
+    const disabledExclude = contentArgv('rg', 'C:/ws', {
+      ctx: null, session: null, cwd: 'C:/ws', query: 'foo', include: ['*.ts'], exclude: [],
+    })
+    expect(disabledExclude).not.toContain('!*.lua')
+    expect(disabledExclude).toContain('*.ts')
   })
 
   it('ignores blank include/exclude entries', () => {
@@ -126,6 +169,19 @@ describe('caps and argv', () => {
     expect(splitGlobs('*.ts, src/**/include, , a.lua')).toEqual(['*.ts', 'src/**/include', 'a.lua'])
     expect(splitGlobs('')).toEqual([])
     expect(splitGlobs('  ,  ')).toEqual([])
+  })
+
+  it('keeps word and regex flags off by default and only enables them when checked', () => {
+    const base = { ctx: null, session: null, cwd: 'C:/ws', query: 'Foo' }
+    const defaults = contentArgv('rg', 'C:/ws', base)
+    expect(defaults).not.toContain('--word-regexp')
+    expect(defaults).toContain('--fixed-strings')
+    const unchecked = contentArgv('rg', 'C:/ws', { ...base, wholeWord: false, regex: false })
+    expect(unchecked).not.toContain('--word-regexp')
+    expect(unchecked).toContain('--fixed-strings')
+    const checked = contentArgv('rg', 'C:/ws', { ...base, wholeWord: true, regex: true })
+    expect(checked).toContain('--word-regexp')
+    expect(checked).not.toContain('--fixed-strings')
   })
 
   it('drops fixed-strings for regex mode', () => {

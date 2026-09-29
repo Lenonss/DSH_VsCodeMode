@@ -157,7 +157,7 @@ export function applyCaps(matches: ContentMatch[], maxMatches: number, maxFiles:
  */
 export function contentArgv(binary: string, root: string, input: ContentSearchInput): string[] {
   const argv = [binary, '--no-config', '--json', '--line-number', '--no-heading', '--color', 'never', '--hidden', '--no-ignore']
-  if (input.matchCase === true) argv.push('--case-sensitive')
+  argv.push(input.matchCase === true ? '--case-sensitive' : '--ignore-case')
   if (input.wholeWord === true) argv.push('--word-regexp')
   if (input.regex !== true) argv.push('--fixed-strings')
   for (const excluded of EXCLUDES) argv.push('--glob', '!**/' + excluded + '/**')

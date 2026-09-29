@@ -27,6 +27,19 @@ export function splitGlobs(text) {
 }
 
 /**
+ * 计算包含文件范围；仅当前文件已开启但无活动文件时返回 null，禁止退化为全工作区搜索。
+ * @author ddj 2026年09月29号
+ * @param onlyActive 是否仅搜索当前文件
+ * @param activePath 当前文件路径
+ * @param includeText 用户输入的包含模式
+ * @returns 包含 glob；null 表示当前搜索范围不可用
+ */
+export function searchIncludes(onlyActive: boolean, activePath: string | null, includeText: string): string[] | null {
+  if (!onlyActive) return splitGlobs(includeText)
+  return activePath ? [activePath] : null
+}
+
+/**
  * 读取按作用域持久化的搜索条件（损坏/缺失返回 null）。
  * 抽成函数而非内联：恢复 effect 内有两处消费者（填状态、同步 requestRef），
  * 且解析必须只做一次（JSON.parse 重复调用既慢又可能两次结果不一致）。
@@ -93,7 +106,7 @@ export function SearchPanel(props) {
   const requestRef = React.useRef({ matchCase, wholeWord, regex, include: [], exclude: [] })
   requestRef.current = {
     matchCase, wholeWord, regex,
-    include: onlyActive ? (activePath ? [activePath] : []) : splitGlobs(includeText),
+    include: searchIncludes(onlyActive, activePath, includeText),
     exclude: excludeOn ? splitGlobs(excludeText) : [],
   }
 
@@ -117,9 +130,8 @@ export function SearchPanel(props) {
         matchCase: saved.matchCase === true,
         wholeWord: saved.wholeWord === true,
         regex: saved.regex === true,
-        include: saved.onlyActive === true
-          ? (activePathRef.current ? [activePathRef.current] : [])
-          : splitGlobs(typeof saved.includeText === 'string' ? saved.includeText : ''),
+        include: searchIncludes(saved.onlyActive === true, activePathRef.current,
+          typeof saved.includeText === 'string' ? saved.includeText : ''),
         exclude: saved.excludeOn === true
           ? splitGlobs(typeof saved.excludeText === 'string' ? saved.excludeText : '')
           : [],
@@ -146,6 +158,14 @@ export function SearchPanel(props) {
     const clean = String(text ?? '').trim()
     if (clean.length < 2) { setMatches(null); setStatus('idle'); return }
     const req = requestRef.current
+    if (req.include === null) {
+      setMatches([])
+      setTruncated(false)
+      setError('')
+      setWarning('')
+      setStatus('done')
+      return
+    }
     setStatus('searching')
     setError('')
     setWarning('')
@@ -195,13 +215,13 @@ export function SearchPanel(props) {
   }
 
   /**
-   * 立即重搜（查询 ≥2 字符时）；先同步 ref 避免本次调用读到旧请求参数。
+   * 立即刷新搜索（短查询清空旧结果）；先同步 ref 避免本次调用读到旧请求参数。
    * @param next 新的请求参数字段
    */
   const rerun = (next) => {
     requestRef.current = Object.assign({}, requestRef.current, next)
     if (timerRef.current) clearTimeout(timerRef.current)
-    if (String(queryRef.current).trim().length >= 2) runSearch(queryRef.current)
+    runSearch(queryRef.current)
   }
 
   /** 选项开关切换（大小写/全词/正则/书本/设置）：更新状态 + 立即重搜。 */
@@ -215,10 +235,18 @@ export function SearchPanel(props) {
     base[key] = value
     rerun({
       matchCase: base.matchCase, wholeWord: base.wholeWord, regex: base.regex,
-      include: base.onlyActive ? (activePathRef.current ? [activePathRef.current] : []) : splitGlobs(includeText),
+      include: searchIncludes(base.onlyActive, activePathRef.current, includeText),
       exclude: base.excludeOn ? splitGlobs(excludeText) : [],
     })
   }
+
+  // 仅当前文件模式下切换/关闭活动文件，立即更新搜索范围并作废旧请求。
+  const previousPathRef = React.useRef(activePath)
+  React.useEffect(() => {
+    if (previousPathRef.current === activePath) return
+    previousPathRef.current = activePath
+    if (onlyActive) rerun({ include: searchIncludes(true, activePath, includeText) })
+  }, [activePath])
 
   /**
    * 取用一次性选区种子（需求 1：Ctrl+Shift+F 时把编辑器选中文本填入搜索框）。
@@ -307,8 +335,8 @@ export function SearchPanel(props) {
             onChange: (e) => onChangeDebounced(setIncludeText, e.target.value),
           }),
           React.createElement('button', {
-            className: 'edrv-search-toggle' + (onlyActive ? ' on' : ''), title: activePath ? '仅在当前打开的文件中搜索' : '无打开的文件（需先打开文件）',
-            'aria-pressed': onlyActive, disabled: !activePath,
+            className: 'edrv-search-toggle' + (onlyActive ? ' on' : ''), title: activePath ? '仅在当前打开的文件中搜索' : onlyActive ? '无打开的文件（点击退出仅当前文件）' : '无打开的文件（需先打开文件）',
+            'aria-pressed': onlyActive, disabled: !activePath && !onlyActive,
             onClick: () => toggleOpt('onlyActive', !onlyActive),
           }, '📖')),
         React.createElement('div', { className: 'edrv-search-row' },
