@@ -20,11 +20,11 @@ const ALPHA_LINES = ['0.1.2', '0.1.3', '0.1.4', '0.1.5', '0.1.6', '0.1.7']
 
 for (const [name, range] of Object.entries(pkg.peerDependencies ?? {}).filter(([key]) => key.startsWith('@deepseek-ai/dsh-'))) {
   describe(name + ' semantic range', () => {
-    it.each(['0.1.5-rc.3', '0.1.6-alpha.2', '0.1.7-alpha.2', '0.1.7-rc.1', '0.1.7-rc.2', '0.2.0-rc.1'])('accepts %s in npm and the DSH gate', (version) => {
+    it.each(['0.1.5-rc.3', '0.1.6-alpha.2', '0.1.7-alpha.2', '0.1.7-rc.1', '0.1.7-rc.2', '0.2.0-rc.1', '0.2.0-rc.2'])('accepts %s in npm and the DSH gate', (version) => {
       expect(satisfies(version, range)).toBe(true)
       expect(satisfies(version, range, { includePrerelease: true })).toBe(true)
     })
-    it.each(['0.2.0-alpha.1', '0.2.0-rc.2', '0.2.0', '1.0.0'])('rejects unadapted %s', (version) => {
+    it.each(['0.2.0-alpha.1', '0.2.0-rc.3', '0.2.0', '1.0.0'])('rejects unadapted %s', (version) => {
       expect(satisfies(version, range)).toBe(false)
       expect(satisfies(version, range, { includePrerelease: true })).toBe(false)
     })

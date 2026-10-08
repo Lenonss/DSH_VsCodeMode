@@ -386,6 +386,7 @@ export interface RpcRequestMap {
   'edrv.fsCopy': { sessionId?: string; from: string; toDir: string }
   'edrv.fsMove': { sessionId?: string; from: string; toDir: string }
   'mcp.list': {}
+  'mcp.snapshot': {}
   'mcp.save': { config: MpcConfig }
   'mcp.remove': { id: string }
   'mcp.toggle': { id: string; enabled: boolean }
@@ -545,6 +546,7 @@ export interface RpcOkMap {
   'edrv.fsCopy': { from: string; to: string }
   'edrv.fsMove': { from: string; to: string }
   'mcp.list': { servers: MpcServer[] }
+  'mcp.snapshot': { servers: MpcServer[]; projects: MpcProject[] }
   'mcp.save': { server: MpcServer }
   'mcp.remove': object
   'mcp.toggle': { server: MpcServer }

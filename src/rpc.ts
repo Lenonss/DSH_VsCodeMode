@@ -33,7 +33,7 @@ import { restoreFile, revertCall, revertHunk, revertHunks, type Result } from '.
 import { rulesList, rulesRead, rulesRemove, rulesSave, rulesToggle } from './rules.js'
 import { isSnippetFilePath, snippetsEntries, snippetsList, snippetsRead, snippetsRemove, snippetsSave } from './snippets.js'
 import { listMcp, refreshMcp, removeMcp, saveMcp, toggleMcp } from './mcp.js'
-import { listProjects, projectRefresh, projectRemove, projectSave, projectToggle } from './mcpProject.js'
+import { listProjects, projectRefresh, projectRemove, projectSave, projectToggle, mcpSnapshot } from './mcpProject.js'
 import { normalizeFileOpenTool, FILE_OPEN_DEFAULT, FILE_OPEN_SETTINGS_NS, sectionOf, updateSection } from './fileOpenSettings.js'
 import { INTEGRATION_BASE_DEFAULT } from './shared/integration.js'
 import { shellMenuRegister, shellMenuRemove, shellMenuStatus } from './integrate.js'
@@ -1165,6 +1165,7 @@ export function buildHandlers(
       return { ok: true, from: r.from, to: r.to }
     },
     'mcp.list': async () => ({ ok: true, ...listMcp(ctx) }),
+    'mcp.snapshot': async () => ({ ok: true, ...mcpSnapshot(ctx) }),
     'mcp.save': async (args) => {
       try { return { ok: true, server: await saveMcp(ctx, args.config) } }
       catch (error) { return { ok: false, error: String(error) } }

@@ -9,6 +9,9 @@
 import React from 'react'
 import { rpc } from '../rpc.js'
 import type { MpcProject, MpcServer } from '../../shared/mcp.js'
+import { configOf } from '../mcpForm.js'
+import { McpState } from '../mcpState.js'
+import { statusOf, statusTone } from '../../shared/mcpStatus.js'
 import '../styles/mcp.css'
 import { availableOpeners, AUTO_OPEN_TOOL } from '../fileOpeners.js'
 import { SettingsContext } from '../settingsContext.js'
@@ -24,44 +27,15 @@ import { AiSettings } from './AiSettings.js'
 
 const EMPTY = { serverName: '', transport: 'stdio', command: '', args: '', cwd: '', url: '', headers: '' }
 
-/** 将表单草稿转换为 Host MCP 配置。 */
-function configOf(draft) {
-  const config = { serverName: draft.serverName.trim(), transport: draft.transport }
-  if (draft.transport === 'stdio') {
-    config.command = draft.command.trim()
-    config.args = draft.args.split(/\r?\n|\s+/).filter(Boolean)
-    if (draft.cwd.trim()) config.cwd = draft.cwd.trim()
-  } else {
-    config.url = draft.url.trim()
-    config.headers = parsePairs(draft.headers)
-  }
-  return config
-}
-
-/** 解析每行 key=value 的表单字段。 */
-function parsePairs(text) {
-  return Object.fromEntries(text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((line) => {
-    const idx = line.indexOf('=')
-    return idx > 0 ? [line.slice(0, idx).trim(), line.slice(idx + 1).trim()] : [line, '']
-  }))
-}
-
-/** @author ddj 2026年09月28号 @param server Server lifecycle snapshot. @returns User-facing status. */
-function statusOf(server) {
-  if (!server.enabled || server.status === 'disabled') return '已禁用'
-  const labels = { connected: '在线', connecting: '装配中', configured: '已配置，等待会话', unverified: '已加载，连接未确认', error: '错误' }
-  return labels[server.status] ?? '状态未知'
-}
-
-/** MCP 服务卡片（全局与项目共用）。 */
-function ServerCard({ server, onRefresh, onToggle, onRemove }) {
+/** @private @author ddj 2026年10月08号 @param props Server snapshot, page-wide busy state and actions. @returns Lifecycle-evidence card; enabled does not imply online. */
+function ServerCard({ server, busy, onRefresh, onToggle, onRemove }) {
   return React.createElement('article', { className: 'vsm-mcp-card' },
     React.createElement('div', { className: 'vsm-mcp-card-head' },
-      React.createElement('div', { className: 'vsm-mcp-title' }, React.createElement('span', { className: 'vsm-mcp-dot ' + (server.enabled ? server.status : 'disabled') }), server.serverName),
+      React.createElement('div', { className: 'vsm-mcp-title' }, React.createElement('span', { className: 'vsm-mcp-dot ' + statusTone(server) }), server.serverName),
       React.createElement('div', { className: 'vsm-mcp-actions' },
-        React.createElement('button', { onClick: () => onRefresh(server.id), title: '刷新连接' }, '↻'),
-        React.createElement('button', { className: 'vsm-danger', onClick: () => onRemove(server.id), title: '删除 MCP' }, '⌫'),
-        React.createElement('button', { className: 'vsm-switch ' + (server.enabled ? 'on' : ''), onClick: () => onToggle(server), 'aria-label': server.enabled ? '禁用' : '启用' }, server.enabled ? '●' : '○'),
+        React.createElement('button', { disabled: !!busy, onClick: () => onRefresh(server.id), title: '重新装配会话实例' }, '↻'),
+        React.createElement('button', { disabled: !!busy, className: 'vsm-danger', onClick: () => onRemove(server.id), title: '删除 MCP' }, '⌫'),
+        React.createElement('button', { disabled: !!busy, className: 'vsm-switch ' + (server.enabled ? 'on' : ''), onClick: () => onToggle(server), title: '配置启用不代表连接在线', 'aria-label': server.enabled ? '禁用配置（不代表在线）' : '启用配置（不代表在线）', 'aria-pressed': !!server.enabled }, server.enabled ? '●' : '○'),
       ),
     ),
     React.createElement('div', { className: 'vsm-mcp-meta' }, statusOf(server), ' · ', server.toolCount, ' 个工具 · ', server.transport,
@@ -119,17 +93,17 @@ function ProjectPicker({ projects, value, onChange }) {
   )
 }
 
-/** 单个项目的 MCP 分组。 */
+/** @private @author ddj 2026年10月08号 @param props Project view, shared busy lock and actions. @returns Project cards with actions disabled for any active mutation. */
 function ProjectGroup({ project, busy, onAdd, onRefresh, onToggle, onRemove }) {
   const head = React.createElement('div', { className: 'vsm-project-head' },
     React.createElement('div', { className: 'vsm-project-title' }, React.createElement('span', { className: 'vsm-project-icon' }, '▣'), React.createElement('div', null, React.createElement('span', { className: 'vsm-project-name' }, project.title), React.createElement('span', { className: 'vsm-project-path' }, project.workspacePath))),
-    React.createElement('button', { className: 'vsm-primary vsm-small', onClick: () => onAdd(project) }, '+ 添加 MCP'),
+    React.createElement('button', { className: 'vsm-primary vsm-small', disabled: !!busy, onClick: () => onAdd(project) }, '+ 添加 MCP'),
   )
   let body
   if (project.missingDir) body = React.createElement('div', { className: 'vsm-project-empty' }, '项目目录已不存在，无法管理 MCP')
   else if (project.fileError) body = React.createElement('div', { className: 'vsm-mcp-error vsm-mcp-banner' }, project.fileError)
   else if (!project.servers.length) body = React.createElement('div', { className: 'vsm-project-empty' }, '此项目未配置 MCP')
-  else body = project.servers.map((server) => React.createElement(ServerCard, { key: server.serverName, server, onRefresh: (id) => onRefresh(project, server, id), onToggle: () => onToggle(project, server), onRemove: (id) => onRemove(project, server, id) }))
+  else body = project.servers.map((server) => React.createElement(ServerCard, { key: server.serverName, server, busy, onRefresh: (id) => onRefresh(project, server, id), onToggle: () => onToggle(project, server), onRemove: (id) => onRemove(project, server, id) }))
   return React.createElement('section', { className: 'vsm-project' }, head, body)
 }
 
@@ -462,8 +436,10 @@ const MCP_TABS = [
  * @param {object} draft 新增表单草稿
  * @param {Function} edit 草稿字段变更回调
  * @param {Function} resetDraft 清空草稿回调
+ * @author ddj 2026年10月08号
  */
-function McpManagePanel({ servers, projects, busy, draft, edit, resetDraft, refreshGlobal, toggleGlobal, removeGlobal, refreshProject, toggleProject, removeProject, saveGlobal, saveProject }) {
+function McpManagePanel(props) {
+  const { projects, busy, draft, edit, resetDraft, saveGlobal, saveProject } = props
   const [mcpTab, setMcpTab] = React.useState('mine')
   const [showForm, setShowForm] = React.useState(false)
   const [projectForm, setProjectForm] = React.useState(null)
@@ -477,26 +453,26 @@ function McpManagePanel({ servers, projects, busy, draft, edit, resetDraft, refr
     if (!projects.some((project) => project.workspacePath === selectedPath)) setSelectedPath(projects[0].workspacePath)
   }, [projects, selectedPath])
 
+  /** @author ddj 2026年10月08号 @description Close the successful global form. */
   const closeGlobalForm = () => setShowForm(false)
+  /** @author ddj 2026年10月08号 @description Close the successful project form. */
   const closeProjectForm = () => setProjectForm(null)
+  /** @author ddj 2026年10月08号 @param project Target project. @description Open a project draft only when idle. */
   const addProject = (project) => {
+    if (busy) return
     resetDraft?.()
+    setShowForm(false)
     setProjectForm({ workspacePath: project.workspacePath, title: project.title })
   }
+  /** @author ddj 2026年10月08号 @description Open a global draft only when idle. */
+  const addGlobal = () => {
+    if (busy) return
+    resetDraft?.()
+    setProjectForm(null)
+    setShowForm(true)
+  }
 
-  const selectedProject = projects.find((project) => project.workspacePath === selectedPath)
-  const mineBody = servers.length
-    ? servers.map((s) => React.createElement(ServerCard, { key: s.id, server: s, onRefresh: refreshGlobal, onToggle: toggleGlobal, onRemove: removeGlobal }))
-    : React.createElement('div', { className: 'vsm-mcp-empty' }, '还没有配置全局 MCP')
-  const projectBody = projects.length ? React.createElement(React.Fragment, null,
-    React.createElement(ProjectPicker, { projects, value: selectedPath, onChange: setSelectedPath }),
-    selectedProject ? React.createElement(ProjectGroup, { project: selectedProject, busy, onAdd: addProject, onRefresh: refreshProject, onToggle: toggleProject, onRemove: removeProject }) : React.createElement('div', { className: 'vsm-mcp-empty' }, '请选择项目'),
-  ) : React.createElement('div', { className: 'vsm-mcp-empty' }, '还没有项目')
-
-  let body
-  if (mcpTab === 'projects') body = projectBody
-  else if (mcpTab === 'market') body = React.createElement('div', { className: 'vsm-mcp-empty' }, 'MCP 市场暂未接入')
-  else body = mineBody
+  const body = manageBody(props, mcpTab, selectedPath, setSelectedPath, addProject)
 
   const form = showForm
     ? React.createElement(McpForm, { title: '添加全局 MCP', draft, busy, edit, save: () => saveGlobal(closeGlobalForm), close: closeGlobalForm })
@@ -506,108 +482,151 @@ function McpManagePanel({ servers, projects, busy, draft, edit, resetDraft, refr
   return React.createElement(React.Fragment, null,
     React.createElement('div', { className: 'vsm-mcp-subhead' },
       React.createElement('nav', { className: 'vsm-mcp-subtabs' }, MCP_TABS.map((item) => React.createElement('button', { key: item.id, className: mcpTab === item.id ? 'active' : '', onClick: () => setMcpTab(item.id) }, item.label))),
-      React.createElement('button', { className: 'vsm-primary vsm-small', onClick: () => { resetDraft?.(); setShowForm(true) } }, '+ 添加全局 MCP'),
+      React.createElement('button', { className: 'vsm-primary vsm-small', disabled: !!busy, onClick: addGlobal }, '+ 添加全局 MCP'),
     ),
     body,
     form,
   )
 }
 
-/** MCP 管理主面板。 */
+/** @private @author ddj 2026年10月08号 @param props Current view and actions. @param tab Selected MCP subtab. @param path Selected project. @param select Project setter. @param add Project form opener. @returns Selected global/project/market content. */
+function manageBody(props, tab, path, select, add) {
+  const { servers, projects, busy, refreshGlobal, toggleGlobal, removeGlobal, refreshProject, toggleProject, removeProject } = props
+  if (tab === 'market') return React.createElement('div', { className: 'vsm-mcp-empty' }, 'MCP 市场暂未接入')
+  if (tab !== 'projects') {
+    return servers.length
+      ? servers.map((server) => React.createElement(ServerCard, { key: server.id, server, busy, onRefresh: refreshGlobal, onToggle: toggleGlobal, onRemove: removeGlobal }))
+      : React.createElement('div', { className: 'vsm-mcp-empty' }, '还没有配置全局 MCP')
+  }
+  if (!projects.length) return React.createElement('div', { className: 'vsm-mcp-empty' }, '还没有项目')
+  const project = projects.find((item) => item.workspacePath === path)
+  return React.createElement(React.Fragment, null,
+    React.createElement(ProjectPicker, { projects, value: path, onChange: select }),
+    project ? React.createElement(ProjectGroup, { project, busy, onAdd: add, onRefresh: refreshProject, onToggle: toggleProject, onRemove: removeProject }) : React.createElement('div', { className: 'vsm-mcp-empty' }, '请选择项目'),
+  )
+}
+
+//region MCP page state and locked actions
+/** @private @author ddj 2026年10月08号 @returns Mounted controller reference and its published view. */
+function useMcpState() {
+  const ref = React.useRef(null)
+  const [view, setView] = React.useState({ servers: [], projects: [], loading: true, busy: '', error: '' })
+  /** @author ddj 2026年10月08号 @description Subscribe to document visibility and initialize MCP data. @returns Unmount cleanup. */
+  const mount = () => {
+    const state = new McpState(rpc, setView)
+    ref.current = state
+    /** @author ddj 2026年10月08号 @description Gate snapshots on actual document visibility. */
+    const visibility = () => state.setVisible(document.visibilityState === 'visible')
+    /** @author ddj 2026年10月08号 @description Stop controller and remove page listener. */
+    const cleanup = () => {
+      document.removeEventListener('visibilitychange', visibility)
+      state.dispose()
+      if (ref.current === state) ref.current = null
+    }
+    visibility()
+    document.addEventListener('visibilitychange', visibility)
+    void state.load()
+    return cleanup
+  }
+  React.useEffect(mount, [])
+  return { ref, view }
+}
+
+/** @private @author ddj 2026年10月08号 @param state Mounted controller. @param id Server identity. @param method Mutation RPC. @param args Request fields. @returns Locked completion. */
+function globalAction(state, id, method, args) {
+  /** @author ddj 2026年10月08号 @returns Global mutation result. */
+  const request = () => rpc(method, args)
+  /** @author ddj 2026年10月08号 @param result Global mutation result. @description Apply only successful mutation to the latest controller view. */
+  const commit = (result) => {
+    state.view.servers = method === 'mcp.remove'
+      ? state.view.servers.filter((server) => server.id !== id)
+      : state.view.servers.map((server) => server.id === id ? result.server : server)
+  }
+  return state?.mutate(id, request, commit)
+}
+
+/** @private @author ddj 2026年10月08号 @param state Mounted controller. @param path Project path. @param name Server identity. @param method Mutation RPC. @param extra Optional request fields. @returns Locked completion. */
+function projectAction(state, path, name, method, extra = {}) {
+  /** @author ddj 2026年10月08号 @returns Project mutation result. */
+  const request = () => rpc(method, { workspacePath: path, serverName: name, ...extra })
+  /** @author ddj 2026年10月08号 @param result Project mutation result. @description Replace project in the current view. */
+  const commit = (result) => {
+    state.view.projects = state.view.projects.map((project) => project.workspacePath === path ? result.project : project)
+  }
+  return state?.mutate(path + ':' + name, request, commit)
+}
+
+/** @private @author ddj 2026年10月08号 @param ref Mounted controller reference. @returns Global/project card actions sharing a synchronous lock. */
+function cardActions(ref) {
+  /** @author ddj 2026年10月08号 @param id Global identity. @returns Locked refresh. */
+  const refreshGlobal = (id) => globalAction(ref.current, id, 'mcp.refresh', { id })
+  /** @author ddj 2026年10月08号 @param server Current configuration. @returns Locked enable change. */
+  const toggleGlobal = (server) => globalAction(ref.current, server.id, 'mcp.toggle', { id: server.id, enabled: !server.enabled })
+  /** @author ddj 2026年10月08号 @param id Global identity from ServerCard. @returns Confirmed locked deletion. */
+  const removeGlobal = (id) => !ref.current?.view.busy && window.confirm('确认删除此 MCP 服务？') && globalAction(ref.current, id, 'mcp.remove', { id })
+  /** @author ddj 2026年10月08号 @param project Project. @param server Configuration. @returns Locked refresh. */
+  const refreshProject = (project, server) => projectAction(ref.current, project.workspacePath, server.serverName, 'mcp.projectRefresh')
+  /** @author ddj 2026年10月08号 @param project Project. @param server Configuration. @returns Locked enable change. */
+  const toggleProject = (project, server) => projectAction(ref.current, project.workspacePath, server.serverName, 'mcp.projectToggle', { enabled: !server.enabled })
+  /** @author ddj 2026年10月08号 @param project Project. @param server Configuration. @returns Confirmed locked deletion. */
+  const removeProject = (project, server) => !ref.current?.view.busy && window.confirm('确认删除此项目的 MCP「' + server.serverName + '」？') && projectAction(ref.current, project.workspacePath, server.serverName, 'mcp.projectRemove')
+  return { refreshGlobal, toggleGlobal, removeGlobal, refreshProject, toggleProject, removeProject }
+}
+
+/** @private @author ddj 2026年10月08号 @param state Controller. @param draft Editable fields. @param setDraft Draft setter. @param path Optional project target. @param close Success-only close callback. @returns Locked save, validation included. */
+function saveDraft(state, draft, setDraft, path, close) {
+  /** @author ddj 2026年10月08号 @returns Validated save result. @throws Malformed arguments/headers. */
+  const request = () => {
+    const config = configOf(draft)
+    return path === null ? rpc('mcp.save', { config }) : rpc('mcp.projectSave', { workspacePath: path, serverName: config.serverName, config })
+  }
+  /** @author ddj 2026年10月08号 @param result Save result. @description Update current view and only then reset/close the form. */
+  const commit = (result) => {
+    if (path !== null) state.view.projects = state.view.projects.map((project) => project.workspacePath === path ? result.project : project)
+    else {
+      const servers = state.view.servers
+      state.view.servers = servers.some((server) => server.id === result.server.id)
+        ? servers.map((server) => server.id === result.server.id ? result.server : server) : servers.concat(result.server)
+    }
+    setDraft(EMPTY)
+    close()
+  }
+  return state?.mutate(path === null ? 'save' : 'project-save', request, commit)
+}
+//endregion
+
+/** @public @author ddj 2026年10月08号 @param props Settings integrations. @returns MCP management page with visible-tab-only snapshot polling. */
 export function McpSettings(props) {
   const openerRegistry = props?.openerRegistry ?? { list: () => [] }
   const compatSummary = props?.compatSummary ?? (() => [])
   const getShortcuts = props?.getShortcuts ?? (() => null)
-  const [servers, setServers] = React.useState<MpcServer[]>([])
-  const [projects, setProjects] = React.useState<MpcProject[]>([])
-  const [loading, setLoading] = React.useState(true)
-  const [busy, setBusy] = React.useState('')
-  const [error, setError] = React.useState('')
+  const { ref, view } = useMcpState()
+  const { servers, projects, loading, busy, error } = view
   const [tab, setTab] = React.useState('general')
   const [draft, setDraft] = React.useState(EMPTY)
-
-  const loadAll = React.useCallback(() => {
-    setLoading(true)
-    setError('')
-    Promise.all([rpc('mcp.list', {}), rpc('mcp.projects', {})]).then(([list, prj]) => {
-      if (!list.ok) throw new Error(list.error)
-      if (!prj.ok) throw new Error(prj.error)
-      setServers(list.servers)
-      setProjects(prj.projects)
-    }).catch((e) => setError(String(e))).finally(() => setLoading(false))
-  }, [])
-
-  React.useEffect(loadAll, [loadAll])
-
-  const finish = (result) => {
-    if (!result.ok) throw new Error(result.error)
-    return result
+  /** @author ddj 2026年10月08号 @description Select polling scope and invalidate late responses on tab leave. @returns Tab cleanup. */
+  const selectTab = () => {
+    const state = ref.current
+    state?.setActive(tab === 'mcp')
+    /** @author ddj 2026年10月08号 @description Cancel reads on tab switch. */
+    const cleanup = () => state?.setActive(false)
+    return cleanup
   }
-
-  const action = (label, id, method, args, patch) => {
-    setBusy(id)
-    setError('')
-    return rpc(method, args).then(finish).then((result) => {
-      if (patch) patch(result)
-    }).catch((e) => setError(String(e))).finally(() => setBusy('')).then(() => label)
-  }
-
-  const refreshGlobal = (id) => action('refresh', id, 'mcp.refresh', { id }, (r) => setServers((old) => old.map((s) => s.id === id ? r.server : s)))
-  const toggleGlobal = (s) => action('toggle', s.id, 'mcp.toggle', { id: s.id, enabled: !s.enabled }, (r) => setServers((old) => old.map((x) => x.id === s.id ? r.server : x)))
-  const removeGlobal = (s) => window.confirm('确认删除此 MCP 服务？') && action('remove', s.id, 'mcp.remove', { id: s.id }, (r) => setServers((old) => old.filter((x) => x.id !== s.id)))
-
-  const replaceProject = (workspacePath) => (result) => setProjects((old) => old.map((p) => p.workspacePath === workspacePath ? result.project : p))
-  const projectAction = (workspacePath, serverName, method, args, patch) => {
-    setBusy(workspacePath + ':' + serverName)
-    setError('')
-    return rpc(method, args).then(finish).then((result) => {
-      if (patch) patch(result)
-    }).catch((e) => setError(String(e))).finally(() => setBusy(''))
-  }
-
-  const refreshProject = (p, s) => projectAction(p.workspacePath, s.serverName, 'mcp.projectRefresh', { workspacePath: p.workspacePath, serverName: s.serverName }, replaceProject(p.workspacePath))
-  const toggleProject = (p, s) => projectAction(p.workspacePath, s.serverName, 'mcp.projectToggle', { workspacePath: p.workspacePath, serverName: s.serverName, enabled: !s.enabled }, replaceProject(p.workspacePath))
-  const removeProject = (p, s) => window.confirm('确认删除此项目的 MCP「' + s.serverName + '」？') && projectAction(p.workspacePath, s.serverName, 'mcp.projectRemove', { workspacePath: p.workspacePath, serverName: s.serverName }, replaceProject(p.workspacePath))
-
-  /**
-   * 保存全局 MCP：成功后由回调关闭子面板。
-   * 作者 ddj 2026年08月27号
-   * @param {Function} close 关闭新增表单回调
-   */
-  const saveGlobal = (close) => {
-    setBusy('save')
-    setError('')
-    rpc('mcp.save', { config: configOf(draft) }).then(finish).then((result) => {
-      setServers((old) => old.some((s) => s.id === result.server.id) ? old.map((s) => s.id === result.server.id ? result.server : s) : old.concat(result.server))
-      setDraft(EMPTY)
-      close()
-    }).catch((e) => setError(String(e))).finally(() => setBusy(''))
-  }
-
-  /**
-   * 保存项目 MCP：成功后由回调关闭子面板。
-   * 作者 ddj 2026年08月27号
-   * @param {string} workspacePath 目标项目路径
-   * @param {Function} close 关闭新增表单回调
-   */
-  const saveProject = (workspacePath, close) => {
-    setBusy('project-save')
-    setError('')
-    const config = configOf(draft)
-    rpc('mcp.projectSave', { workspacePath, serverName: config.serverName, config }).then(finish).then((result) => {
-      setProjects((old) => old.map((p) => p.workspacePath === workspacePath ? result.project : p))
-      setDraft(EMPTY)
-      close()
-    }).catch((e) => setError(String(e))).finally(() => setBusy(''))
-  }
-
-  const edit = (key, value) => setDraft((old) => ({ ...old, [key]: value }))
-  const resetDraft = () => setDraft(EMPTY)
+  React.useEffect(selectTab, [tab])
+  const { refreshGlobal, toggleGlobal, removeGlobal, refreshProject, toggleProject, removeProject } = cardActions(ref)
+  /** @author ddj 2026年10月08号 @param close Success-only close callback. @returns Global save completion. */
+  const saveGlobal = (close) => saveDraft(ref.current, draft, setDraft, null, close)
+  /** @author ddj 2026年10月08号 @param path Target project. @param close Success-only close callback. @returns Project save completion. */
+  const saveProject = (path, close) => saveDraft(ref.current, draft, setDraft, path, close)
+  /** @author ddj 2026年10月08号 @param key Draft field. @param value User input. @description Keep draft edits unavailable during a save. */
+  const edit = (key, value) => { if (!ref.current?.view.busy) setDraft((old) => ({ ...old, [key]: value })) }
+  /** @author ddj 2026年10月08号 @description Reset the draft when no mutation is pending. */
+  const resetDraft = () => { if (!ref.current?.view.busy) setDraft(EMPTY) }
   let body
   if (loading) body = React.createElement('div', { className: 'vsm-mcp-empty' }, '正在读取 MCP 服务…')
   else if (tab === 'general') body = React.createElement(GeneralSettings, { registry: openerRegistry, getShortcuts })
   else if (tab === 'mcp') body = React.createElement(McpManagePanel, { servers, projects, busy, draft, edit, resetDraft,
-    saveGlobal: (close) => saveGlobal(close), saveProject: (workspacePath, close) => saveProject(workspacePath, close),
+    saveGlobal, saveProject,
     refreshGlobal, toggleGlobal, removeGlobal, refreshProject, toggleProject, removeProject })
   else if (tab === 'compat') body = React.createElement(CompatSection, { getSummary: compatSummary })
   else if (tab === 'lsp') body = React.createElement(LspSettings, null)
@@ -621,9 +640,27 @@ export function McpSettings(props) {
   )
 }
 
-/** MCP 新增表单（全局/项目共用）。 */
+/** @private @author ddj 2026年10月08号 @param props Draft, shared busy lock, edit/save/close callbacks. @returns Lossless argument/header form; failed save stays open. */
 function McpForm({ title, draft, busy, edit, save, close }) {
-  const input = (key, placeholder) => React.createElement('input', { value: draft[key], onChange: (e) => edit(key, e.target.value), placeholder })
-  const fields = draft.transport === 'stdio' ? React.createElement(React.Fragment, null, React.createElement('label', null, '命令', input('command', 'npx')), React.createElement('label', null, '参数（空格或换行分隔）', React.createElement('textarea', { value: draft.args, onChange: (e) => edit('args', e.target.value) })), React.createElement('label', null, '工作目录（可选）', input('cwd', ''))) : React.createElement(React.Fragment, null, React.createElement('label', null, 'URL', input('url', 'http://localhost:3000/mcp')), React.createElement('label', null, '请求头（每行 key=value）', React.createElement('textarea', { value: draft.headers, onChange: (e) => edit('headers', e.target.value) })))
-  return React.createElement('div', { className: 'vsm-mcp-modal' }, React.createElement('div', { className: 'vsm-mcp-dialog' }, React.createElement('h3', null, title), React.createElement('label', null, '名称', input('serverName', '例如 codegraph')), React.createElement('label', null, '传输方式', React.createElement('select', { value: draft.transport, onChange: (e) => edit('transport', e.target.value) }, React.createElement('option', { value: 'stdio' }, 'stdio'), React.createElement('option', { value: 'streamable-http' }, 'streamable-http'))), fields, React.createElement('div', { className: 'vsm-mcp-dialog-actions' }, React.createElement('button', { onClick: close }, '取消'), React.createElement('button', { className: 'vsm-primary', disabled: busy === 'save' || busy === 'project-save', onClick: save }, '保存并连接'))))
+  /** @author ddj 2026年10月08号 @param key Draft field. @returns Short input change callback. */
+  const change = (key) => (event) => edit(key, event.target.value)
+  /** @author ddj 2026年10月08号 @param key Draft field. @param placeholder Input hint. @returns Disabled-while-busy input. */
+  const input = (key, placeholder) => React.createElement('input', { disabled: !!busy, value: draft[key], onChange: change(key), placeholder })
+  /** @author ddj 2026年10月08号 @param key Draft field. @returns Disabled-while-busy text area. */
+  const textarea = (key) => React.createElement('textarea', { disabled: !!busy, value: draft[key], onChange: change(key) })
+  const fields = draft.transport === 'stdio' ? React.createElement(React.Fragment, null,
+    React.createElement('label', null, '命令', input('command', 'npx')),
+    React.createElement('label', null, '参数（JSON string[] 或每行一个；保留空格，空参数用 JSON）', textarea('args')),
+    React.createElement('label', null, '工作目录（可选）', input('cwd', '')),
+  ) : React.createElement(React.Fragment, null,
+    React.createElement('label', null, 'URL', input('url', 'http://localhost:3000/mcp')),
+    React.createElement('label', null, '请求头（每行 key=value，键不可重复）', textarea('headers')),
+  )
+  return React.createElement('div', { className: 'vsm-mcp-modal' }, React.createElement('div', { className: 'vsm-mcp-dialog' },
+    React.createElement('h3', null, title),
+    React.createElement('label', null, '名称', input('serverName', '例如 codegraph')),
+    React.createElement('label', null, '传输方式', React.createElement('select', { disabled: !!busy, value: draft.transport, onChange: change('transport') }, React.createElement('option', { value: 'stdio' }, 'stdio'), React.createElement('option', { value: 'streamable-http' }, 'streamable-http'))),
+    fields,
+    React.createElement('div', { className: 'vsm-mcp-dialog-actions' }, React.createElement('button', { disabled: !!busy, onClick: close }, '取消'), React.createElement('button', { className: 'vsm-primary', disabled: !!busy, onClick: save }, '保存配置')),
+  ))
 }

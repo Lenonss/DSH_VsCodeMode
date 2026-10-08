@@ -84,16 +84,17 @@ export function inDshRange(version: DshVersion | null | undefined, range: DshRan
 
 /**
  * 版本线标签：报告与文档展示版本归属；不可解析返回 '未知'。
- * 逐线自新到旧匹配，先命中先返回；仅 0.2.0-rc.1 精确标记为已审计版本。
- * @author ddj 2026年09月02号 / 2026年09月18号 / 2026年09月22号 / 2026年09月29号
+ * 逐线自新到旧匹配，先命中先返回；仅已静态审计的 0.2.0-rc.1/rc.2 精确标记。
+ * @author ddj 2026年09月02号 / 2026年09月18号 / 2026年09月22号 / 2026年09月29号 / 2026年10月08号
  * @param input 版本串（如 '0.1.6-alpha.2'）
  * @returns 版本线标签
  */
 export function familyLabel(input: string): string {
   const version = parseDshVersion(input)
   if (!version) return '未知'
+  if (inDshRange(version, { from: '0.2.0-rc.2', to: '0.2.0-rc.2' })) return '0.2.0-rc.2（设置=profile Config；按能力探测）'
   if (inDshRange(version, { from: '0.2.0-rc.1', to: '0.2.0-rc.1' })) return '0.2.0-rc.1（设置=profile Config；按能力探测）'
-  if (inDshRange(version, { from: '0.2.0-0' })) return '0.2.0 及更新（除 rc.1 外未经逐版适配；按能力探测）'
+  if (inDshRange(version, { from: '0.2.0-0' })) return '0.2.0 及更新（除 rc.1/rc.2 外未经逐版适配；按能力探测）'
   if (inDshRange(version, { from: '0.1.7-alpha.1' })) return '0.1.7-alpha.1 及更新（设置=profile Config + configForms 客户端面 + 会话 V4）'
   if (inDshRange(version, { from: '0.1.6-alpha.2' })) return '0.1.6-alpha.2 及更新（会话多实例共存 + 回合改动卡片 + Office 侧栏预览 + 侧栏浏览器）'
   if (inDshRange(version, { from: '0.1.6-alpha.1' })) return '0.1.6-alpha 及更新（MCP SDK v2 + Web 侧边栏终端 + 文件链接默认侧栏预览）'

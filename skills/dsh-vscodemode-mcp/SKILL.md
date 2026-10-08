@@ -29,6 +29,10 @@ whenToUse: 用户要求新增、修改、启停或排查 VSCodeMode MCP 配置�
 
 禁用、删除、配置变更、刷新重连及 agent/插件卸载都会释放相应 fiber 和连接。仅刷新未变化的项目列表不会重复连接。主机代码更新需要重启 DSH 才能加载新实现。
 
+管理页首次加载配置，之后仅在 MCP 页签可见且文档可见时每 2.5 秒读取 `mcp.snapshot`；单次读取 10 秒截止，不重叠、不在卸载后回写。快照只读运行台账，不读项目文件、不 reconcile、不额外建连。外部文件变更通过显式刷新/重新打开设置或新 agent 加载；快照不是文件监听器。配置写操作串行保护读取—修改—写入与跨作用域命名保留。
+
+表单 stdio 参数采用 JSON `string[]` 或每行一个完整参数，不按空格/引号做 shell 拆分；含空参数或内嵌换行使用 JSON。HTTP 请求头每行 `key=value`，保留值内的等号，拒绝非法/重复（忽略大小写）键。失败保存保持表单，忙时禁止重复动作。
+
 ## 3. 项目配置
 
 `.mcp.json` 示例：
@@ -57,7 +61,7 @@ whenToUse: 用户要求新增、修改、启停或排查 VSCodeMode MCP 配置�
 - `disabled: true` 保持配置但不创建连接；保存表单会恢复启用。重启和 reconcile 都尊重 `disabled`。
 - 保存保留文档顶层、其他服务器及当前服务器的未知字段和未编辑高级参数；切换传输方式会移除旧传输专属字段。
 - `env` / `headers` 在返回值中使用 `••••••` 脱敏。原键的未修改掩码保存时恢复真实值；新键只有掩码而没有原值时会拒绝保存，需填写凭据。
-- 只有 `ENOENT` 表示配置不存在。权限、IO、JSON 或结构错误会报告 `fileError`，保留最后有效配置与活动连接，不覆盖损坏文件。
+- 配置不存在只认结构化错误码：官方 fs 的 `FS_NOT_FOUND` 与兼容旧后端的 `ENOENT`；缺失的可选配置按空服务处理，不写空文件，不阻断其他项目的重名检查。权限、IO、JSON 或结构错误会报告 `fileError`，保留最后有效配置与活动连接，不覆盖损坏文件。
 
 全局配置继续使用官方 loader entry：
 
@@ -80,6 +84,7 @@ whenToUse: 用户要求新增、修改、启停或排查 VSCodeMode MCP 配置�
 | 方法 | 入参 | 成功返回字段 |
 |---|---|---|
 | `mcp.list` | `{}` | `servers` |
+| `mcp.snapshot` | `{}` | `servers`, `projects`（只读运行快照） |
 | `mcp.save` | `{ config }` | `server` |
 | `mcp.remove` | `{ id }` | 无 |
 | `mcp.toggle` | `{ id, enabled }` | `server` |
@@ -97,6 +102,7 @@ whenToUse: 用户要求新增、修改、启停或排查 VSCodeMode MCP 配置�
 - `serverName` 使用 `/^[A-Za-z0-9_-]{1,32}$/`；允许下划线，与技能名规则不同。
 - VSCodeMode 管理的全局和所有项目配置之间名称唯一，包括未启用和没有活动 agent 的配置。官方 MCP 还会拒绝同一个 agent scope 中的重复名称。
 - 工具名是 `mcp__<serverName>__<原始工具名>`。共享资源工具通过 `arguments.server` 选择服务器。
+- 不同服务名称不得以 `__` 形成前缀交叠，例如 `alpha` 与 `alpha__nested`：原始工具名也允许 `__`，官方编码不能唯一反解，不能靠最长前缀猜归属。保存与 reconcile 双向检查全局/所有项目（含禁用项）；历史歧义工具执行时 fail-closed 且不计入任何服务。独立含 `__` 的名称仍合法。
 - 项目稳定 id 仍是 `vsm-mcp.<workspaceHash>.<serverName>`，用于 UI/RPC 身份；0.13 起不再代表全局 loader entry。
 - 启动迁移会先删除旧的 `vsm-mcp.*` 和 `vsm-mcp:*` 全局项目条目及其连接，再在 agent scope 挂载。不要手动将项目条目改成其他 id。
 - 项目写操作只接受已注册 workspace，目标固定为该根目录的 `.mcp.json`。
@@ -120,10 +126,10 @@ whenToUse: 用户要求新增、修改、启停或排查 VSCodeMode MCP 配置�
 
 | 状态/现象 | 含义与处理 |
 |---|---|
-| `configured` | 配置已保存，没有已挂载实例；打开匹配工作区会话后挂载 |
+| `configured` | 中性色；配置已保存，没有已挂载实例，打开匹配工作区会话后挂载 |
 | `disabled` | 配置已停用，不建立项目连接 |
 | `connecting` | 官方插件还在等待启动完成；检查命令、cwd、URL 和握手 |
-| `unverified` | fiber 已激活，但官方没有公开连接状态证据；不能宣称已连接 |
+| `unverified` | 中性色；fiber 已激活，但官方没有公开连接状态证据，不能宣称已连接；右侧绿色开关只表示启用 |
 | `error` | 插件启动或挂载失败；读 `error` 与 Host 日志 |
 | `instanceCount: N` | N 个挂载的官方插件 fiber，**不等于 N 个确认存活的网络连接** |
 | `toolCount: 0` | 可能是合法的纯资源服务器，也可能启动失败或工具同步失败；结合资源调用和日志判断 |

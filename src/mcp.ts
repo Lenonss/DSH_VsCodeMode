@@ -13,6 +13,49 @@ import {
 import type { MpcConfig, MpcServer, MpcTool } from './shared/mcp.js'
 import type { Ctx } from './store.js'
 import { checkMcpName } from './mcpProject.js'
+import { runtimeOf } from './mcpRuntime.js'
+
+/**
+ * Compare the official tool-name namespaces without guessing the longest prefix.
+ * @public @author ddj 2026年10月08号
+ * @param left First server name.
+ * @param right Second server name.
+ * @returns Whether distinct names generate overlapping public tool names.
+ */
+export function nameOverlap(left: string, right: string): boolean {
+  return left !== right && (left.startsWith(right + '__') || right.startsWith(left + '__'))
+}
+
+/**
+ * Collect known global and project namespaces without opening connections.
+ * @public @author ddj 2026年10月08号
+ * @param ctx Host context.
+ * @returns Distinct server names used for fail-closed attribution.
+ */
+export function mcpNames(ctx: Ctx): Set<string> {
+  const names = new Set(runtimeOf(ctx).owners().keys())
+  for (const entry of entriesOf(ctx)) {
+    const name = entry.options?.config?.serverName
+    if (typeof name === 'string') names.add(name)
+  }
+  return names
+}
+
+const edits = new WeakMap<object, Promise<unknown>>()
+
+/**
+ * Serialize profile/project edits together to preserve files and cross-scope name reservations.
+ * @public @author ddj 2026年10月08号
+ * @param ctx Host owner.
+ * @param action Validated configuration operation.
+ * @returns Operation result; a rejection never poisons the next edit.
+ */
+export function mcpEdit<T>(ctx: Ctx, action: () => Promise<T>): Promise<T> {
+  const owner = ctx.root ?? ctx
+  const next = (edits.get(owner) ?? Promise.resolve()).then(action, action)
+  edits.set(owner, next)
+  return next
+}
 
 export { LEGACY_PROJECT_PREFIX, MCP_PACKAGE, PROJECT_ENTRY_PREFIX, isProjectEntryId }
 
@@ -46,7 +89,11 @@ export function toolsOf(ctx: Ctx, serverName: string, agent?: any): MpcTool[] {
   const visible = view?.visible
   if (!(visible instanceof Map)) return []
   const prefix = `mcp__${serverName}__`
-  return [...visible.entries()].filter(([name]) => String(name).startsWith(prefix)).map(([name, definition]) => ({
+  const namespaces = mcpNames(ctx)
+  namespaces.add(serverName)
+  const belongs = (name: string) => name.startsWith(prefix)
+    && [...namespaces].filter((server) => name.startsWith('mcp__' + server + '__')).length === 1
+  return [...visible.entries()].filter(([name]) => belongs(String(name))).map(([name, definition]) => ({
     name: String(name).slice(prefix.length),
     description: typeof definition?.description === 'string' ? definition.description : undefined,
   }))
@@ -77,6 +124,20 @@ export function mergeSecrets(next: Record<string, unknown>, previous: Record<str
 }
 
 /**
+ * Merge editable transport fields while retaining advanced settings and secret values.
+ * @public @author ddj 2026年10月08号
+ * @param previous Last saved configuration.
+ * @param config Submitted transport configuration.
+ * @returns Detached configuration without fields belonging to the old transport.
+ */
+export function mergeMcp(previous: Record<string, unknown>, config: MpcConfig): Record<string, unknown> {
+  const next = mergeSecrets({ ...previous, ...config }, previous)
+  const stale = config.transport === 'stdio' ? ['url', 'headers'] : ['command', 'args', 'cwd', 'env']
+  for (const key of stale) delete next[key]
+  return next
+}
+
+/**
  * Summarize a global entry without treating plugin activation as a successful handshake.
  * @public @author ddj 2026年09月28号
  * @param ctx Host services.
@@ -103,11 +164,40 @@ export function serverOf(ctx: Ctx, entry: any): MpcServer {
   }
 }
 
-/** 校验 MCP 配置。 */
+/**
+ * Validate transport fields before any loader or source mutation.
+ * @public @author ddj 2026年10月08号
+ * @param config Submitted configuration.
+ * @throws Error for unsupported transport or malformed endpoint/arguments/maps.
+ */
 export function validateConfig(config: MpcConfig): void {
-  if (!/^[A-Za-z0-9_-]{1,32}$/.test(config.serverName)) throw new Error('serverName 只能包含字母、数字、下划线和连字符（最多 32 位）')
-  if (config.transport === 'stdio' && !config.command?.trim()) throw new Error('stdio MCP 必须填写 command')
-  if (config.transport === 'streamable-http' && !/^https?:\/\//.test(config.url ?? '')) throw new Error('HTTP MCP 必须填写 http(s) URL')
+  if (!config || typeof config !== 'object') throw new Error('MCP 配置必须是对象')
+  if (typeof config.serverName !== 'string' || !/^[A-Za-z0-9_-]{1,32}$/.test(config.serverName)) throw new Error('serverName 只能包含字母、数字、下划线和连字符（最多 32 位）')
+  if (!['stdio', 'streamable-http'].includes(config.transport)) throw new Error('不支持的 MCP transport')
+  if (config.transport === 'stdio') {
+    if (typeof config.command !== 'string' || !config.command.trim()) throw new Error('stdio MCP 必须填写 command')
+    if (config.args !== undefined && (!Array.isArray(config.args) || config.args.some((arg) => typeof arg !== 'string'))) throw new Error('MCP args 必须是字符串数组')
+    if (config.cwd !== undefined && typeof config.cwd !== 'string') throw new Error('MCP cwd 必须是字符串')
+    validatePairs(config.env, 'env')
+  } else {
+    let url: URL
+    try { url = new URL(config.url ?? '') } catch { throw new Error('HTTP MCP 必须填写有效 http(s) URL') }
+    if (!['http:', 'https:'].includes(url.protocol) || !url.hostname || url.username || url.password) throw new Error('HTTP MCP 必须填写有效 http(s) URL，凭据请使用请求头')
+    validatePairs(config.headers, 'headers')
+  }
+}
+
+/**
+ * Validate an optional string-valued map without coercing malformed input.
+ * @private @author ddj 2026年10月08号
+ * @param values Submitted map.
+ * @param field Field used in the diagnostic.
+ * @throws Error for non-object or non-string values.
+ */
+function validatePairs(values: unknown, field: string): void {
+  if (values === undefined) return
+  if (!values || typeof values !== 'object' || Array.isArray(values)
+    || Object.entries(values).some(([key, value]) => !key || typeof value !== 'string')) throw new Error('MCP ' + field + ' 必须是字符串字典')
 }
 
 /** 列出全局（profile）MCP 服务，过滤掉新旧格式的项目级条目。 */
@@ -123,13 +213,18 @@ export function listMcp(ctx: Ctx): { servers: MpcServer[] } {
  * @returns Masked server status; project name collisions reject before writing.
  */
 export async function saveMcp(ctx: Ctx, config: MpcConfig): Promise<MpcServer> {
+  return mcpEdit(ctx, () => saveGlobal(ctx, config))
+}
+
+/** @private @author ddj 2026年10月08号 @param ctx Host services. @param config Configuration. @returns Saved status; validation failures do not write. */
+async function saveGlobal(ctx: Ctx, config: MpcConfig): Promise<MpcServer> {
   validateConfig(config)
   await checkMcpName(ctx, config.serverName)
   const loader = ctx.get('loader')
   if (!loader) throw new Error('缺少 loader 服务')
   const existing = entriesOf(ctx).find((entry) => !isProjectEntryId(String(entry.id ?? entry.options?.id ?? '')) && entry.options?.config?.serverName === config.serverName)
   const previous = existing?.options?.config ?? {}
-  const next = mergeSecrets({ ...previous, ...config }, previous)
+  const next = mergeMcp(previous, config)
   if (existing) {
     await loader.update(existing.id, { config: next })
     return serverOf(ctx, loader.resolve(existing.id))
@@ -138,33 +233,46 @@ export async function saveMcp(ctx: Ctx, config: MpcConfig): Promise<MpcServer> {
   return serverOf(ctx, loader.resolve(id))
 }
 
-/** 删除 MCP 服务。 */
+/** @private @author ddj 2026年10月08号 @param ctx Host services. @param id Global identity. @returns Loader and verified global entry. @throws Missing service, entry or wrong scope. */
+function globalEntry(ctx: Ctx, id: string): { loader: any; entry: any } {
+  const loader = ctx.get('loader')
+  if (!loader) throw new Error('缺少 loader 服务')
+  const entry = entriesOf(ctx).find((candidate) => String(candidate.id) === id)
+  if (!entry) throw new Error('MCP 服务不存在')
+  if (isProjectEntryId(String(entry.id ?? entry.options?.id ?? ''))) throw new Error('项目 MCP 必须通过项目入口操作')
+  return { loader, entry }
+}
+
+/** @public @author ddj 2026年10月08号 @param ctx Host services. @param id Global identity. @returns Persisted removal, serialized with all settings writes. */
 export async function removeMcp(ctx: Ctx, id: string): Promise<void> {
-  const loader = ctx.get('loader')
-  if (!loader) throw new Error('缺少 loader 服务')
-  const entry = entriesOf(ctx).find((candidate) => String(candidate.id) === id)
-  if (!entry) throw new Error('MCP 服务不存在')
-  await loader.remove(entry.id)
+  /** @private @author ddj 2026年10月08号 @returns Loader removal after scope validation. */
+  const remove = async () => {
+    const { loader, entry } = globalEntry(ctx, id)
+    await loader.remove(entry.id)
+  }
+  return mcpEdit(ctx, remove)
 }
 
-/** 切换 MCP 服务启用状态。 */
+/** @public @author ddj 2026年10月08号 @param ctx Host services. @param id Global identity. @param enabled Desired state. @returns Persisted status after serialized toggle. */
 export async function toggleMcp(ctx: Ctx, id: string, enabled: boolean): Promise<MpcServer> {
-  const loader = ctx.get('loader')
-  if (!loader) throw new Error('缺少 loader 服务')
-  const entry = entriesOf(ctx).find((candidate) => String(candidate.id) === id)
-  if (!entry) throw new Error('MCP 服务不存在')
-  await loader.update(entry.id, { disabled: !enabled })
-  return serverOf(ctx, loader.resolve(entry.id))
+  /** @private @author ddj 2026年10月08号 @returns Loader status after toggle. */
+  const toggle = async () => {
+    const { loader, entry } = globalEntry(ctx, id)
+    await loader.update(entry.id, { disabled: !enabled })
+    return serverOf(ctx, loader.resolve(entry.id))
+  }
+  return mcpEdit(ctx, toggle)
 }
 
-/** 重新加载 MCP 服务。 */
+/** @public @author ddj 2026年10月08号 @param ctx Host services. @param id Global identity. @returns Loader status after serialized refresh. */
 export async function refreshMcp(ctx: Ctx, id: string): Promise<MpcServer> {
-  const loader = ctx.get('loader')
-  if (!loader) throw new Error('缺少 loader 服务')
-  const entry = entriesOf(ctx).find((candidate) => String(candidate.id) === id)
-  if (!entry) throw new Error('MCP 服务不存在')
-  await loader.update(entry.id, { config: { ...(entry.options?.config ?? {}) } })
-  return serverOf(ctx, loader.resolve(entry.id))
+  /** @private @author ddj 2026年10月08号 @returns Loader status after refresh. */
+  const refresh = async () => {
+    const { loader, entry } = globalEntry(ctx, id)
+    await loader.update(entry.id, { config: { ...(entry.options?.config ?? {}) } })
+    return serverOf(ctx, loader.resolve(entry.id))
+  }
+  return mcpEdit(ctx, refresh)
 }
 
 export type { MpcConfig, MpcServer }

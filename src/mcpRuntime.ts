@@ -114,7 +114,7 @@ export class McpRuntime {
     const update = async () => {
       this.projects.set(path, defs)
       this.changed()
-      for (const [agent, record] of this.agents) await this.syncAgent(agent, record, refresh)
+      for (const [agent, record] of this.agents) await this.syncAgent(agent, record, this.workspace(agent) === path ? refresh : undefined)
       this.changed()
     }
     return this.enqueue(update)
@@ -196,13 +196,28 @@ export class McpRuntime {
     const defs = this.projects.get(path ?? '') ?? new Map<string, ProjectDef>()
     for (const [name, instance] of record.instances) {
       const def = defs.get(name)
-      if (def?.enabled && instance.key === JSON.stringify(def.config) && name !== refresh) continue
+      if (def?.enabled && instance.path === path && instance.key === JSON.stringify(def.config) && name !== refresh) continue
       await this.stopOne(record, name)
     }
     for (const [name, def] of defs) {
       if (!record.live || this.stopped) break
       if (!def.enabled || record.instances.has(name)) continue
       await this.mount(agent, record, def.config, path!)
+    }
+  }
+
+  /**
+   * Cache successful module loads while allowing explicit refresh after transient failures.
+   * @private @author ddj 2026年10月08号
+   * @returns Official plugin module; load failures propagate to the instance diagnostic.
+   */
+  private async getModule(): Promise<any> {
+    const loading = this.module ??= this.load()
+    try {
+      return await loading
+    } catch (error) {
+      if (this.module === loading) this.module = undefined
+      throw error
     }
   }
 
@@ -219,7 +234,7 @@ export class McpRuntime {
     const instance: Instance = { key: JSON.stringify(config), path }
     record.instances.set(config.serverName, instance)
     try {
-      const officialMcp = await (this.module ??= this.load())
+      const officialMcp = await this.getModule()
       if (!record.live || this.stopped) return
       const global = entriesOf(this.ctx).find((entry) => !isProjectEntryId(String(entry.id ?? entry.options?.id ?? '')) && entry.options?.config?.serverName === config.serverName)
       if (global) throw new Error('serverName 已被全局 MCP 使用：' + config.serverName)

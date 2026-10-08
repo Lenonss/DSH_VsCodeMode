@@ -5,7 +5,10 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
 
 # dsh-vscode-mode 开发/发布经验集（自我更新型技能）
 
-> updated: 2026-09-29 · 维护者：ddj（AI 会话按文末协议追加，保持精炼、去重）
+> updated: 2026-10-08 · 维护者：ddj（AI 会话按文末协议追加，保持精炼、去重）
+- 2026-10-08 MCP 审计：`mcp__${serverName}__${rawName}` 非单射，不能凭最长前缀反解归属；跨全局/项目双向拒绝 `__` 命名交叠，并对历史歧义工具 fail-closed。`ACTIVE`/工具数不是健康证据，`unverified` 应中性色；右侧绿色开关仅启用。状态轮询用只读 `mcp.snapshot`，不复用带文件/reconcile 的列表；初读并发用 `Promise.allSettled` 等所有传输结束，避免半失败导致重叠请求。配置读取—修改—写入需串行，避免并发丢服务；模块加载的 rejected Promise 不能永久缓存，否则刷新无法恢复。官方回归设置 `DSH_MCP_HOST_ROOT` 后才算真实模块测试，资源-only 零工具合法。
+- 当前桌面 profile 路径必须依据实际进程核验，不能套用下方旧版本 home 经验；2026-10-08 本机为 `C:\Users\1\.dsh\profiles\desktop`，Electron userData 与 Host profile 不是同一目录。
+- 2026-10-08 坑：`ctx.fs.readText` 的缺失错误为官方 `FS_NOT_FOUND`，只认 Node `ENOENT` 会让无 `.mcp.json` 的其他注册项目阻断当前项目重名检查与挂载；按结构化错误码兼容两者，权限/IO/JSON 错误仍报告并保留最后有效连接，测试须模拟官方错误码而非仅模拟 Node errno。
 - 2026-09-29 实录（v0.14.0 发布：**界面状态跨 DSH 重启持久化**；基线 `v0.13.1` @ `c8d9843`）：
   三门本地全绿（typecheck 0 / **179 文件通过 + 2 跳过；2377 通过 + 12 跳过** /
   `node --test tests/nativeOpen.test.mjs` 9/9 / tsdown 双面：host 734144 B、client 1499417 B）；

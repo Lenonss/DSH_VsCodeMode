@@ -2,8 +2,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { filterResources, guardMcp, installIsolation } from '../src/mcpIsolation.js'
 import { installMcpRuntime, runtimeOf } from '../src/mcpRuntime.js'
-import { listProjects, projectRefresh, projectRemove, projectSave, projectToggle, reconcileProject } from '../src/mcpProject.js'
-import { listMcp, MCP_PACKAGE, saveMcp, serverOf } from '../src/mcp.js'
+import { listProjects, projectRefresh, projectRemove, projectSave, projectToggle, reconcileProject, mcpSnapshot } from '../src/mcpProject.js'
+import { listMcp, MCP_PACKAGE, saveMcp, serverOf, toolsOf, validateConfig, removeMcp, toggleMcp, refreshMcp } from '../src/mcp.js'
 
 const hosts: TestHost[] = []
 
@@ -265,6 +265,71 @@ describe('agent-owned project runtime', () => {
     expect(host.mounts[0].fiber.dispose).toHaveBeenCalledOnce()
   })
 
+  it.each(['FS_NOT_FOUND', 'ENOENT'])('treats another project missing config (%s) as optional without blocking mounts', async (code) => {
+    const host = new TestHost()
+    host.source('/alpha', { alpha: { command: 'ok' } })
+    host.failures.set('/beta/.mcp.json', Object.assign(new Error('cannot read beta: not found'), { code }))
+    host.agent('/alpha')
+    await installMcpRuntime(host.ctx)
+    const result = await listProjects(host.ctx)
+    expect(result.projects[0].fileError).toBeUndefined()
+    expect(result.projects[0].servers[0]).toMatchObject({ serverName: 'alpha', instanceCount: 1 })
+    expect(result.projects[1]).toMatchObject({ servers: [], missingDir: false })
+    expect(result.projects[1].fileError).toBeUndefined()
+    expect(host.services.fs.writeText).not.toHaveBeenCalled()
+  })
+
+  it.each(['FS_NOT_FOUND', 'ENOENT'])('creates the first configuration after an absent read (%s)', async (code) => {
+    const host = new TestHost()
+    host.failures.set('/alpha/.mcp.json', Object.assign(new Error('missing config'), { code }))
+    // A successful create makes subsequent reads observe the new document.
+    host.services.fs.writeText.mockImplementation(async (path: string, text: string) => {
+      host.files.set(path, text)
+      host.failures.delete(path)
+    })
+    const result = await projectSave(host.ctx, '/alpha', 'alpha', { serverName: 'alpha', transport: 'stdio', command: 'ok' })
+    expect(result.fileError).toBeUndefined()
+    expect(JSON.parse(host.files.get('/alpha/.mcp.json')!)).toEqual({ mcpServers: { alpha: { command: 'ok' } } })
+    expect(result.servers[0]).toMatchObject({ status: 'configured', instanceCount: 0 })
+  })
+
+  it.each(['FS_NOT_FOUND', 'ENOENT'])('marks a missing workspace directory (%s)', async (code) => {
+    const host = new TestHost()
+    host.services.fs.stat = vi.fn().mockRejectedValue(Object.assign(new Error('missing directory'), { code }))
+    const result = await listProjects(host.ctx)
+    expect(result.projects.every((project) => project.missingDir === true)).toBe(true)
+    expect(host.mounts).toHaveLength(0)
+    expect(host.services.fs.writeText).not.toHaveBeenCalled()
+  })
+
+  it.each(['FS_PERMISSION_DENIED', 'FS_IO_ERROR', 'FS_SANDBOX_DENIED', 'FS_NOT_TEXT'])('retains connections and refuses overwrites on %s', async (code) => {
+    const host = new TestHost()
+    host.source('/alpha', { alpha: { command: 'ok' } })
+    host.agent('/alpha')
+    await installMcpRuntime(host.ctx)
+    const source = host.files.get('/alpha/.mcp.json')
+    host.failures.set('/alpha/.mcp.json', Object.assign(new Error('cannot read: not found in error context'), { code }))
+    const result = await listProjects(host.ctx)
+    expect(result.projects[0].fileError).toContain('读取失败')
+    expect(result.projects[0].servers[0].instanceCount).toBe(1)
+    await expect(projectSave(host.ctx, '/alpha', 'alpha', { serverName: 'alpha', transport: 'stdio', command: 'changed' })).rejects.toThrow('读取失败')
+    expect(host.files.get('/alpha/.mcp.json')).toBe(source)
+    expect(host.services.fs.writeText).not.toHaveBeenCalled()
+    expect(host.mounts[0].fiber.dispose).not.toHaveBeenCalled()
+  })
+
+  it('refuses saving over invalid JSON while retaining the last valid connection', async () => {
+    const host = new TestHost()
+    host.source('/alpha', { alpha: { command: 'ok' } })
+    host.agent('/alpha')
+    await installMcpRuntime(host.ctx)
+    host.files.set('/alpha/.mcp.json', '{broken')
+    await expect(projectSave(host.ctx, '/alpha', 'alpha', { serverName: 'alpha', transport: 'stdio', command: 'changed' })).rejects.toThrow('解析失败')
+    expect(host.files.get('/alpha/.mcp.json')).toBe('{broken')
+    expect(host.services.fs.writeText).not.toHaveBeenCalled()
+    expect(host.mounts[0].fiber.dispose).not.toHaveBeenCalled()
+  })
+
   it('cancels pending startup and never resurrects a disposed agent', async () => {
     const host = new TestHost()
     host.source('/alpha', { first: { command: 'ok' }, later: { command: 'ok' } })
@@ -346,6 +411,168 @@ describe('source preservation and name reservations', () => {
     expect(result).toMatchObject({ status: 'unverified', instanceCount: 1 })
     expect(serverOf(host.ctx, { ...host.entries[0], disabled: true }).status).toBe('disabled')
     expect(listMcp(host.ctx).servers).toHaveLength(1)
+  })
+})
+
+describe('MCP audit regressions', () => {
+  it('clears stale global transport fields without losing advanced options or enable intent', async () => {
+    const host = new TestHost()
+    const name = 'global'
+    await saveMcp(host.ctx, { serverName: name, transport: 'stdio', command: 'ok', args: ['one'], env: { TOKEN: 'real' } })
+    host.entries[0].options.config.toolCallTimeoutMs = 300000
+    host.entries[0].disabled = true
+    await saveMcp(host.ctx, { serverName: name, transport: 'streamable-http', url: 'http://localhost/mcp', headers: { Token: 'real' } })
+    expect(host.entries[0].options.config).not.toHaveProperty('command')
+    expect(host.entries[0].options.config).not.toHaveProperty('env')
+    expect(host.entries[0].options.config.toolCallTimeoutMs).toBe(300000)
+    expect(host.entries[0].disabled).toBe(true)
+    await saveMcp(host.ctx, { serverName: name, transport: 'stdio', command: 'new' })
+    expect(host.entries[0].options.config).not.toHaveProperty('url')
+    expect(host.entries[0].options.config).not.toHaveProperty('headers')
+  })
+
+  it('serializes concurrent project saves so neither definition is lost', async () => {
+    const host = new TestHost()
+    host.source('/alpha', {})
+    await Promise.all(['first', 'second'].map((serverName) => projectSave(host.ctx, '/alpha', serverName, { serverName, transport: 'stdio', command: 'ok' })))
+    expect(Object.keys(JSON.parse(host.files.get('/alpha/.mcp.json')!).mcpServers).sort()).toEqual(['first', 'second'])
+  })
+
+  it('serializes concurrent global and project namespace reservations', async () => {
+    const host = new TestHost()
+    const config = { serverName: 'shared', transport: 'stdio' as const, command: 'ok' }
+    const results = await Promise.allSettled([saveMcp(host.ctx, config), projectSave(host.ctx, '/alpha', 'shared', config)])
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1)
+    expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1)
+  })
+
+  it('retries a transient official module load failure on explicit refresh', async () => {
+    const host = new TestHost()
+    host.source('/alpha', { alpha: { command: 'ok' } })
+    host.agent('/alpha')
+    const load = vi.mocked((runtimeOf(host.ctx) as any).load)
+    load.mockRejectedValueOnce(new Error('transient module load failure')).mockResolvedValue(host.official)
+    await installMcpRuntime(host.ctx)
+    expect(runtimeOf(host.ctx).views('/alpha')[0].status).toBe('error')
+    await projectRefresh(host.ctx, '/alpha', 'alpha')
+    expect(load).toHaveBeenCalledTimes(2)
+    expect(host.mounts).toHaveLength(1)
+    expect(runtimeOf(host.ctx).views('/alpha')[0].status).toBe('unverified')
+  })
+
+  it('remounts identical definitions when an agent moves to another workspace', async () => {
+    const host = new TestHost()
+    const agent = host.agent('/alpha')
+    const runtime = runtimeOf(host.ctx)
+    const defs = new Map([['alpha', { config: { serverName: 'alpha', transport: 'stdio' as const, command: 'ok' }, enabled: true }]])
+    await runtime.replace('/alpha', defs)
+    await runtime.replace('/beta', defs)
+    await runtime.attach(agent)
+    expect(host.mounts[0].config.cwd).toBe('/alpha')
+    agent.session.header.cwd = '/beta'
+    await runtime.attach(agent)
+    expect(host.mounts).toHaveLength(2)
+    expect(host.mounts[0].fiber.dispose).toHaveBeenCalledOnce()
+    expect(host.mounts[1].config.cwd).toBe('/beta')
+  })
+
+  it('refreshes only the requested workspace for historical same-name ledgers', async () => {
+    const host = new TestHost()
+    const first = host.agent('/alpha')
+    const second = host.agent('/beta')
+    const runtime = runtimeOf(host.ctx)
+    const defs = new Map([['alpha', { config: { serverName: 'alpha', transport: 'stdio' as const, command: 'ok' }, enabled: true }]])
+    await runtime.replace('/alpha', defs)
+    await runtime.replace('/beta', defs)
+    await runtime.attach(first)
+    await runtime.attach(second)
+    await runtime.replace('/alpha', defs, 'alpha')
+    expect(host.mounts).toHaveLength(3)
+    expect(host.mounts[0].fiber.dispose).toHaveBeenCalledOnce()
+    expect(host.mounts[1].fiber.dispose).not.toHaveBeenCalled()
+  })
+
+  it('polls detached live snapshots without filesystem reads, writes, or reconcile', async () => {
+    const host = new TestHost()
+    host.source('/alpha', { alpha: { command: 'ok' } })
+    const agent = host.agent('/alpha')
+    await installMcpRuntime(host.ctx)
+    host.source('/alpha', { alpha: { command: 'external-change' } })
+    const read = vi.spyOn(host.services.fs, 'readText')
+    const before = host.mounts.length
+    const snapshot = mcpSnapshot(host.ctx)
+    expect(snapshot.projects[0].servers[0].config.command).toBe('ok')
+    expect(snapshot.projects[0].servers[0].toolCount).toBe(1)
+    agent.tools.set('mcp__alpha__new', {})
+    expect(mcpSnapshot(host.ctx).projects[0].servers[0].toolCount).toBe(2)
+    expect(snapshot.projects[0].servers[0].toolCount).toBe(1)
+    expect(read).not.toHaveBeenCalled()
+    expect(host.services.fs.writeText).not.toHaveBeenCalled()
+    expect(host.mounts).toHaveLength(before)
+  })
+
+  it('reports handwritten namespace overlap without mounting and denies ambiguous calls', async () => {
+    const host = new TestHost()
+    host.source('/alpha', { alpha: { command: 'ok' }, alpha__nested: { command: 'ok' } })
+    const agent = host.agent('/alpha')
+    const result = await listProjects(host.ctx)
+    expect(result.projects[0].fileError).toContain('命名空间冲突')
+    expect(host.mounts).toHaveLength(0)
+    host.entries = ['alpha', 'alpha__nested'].map((serverName) => ({ id: serverName, options: { name: MCP_PACKAGE, config: { serverName } } }))
+    expect(guardMcp(host.ctx, { name: 'mcp__alpha__nested__search', agent })).toContain('命名空间冲突')
+  })
+
+  it.each(['alpha__nested', 'alpha'])('rejects overlapping namespaces before project writes: %s', async (name) => {
+    const host = new TestHost()
+    host.source('/beta', { [name === 'alpha' ? 'alpha__nested' : 'alpha']: { command: 'ok' } })
+    await expect(projectSave(host.ctx, '/alpha', name, { serverName: name, transport: 'stdio', command: 'ok' })).rejects.toThrow('命名空间')
+    expect(host.services.fs.writeText).not.toHaveBeenCalled()
+    await expect(saveMcp(host.ctx, { serverName: name, transport: 'stdio', command: 'ok' })).rejects.toThrow('命名空间')
+  })
+
+  it('rejects overlapping names within one project and between globals', async () => {
+    const host = new TestHost()
+    host.source('/alpha', { alpha: { command: 'ok' } })
+    await expect(projectSave(host.ctx, '/alpha', 'alpha__nested', { serverName: 'alpha__nested', transport: 'stdio', command: 'ok' })).rejects.toThrow('命名空间')
+    host.entries = [{ id: 'global', options: { name: MCP_PACKAGE, config: { serverName: 'global', transport: 'stdio', command: 'ok' } } }]
+    await expect(saveMcp(host.ctx, { serverName: 'global__nested', transport: 'stdio', command: 'ok' })).rejects.toThrow('命名空间')
+  })
+
+  it('does not count an ambiguously attributed historical tool', () => {
+    const host = new TestHost()
+    host.entries = ['alpha', 'alpha__nested'].map((serverName) => ({ id: serverName, options: { name: MCP_PACKAGE, config: { serverName } } }))
+    host.globalTools.set('mcp__alpha__nested__search', {})
+    expect(toolsOf(host.ctx, 'alpha')).toEqual([])
+    expect(toolsOf(host.ctx, 'alpha__nested')).toEqual([])
+  })
+
+  it.each([removeMcp, refreshMcp])('rejects project entries in a global action', async (action) => {
+    const host = new TestHost()
+    host.entries = [{ id: 'vsm-mcp.a164c0c98d.alpha', options: { name: MCP_PACKAGE, config: { serverName: 'alpha' } } }]
+    await expect(action(host.ctx, host.entries[0].id)).rejects.toThrow('项目')
+    expect(host.services.loader.remove).not.toHaveBeenCalled()
+    expect(host.services.loader.update).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    { serverName: 'bad', transport: 'invalid' },
+    { serverName: 'bad', transport: 'stdio', command: 'ok', args: 'not-array' },
+    { serverName: 'bad', transport: 'stdio', command: 'ok', args: [1] },
+    { serverName: 'bad', transport: 'streamable-http', url: 'http://' },
+    { serverName: 'bad', transport: 'streamable-http', url: 'http://user:secret@localhost/mcp' },
+    { serverName: 'bad', transport: 'stdio', command: 'ok', env: [] },
+  ])('rejects malformed runtime configurations before loader calls', async (config) => {
+    const host = new TestHost()
+    await expect(saveMcp(host.ctx, config as any)).rejects.toThrow()
+    expect(host.services.loader.create).not.toHaveBeenCalled()
+  })
+
+  it('rejects invalid persisted definitions instead of coercing argument values', async () => {
+    const host = new TestHost()
+    host.source('/alpha', { alpha: { command: 'ok', args: [null] } })
+    const result = await listProjects(host.ctx)
+    expect(result.projects[0].fileError).toBeTruthy()
+    expect(host.mounts).toHaveLength(0)
   })
 })
 

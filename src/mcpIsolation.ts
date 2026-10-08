@@ -1,7 +1,7 @@
 /** Project MCP visibility, instruction shadows, and execution guards. @author ddj 2026年09月28号 */
 import { posix, win32 } from 'node:path'
 import { LEGACY_PROJECT_PREFIX, entryHash, isProjectEntryId } from './compat.js'
-import { entriesOf } from './mcp.js'
+import { entriesOf, mcpNames } from './mcp.js'
 import { hashWorkspace } from './mcpProject.js'
 import { runtimeOf } from './mcpRuntime.js'
 import type { Ctx } from './store.js'
@@ -101,6 +101,7 @@ export function guardMcp(ctx: Ctx, exec: any): string | undefined {
   const server = callServer(exec)
   const owners = serverOwners(ctx)
   const current = runtimeOf(ctx).workspace(exec.agent)
+  if (!RESOURCE_TOOLS.has(name) && [...mcpNames(ctx)].filter((key) => name.startsWith('mcp__' + key + '__')).length > 1) return '已拒绝：MCP 命名空间冲突，无法确认工具归属'
   const owned = RESOURCE_TOOLS.has(name) ? [...owners].filter(([key]) => key === server)
     : [...owners].filter(([key]) => name.startsWith('mcp__' + key + '__'))
   if (!owned.some(([, owner]) => owner !== current)) return undefined

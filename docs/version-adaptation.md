@@ -1,7 +1,7 @@
 # DSH 版本适配机制（dsh-vscode-mode）
 
-> 更新于 2026-09-29；第 1～7 节记录插件 0.13.0 对 DSH `0.1.7-rc.2` 的历史基线，
-> 第 8 节另列插件 0.14.1 对 Web DSH `0.2.0-rc.1` 的限定适配。
+> 更新于 2026-10-08；第 1～7 节记录插件 0.13.0 对 DSH `0.1.7-rc.2` 的历史基线，
+> 第 8 节另列插件 0.14.1 对 Web DSH `0.2.0-rc.1`，第 9 节记录 0.14.4 对 Desktop `0.2.0-rc.2` 的限定适配。
 > API 能力探测、包版本范围、自动化测试和真实应用验收分别记录；其中任何一项都不能替代其他项。
 
 ## 1. 适配入口与证据来源
@@ -154,3 +154,12 @@
 - 打包、Web 安装与原页面冒烟的证据/限制见 [0.14.1 适配与发布说明](release-0.14.1.md)。
   `v0.14.1` 的发布须以 GitHub Actions 和 npm 注册表的实际结果为准；旧版
   `0.14.0` 的 peer 仍会被 Web DSH `0.2.0-rc.1` 拒绝。
+
+## 9. 0.14.4 对 Desktop DSH 0.2.0-rc.2 的精确放行（2026-10-08）
+
+- 正在运行的桌面入口为 `GFDeepSeekHarness` 打包树 `@deepseek-ai/dsh@0.2.0-rc.2`，六个声明的 DSH peer 均为 `0.2.0-rc.2`；实际 profile 为 `C:\Users\1\.dsh\profiles\desktop`，不是 Web profile 或旧的 `.dsh-desktop`。当时 npm 已有 0.14.3，故本地候选包递增至 0.14.4；该次安装未发布 npm。最终合并版的发布范围和验证边界见 [0.14.4 发布说明](release-0.14.4.md)。
+- 从 Electron ASAR 读取 rc.2 实际包，对照 Web rc.1：`dsh-settings`、`dsh-client-ui-settings`、`dsh-client-ui-session`、`dsh-client-connection`、`dsh-tools`、`dsh-client-ui-slots` 对应入口内容一致；侧栏服务仍提供 `sidebarRightTabs` / `sidebarRight`、`openTabIn` / `openResource`，10 个消费的原语及 Markdown 原语在 rc.2 保留。此为静态接口审计，**不等于 Desktop 全功能验收**。
+- 六个 peer 原有区间和 `=0.2.0-rc.1` 均保留，仅追加 `|| =0.2.0-rc.2`；锁文件 importer 对齐，未升级开发期旧依赖。定向 semver 测试同时覆盖 npm 默认与 DSH `includePrerelease`：应接受 rc.2，仍拒绝 alpha.1 / rc.3 / 0.2.0 正式版。
+- `familyLabel` 单列 rc.2；完整实测上界 `TESTED_DSH_MAX` 仍保留 0.1.7-rc.2，避免把静态审计/安装冒烟误当全功能覆盖。定向测试 `peerDeps` / `dshVersion` / `compat`：103/103 通过，类型检查和 Host/Client 构建通过；构建中的 `INVALID_ANNOTATION` 为现存 Rolldown 告警。
+- 从桌面安装目录的 `@deepseek-ai/dsh-desktop-host/lib/cli.js` 调用 Desktop 专属 `plugin --profile desktop add <tgz>`：退出码 0，profile manifest 新增 `dsh-vscode-mode` 依赖与 bundle，安装目录读回 `0.14.4` 和双面产物。保留安装源于 `C:\Users\1\.dsh\plugin-archives\dsh-vscode-mode-0.14.4-desktop-rc2.tgz`（SHA256 `5274B4B97601CB10F098570CA67A961B3E4422B9B6C0D48CA72309DFB4B8D717`）；profile 原始五文件备份于 `C:\Users\1\.dsh\profiles\desktop\backup-dsh-vscode-mode-0.14.4-20261008-110914`。原 `cordis.yml` / `cordis.patch.yml` / `pnpm-workspace.yaml` 哈希不变，manifest 原依赖保留，未使用风险豁免。
+- Desktop 专属 CLI 的 pnpm `peers check` 仍报告缺少内置 DSH peer、react、cordis 等（其他插件也受影响）；这是 profile 包管理器视角，官方包实际在打包 ASAR 内，不能据此判为全部运行时功能正常或异常。桌面应用当时仍运行，本次**不自动退出或重启**，新 Host 挂载/侧栏 UI 待用户自行重启后验收。回退时先记录重启后的新改动，在 Desktop 专属 CLI 运行 `plugin --profile desktop remove dsh-vscode-mode`，再比对备份而非直接覆盖用户新配置；保留 tgz 直至确认无需重装。

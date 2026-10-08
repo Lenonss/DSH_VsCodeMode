@@ -49,16 +49,19 @@
 .vsm-mcp-card-head{display:flex;justify-content:space-between;align-items:center;gap:12px}
 .vsm-mcp-title{display:flex;align-items:center;gap:9px;font-weight:600;font-size:14px;color:var(--dsw-alias-label-primary,#e6e6e6);min-width:0}
 .vsm-mcp-source{font-size:11px;font-weight:400;padding:2px 7px;border-radius:4px;background:var(--dsw-alias-bg-mask-2,#ffffff22);color:var(--dsw-alias-label-tertiary,#9aa5b1);flex-shrink:0}
-.vsm-mcp-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;background:var(--dsw-alias-state-error-primary,#e05252)}
+.vsm-mcp-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;background:var(--dsw-alias-label-tertiary,#9aa5b1)}
 .vsm-mcp-dot.connected{background:var(--dsw-alias-state-success-primary,#38bd75)}
 .vsm-mcp-dot.connecting{background:var(--dsw-alias-state-warn-primary,#e5b93f)}
-.vsm-mcp-dot.disabled{background:var(--dsw-alias-label-tertiary,#9aa5b1)}
+.vsm-mcp-dot.error{background:var(--dsw-alias-state-error-primary,#e05252)}
+.vsm-mcp-dot.disabled,.vsm-mcp-dot.neutral,.vsm-mcp-dot.configured,.vsm-mcp-dot.unverified{background:var(--dsw-alias-label-tertiary,#9aa5b1)}
 .vsm-mcp-actions{display:flex;align-items:center;gap:4px;flex-shrink:0}
 .vsm-mcp-actions button{border:0;background:none;color:var(--dsw-alias-label-tertiary,#9aa5b1);cursor:pointer;font-size:15px;width:28px;height:28px;border-radius:6px;line-height:1}
 .vsm-mcp-actions button:hover{color:var(--dsw-alias-label-primary,#fff);background:var(--dsw-alias-interactive-bg-hover,#ffffff14)}
 .vsm-mcp-actions button.vsm-danger:hover{color:var(--dsw-alias-state-error-primary,#f07878);background:var(--dsw-alias-interactive-bg-hover-danger,#ff000014)}
 .vsm-switch{font-size:14px !important}
-.vsm-switch.on{color:var(--dsw-alias-state-success-primary,#38bd75)}
+/* 配置启用使用品牌色，不冒充在线状态；在线证据仅由 connected 圆点表达。 */
+.vsm-switch.on{color:var(--dsw-alias-brand-primary,#6d55ff)}
+.vsm-mcp-actions button:disabled,.vsm-mcp-dialog-actions button:disabled{opacity:.55;cursor:default}
 .vsm-mcp-meta{font-size:12px;color:var(--dsw-alias-label-tertiary,#9aa5b1);margin:9px 0}
 .vsm-mcp-error{color:var(--dsw-alias-state-error-primary,#f07878);font-size:12px;margin:8px 0}
 .vsm-mcp-banner{padding:9px 12px;border:1px solid var(--dsw-alias-state-error-secondary,#d9534f55);border-radius:6px;background:var(--dsw-alias-state-error-secondary,#d9534f1a);margin-bottom:10px}

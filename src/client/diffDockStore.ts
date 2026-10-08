@@ -18,15 +18,20 @@ export interface DiffDockSnapshot {
 }
 
 /**
- * 判断编辑器差异栏应显示在指定布局，空态仅在尚有差异文件时显示。
- * @author ddj 2026年09月29号
+ * 指定布局仅在仍有待处理差异时显示差异栏，冲突差异和其他文件差异也保留入口。
+ * @public
+ * @author ddj 2026年10月08号
  * @param snapshot 编辑器发布的差异快照
  * @param layout 目标布局
  * @returns 是否显示差异栏
  */
 export function dockInLayout(snapshot: DiffDockSnapshot | null, layout: 'side' | 'tab'): boolean {
   if (!snapshot || (snapshot.layout ?? 'tab') !== layout) return false
-  return snapshot.mode !== 'editor-empty' || Boolean(snapshot.fileTotal)
+  return Number(snapshot.fileTotal) > 0
+    || Number(snapshot.allPendingCount) > 0
+    || Number(snapshot.diffTotal) > 0
+    || (Array.isArray(snapshot.pendingRegions) && snapshot.pendingRegions.length > 0)
+    || (Array.isArray(snapshot.staleRegions) && snapshot.staleRegions.length > 0)
 }
 
 type DiffDockListener = () => void

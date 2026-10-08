@@ -1,6 +1,7 @@
 /** Project MCP configuration; .mcp.json is the source of truth. @author ddj 2026年09月28号 */
 import { createHash } from 'node:crypto'
-import { PROJECT_ENTRY_PREFIX, entriesOf, mergeSecrets, validateConfig } from './mcp.js'
+import { PROJECT_ENTRY_PREFIX, entriesOf, mergeMcp, validateConfig, nameOverlap, listMcp, mcpEdit } from './mcp.js'
+
 import { isProjectEntryId } from './compat.js'
 import { clearLegacy, runtimeOf } from './mcpRuntime.js'
 import type { ProjectDef } from './mcpRuntime.js'
@@ -8,6 +9,7 @@ import type { MpcConfig, MpcProject, MpcServer } from './shared/mcp.js'
 import type { Ctx } from './store.js'
 
 const FILE_NAME = '.mcp.json'
+const projectStates = new WeakMap<object, Map<string, { fileError?: string; missingDir?: boolean }>>()
 
 /**
  * Require an exact registered workspace before any project file mutation.
@@ -54,7 +56,18 @@ export function projectEntryId(workspacePath: string, serverName: string): strin
 }
 
 /**
- * Read the complete source document; only ENOENT denotes an absent configuration.
+ * Identify an absent target using official host and legacy Node filesystem codes.
+ * @private @author ddj 2026年10月08号
+ * @param error Filesystem failure; messages and class identity are not authoritative.
+ * @returns Whether the backend explicitly reports a missing target.
+ */
+function isMissingFile(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null)?.code
+  return code === 'FS_NOT_FOUND' || code === 'ENOENT'
+}
+
+/**
+ * Read the complete source document; only missing-target codes denote an absent configuration.
  * @private @author ddj 2026年09月28号
  * @param ctx Host filesystem.
  * @param workspacePath Registered workspace path.
@@ -68,7 +81,7 @@ async function readProjectJson(ctx: Ctx, workspacePath: string): Promise<Record<
   try {
     text = await fs.readText(target)
   } catch (error) {
-    if ((error as { code?: string })?.code === 'ENOENT') return {}
+    if (isMissingFile(error)) return {}
     throw new Error('.mcp.json 读取失败：' + String(error))
   }
   let data: unknown
@@ -108,7 +121,14 @@ export function serversOf(data: Record<string, unknown>): Record<string, Record<
  */
 export function configFromDef(def: Record<string, unknown> | undefined, serverName: string): MpcConfig | null {
   if (!def) return null
-  const transport = typeof def.url === 'string' ? 'streamable-http' : 'stdio'
+  if (def.transport !== undefined && !['stdio', 'streamable-http'].includes(def.transport as string)) throw new Error('不支持的 MCP transport：' + serverName)
+  if (def.args !== undefined && (!Array.isArray(def.args) || def.args.some((arg) => typeof arg !== 'string'))) throw new Error('MCP args 必须是字符串数组：' + serverName)
+  for (const field of ['env', 'headers']) {
+    const values = def[field]
+    if (values !== undefined && (!values || typeof values !== 'object' || Array.isArray(values)
+      || Object.values(values).some((value) => value === null || !['string', 'number', 'boolean'].includes(typeof value)))) throw new Error('MCP ' + field + ' 必须是标量字典：' + serverName)
+  }
+  const transport = def.transport as MpcConfig['transport'] | undefined ?? (typeof def.url === 'string' ? 'streamable-http' : 'stdio')
   const config: MpcConfig = { serverName, transport }
   if (transport === 'stdio') {
     config.command = typeof def.command === 'string' ? def.command : ''
@@ -150,16 +170,19 @@ async function writeProjectJson(ctx: Ctx, workspacePath: string, data: Record<st
  * @returns Completion; throws on collision or an unreadable competing source document.
  */
 export async function checkMcpName(ctx: Ctx, serverName: string, workspacePath?: string): Promise<void> {
-  const conflict = 'serverName "' + serverName + '" 已被另一个 MCP 使用（全局或其他项目），请换一个名称'
+  /** @private @author ddj 2026年10月08号 @param other Existing name. @param sameOwner Whether updates share ownership. @throws Error for ambiguous namespaces. */
+  const checkName = (other: string, sameOwner: boolean): void => {
+    if (nameOverlap(serverName, other)) throw new Error('MCP 命名空间冲突：' + serverName + ' / ' + other + '，请避免 __ 前缀交叠')
+    if (other === serverName && !sameOwner) throw new Error('serverName "' + serverName + '" 已被另一个 MCP 使用（全局或其他项目），请换一个名称')
+  }
   for (const entry of entriesOf(ctx)) {
-    const project = isProjectEntryId(String(entry.id ?? entry.options?.id ?? ''))
-    if (project || workspacePath === undefined) continue
-    if (entry.options?.config?.serverName === serverName) throw new Error(conflict)
+    if (isProjectEntryId(String(entry.id ?? entry.options?.id ?? ''))) continue
+    const name = entry.options?.config?.serverName
+    if (typeof name === 'string') checkName(name, workspacePath === undefined)
   }
   for (const ws of ctx.get('workspaceRegistry')?.list?.() ?? []) {
-    if (ws.path === workspacePath) continue
     const servers = serversOf(await readProjectJson(ctx, ws.path))
-    if (Object.hasOwn(servers, serverName)) throw new Error(conflict)
+    for (const name of Object.keys(servers)) checkName(name, ws.path === workspacePath)
   }
 }
 
@@ -232,9 +255,13 @@ async function projectOf(ctx: Ctx, workspacePath: string, title: string): Promis
     missingDir = !info || info.type !== 'directory'
     if (!missingDir) await reconcileProject(ctx, workspacePath)
   } catch (error) {
-    missingDir = (error as { code?: string })?.code === 'ENOENT' || undefined
+    missingDir = isMissingFile(error) || undefined
     fileError = String(error)
   }
+  const owner = ctx.root ?? ctx
+  const states = projectStates.get(owner) ?? new Map()
+  states.set(workspacePath, { missingDir, fileError })
+  projectStates.set(owner, states)
   return { workspacePath, title, servers: runtimeOf(ctx).views(workspacePath), source: 'project', missingDir, fileError }
 }
 
@@ -251,6 +278,21 @@ export async function listProjects(ctx: Ctx): Promise<{ projects: MpcProject[] }
 }
 
 /**
+ * Read the current ledger only; polling never reconciles files or starts connections.
+ * @public @author ddj 2026年10月08号
+ * @param ctx Host services.
+ * @returns Masked global/project snapshots with last configuration diagnostics.
+ */
+export function mcpSnapshot(ctx: Ctx): { servers: MpcServer[]; projects: MpcProject[] } {
+  const states = projectStates.get(ctx.root ?? ctx)
+  const projects: MpcProject[] = (ctx.get('workspaceRegistry')?.list?.() ?? []).map((ws: { path: string; title?: string }) => ({
+    workspacePath: ws.path, title: ws.title ?? '', source: 'project' as const,
+    servers: runtimeOf(ctx).views(ws.path), ...states?.get(ws.path),
+  }))
+  return { ...listMcp(ctx), projects }
+}
+
+/**
  * Merge editable fields while retaining advanced fields and unchanged masked credentials.
  * @private @author ddj 2026年09月28号
  * @param previous Persisted server definition.
@@ -258,12 +300,10 @@ export async function listProjects(ctx: Ctx): Promise<{ projects: MpcProject[] }
  * @returns Enabled source definition without runtime-only keys or stale transport fields.
  */
 function mergeDefinition(previous: Record<string, unknown>, config: MpcConfig): Record<string, unknown> {
-  const next = mergeSecrets({ ...previous, ...config }, previous)
+  const next = mergeMcp(previous, config)
   delete next.serverName
   delete next.transport
   delete next.disabled
-  const stale = config.transport === 'stdio' ? ['url', 'headers'] : ['command', 'args', 'cwd', 'env']
-  for (const key of stale) delete next[key]
   return next
 }
 
@@ -277,6 +317,11 @@ function mergeDefinition(previous: Record<string, unknown>, config: MpcConfig): 
  * @returns Updated project view; invalid sources or conflicts reject before writing.
  */
 export async function projectSave(ctx: Ctx, workspacePath: string, serverName: string, config: MpcConfig): Promise<MpcProject> {
+  return mcpEdit(ctx, () => saveProject(ctx, workspacePath, serverName, config))
+}
+
+/** @private @author ddj 2026年10月08号 @param ctx Host services. @param workspacePath Owner. @param serverName Namespace. @param config Editable fields. @returns Persisted project status. */
+async function saveProject(ctx: Ctx, workspacePath: string, serverName: string, config: MpcConfig): Promise<MpcProject> {
   const workspace = requireWorkspace(ctx, workspacePath)
   validateConfig({ ...config, serverName })
   await checkMcpName(ctx, serverName, workspacePath)
@@ -297,6 +342,11 @@ export async function projectSave(ctx: Ctx, workspacePath: string, serverName: s
  * @returns Updated project view; write failures leave active configuration intact.
  */
 export async function projectRemove(ctx: Ctx, workspacePath: string, serverName: string): Promise<MpcProject> {
+  return mcpEdit(ctx, () => removeProject(ctx, workspacePath, serverName))
+}
+
+/** @private @author ddj 2026年10月08号 @param ctx Host services. @param workspacePath Owner. @param serverName Namespace. @returns Project after persisted removal. */
+async function removeProject(ctx: Ctx, workspacePath: string, serverName: string): Promise<MpcProject> {
   const workspace = requireWorkspace(ctx, workspacePath)
   const data = await readProjectJson(ctx, workspacePath)
   const servers = serversOf(data)
@@ -316,6 +366,11 @@ export async function projectRemove(ctx: Ctx, workspacePath: string, serverName:
  * @returns Updated project view, including retained disabled definitions.
  */
 export async function projectToggle(ctx: Ctx, workspacePath: string, serverName: string, enabled: boolean): Promise<MpcProject> {
+  return mcpEdit(ctx, () => toggleProject(ctx, workspacePath, serverName, enabled))
+}
+
+/** @private @author ddj 2026年10月08号 @param ctx Host services. @param workspacePath Owner. @param serverName Namespace. @param enabled Desired state. @returns Project after persisted toggle. */
+async function toggleProject(ctx: Ctx, workspacePath: string, serverName: string, enabled: boolean): Promise<MpcProject> {
   const workspace = requireWorkspace(ctx, workspacePath)
   const data = await readProjectJson(ctx, workspacePath)
   const servers = serversOf(data)
@@ -337,6 +392,11 @@ export async function projectToggle(ctx: Ctx, workspacePath: string, serverName:
  * @returns Updated project view; disabled or idle definitions stay connection-free.
  */
 export async function projectRefresh(ctx: Ctx, workspacePath: string, serverName: string): Promise<MpcProject> {
+  return mcpEdit(ctx, () => refreshProject(ctx, workspacePath, serverName))
+}
+
+/** @private @author ddj 2026年10月08号 @param ctx Host services. @param workspacePath Owner. @param serverName Namespace. @returns Refreshed project status without racing edits. */
+async function refreshProject(ctx: Ctx, workspacePath: string, serverName: string): Promise<MpcProject> {
   const workspace = requireWorkspace(ctx, workspacePath)
   const data = await readProjectJson(ctx, workspacePath)
   if (!Object.hasOwn(serversOf(data), serverName)) throw new Error('项目中不存在该 MCP')

@@ -68,12 +68,41 @@ describe('canDecideFile', () => {
   })
 })
 
+// @author ddj 2026年10月08号：覆盖空差异隐藏及各布局的待处理差异入口。
 describe('dockInLayout', () => {
   it('侧栏快照只在侧栏显示，页签快照保留中央 dock', () => {
-    expect(dockInLayout({ mode: 'editor', layout: 'side' }, 'side')).toBe(true)
-    expect(dockInLayout({ mode: 'editor', layout: 'side' }, 'tab')).toBe(false)
-    expect(dockInLayout({ mode: 'editor', layout: 'tab' }, 'tab')).toBe(true)
-    expect(dockInLayout({ mode: 'editor' }, 'tab')).toBe(true)
+    expect(dockInLayout({ mode: 'editor', layout: 'side', fileTotal: 1 }, 'side')).toBe(true)
+    expect(dockInLayout({ mode: 'editor', layout: 'side', fileTotal: 1 }, 'tab')).toBe(false)
+    expect(dockInLayout({ mode: 'editor', layout: 'tab', fileTotal: 1 }, 'tab')).toBe(true)
+    expect(dockInLayout({ mode: 'editor', fileTotal: 1 }, 'tab')).toBe(true)
+  })
+  it.each(['side', 'tab'] as const)('%s 布局打开文件但没有任何差异时隐藏', (layout) => {
+    expect(dockInLayout({
+      mode: 'editor', layout, activePath: 'clean.ts', fileTotal: 0,
+      allPendingCount: 0, diffTotal: 0, pendingRegions: [], staleRegions: [],
+    }, layout)).toBe(false)
+    expect(dockInLayout({ mode: 'editor', layout }, layout)).toBe(false)
+  })
+  it.each(['side', 'tab'] as const)('%s 布局保留其他文件的差异入口', (layout) => {
+    expect(dockInLayout({
+      mode: 'editor', layout, activePath: 'clean.ts', fileTotal: 2,
+      diffTotal: 0, pendingRegions: [], staleRegions: [],
+    }, layout)).toBe(true)
+  })
+  it.each([
+    { pendingRegions: [{}] },
+    { staleRegions: [{}] },
+    { diffTotal: 1 },
+    { allPendingCount: 1 },
+  ])('摘要尚未更新时仍保留待处理差异入口 %j', (pending) => {
+    expect(dockInLayout({ mode: 'editor', fileTotal: 0, ...pending }, 'tab')).toBe(true)
+    expect(dockInLayout({ mode: 'editor', layout: 'side', fileTotal: 0, ...pending }, 'side')).toBe(true)
+  })
+  it('零数量和无效摘要不构成待处理差异', () => {
+    expect(dockInLayout({
+      mode: 'editor', fileTotal: -1, diffTotal: Number.NaN, allPendingCount: 0,
+      pendingRegions: null, staleRegions: {},
+    }, 'tab')).toBe(false)
   })
   it('无活动文件且无差异不占位，有差异时提供下一个文件入口', () => {
     expect(dockInLayout({ mode: 'editor-empty', layout: 'side', fileTotal: 0 }, 'side')).toBe(false)
@@ -84,6 +113,26 @@ describe('dockInLayout', () => {
 })
 
 describe('diffDockStore', () => {
+  // @author ddj 2026年10月08号：通过真实快照发布验证隐藏/恢复，不清除编辑上下文。
+  it.each(['side', 'tab'] as const)('%s 布局最后一项处理后隐藏，新差异到达后恢复', (layout) => {
+    const sessionId = 'session-diff-visibility-' + layout
+    const source = {}
+    try {
+      publishDiffDock(sessionId, { mode: 'editor', layout, fileTotal: 1 }, source)
+      expect(dockInLayout(readDiffDock(sessionId), layout)).toBe(true)
+      publishDiffDock(sessionId, {
+        mode: 'editor', layout, fileTotal: 0, allPendingCount: 0,
+        diffTotal: 0, pendingRegions: [], staleRegions: [],
+      }, source)
+      expect(dockInLayout(readDiffDock(sessionId), layout)).toBe(false)
+      expect(readDiffDock(sessionId)?.mode).toBe('editor')
+      publishDiffDock(sessionId, { mode: 'editor', layout, fileTotal: 1 }, source)
+      expect(dockInLayout(readDiffDock(sessionId), layout)).toBe(true)
+    } finally {
+      clearDiffDock(sessionId, source)
+    }
+  })
+
   it('侧栏卸载与会话切换后恢复原有摘要路由', () => {
     const source = {}
     publishDiffDock('session-side-switch', { mode: 'editor', layout: 'side', fileTotal: 1 }, source)
