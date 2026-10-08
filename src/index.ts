@@ -1,6 +1,7 @@
 /** dsh-vscode-mode Host composition. @author ddj 2026年09月28号 */
 import { registerRoutes } from './routes.js'
 import { captureToolResult } from './capture.js'
+import { closeArchiveDbs } from './archiveDb.js'
 import { handleRpc } from './rpc.js'
 import { newSearcher } from './search/orchestrator.js'
 import { newContentSearcher } from './search/content.js'
@@ -83,6 +84,7 @@ function attachRuntime(ctx: Ctx, runtime: Runtime): void {
   /** @author ddj 2026年09月28号 Release every manager even if another cleanup rejects. */
   async function cleanup(): Promise<void> {
     runtime.fileVersions.dispose()
+    closeArchiveDbs()
     disposeAllServers()
     const tasks = [() => runtime.lspManager.disposeAll(), () => runtime.svnRpc.dispose(), () => runtime.dapRpc.dispose()]
     await Promise.allSettled(tasks.map((run) => Promise.resolve().then(run)))

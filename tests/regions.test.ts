@@ -114,6 +114,15 @@ describe('diffRegions', () => {
     expect(regs[0].end).toBe(3)
     expect(regs[0].newLines).toEqual(['line1', 'line2'])
   })
+  it('多块分散于 CRLF/BOM 文件时保持归一化行号', () => {
+    const r = rec({ hunks: [
+      { oldText: 'old1', newText: 'MARK1' },
+      { oldText: 'old2', newText: 'MARK2' },
+      { oldText: 'old3', newText: 'MARK3' },
+    ], decisions: { call: 'pending', perHunk: ['pending', 'pending', 'pending'] } })
+    const regs = diffRegions([r], '\uFEFFfirst\r\nMARK1\r\nthird\r\nMARK2\r\nfifth\r\nMARK3')
+    expect(regs.map(({ start, stale }) => [start, stale])).toEqual([[2, undefined], [4, undefined], [6, undefined]])
+  })
   it('content 为 null 返回空', () => {
     expect(diffRegions([rec()], null)).toHaveLength(0)
   })

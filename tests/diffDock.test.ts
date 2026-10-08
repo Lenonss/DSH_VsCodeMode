@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import { canDecideFile, diffDockText, displayDiffTotal, editorDockMode, nextDiffPath } from '../src/client/diffDock.js'
-import { clearDiffDock, publishDiffDock, readDiffDock, subscribeDiffDock } from '../src/client/diffDockStore.js'
+import { clearDiffDock, dockInLayout, publishDiffDock, readDiffDock, subscribeDiffDock } from '../src/client/diffDockStore.js'
 
 describe('nextDiffPath', () => {
   it('空列表返回 null', () => {
@@ -68,7 +68,35 @@ describe('canDecideFile', () => {
   })
 })
 
+describe('dockInLayout', () => {
+  it('侧栏快照只在侧栏显示，页签快照保留中央 dock', () => {
+    expect(dockInLayout({ mode: 'editor', layout: 'side' }, 'side')).toBe(true)
+    expect(dockInLayout({ mode: 'editor', layout: 'side' }, 'tab')).toBe(false)
+    expect(dockInLayout({ mode: 'editor', layout: 'tab' }, 'tab')).toBe(true)
+    expect(dockInLayout({ mode: 'editor' }, 'tab')).toBe(true)
+  })
+  it('无活动文件且无差异不占位，有差异时提供下一个文件入口', () => {
+    expect(dockInLayout({ mode: 'editor-empty', layout: 'side', fileTotal: 0 }, 'side')).toBe(false)
+    expect(dockInLayout({ mode: 'editor-empty', layout: 'side', fileTotal: 2 }, 'side')).toBe(true)
+    expect(dockInLayout({ mode: 'editor-empty', layout: 'side', fileTotal: 2 }, 'tab')).toBe(false)
+    expect(dockInLayout(null, 'tab')).toBe(false)
+  })
+})
+
 describe('diffDockStore', () => {
+  it('侧栏卸载与会话切换后恢复原有摘要路由', () => {
+    const source = {}
+    publishDiffDock('session-side-switch', { mode: 'editor', layout: 'side', fileTotal: 1 }, source)
+    expect(dockInLayout(readDiffDock('session-side-switch'), 'tab')).toBe(false)
+    expect(dockInLayout(readDiffDock('session-side-switch'), 'side')).toBe(true)
+    expect(readDiffDock('other-side-switch')).toBeNull()
+    publishDiffDock('session-side-switch', { mode: 'editor', layout: 'tab', fileTotal: 1 }, {})
+    clearDiffDock('session-side-switch', source)
+    expect(dockInLayout(readDiffDock('session-side-switch'), 'tab')).toBe(true)
+    clearDiffDock('session-side-switch')
+    expect(readDiffDock('session-side-switch')).toBeNull()
+  })
+
   it('按会话隔离快照并通知订阅者', () => {
     const source = {}
     let notices = 0

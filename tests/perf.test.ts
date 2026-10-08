@@ -3,7 +3,9 @@ import { describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { sessionIdSegment, sessionWorkspaceKey, sessionsRoot } from '../src/paths.js'
+import { archiveDbFile, sessionIdSegment, sessionWorkspaceKey, sessionsRoot } from '../src/paths.js'
+import { closeArchiveDbs, commitActive, migrateActive } from '../src/archiveDb.js'
+import { sidecarSummaryOf } from '../src/perf.js'
 import {
   markActiveSessions,
   markOfficialFlags,
@@ -272,6 +274,33 @@ describe('markOfficialFlags / registryFlags（官方归档/置顶标志，best-e
     const flagged: PerfSession = { ...legacy, archived: true, pinned: true }
     expect(flagged.archived).toBe(true)
     expect(flagged.pinned).toBe(true)
+  })
+})
+
+describe('SQLite sidecar 摘要', () => {
+  it('只从活跃库统计，不读取冻结的旧 sidecar 全文', async () => {
+    const cwd = '/perf-active-test'
+    const oldHome = process.env.DSH_HOME
+    process.env.DSH_HOME = HOME
+    try {
+      await migrateActive(cwd, null, async () => null)
+      const rec = { callId: 'pending', toolName: 'edit' as const, path: cwd + '/a.ts', before: 'old',
+        create: false, callHunk: null, hunks: [{ oldText: 'old', newText: 'new' }],
+        decisions: { call: 'pending' as const, perHunk: ['pending' as const] }, note: null,
+        superseded: false, archived: false, batch: 1, at: '2026-09-30T00:00:00.000Z' }
+      commitActive(cwd, { upserts: [rec], removed: [] })
+      const ctx = { get: () => ({ resolve: async (path: string) => path, stat: async () => undefined,
+        readText: async () => { throw new Error('禁止读取遗留 sidecar') } }) }
+      const summary = await sidecarSummaryOf(ctx, cwd)
+      expect(summary.active).toBe(1)
+      expect(summary.pendingByFile).toEqual([{ path: rec.path, pending: 1 }])
+      expect(summary.legacyActiveBytes).toBe(0)
+      expect(statSync(archiveDbFile(cwd)).size).toBeGreaterThan(0)
+    } finally {
+      closeArchiveDbs()
+      if (oldHome === undefined) delete process.env.DSH_HOME
+      else process.env.DSH_HOME = oldHome
+    }
   })
 })
 

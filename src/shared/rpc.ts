@@ -275,7 +275,12 @@ export interface PerfMoveFailure {
 export interface SidecarPerfSummary {
   active: number
   pendingByFile: { path: string; pending: number }[]
+  /** 新版 SQLite 主库 + WAL 文件字节数。 */
   archiveBytes: number
+  /** 旧 JSON 历史体积；不计入新归档。 */
+  legacyArchiveBytes: number
+  /** 旧活跃 JSON 只读快照体积。 */
+  legacyActiveBytes: number
 }
 // --endregion
 
@@ -362,7 +367,8 @@ export interface RpcRequestMap {
   'edrv.save': { sessionId?: string; path: string; content: string; rev?: string }
   'edrv.saveBinary': { sessionId?: string; path: string; content: string; encoding: 'base64' }
   'edrv.archiveList': { sessionId?: string }
-  'edrv.archiveRead': { sessionId?: string; path?: string }
+  'edrv.archivePage': { sessionId?: string; cursor?: string; limit?: number }
+  'edrv.archiveRead': { sessionId?: string; path?: string; batch?: number | null }
   'edrv.rollback': { sessionId?: string; path: string; batch?: number }
   'edrv.debug': { sessionId?: string; text: string; level?: LoggerLevel }
   'edrv.dlog.list': { sessionId?: string }
@@ -520,6 +526,7 @@ export interface RpcOkMap {
   'edrv.save': { rev?: string; conflict?: boolean }
   'edrv.saveBinary': object
   'edrv.archiveList': { entries: ArchiveEntry[] }
+  'edrv.archivePage': { entries: ArchiveEntry[]; nextCursor: string | null }
   'edrv.archiveRead': { batches: ArchiveBatch[] }
   'edrv.rollback': { path: string; batch: number | null }
   'edrv.debug': object

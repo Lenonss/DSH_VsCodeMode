@@ -193,6 +193,17 @@ export function debugLogFile(cwd: string, home = dshHome()): string {
   return join(pluginLogRoot(home), 'debug.' + hashOf(cwd) + '.log')
 }
 
+/**
+ * 每工作区归档数据库（用户数据，不受缓存清理预算约束）。
+ * @author ddj 2026年09月30号
+ * @param cwd 工作区绝对路径
+ * @param home DSH home
+ * @returns 归档数据库绝对路径
+ */
+export function archiveDbFile(cwd: string, home = dshHome()): string {
+  return join(home, PLUGIN_ID, 'data', 'archive', hashOf(cwd) + '.sqlite')
+}
+
 /** 插件包 assets 目录（import.meta.url 派生；config.imageDir 可覆盖，见 imageDirOf）。 */
 export function assetsDirOf(moduleUrl: string): string {
   return join(dirname(fileURLToPath(moduleUrl)), '..', 'assets')

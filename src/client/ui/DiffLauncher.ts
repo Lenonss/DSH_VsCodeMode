@@ -9,6 +9,35 @@ import { rpc } from '../rpc.js'
 import { MONO, btn } from './shared.js'
 
 /**
+ * 文件与批次共同标识归档卡片，避免同文件多批次共用展开状态。
+ * @author ddj 2026年09月30号
+ * @param entry 归档摘要或展开详情
+ * @returns 稳定卡片键
+ */
+export function archiveKey(entry) {
+  return JSON.stringify([entry.path, entry.batch])
+}
+
+/**
+ * 追加一页摘要并按文件/批次去重，保留已有卡片的顺序。
+ * @author ddj 2026年09月30号
+ * @param current 已加载页面
+ * @param next 下一页
+ * @returns 合并后的摘要列表
+ */
+export function mergeArchives(current, next) {
+  const merged = [...(current ?? [])]
+  const keys = new Set(merged.map(archiveKey))
+  for (const entry of next) {
+    const key = archiveKey(entry)
+    if (keys.has(key)) continue
+    keys.add(key)
+    merged.push(entry)
+  }
+  return merged
+}
+
+/**
  * 全局差异面板：待处理文件列表（点击打开并跳转）+ 归档浏览/批次回滚。
  * 由状态栏差异 chip / header 角标触发。
  */
@@ -22,27 +51,50 @@ export function DiffLauncher(props) {
   const [archiveDetail, setArchiveDetail] = React.useState(null)
   const [archivePath, setArchivePath] = React.useState(null)
   const [archiveErr, setArchiveErr] = React.useState(null)
+  const [nextCursor, setNextCursor] = React.useState(null)
+  const [moreBusy, setMoreBusy] = React.useState(false)
+  const requestRef = React.useRef(0)
+  const detailRef = React.useRef(0)
+  const moreRef = React.useRef(false)
   const [error, setError] = React.useState(null)
 
-  const loadArchives = () => {
+  /** @author ddj 2026年09月30号 @description 仅加载一个归档摘要页并丢弃失效响应。 */
+  const loadArchives = (cursor = null) => {
     if (!sessionId) { setArchiveErr('会话不存在'); return }
-    rpc('edrv.archiveList', { sessionId }).then((res) => {
-      if (res && res.ok && Array.isArray(res.entries)) { setArchives(res.entries); setArchiveErr(null) }
-      else setArchiveErr(res?.error ? String(res.error) : '归档列表读取失败')
-    }).catch((e) => setArchiveErr('归档异常:' + String(e)))
+    if (cursor && moreRef.current) return
+    if (cursor) { moreRef.current = true; setMoreBusy(true); setArchiveErr(null) }
+    else { requestRef.current++; setArchives(null); setNextCursor(null); setArchiveErr(null) }
+    const generation = requestRef.current
+    rpc('edrv.archivePage', { sessionId, ...(cursor ? { cursor } : {}) }).then((res) => {
+      if (generation !== requestRef.current) return
+      if (res && res.ok && Array.isArray(res.entries)) {
+        setArchives((current) => cursor ? mergeArchives(current, res.entries) : res.entries)
+        setNextCursor(res.nextCursor ?? null)
+        setArchiveErr(null)
+      } else setArchiveErr(res?.error ? String(res.error) : '归档分页读取失败')
+    }).catch((e) => { if (generation === requestRef.current) setArchiveErr('归档异常:' + String(e)) })
+      .finally(() => { if (generation === requestRef.current) { moreRef.current = false; setMoreBusy(false) } })
   }
-  const loadArchiveDetail = (path) => {
+  /** @author ddj 2026年09月30号 @description 仅加载目标文件和批次详情。 */
+  const loadArchiveDetail = (path, batch) => {
     if (!sessionId) return
+    const generation = ++detailRef.current
     setArchiveDetail(null)
-    rpc('edrv.archiveRead', { sessionId, path }).then((res) => {
+    rpc('edrv.archiveRead', { sessionId, path, batch }).then((res) => {
+      if (generation !== detailRef.current) return
       if (res && res.ok && Array.isArray(res.batches)) setArchiveDetail(res.batches)
       else setArchiveErr(res?.error ? String(res.error) : '归档详情读取失败')
-    }).catch((e) => setArchiveErr('归档异常:' + String(e)))
+    }).catch((e) => { if (generation === detailRef.current) setArchiveErr('归档异常:' + String(e)) })
   }
   React.useEffect(() => {
-    if (tab !== 'archive') return
-    setArchives(null); setArchiveDetail(null); setArchivePath(null); setArchiveErr(null)
-    loadArchives()
+    requestRef.current++
+    detailRef.current++
+    moreRef.current = false
+    setMoreBusy(false)
+    setArchiveDetail(null); setArchivePath(null); setArchiveErr(null)
+    if (tab === 'archive') loadArchives()
+    else { setArchives(null); setNextCursor(null) }
+    return () => { requestRef.current++; detailRef.current++ }
   }, [tab, sessionId])
 
   let body
@@ -54,17 +106,18 @@ export function DiffLauncher(props) {
           React.createElement('span', { className: 'edrv-launch-cnt' }, '待处理 ' + f.pending + ' 处'),
           React.createElement('button', { className: 'edrv-btn-mini edrv-btn-keep', onClick: (e) => { e.stopPropagation(); onOpenFile(f.path) } }, '打开'))))
   } else {
-    if (archiveErr) body = React.createElement('div', { className: 'edrv-search-empty', style: { color: 'var(--dsw-alias-state-error-primary,#d9534f)' } }, '错误：' + String(archiveErr))
+    if (archiveErr && archives === null) body = React.createElement('div', { className: 'edrv-search-empty', style: { color: 'var(--dsw-alias-state-error-primary,#d9534f)' } }, '错误：' + String(archiveErr), React.createElement('button', { onClick: () => loadArchives(), style: btn(false) }, '重试'))
     else if (archives === null) body = React.createElement('div', { className: 'edrv-search-empty' }, '加载中…')
     else if (archives.length === 0) body = React.createElement('div', { className: 'edrv-search-empty' }, '暂无归档记录')
     else {
       const inner = archives.map((e) => {
-        const open = archivePath === e.path
+        const entryKey = archiveKey(e)
+        const open = archivePath === entryKey
         let detailEl = null
         if (open) {
           if (archiveDetail === null) detailEl = React.createElement('div', { style: { padding: 8, fontSize: 11, color: 'var(--dsw-alias-label-tertiary,#888)' } }, '加载中…')
           else {
-            const batches = archiveDetail.filter((b) => b.path === e.path)
+            const batches = archiveDetail.filter((b) => b.path === e.path && b.batch === e.batch)
             detailEl = batches.map((b) => (Array.isArray(b.records) ? b.records : []).map((rec) => {
               const lines = []
               const hunks = Array.isArray(rec.hunks) ? rec.hunks : []
@@ -90,8 +143,8 @@ export function DiffLauncher(props) {
             }))
           }
         }
-        return React.createElement('div', { key: e.at + e.path, style: { border: '1px solid var(--dsw-alias-border-l1,#333)', borderRadius: 8, overflow: 'hidden' } },
-          React.createElement('div', { style: { display: 'flex', gap: 8, alignItems: 'center', padding: '6px 8px', background: 'var(--dsw-alias-bg-layer-1,transparent)', cursor: 'pointer', flexWrap: 'wrap' }, onClick: () => { if (open) { setArchivePath(null); setArchiveDetail(null) } else { setArchivePath(e.path); loadArchiveDetail(e.path) } } },
+        return React.createElement('div', { key: entryKey, style: { border: '1px solid var(--dsw-alias-border-l1,#333)', borderRadius: 8, overflow: 'hidden' } },
+          React.createElement('div', { style: { display: 'flex', gap: 8, alignItems: 'center', padding: '6px 8px', background: 'var(--dsw-alias-bg-layer-1,transparent)', cursor: 'pointer', flexWrap: 'wrap' }, onClick: () => { if (open) { detailRef.current++; setArchivePath(null); setArchiveDetail(null) } else { setArchivePath(entryKey); loadArchiveDetail(e.path, e.batch) } } },
             React.createElement('span', { style: { flex: 1, fontSize: 12, color: 'var(--dsw-alias-label-primary,#ddd)', wordBreak: 'break-all' } }, e.displayPath ?? e.path),
             (e.batch != null ? React.createElement('span', { style: { fontSize: 11, color: 'var(--dsw-alias-label-tertiary,#888)' } }, '批次 ' + e.batch) : null),
             (e.reason ? React.createElement('span', { style: { fontSize: 11, color: 'var(--dsw-alias-state-warn-primary,#b7791f)' } }, e.reason) : null),
@@ -110,7 +163,13 @@ export function DiffLauncher(props) {
             }, style: btn(false) }, '回滚')),
           detailEl)
       })
-      body = React.createElement('div', { className: 'edrv-launch-arch' }, inner)
+      body = React.createElement('div', { className: 'edrv-launch-arch' }, inner,
+        archiveErr ? React.createElement('div', { style: { color: 'var(--dsw-alias-state-error-primary,#d9534f)' } }, '归档异常：' + archiveErr,
+          React.createElement('button', { onClick: () => { if (nextCursor) loadArchives(nextCursor); else loadArchives() }, style: btn(false) }, '重试')) : null,
+        nextCursor || moreBusy ? React.createElement('button', {
+          className: 'edrv-btn-mini', disabled: moreBusy || !!archiveErr,
+          onClick: () => { if (nextCursor) loadArchives(nextCursor) },
+        }, moreBusy ? '加载中…' : '加载更多') : null)
     }
   }
 

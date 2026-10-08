@@ -175,6 +175,9 @@ export function createDiffRenderer(log) {
       const overlay = root && root.querySelector('.edrv-minus-overlay')
       if (overlay) overlay.innerHTML = ''
     }
+    // #region debug log
+    try { log(sessionId, '[DEBUG diffRender] regions=' + pendingRegions.length + ' zones=' + createdZones.length + ' ms=' + (Date.now() - renderT0)) } catch (e) { /* 诊断不可影响渲染 */ }
+    // #endregion
   }
 
   /** 卸载清理（EditorView unmount 时调用）。 */

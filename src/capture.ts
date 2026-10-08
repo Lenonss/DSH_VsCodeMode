@@ -240,12 +240,19 @@ async function buildRemoteRecord(cwd: string, exec: CaptureExec, args: Record<st
 async function persistRecord(ctx: Ctx, registry: Registry, session: Session, cwd: string, record: DiffRecord): Promise<void> {
   let bucket = registry.get(cwd)
   if (!bucket) { bucket = await loadBucket(ctx, cwd); registry.set(cwd, bucket) }
+  const prior = new Map(bucket)
   record.batch = fileMaxBatch(bucket, record.path) + 1
   bucket.set(record.callId, record)
   // 同一文件的多次 edit/write 都保留为独立记录，便于逐条审查。
   // 旧实现按文件 batch 自动归档 prior，会导致界面看起来每个文件只剩一条差异。
   prune(bucket)
-  await saveBucket(ctx, cwd, bucket, session)
+  const removed = [...prior.keys()].filter((callId) => !bucket.has(callId))
+  try { await saveBucket(ctx, cwd, bucket, session, { upserts: [record], removed }) }
+  catch (error) {
+    bucket.clear()
+    for (const [callId, rec] of prior) bucket.set(callId, rec)
+    throw error
+  }
 }
 
 /**

@@ -14,22 +14,22 @@ import {
   appendArchiveEntries,
   archiveRecords,
   autoArchiveStale,
-  parseArchive,
   policyOf,
-  readArchiveText,
   resolveTarget,
   saveBucket,
 } from './store.js'
 import { cp, mkdir, readFile, rename, rm, stat, writeFile, readdir } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { archiveEntryFor, markDecision, recordResolved, reconstructOriginal } from './model.js'
+import { clearRevertState, listArchives, pageArchives, readArchives, revertState, setRevertState, startReverts } from './archiveDb.js'
+import { log } from './log.js'
 import type { Registry } from './registry.js'
 import { bucketOf, cwdOf, sessionOf } from './registry.js'
 import type { SearchOrchestrator } from './search/orchestrator.js'
 import { newSearcher } from './search/orchestrator.js'
 import type { ContentSearcher } from './search/content.js'
 import { newContentSearcher } from './search/content.js'
-import { restoreFile, revertCall, revertHunk } from './revert.js'
+import { restoreFile, revertCall, revertHunk, revertHunks, type Result } from './revert.js'
 import { rulesList, rulesRead, rulesRemove, rulesSave, rulesToggle } from './rules.js'
 import { isSnippetFilePath, snippetsEntries, snippetsList, snippetsRead, snippetsRemove, snippetsSave } from './snippets.js'
 import { listMcp, refreshMcp, removeMcp, saveMcp, toggleMcp } from './mcp.js'
@@ -58,6 +58,10 @@ import { settingsDocPath } from './settingsDocPath.js'
 const staleCheckedAt = new Map<string, number>()
 /** stale 自动清理最小间隔。 */
 const STALE_CHECK_MIN_MS = 10_000
+// #region debug log
+/** 诊断由 client 的 edrv.debug 激活，过期后不再产生 Host 耗时日志。 */
+const diffTraceUntil = new Map<string, { until: number; id: string }>()
+// #endregion
 /**
  * 无会话期诊断的伪 cwd：冷启动早期本插件客户端就会上报界面状态镜像事件
  * （此时 `sessions` 可能尚未就绪，`requireSession` 会失败），退回本固定值落盘
@@ -237,7 +241,7 @@ async function afterManualSave(
     const done: DiffRecord[] = []
     for (const rec of bucket.values()) if (rec.path === path && rec.superseded) done.push(rec)
     if (done.length) await archiveRecords(ctx, sc.session, sc.cwd, bucket, done, '被手动编辑覆盖')
-    else await saveBucket(ctx, sc.cwd, bucket, sc.session)
+    else await saveBucket(ctx, sc.cwd, bucket, sc.session, { upserts: [...bucket.values()].filter((rec) => rec.path === path), removed: [] })
   }
 }
 
@@ -259,18 +263,110 @@ async function applyDecisions(
 ): Promise<DecideResult[]> {
   const results: DecideResult[] = []
   const resolved: DiffRecord[] = []
+  const touched = new Map<string, DiffRecord>()
   const ws = findRemoteWs(cwd)
   let changed = false
-  for (const item of items) {
+  const grouped = new Map<number, Result>()
+  // #region debug log
+  const trace = diffTraceUntil.get(cwd)
+  const traceId = trace && trace.until > Date.now() ? trace.id : null
+  const started = traceId ? performance.now() : 0
+  let revertMs = 0
+  let revertGroups = 0
+  // #endregion
+  for (let index = 0; index < items.length; index++) {
+    const item = items[index]
     const record = bucket.get(item.callId)
     if (!record) {
       results.push({ callId: item.callId, ok: false, error: '记录不存在' })
       continue
     }
+    if (record.archived) {
+      results.push({ callId: item.callId, ok: false, error: '记录已归档，无法重复决策' })
+      continue
+    }
+    // 重试已执行的决定只补持久化，不能再次修改磁盘上的同一个 hunk。
+    const previous = item.scope === 'hunk'
+      ? record.decisions.perHunk[item.hunkIndex ?? -1] : record.decisions.call
+    const alreadyDone = previous === item.decision
+    if (alreadyDone) {
+      if (recordResolved(record) && !record.archived) resolved.push(record)
+      changed = true
+      touched.set(record.callId, record)
+      results.push({ callId: item.callId, ok: true, record: recView(record, ws) })
+      continue
+    }
     let revertedStale = false
-    if (item.decision === 'rejected') {
+    if (item.decision === 'rejected' && !alreadyDone) {
       const scope: RpcScope = item.scope ?? 'call'
-      const outcome = scope === 'hunk' ? await revertHunk(ctx, session, record, item.hunkIndex ?? -1) : await revertCall(ctx, session, record)
+      const hunkIndex = scope === 'hunk' ? item.hunkIndex ?? -1 : -1
+      let existingIntent: ReturnType<typeof revertState>
+      try { existingIntent = grouped.has(index) ? null : revertState(cwd, record.callId, scope, hunkIndex) }
+      catch (error) {
+        results.push({ callId: item.callId, ok: false, error: '回滚状态读取失败，未修改文件：' + String(error) })
+        continue
+      }
+      if (existingIntent === 'started') {
+        results.push({ callId: item.callId, ok: false, error: '回滚结果不确定，请人工核对文件后处理；已阻止再次修改文件' })
+        continue
+      }
+      if (existingIntent === 'applied') {
+        markDecision(record, scope, item.hunkIndex, item.decision)
+        changed = true
+        touched.set(record.callId, record)
+        if (recordResolved(record)) resolved.push(record)
+        results.push({ callId: item.callId, ok: true, record: recView(record, ws) })
+        continue
+      }
+      if (!grouped.has(index)) {
+        let last = index + 1
+        if (scope === 'hunk' && !ws && record.toolName !== 'remote_ssh_write') {
+          while (last < items.length && items[last].callId === item.callId
+            && items[last].decision === 'rejected' && items[last].scope === 'hunk') last++
+        }
+        let groupReady = false
+        try {
+          groupReady = last > index + 1 && items.slice(index + 1, last).every((next) =>
+            revertState(cwd, record.callId, 'hunk', next.hunkIndex ?? -1) === null)
+          if (groupReady) startReverts(cwd, record.callId, items.slice(index, last).map((next) => next.hunkIndex ?? -1))
+          else setRevertState(cwd, record.callId, scope, hunkIndex, 'started')
+        } catch (error) {
+          results.push({ callId: item.callId, ok: false, error: '回滚状态无法登记，未修改文件：' + String(error) })
+          continue
+        }
+        if (groupReady) {
+          // #region debug log
+          const revertStart = traceId ? performance.now() : 0
+          // #endregion
+          const outcomes = await revertHunks(ctx, session, record, items.slice(index, last).map((next) => next.hunkIndex ?? -1), traceId ?? undefined)
+          // #region debug log
+          if (traceId) revertMs += performance.now() - revertStart
+          revertGroups++
+          // #endregion
+          outcomes.forEach((outcome, offset) => grouped.set(index + offset, outcome))
+        }
+      }
+      // #region debug log
+      const revertStart = traceId ? performance.now() : 0
+      // #endregion
+      const outcome = grouped.get(index) ?? (scope === 'hunk'
+        ? await revertHunk(ctx, session, record, item.hunkIndex ?? -1, traceId ?? undefined)
+        : await revertCall(ctx, session, record))
+      // #region debug log
+      if (traceId && !grouped.has(index)) revertMs += performance.now() - revertStart
+      // #endregion
+      grouped.delete(index)
+      try {
+        if (outcome.ok || outcome.stale === true) setRevertState(cwd, record.callId, scope, hunkIndex, 'applied')
+        else if (outcome.error === '找不到该差异块' || outcome.error === '回滚失败：文件不存在'
+          || outcome.error === '回滚失败：文件过大，无法安全定位') {
+          clearRevertState(cwd, record.callId, scope, hunkIndex)
+        }
+        // 其余失败可能发生在写盘途中：保留 started，阻止不确定状态下重复回滚。
+      } catch (error) {
+        results.push({ callId: item.callId, ok: false, error: '回滚状态保存失败，请人工核对文件：' + String(error) })
+        continue
+      }
       if (!outcome.ok) {
         if (scope !== 'hunk' || outcome.stale !== true) {
           results.push({ callId: item.callId, ok: false, error: outcome.error })
@@ -282,16 +378,62 @@ async function applyDecisions(
     const wasResolved = recordResolved(record)
     markDecision(record, item.scope ?? 'call', item.hunkIndex, item.decision)
     changed = true
+    touched.set(record.callId, record)
     if (!wasResolved && recordResolved(record)) resolved.push(record)
     const result: DecideResult = { callId: item.callId, ok: true, record: recView(record, ws) }
     if (revertedStale) result.stale = true
     results.push(result)
   }
+  // #region debug log
+  const decisionMs = traceId ? performance.now() - started : 0
+  const archiveStart = traceId ? performance.now() : 0
+  // #endregion
   if (resolved.length) {
     const reason = items.some((item) => item.decision === 'rejected') ? '已处理（回滚）' : '已处理'
-    await archiveRecords(ctx, session, cwd, bucket, resolved, reason, { deferSave: true })
+    try {
+      await archiveRecords(ctx, session, cwd, bucket, resolved, reason, { deferSave: true, traceId: traceId ?? undefined, changed: [...touched.values()] })
+    } catch (error) {
+      const failed = new Set(resolved.map((record) => record.callId))
+      for (const result of results) {
+        if (!failed.has(result.callId) || !result.ok) continue
+        result.ok = false
+        result.error = '归档失败：' + String(error)
+        delete result.record
+      }
+      // 决策保留于内存并尝试写回 sidecar，Undo 不再重复反替换。
+      if (changed) {
+        try { await saveBucket(ctx, cwd, bucket, session, { upserts: [...touched.values()], removed: [] }) }
+        catch (saveError) { log.error('归档失败后的 SQLite 补写失败：' + String(saveError)) }
+      }
+      return results
+    }
   }
-  if (changed) await saveBucket(ctx, cwd, bucket, session)
+  // #region debug log
+  const archiveMs = traceId ? performance.now() - archiveStart : 0
+  const saveStart = traceId ? performance.now() : 0
+  // #endregion
+  if (changed && !resolved.length) {
+    try {
+      await saveBucket(ctx, cwd, bucket, session, { upserts: [...touched.values()], removed: [] })
+    } catch (error) {
+      for (const result of results) {
+        if (!result.ok) continue
+        result.ok = false
+        result.error = '决策记录保存失败：' + String(error)
+        delete result.record
+      }
+      return results
+    }
+  }
+  // #region debug log
+  try {
+    if (traceId) {
+      const saveMs = performance.now() - saveStart
+      const totalMs = performance.now() - started
+      debugRecord(ctx, cwd, `[DEBUG diffDecision] trace=${traceId} items=${items.length} rejected=${items.filter((item) => item.decision === 'rejected').length} ok=${results.filter((result) => result.ok).length} stale=${results.filter((result) => result.stale === true).length} grouped=${revertGroups} loopMs=${decisionMs.toFixed(1)} revertMs=${revertMs.toFixed(1)} archiveMs=${archiveMs.toFixed(1)} saveMs=${saveMs.toFixed(1)} totalMs=${totalMs.toFixed(1)}`)
+    }
+  } catch { /* 诊断不可影响决策 */ }
+  // #endregion
   return results
 }
 
@@ -447,9 +589,17 @@ export function buildHandlers(
     // edrv.dap.* 由 createDapRpc 提供（调试会话单例），这里并入。
     ...((dapHandlers ?? {}) as RpcHandlerMap),
     'edrv.list': async (args) => {
+      // #region debug log
+      const start = performance.now()
+      let staleMs = 0
+      let staleChecked = false
+      // #endregion
       const sc = await requireSession(ctx, args.sessionId)
       if ('err' in sc) return { ok: false, error: sc.err }
       const bucket = await bucketOf(registry, ctx, sc.cwd)
+      // #region debug log
+      const loadMs = performance.now() - start
+      // #endregion
       const want = Array.isArray(args.callIds) ? new Set(args.callIds) : null
       // 全量轮询时自动清理 stale 幽灵差异（批量决策后的即时刷新可 skipStale 跳过）；
       // 三个组件各自 5s 全量 list，stale 检查节流到 STALE_CHECK_MIN_MS 一次，
@@ -458,7 +608,14 @@ export function buildHandlers(
         const now = Date.now()
         if (now - (staleCheckedAt.get(sc.cwd) ?? 0) > STALE_CHECK_MIN_MS) {
           staleCheckedAt.set(sc.cwd, now)
+          // #region debug log
+          staleChecked = true
+          const staleStart = performance.now()
+          // #endregion
           await autoArchiveStale(ctx, sc.session, sc.cwd, bucket)
+          // #region debug log
+          staleMs = performance.now() - staleStart
+          // #endregion
         }
       }
       const out: RecordView[] = []
@@ -470,6 +627,13 @@ export function buildHandlers(
         out.push(recView(rec, ws))
       }
       out.sort((a, b) => (a.at < b.at ? -1 : 1))
+      // #region debug log
+      try {
+        const totalMs = performance.now() - start
+        const trace = diffTraceUntil.get(sc.cwd)
+        if (trace && trace.until > Date.now() && (totalMs >= 20 || staleMs >= 10)) debugRecord(ctx, sc.cwd, `[DEBUG diffListHost] trace=${trace.id} count=${out.length} bucket=${bucket.size} checked=${staleChecked} loadMs=${loadMs.toFixed(1)} staleMs=${staleMs.toFixed(1)} totalMs=${totalMs.toFixed(1)}`)
+      } catch { /* 诊断不可影响列表 */ }
+      // #endregion
       return { ok: true, records: out }
     },
     /**
@@ -715,38 +879,38 @@ export function buildHandlers(
     'edrv.archiveList': async (args) => {
       const sc = await requireSession(ctx, args.sessionId)
       if ('err' in sc) return { ok: false, error: sc.err }
-      const batches = parseArchive(await readArchiveText(ctx, sc.cwd)).filter((b) => b.cwd === sc.cwd)
-      const ws = findRemoteWs(sc.cwd)
-      const entries = batches.map((b) => {
-        const recs = Array.isArray(b.records) ? b.records : []
-        const sum = recs.reduce((s, r) => {
-          const sm = r.summary || { accepted: 0, rejected: 0, pending: 0, superseded: false }
-          s.accepted += sm.accepted || 0
-          s.rejected += sm.rejected || 0
-          s.pending += sm.pending || 0
-          if (sm.superseded) s.superseded++
-          return s
-        }, { accepted: 0, rejected: 0, pending: 0, superseded: 0 })
-        return {
-          at: b.at,
-          lastAt: b.lastAt || b.at,
-          path: b.path,
-          ...(ws ? { displayPath: remoteDisplayOf(b.path, ws) ?? undefined } : {}),
-          batch: b.batch ?? null,
-          reason: b.reason ?? null,
-          nRecords: recs.length,
-          summary: sum,
-        }
-      })
-      entries.sort((a, b) => (Number(b.batch ?? -1) - Number(a.batch ?? -1)) || (a.at < b.at ? 1 : -1))
-      return { ok: true, entries }
+      try {
+        const ws = findRemoteWs(sc.cwd)
+        const entries = listArchives(sc.cwd).map((item) => ({
+          ...item, ...(ws ? { displayPath: remoteDisplayOf(item.path, ws) ?? undefined } : {}),
+        }))
+        return { ok: true, entries }
+      } catch (error) {
+        return { ok: false, error: '归档列表读取失败：' + String(error) }
+      }
+    },
+    'edrv.archivePage': async (args) => {
+      const sc = await requireSession(ctx, args.sessionId)
+      if ('err' in sc) return { ok: false, error: sc.err }
+      try {
+        const ws = findRemoteWs(sc.cwd)
+        const page = pageArchives(sc.cwd, args.cursor, args.limit)
+        return { ok: true, entries: page.entries.map((item) => ({
+          ...item, ...(ws ? { displayPath: remoteDisplayOf(item.path, ws) ?? undefined } : {}),
+        })), nextCursor: page.nextCursor }
+      } catch (error) {
+        return { ok: false, error: '归档分页读取失败：' + String(error) }
+      }
     },
     'edrv.archiveRead': async (args) => {
       const sc = await requireSession(ctx, args.sessionId)
       if ('err' in sc) return { ok: false, error: sc.err }
-      const batchPath = args.path
-      const batches = parseArchive(await readArchiveText(ctx, sc.cwd)).filter((b) => b.cwd === sc.cwd && (!batchPath || b.path === batchPath))
-      return { ok: true, batches }
+      try {
+        if (args.batch !== undefined && (!args.path || (args.batch !== null && !Number.isInteger(args.batch)))) return { ok: false, error: '归档批次参数无效' }
+        return { ok: true, batches: readArchives(sc.cwd, args.path, args.batch) }
+      } catch (error) {
+        return { ok: false, error: '归档详情读取失败：' + String(error) }
+      }
     },
     'edrv.rollback': async (args) => {
       const sc = await requireSession(ctx, args.sessionId)
@@ -755,37 +919,41 @@ export function buildHandlers(
       if (!fs) return { ok: false, error: '缺少 fs' }
       const batch = args.batch
       const bucket = await bucketOf(registry, ctx, sc.cwd)
-      let affected: DiffRecord[] = []
-      let beforeRec: DiffRecord | null = null
-      if (batch !== undefined) {
-        const all = parseArchive(await readArchiveText(ctx, sc.cwd)).filter((b) => b.cwd === sc.cwd && b.path === args.path)
-        const recs: DiffRecord[] = []
-        for (const b of all) if (b.batch === batch) for (const r of (b.records || [])) recs.push(r as unknown as DiffRecord)
-        if (!recs.length) return { ok: false, error: '归档中找不到该批次' }
-        recs.sort((a, b2) => (a.at < b2.at ? -1 : 1))
-        beforeRec = recs[0]
-        affected = recs
-      } else {
-        for (const r of bucket.values()) if (r.path === args.path && !r.archived) affected.push(r)
-        if (!affected.length) return { ok: false, error: '该文件没有可回滚的差异' }
-        affected.sort((a, b2) => (a.at < b2.at ? -1 : 1))
-        beforeRec = affected[0]
+      try {
+        let affected: DiffRecord[] = []
+        let beforeRec: DiffRecord | null = null
+        if (batch !== undefined) {
+          const all = readArchives(sc.cwd, args.path, batch)
+          const recs: DiffRecord[] = []
+          for (const b of all) if (b.batch === batch) for (const r of (b.records || [])) recs.push(r as unknown as DiffRecord)
+          if (!recs.length) return { ok: false, error: '归档中找不到该批次' }
+          recs.sort((a, b2) => (a.at < b2.at ? -1 : 1))
+          beforeRec = recs[0]
+          affected = recs
+        } else {
+          for (const r of bucket.values()) if (r.path === args.path && !r.archived) affected.push(r)
+          if (!affected.length) return { ok: false, error: '该文件没有可回滚的差异' }
+          affected.sort((a, b2) => (a.at < b2.at ? -1 : 1))
+          beforeRec = affected[0]
+        }
+        const rerr = await restoreFile(ctx, sc.session, beforeRec)
+        if (rerr) return { ok: false, error: rerr }
+        if (batch === undefined) {
+          await archiveRecords(ctx, sc.session, sc.cwd, bucket, affected, '已回滚')
+        } else {
+          const all = readArchives(sc.cwd, args.path, batch)
+          const sumRecs = all.reduce((s, b) => s + ((b.records || []).length), 0)
+          const logRec = Object.assign({}, affected[0], { note: (affected[0].note ? affected[0].note + '；' : '') + '回滚至本批次前（批次 ' + batch + '）' })
+          await appendArchiveEntries(ctx, sc.cwd, [archiveEntryFor([logRec], sc.cwd, '已回滚（批次 ' + batch + '，' + sumRecs + ' 条）')], sc.session)
+          // 批次回滚恢复的是旧内容，文件当前活跃差异已失效，一并归档
+          const activeRecs: DiffRecord[] = []
+          for (const r of bucket.values()) if (r.path === args.path && !r.archived) activeRecs.push(r)
+          if (activeRecs.length) await archiveRecords(ctx, sc.session, sc.cwd, bucket, activeRecs, '已回滚（批次回滚覆盖）')
+        }
+        return { ok: true, path: args.path, batch: batch ?? null }
+      } catch (error) {
+        return { ok: false, error: '回滚/归档失败：' + String(error) }
       }
-      const rerr = await restoreFile(ctx, sc.session, beforeRec)
-      if (rerr) return { ok: false, error: rerr }
-      if (batch === undefined) {
-        await archiveRecords(ctx, sc.session, sc.cwd, bucket, affected, '已回滚')
-      } else {
-        const all = parseArchive(await readArchiveText(ctx, sc.cwd)).filter((b) => b.cwd === sc.cwd && b.path === args.path && b.batch === batch)
-        const sumRecs = all.reduce((s, b) => s + ((b.records || []).length), 0)
-        const logRec = Object.assign({}, affected[0], { note: (affected[0].note ? affected[0].note + '；' : '') + '回滚至本批次前（批次 ' + batch + '）' })
-        await appendArchiveEntries(ctx, sc.cwd, [archiveEntryFor([logRec], sc.cwd, '已回滚（批次 ' + batch + '，' + sumRecs + ' 条）')], sc.session)
-        // 批次回滚恢复的是旧内容，文件当前活跃差异已失效，一并归档
-        const activeRecs: DiffRecord[] = []
-        for (const r of bucket.values()) if (r.path === args.path && !r.archived) activeRecs.push(r)
-        if (activeRecs.length) await archiveRecords(ctx, sc.session, sc.cwd, bucket, activeRecs, '已回滚（批次回滚覆盖）')
-      }
-      return { ok: true, path: args.path, batch: batch ?? null }
     },
     'edrv.debug': async (args) => {
       // 诊断日志：client 上报 → debugLog 模块缓冲批量落盘 ~/.dsh/dsh-vscode-mode/logs/
@@ -798,6 +966,12 @@ export function buildHandlers(
         debugRecord(ctx, UI_AUDIT_CWD, text, args.level)
         return { ok: true }
       }
+      // #region debug log
+      try {
+        const match = /^\[DEBUG diffAction\] stage=start trace=(\d+-\d+) /.exec(text)
+        if (match) diffTraceUntil.set(sc.cwd, { until: Date.now() + 15_000, id: match[1] })
+      } catch { /* 诊断不可影响日志路由 */ }
+      // #endregion
       debugRecord(ctx, sc.cwd, text, args.level)
       return { ok: true }
     },

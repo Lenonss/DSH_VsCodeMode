@@ -127,18 +127,43 @@ export function lineBefore(text: string, index: number): number {
   return n
 }
 
-/** 找出文本的全部非重叠出现位置。 */
-function allMatches(content: string, needle: string): TextRange[] {
-  if (!needle.length) return []
-  const out: TextRange[] = []
-  let from = 0
-  while (from <= content.length - needle.length) {
-    const at = content.indexOf(needle, from)
-    if (at < 0) break
-    out.push({ start: at, end: at + needle.length })
-    from = at + Math.max(1, needle.length)
+/** 每种搜索串只推进一次，保持原来从头开始的非重叠匹配顺序。 */
+interface MatchState {
+  ranges: TextRange[]
+  next: number
+  done: boolean
+}
+
+/**
+ * 懒扫描候选：先找 cursor 后未占用项，找不到再回退至首个未占用项。
+ * @author ddj 2026年09月29号
+ * @param content 当前内容
+ * @param needle 搜索串
+ * @param cursor 前一块的结束位置
+ * @param occupied 已选区间
+ * @param state 此搜索串已扫描的候选
+ * @returns 与完整候选列表双轮查找相同的匹配
+ */
+function findCandidate(content: string, needle: string, cursor: number, occupied: TextRange[], state: MatchState): TextRange | undefined {
+  if (!needle.length) return undefined
+  let fallback: TextRange | undefined
+  for (let i = 0; i < state.ranges.length; i++) {
+    const range = state.ranges[i]
+    if (occupied.some((used) => overlaps(range, used))) continue
+    if (range.start >= cursor) return range
+    if (!fallback) fallback = range
   }
-  return out
+  while (!state.done) {
+    const at = content.indexOf(needle, state.next)
+    if (at < 0) { state.done = true; break }
+    const range = { start: at, end: at + needle.length }
+    state.ranges.push(range)
+    state.next = range.end
+    if (occupied.some((used) => overlaps(range, used))) continue
+    if (range.start >= cursor) return range
+    if (!fallback) fallback = range
+  }
+  return fallback
 }
 
 /**
@@ -153,6 +178,7 @@ export function locateHunks(content: string, hunks: Hunk[]): HunkLocation[] {
   const locations: HunkLocation[] = []
   let cursor = 0
   const occupied: TextRange[] = []
+  const matches = new Map<string, MatchState>()
   for (let idx = 0; idx < hunks.length; idx++) {
     const hunk = hunks[idx]
     const newText = hunk.newText
@@ -163,9 +189,14 @@ export function locateHunks(content: string, hunks: Hunk[]): HunkLocation[] {
       && (newText.length === 0 || content.slice(snapshot.start, snapshot.end) === newText)
       ? snapshot
       : null
-    const candidates = snapshotMatches ? [snapshotMatches] : allMatches(content, newText)
-    const candidate = candidates.find((range) => range.start >= cursor && !occupied.some((used) => overlaps(range, used)))
-      ?? candidates.find((range) => !occupied.some((used) => overlaps(range, used)))
+    let candidate: TextRange | undefined
+    if (snapshotMatches) {
+      if (!occupied.some((used) => overlaps(snapshotMatches, used))) candidate = snapshotMatches
+    } else if (newText.length) {
+      let state = matches.get(newText)
+      if (!state) { state = { ranges: [], next: 0, done: false }; matches.set(newText, state) }
+      candidate = findCandidate(content, newText, cursor, occupied, state)
+    }
     if (candidate) {
       locations.push({ idx, hunk, ...candidate, matched: true })
       occupied.push(candidate)
@@ -205,15 +236,33 @@ export function replaceRange(content: string, location: HunkLocation, reverse = 
   return content.slice(0, location.start) + replacement + content.slice(location.end)
 }
 
-/** 按当前内容中出现的位置从后向前应用 hunk，避免前块长度变化影响后块。 */
+/**
+ * 按位置倒序收集片段，最后一次拼接；非互斥区间退回原替换语义。
+ * @author ddj 2026年09月29号
+ * @param content 当前文件内容
+ * @param locations 已定位区间
+ * @param reverse 是否反向应用
+ * @returns 合成内容及失效块索引
+ */
 export function applyLocations(content: string, locations: HunkLocation[], reverse = false): { content: string; stale: number[] } {
   const stale = locations.filter((location) => !location.matched).map((location) => location.idx)
-  let out = content
   const matched = locations.filter((location) => location.matched).sort((a, b) => b.start - a.start)
+  const parts: string[] = []
+  let end = content.length
   for (const location of matched) {
-    const next = replaceRange(out, location, reverse)
-    if (next === null) stale.push(location.idx)
-    else out = next
+    if (location.start < 0 || location.end > end) {
+      let out = content
+      for (const item of matched) {
+        const next = replaceRange(out, item, reverse)
+        if (next === null) stale.push(item.idx)
+        else out = next
+      }
+      return { content: out, stale: stale.sort((a, b) => a - b) }
+    }
+    parts.push(content.slice(location.end, end), reverse ? (location.hunk.oldText ?? '') : location.hunk.newText)
+    end = location.start
   }
-  return { content: out, stale: stale.sort((a, b) => a - b) }
+  parts.push(content.slice(0, end))
+  parts.reverse()
+  return { content: parts.join(''), stale: stale.sort((a, b) => a - b) }
 }

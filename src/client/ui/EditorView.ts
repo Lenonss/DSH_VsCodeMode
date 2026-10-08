@@ -11,7 +11,7 @@ import React from 'react'
 import { useOpenReceipt } from '../useOpenReceipt.js'
 import { acceptsLoad, receiptErrorFor, receiptPath, receiptReadyFor, receiptTabPath } from '../receiptState.js'
 import { bindPanelCommand } from '../panelCommands.js'
-import { dbg, rpc } from '../rpc.js'
+import { dbg, isDebug, rpc } from '../rpc.js'
 import { emitFileChanged, emitRefresh } from '../events.js'
 import { langOf, loadMonaco, snippetLanguageOf } from '../monaco/loader.js'
 import { clampZoom, clearZoomMem, dataUrlOf, isImagePath, isSvgPath, recallZoom, rememberZoom, zoomKeyOf, zoomStepOf } from '../imagePreview.js'
@@ -44,7 +44,8 @@ import { CommandPalette } from './CommandPalette.js'
 import { closeCommandPalette } from '../commandPaletteStore.js'
 import { DiffLauncher } from './DiffLauncher.js'
 import { SidebarView } from '../sidebar/SidebarView.js'
-import { clearDiffDock, publishDiffDock } from '../diffDockStore.js'
+import { clearDiffDock, dockInLayout, publishDiffDock } from '../diffDockStore.js'
+import { DiffBox } from './DiffBox.js'
 import { displayDiffTotal, editorDockMode } from '../diffDock.js'
 import { editorHeight } from '../editorLayout.js'
 import { revealInExplorer as revealPathInExplorer } from '../fileReveal.js'
@@ -479,7 +480,19 @@ export function EditorView(props) {
   // 当前 tab 是否为可预览的 Markdown，以及是否正处于预览态（预览态替换 Monaco host，只读）
   const isMdActive = !!active && isMarkdownPath(active)
   const mdPreviewing = isMdActive && mdPreviewRef.current.has(active)
-  const regions = React.useMemo(() => diffRegions(currentRecords, contentReady ? content : null).filter((r) => !r.superseded), [currentRecords, content, contentPath, active])
+  const regions = React.useMemo(() => {
+    // #region debug log
+    const trace = isDebug() && contentReady && currentRecords.length > 0
+    const start = trace ? performance.now() : 0
+    // #endregion
+    const next = diffRegions(currentRecords, contentReady ? content : null).filter((r) => !r.superseded)
+    // #region debug log
+    if (trace) {
+      try { dbg(sessionId, `[DEBUG diffRegions] records=${currentRecords.length} bytes=${content.length} regions=${next.length} ms=${(performance.now() - start).toFixed(1)}`) } catch (e) { /* 诊断不可影响渲染 */ }
+    }
+    // #endregion
+    return next
+  }, [currentRecords, content, contentPath, active])
   // useMemo 稳定引用：否则 hover 等重渲染会让 view zone effect 反复重建（- 号闪烁）
   const pendingRegions = React.useMemo(() => regions.filter((r) => r.status === ST.PENDING && !r.stale), [regions])
   const staleRegions = React.useMemo(() => regions.filter((r) => r.status === ST.PENDING && r.stale), [regions])
@@ -802,14 +815,35 @@ export function EditorView(props) {
 
   const refreshRecords = (skipStale) => {
     if (!sessionId) return
+    // #region debug log
+    const trace = isDebug()
+    const start = trace ? performance.now() : 0
+    // #endregion
     rpc('edrv.list', { sessionId, ...(skipStale ? { skipStale: true } : {}) }).then((res) => {
+      // #region debug log
+      const received = trace ? performance.now() : 0
+      // #endregion
       if (!res || !res.ok || !Array.isArray(res.records)) return
       const map = {}
       for (const r of res.records) {
         if (r.archived === true) continue
         map[r.callId] = r
       }
-      setRecords((prev) => (sameRecords(prev, map) ? prev : map))
+      setRecords((prev) => {
+        // #region debug log
+        const compareStart = trace ? performance.now() : 0
+        // #endregion
+        const equal = sameRecords(prev, map)
+        // #region debug log
+        if (trace) {
+          try {
+            const compareMs = performance.now() - compareStart
+            if (compareMs > 20 || received - start > 100) dbg(sessionId, `[DEBUG diffList] count=${res.records.length} skipStale=${skipStale === true} rpcMs=${(received - start).toFixed(1)} compareMs=${compareMs.toFixed(1)} changed=${!equal}`)
+          } catch (e) { /* 诊断不可影响轮询 */ }
+        }
+        // #endregion
+        return equal ? prev : map
+      })
     }).catch((e) => setError('list异常:' + String(e)))
   }
 
@@ -942,7 +976,15 @@ export function EditorView(props) {
       return
     }
     setLoadStage({ progress: monaco ? 72 : 12, message: '读取文件内容…' })
+    // #region debug log
+    const readStart = isDebug() ? performance.now() : 0
+    // #endregion
     rpc('edrv.read', { sessionId: sid, path }).then((res) => {
+      // #region debug log
+      if (readStart) {
+        try { dbg(sid, `[DEBUG diffRead] force=${force === true} ok=${res?.ok === true} bytes=${typeof res?.content === 'string' ? res.content.length : 0} rpcMs=${(performance.now() - readStart).toFixed(1)}`) } catch (e) { /* 诊断不可影响文件读取 */ }
+      }
+      // #endregion
       if (!loadCurrent(path, seq)) return
       if (res && res.ok) {
         mark(res.version, true)
@@ -2704,7 +2746,20 @@ export function EditorView(props) {
    */
   const actHunk = (region, reject, silent) => {
     const method = reject ? 'edrv.reject' : 'edrv.accept'
+    // #region debug log
+    const trace = isDebug()
+    const start = trace ? performance.now() : 0
+    const traceId = trace ? `${Date.now()}-${Math.floor(Math.random() * 1000)}` : ''
+    if (trace) {
+      try { dbg(sessionId, `[DEBUG diffAction] stage=start trace=${traceId} method=${method} scope=${region.create ? 'call' : 'hunk'}`) } catch (e) { /* 诊断不可影响决策 */ }
+    }
+    // #endregion
     return rpc(method, { sessionId, callId: region.callId, scope: region.create ? 'call' : 'hunk', hunkIndex: region.idx }).then((res) => {
+      // #region debug log
+      if (trace) {
+        try { dbg(sessionId, `[DEBUG diffAction] stage=reply trace=${traceId} method=${method} ok=${res?.ok === true} rpcMs=${(performance.now() - start).toFixed(1)}`) } catch (e) { /* 诊断不可影响决策 */ }
+      }
+      // #endregion
       if (res && res.ok) {
         setRecords((prev) => Object.assign({}, prev, { [region.callId]: res.record }))
         if (!silent) { reloadFile(); emitRefresh() }
@@ -2727,7 +2782,21 @@ export function EditorView(props) {
    */
   const actMany = (items) => {
     if (!items.length) return Promise.resolve({ ok: 0, fail: 0, stale: 0 })
+    // #region debug log
+    const trace = isDebug()
+    const start = trace ? performance.now() : 0
+    const rejected = trace ? items.filter((item) => item.decision === 'rejected').length : 0
+    const traceId = trace ? `${Date.now()}-${Math.floor(Math.random() * 1000)}` : ''
+    if (trace) {
+      try { dbg(sessionId, `[DEBUG diffAction] stage=start trace=${traceId} method=decideBatch items=${items.length} rejected=${rejected}`) } catch (e) { /* 诊断不可影响决策 */ }
+    }
+    // #endregion
     return rpc('edrv.decideBatch', { sessionId, items }).then((res) => {
+      // #region debug log
+      if (trace) {
+        try { dbg(sessionId, `[DEBUG diffAction] stage=reply trace=${traceId} method=decideBatch items=${items.length} rpcMs=${(performance.now() - start).toFixed(1)} ok=${res?.ok === true}`) } catch (e) { /* 诊断不可影响决策 */ }
+      }
+      // #endregion
       if (!res || !res.ok || !Array.isArray(res.results)) {
         setError(res?.error ? String(res.error) : '批量处理失败')
         return { ok: 0, fail: items.length, stale: 0 }
@@ -3700,9 +3769,14 @@ export function EditorView(props) {
         React.createElement('button', { className: 'edrv-pill edrv-pill-undo', onClick: () => { dismissHover(); actHunk(hoverAct.region, true) } }, '↩ Undo'))
     : null
 
-  /** 组装差异 dock 快照（发布给 conversation.input.dock 的唯一 DiffBox 实例）。 */
+  /**
+   * 组装当前编辑器的差异上下文，供侧栏本地与会话 dock 共用。
+   * @author ddj 2026年09月29号
+   * @returns 含布局及操作回调的差异快照
+   */
   const buildDockSnapshot = () => ({
     mode: editorDockMode(active),
+    layout,
     pendingRegions,
     staleRegions,
     onAct: actHunk,
@@ -3729,9 +3803,10 @@ export function EditorView(props) {
     onOpenNextFile: openNextFile,
   })
 
+  const dockSnapshot = buildDockSnapshot()
   React.useEffect(() => {
     if (!sessionId) return
-    publishDiffDock(sessionId, buildDockSnapshot(), dockSourceRef.current)
+    publishDiffDock(sessionId, dockSnapshot, dockSourceRef.current)
     // 侧栏形态同步 Tab 角标计数（仅本形态写入；页签形态清零避免残留）
     if (layout === 'side') setSidePending(sessionId, sum.totalFiles)
     else setSidePending(sessionId, 0)
@@ -3930,12 +4005,20 @@ export function EditorView(props) {
       }, '添加配置…')
     : null
 
-  // 主编辑列（侧边栏右侧）：pathBar + tabRow + 编辑/差异区（底部整条留给 DSH 对话输入栏）
+  // 侧栏差异栏悬浮在编辑区底部；中央页签仍使用对话 dock。
+  const sideDock = dockInLayout(dockSnapshot, 'side')
+    ? React.createElement('div', {
+        className: 'edrv-side-diff-dock edrv-diff-dock-shell',
+        'data-edrv-diff-dock-shell': '1',
+      }, React.createElement(DiffBox, { ...dockSnapshot, dock: true }))
+    : null
+  // 主编辑列（侧边栏右侧）：pathBar + tabRow + 编辑/差异区。
   const editorArea = React.createElement('div', { className: 'edrv-editor-area' },
     dapBar,
     addCfgBtn,
     body,
     hoverEl,
+    sideDock,
     overlay)
   // 侧边栏引导条（仅旧页签形态且未装 betterSidebar 时显示；可复制安装命令、可关闭）
   const dismissHint = () => {

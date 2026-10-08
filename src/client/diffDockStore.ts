@@ -13,7 +13,20 @@ export type DiffDockMode = 'chat' | 'editor' | 'editor-empty'
  */
 export interface DiffDockSnapshot {
   mode: DiffDockMode
+  layout?: 'side' | 'tab'
   [key: string]: unknown
+}
+
+/**
+ * 判断编辑器差异栏应显示在指定布局，空态仅在尚有差异文件时显示。
+ * @author ddj 2026年09月29号
+ * @param snapshot 编辑器发布的差异快照
+ * @param layout 目标布局
+ * @returns 是否显示差异栏
+ */
+export function dockInLayout(snapshot: DiffDockSnapshot | null, layout: 'side' | 'tab'): boolean {
+  if (!snapshot || (snapshot.layout ?? 'tab') !== layout) return false
+  return snapshot.mode !== 'editor-empty' || Boolean(snapshot.fileTotal)
 }
 
 type DiffDockListener = () => void

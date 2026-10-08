@@ -10,10 +10,9 @@
  */
 import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve, sep } from 'node:path'
-import { parseSidecar } from './store.js'
-import { recSummary } from './model.js'
+import { activeSummary } from './archiveDb.js'
 import { log } from './log.js'
-import { SIDECAR, SIDECAR_ARCHIVE, dshHome, sessionIdSegment, sessionWorkspaceKey, sessionsRoot } from './paths.js'
+import { SIDECAR, SIDECAR_ARCHIVE, archiveDbFile, dshHome, sessionIdSegment, sessionWorkspaceKey, sessionsRoot } from './paths.js'
 import type { PerfMoveFailure, PerfMoveItem, PerfSession, PerfTotals, PerfWorkspace, SidecarPerfSummary } from './shared/rpc.js'
 import type { Ctx } from './store.js'
 
@@ -370,29 +369,23 @@ export async function sessionSizeOf(home: string, cwd: string, sessionId: string
  */
 export async function sidecarSummaryOf(ctx: Ctx, cwd: string | null): Promise<SidecarPerfSummary> {
   const fs = ctx.get('fs')
-  const summary: SidecarPerfSummary = { active: 0, pendingByFile: [], archiveBytes: 0 }
+  const summary: SidecarPerfSummary = { active: 0, pendingByFile: [], archiveBytes: 0, legacyArchiveBytes: 0, legacyActiveBytes: 0 }
   if (!fs || !cwd) return summary
+  const current = activeSummary(cwd)
+  summary.active = current.active
+  summary.pendingByFile = current.pendingByFile
   try {
-    const text = await fs.readText(await fs.resolve(SIDECAR, { cwd }))
-    const data = parseSidecar(text)
-    const recs = data?.workspaces?.[cwd]?.records
-    if (recs) {
-      const byFile = new Map<string, number>()
-      let active = 0
-      for (const rec of Object.values(recs)) {
-        if (rec.archived) continue
-        active += 1
-        const sm = recSummary(rec)
-        if (sm.pending > 0 && rec.path) byFile.set(rec.path, (byFile.get(rec.path) ?? 0) + sm.pending)
-      }
-      summary.active = active
-      summary.pendingByFile = [...byFile.entries()].map(([path, pending]) => ({ path, pending })).sort((a, b) => b.pending - a.pending)
-    }
-    try {
-      const info = await fs.stat(await fs.resolve(SIDECAR_ARCHIVE, { cwd }))
-      summary.archiveBytes = info?.size ?? 0
-    } catch (error) { /* 归档缺失忽略 */ }
-  } catch (error) { /* sidecar 不可读返回空摘要 */ }
+    const info = await fs.stat(await fs.resolve(SIDECAR_ARCHIVE, { cwd }))
+    summary.legacyArchiveBytes = info?.size ?? 0
+  } catch { /* 旧归档缺失忽略 */ }
+  try {
+    const info = await fs.stat(await fs.resolve(SIDECAR, { cwd }))
+    summary.legacyActiveBytes = info?.size ?? 0
+  } catch { /* 旧活跃文件缺失忽略 */ }
+  const dbPath = archiveDbFile(cwd)
+  for (const file of [dbPath, dbPath + '-wal', dbPath + '-shm']) {
+    try { summary.archiveBytes += (await stat(file)).size } catch { /* 数据库尚未创建 */ }
+  }
   return summary
 }
 

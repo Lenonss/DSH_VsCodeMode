@@ -1,16 +1,40 @@
 /**
  * host rpc.ts 批量决策（edrv.decideBatch）与单条 accept/reject 委托测试。
- * 用内存 fake fs/ctx 验证：一次批量 = 一次归档写 + 一次 sidecar 写；逐项错误传播；
+ * 用内存 fake fs/ctx 验证：一次批量 = 一次 SQLite 事务、零次 sidecar 重写；逐项错误传播；
  * rejected 顺序回滚；edrv.list skipStale 跳过 stale 清理。
  * 作者 ddj 2026-08-25
  */
-import { describe, expect, it, vi } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { closeArchiveDbs, listArchives, migrateActive } from '../src/archiveDb.js'
+import { archiveDbFile } from '../src/paths.js'
 import { buildHandlers } from '../src/rpc.js'
 import type { DiffRecord } from '../src/shared/types.js'
 
 const SIDECAR = '.dsh-edit-review.json'
 const ARCHIVE = '.dsh-edit-review-archive.json'
 const CWD = '/ws'
+let testHome = ''
+let originalHome: string | undefined
+
+beforeAll(() => {
+  originalHome = process.env.DSH_HOME
+  testHome = mkdtempSync(join(tmpdir(), 'edrv-decide-sqlite-'))
+  process.env.DSH_HOME = testHome
+})
+beforeEach(async () => {
+  closeArchiveDbs()
+  rmSync(archiveDbFile(CWD), { force: true })
+  await migrateActive(CWD, null, async () => null)
+})
+afterAll(() => {
+  closeArchiveDbs()
+  if (originalHome === undefined) delete process.env.DSH_HOME
+  else process.env.DSH_HOME = originalHome
+  rmSync(testHome, { recursive: true, force: true })
+})
 
 function rec(partial: Partial<DiffRecord>): DiffRecord {
   return {
@@ -64,7 +88,7 @@ function bucketOf(records: DiffRecord[]): Map<string, DiffRecord> {
 }
 
 describe('edrv.decideBatch', () => {
-  it('批量采纳多记录：决策落盘且只写一次归档 + 一次 sidecar', async () => {
+  it('批量采纳多记录：SQLite 同批次去重且不重写 sidecar', async () => {
     const fs = fakeFs({})
     const ctx = fakeCtx(fs)
     const registry = new Map<string, Map<string, DiffRecord>>([
@@ -80,11 +104,12 @@ describe('edrv.decideBatch', () => {
     expect(res.results).toHaveLength(2)
     expect(res.results.every((item) => item.ok)).toBe(true)
     expect(res.results.map((item) => item.record?.decisions.perHunk)).toEqual([['accepted'], ['accepted']])
-    // 全部解决 → 已归档；仅一次归档写 + 一次 sidecar 写
+    // 全部解决 → 同路径/批次归档合并；sidecar 不再写
     const recs = registry.get(CWD)!
     expect(recs.get('a')!.archived).toBe(true)
     expect(recs.get('b')!.archived).toBe(true)
-    expect(fs.writeText.mock.calls.length).toBe(2)
+    expect(fs.writeText.mock.calls.length).toBe(0)
+    expect(listArchives(CWD).some((entry) => entry.nRecords >= 2)).toBe(true)
   })
 
   it('含不存在记录的项报错，其余项正常处理', async () => {
@@ -123,8 +148,92 @@ describe('edrv.decideBatch', () => {
     const fileContent = await fs.readText(CWD + '/a.ts')
     expect(fileContent).toBe('a')
     expect(registry.get(CWD)!.get('a')!.archived).toBe(true)
-    // 回滚文件写 + 归档写 + sidecar 写 = 3 次
-    expect(fs.writeText.mock.calls.length).toBe(3)
+    // 仅回滚文件写一次（SQLite 事务独立于 fake fs）
+    expect(fs.writeText.mock.calls.length).toBe(1)
+  })
+
+  it('同一记录多块 rejected 保持逐项顺序，统计文件读写次数', async () => {
+    const fs = fakeFs({ [CWD + '/a.ts']: 'a-new\nb-new\nc-new' })
+    const ctx = fakeCtx(fs)
+    const registry = new Map<string, Map<string, DiffRecord>>([[CWD, bucketOf([
+      rec({ callId: 'multi', hunks: [
+        { oldText: 'a-old', newText: 'a-new' },
+        { oldText: 'b-old', newText: 'b-new' },
+        { oldText: 'c-old', newText: 'c-new' },
+      ], decisions: { call: 'pending', perHunk: ['pending', 'pending', 'pending'] } }),
+    ])]])
+    const handlers = buildHandlers(ctx, registry)
+    const result = await handlers['edrv.decideBatch']({ sessionId: 's1', items: [0, 1, 2].map((hunkIndex) => ({
+      callId: 'multi', scope: 'hunk' as const, hunkIndex, decision: 'rejected' as const,
+    })) })
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.results.map(({ ok }) => ok)).toEqual([true, true, true])
+    expect(await fs.readText(CWD + '/a.ts')).toBe('a-old\nb-old\nc-old')
+    expect(fs.readText.mock.calls.filter(([path]: [string]) => path === CWD + '/a.ts')).toHaveLength(2) // 批量一次 + 上面的读回一次
+    expect(fs.writeText.mock.calls.filter(([path]: [string]) => path === CWD + '/a.ts')).toHaveLength(1)
+  })
+
+  it('前一块改变长度后，后续块仍基于最新内容重新定位', async () => {
+    const fs = fakeFs({ [CWD + '/a.ts']: 'new\ntail' })
+    const record = rec({ callId: 'shift', hunks: [
+      { oldText: 'lengthened', newText: 'new', afterStart: 0, afterEnd: 3 },
+      { oldText: 'old-tail', newText: 'tail', afterStart: 4, afterEnd: 8 },
+    ], decisions: { call: 'pending', perHunk: ['pending', 'pending'] } })
+    const registry = new Map<string, Map<string, DiffRecord>>([[CWD, bucketOf([record])]])
+    const result = await buildHandlers(fakeCtx(fs), registry)['edrv.decideBatch']({
+      sessionId: 's1', items: [0, 1].map((hunkIndex) => ({
+        callId: 'shift', scope: 'hunk' as const, hunkIndex, decision: 'rejected' as const,
+      })),
+    })
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.results.map(({ ok }) => ok)).toEqual([true, true])
+    expect(await fs.readText(CWD + '/a.ts')).toBe('lengthened\nold-tail')
+    expect(fs.writeText.mock.calls.filter(([path]: [string]) => path === CWD + '/a.ts')).toHaveLength(1)
+  })
+
+  it('批量中某块 stale 时其余块仍回滚并逐项归档', async () => {
+    const fs = fakeFs({ [CWD + '/a.ts']: 'first\nlast' })
+    const registry = new Map<string, Map<string, DiffRecord>>([[CWD, bucketOf([rec({
+      callId: 'multi', hunks: [
+        { oldText: 'old1', newText: 'first' },
+        { oldText: 'old2', newText: 'missing' },
+        { oldText: 'old3', newText: 'last' },
+      ], decisions: { call: 'pending', perHunk: ['pending', 'pending', 'pending'] },
+    })])]])
+    const result = await buildHandlers(fakeCtx(fs), registry)['edrv.decideBatch']({
+      sessionId: 's1', items: [0, 1, 2].map((hunkIndex) => ({
+        callId: 'multi', scope: 'hunk' as const, hunkIndex, decision: 'rejected' as const,
+      })),
+    })
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.results.map(({ ok, stale }) => [ok, stale])).toEqual([[true, undefined], [true, true], [true, undefined]])
+    expect(await fs.readText(CWD + '/a.ts')).toBe('old1\nold3')
+    expect(fs.writeText.mock.calls.filter(([path]: [string]) => path === CWD + '/a.ts')).toHaveLength(1)
+  })
+
+  it('批量写文件失败时不提交任何成功或 stale 决策', async () => {
+    const fs = fakeFs({ [CWD + '/a.ts']: 'new' })
+    fs.writeText.mockImplementation(async (target: string, content: string) => {
+      if (target === CWD + '/a.ts') throw new Error('write denied')
+      return undefined
+    })
+    const record = rec({ callId: 'multi', hunks: [
+      { oldText: 'old', newText: 'new' },
+      { oldText: 'old-stale', newText: 'missing' },
+    ], decisions: { call: 'pending', perHunk: ['pending', 'pending'] } })
+    const registry = new Map<string, Map<string, DiffRecord>>([[CWD, bucketOf([record])]])
+    const result = await buildHandlers(fakeCtx(fs), registry)['edrv.decideBatch']({
+      sessionId: 's1', items: [0, 1].map((hunkIndex) => ({
+        callId: 'multi', scope: 'hunk' as const, hunkIndex, decision: 'rejected' as const,
+      })),
+    })
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.results.every(({ ok }) => !ok)).toBe(true)
+    expect(record.decisions.perHunk).toEqual(['pending', 'pending'])
   })
 
   it('rejected 目标 hunk 已不在文件中：不改文件，按已回滚归档并标记 stale', async () => {
@@ -142,10 +251,10 @@ describe('edrv.decideBatch', () => {
     if (!res.ok) return
     expect(res.results[0]).toMatchObject({ callId: 'a', ok: true, stale: true })
     expect(res.results[0].record?.decisions.perHunk).toEqual(['rejected'])
-    // 文件保持原样（未写回滚内容），只落盘归档 + sidecar
+    // 文件保持原样（未写回滚内容），仅写 SQLite 归档
     expect(await fs.readText(CWD + '/a.ts')).toBe('xxx')
     expect(registry.get(CWD)!.get('a')!.archived).toBe(true)
-    expect(fs.writeText.mock.calls.length).toBe(2)
+    expect(fs.writeText.mock.calls.length).toBe(0)
   })
 
   it('rejected 目标文件不存在：仍按失败报错且不改决策', async () => {
@@ -181,7 +290,7 @@ describe('edrv.accept / edrv.reject 单条委托', () => {
     if (!res.ok) return
     expect(res.record?.decisions.perHunk).toEqual(['accepted'])
     expect(registry.get(CWD)!.get('a')!.archived).toBe(true)
-    expect(fs.writeText.mock.calls.length).toBe(2)
+    expect(fs.writeText.mock.calls.length).toBe(0)
   })
 
   it('reject 单条（call 作用域）整记录回滚', async () => {

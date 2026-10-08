@@ -4,9 +4,14 @@
  * 成功路径 node:fs writeFile 落盘参数、成功后 pending 记录被 superseded。
  * 作者 ddj 2026-09-22
  */
-import { describe, expect, it, vi } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { BINARY_READ_CAP } from '../src/store.js'
 import { buildHandlers } from '../src/rpc.js'
+import { closeArchiveDbs, commitActive, migrateActive, readActive } from '../src/archiveDb.js'
+import { archiveDbFile } from '../src/paths.js'
 import type { DiffRecord } from '../src/shared/types.js'
 
 const { writeFileMock } = vi.hoisted(() => ({
@@ -26,6 +31,27 @@ vi.mock('../src/treeIndex.js', () => ({
 }))
 
 const CWD = '/ws'
+let home: string
+let previousHome: string | undefined
+
+beforeAll(() => {
+  previousHome = process.env.DSH_HOME
+  home = mkdtempSync(join(tmpdir(), 'edrv-pdf-save-'))
+  process.env.DSH_HOME = home
+})
+
+beforeEach(async () => {
+  closeArchiveDbs()
+  rmSync(archiveDbFile(CWD), { force: true })
+  await migrateActive(CWD, null, async () => null)
+})
+
+afterAll(() => {
+  closeArchiveDbs()
+  if (previousHome === undefined) delete process.env.DSH_HOME
+  else process.env.DSH_HOME = previousHome
+  rmSync(home, { recursive: true, force: true })
+})
 
 function rec(partial: Partial<DiffRecord>): DiffRecord {
   return {
@@ -81,6 +107,7 @@ function makeHandlers(fs: any, records: DiffRecord[] = []) {
   const registry = new Map<string, Map<string, DiffRecord>>([
     [CWD, new Map(records.map((r) => [r.callId, r]))],
   ])
+  if (records.length) commitActive(CWD, { upserts: records, removed: [] })
   return { handlers: buildHandlers(fakeCtx(fs), registry), registry }
 }
 
@@ -156,6 +183,8 @@ describe('edrv.saveBinary', () => {
     const bucket = registry.get(CWD)!
     expect(bucket.get('c1')!.superseded).toBe(true)
     expect(bucket.get('c2')!.superseded).toBe(false)
+    expect(readActive(CWD).get('c1')).toMatchObject({ superseded: true, archived: true })
+    expect(readActive(CWD).get('c2')).toMatchObject({ superseded: false, archived: false })
   })
 })
 

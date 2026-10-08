@@ -6,11 +6,12 @@
  * 作者 ddj 2026-09-23
  */
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { captureToolResult } from '../src/capture.js'
+import { closeArchiveDbs } from '../src/archiveDb.js'
 import type { DiffRecord } from '../src/shared/types.js'
 import type { Registry } from '../src/registry.js'
 import { clearWsCache } from '../src/remoteWorkspace.js'
@@ -32,6 +33,16 @@ function fakeCtx() {
         resolve: async (p: string, opts?: { cwd?: string }) => (opts?.cwd ? join(opts.cwd, p) : p),
         processPath: (p: string) => p,
         readText: (p: string) => readFile(p, 'utf8'),
+        stat: async (p: string) => {
+          try {
+            const info = await stat(p)
+            return { type: info.isFile() ? 'file' : 'directory', size: info.size,
+              version: `${info.dev}:${info.ino}:${info.size}:${info.mtimeMs}` }
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
+            throw error
+          }
+        },
         writeText: async (p: string, text: string) => {
           await mkdir(dirname(p), { recursive: true })
           await writeFile(p, text, 'utf8')
@@ -42,6 +53,7 @@ function fakeCtx() {
 }
 
 let base: string
+let previousHome: string | undefined
 const cwds: string[] = []
 
 /** 造一个会话工作区（withMarker 时写入合法远程标记）。 */
@@ -64,6 +76,8 @@ function recOf(registry: Registry, cwd: string, callId: string): DiffRecord | un
 
 beforeEach(() => {
   base = mkdtempSync(join(tmpdir(), 'edrv-cap-'))
+  previousHome = process.env.DSH_HOME
+  process.env.DSH_HOME = join(base, 'home')
   cwds.length = 0
   clearWsCache()
 })
@@ -71,6 +85,9 @@ beforeEach(() => {
 afterEach(() => {
   for (const cwd of cwds) disposeIndex(cwd)
   clearWsCache()
+  closeArchiveDbs()
+  if (previousHome === undefined) delete process.env.DSH_HOME
+  else process.env.DSH_HOME = previousHome
   rmSync(base, { recursive: true, force: true })
 })
 

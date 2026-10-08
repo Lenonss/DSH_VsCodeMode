@@ -35,6 +35,40 @@ describe('shared diff helpers', () => {
     expect(hunks.map((hunk) => [hunk.afterStart, hunk.afterEnd])).toEqual([[0, 4], [10, 14]])
   })
 
+  it('respects snapshot priority and fallback to the earliest unoccupied repeated text', () => {
+    const locations = locateHunks('same--same--same', [
+      { oldText: 'a', newText: 'same', afterStart: 6, afterEnd: 10 },
+      { oldText: 'b', newText: 'same', afterStart: 6, afterEnd: 10 },
+      { oldText: 'c', newText: 'same', afterStart: 12, afterEnd: 16 },
+    ])
+    expect(locations.map(({ start, matched }) => [start, matched])).toEqual([[6, true], [-1, false], [12, true]])
+    expect(locateHunks('same--same--same', [
+      { oldText: 'a', newText: 'same', afterStart: 6, afterEnd: 10 },
+      { oldText: 'b', newText: 'same' },
+      { oldText: 'c', newText: 'same' },
+    ]).map(({ start }) => start)).toEqual([6, 12, 0])
+  })
+
+  it('keeps the original non-overlapping occurrence sequence for repeated needles', () => {
+    const locations = locateHunks('aaaaa', Array.from({ length: 3 }, () => ({ oldText: 'x', newText: 'aa' })))
+    expect(locations.map(({ start, matched }) => [start, matched])).toEqual([[0, true], [2, true], [-1, false]])
+  })
+
+  it('applies distant replacements and zero-length insertions in descending order', () => {
+    const content = 'a--b--c'
+    const locations = locateHunks(content, [
+      { oldText: 'A', newText: 'a' },
+      { oldText: 'B', newText: 'b' },
+      { oldText: 'C', newText: 'c' },
+    ])
+    expect(applyLocations(content, locations, true)).toEqual({ content: 'A--B--C', stale: [] })
+    const points = locateHunks('abc', [
+      { oldText: 'x', newText: '', afterStart: 1, afterEnd: 1 },
+      { oldText: 'y', newText: '', afterStart: 2, afterEnd: 2 },
+    ])
+    expect(applyLocations('abc', points, true).content).toBe('axbyc')
+  })
+
   it('fingerprint distinguishes equal content from unavailable content', () => {
     expect(fingerprint('')).toBe(fingerprint(''))
     expect(fingerprint(null)).toBeNull()

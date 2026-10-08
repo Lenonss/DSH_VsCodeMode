@@ -9,7 +9,7 @@ import { rpc } from '../rpc.js'
 import { openDiffView } from '../events.js'
 import { summarize } from '../state/records.js'
 import { nextDiffPath } from '../diffDock.js'
-import { readDiffDock, subscribeDiffDock } from '../diffDockStore.js'
+import { dockInLayout, readDiffDock, subscribeDiffDock } from '../diffDockStore.js'
 import { DiffBox } from './DiffBox.js'
 import { CommandPalette } from './CommandPalette.js'
 
@@ -65,7 +65,7 @@ export function ConversationDiffDock(props) {
   // 与 EditorView 同时挂载时由 commandPaletteStore 的单实例认领保证只渲染一份。
   const palette = React.createElement(CommandPalette, { key: 'edrv-palette', sessionId })
   if (editorSnapshot) {
-    if (editorSnapshot.mode === 'editor-empty' && !editorSnapshot.fileTotal) return palette
+    if (!dockInLayout(editorSnapshot, 'tab')) return palette
     return React.createElement(React.Fragment, null,
       renderDock(React.createElement(DiffBox, Object.assign({}, editorSnapshot, { dock: true })), sessionId),
       palette)

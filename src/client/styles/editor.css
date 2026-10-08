@@ -248,6 +248,18 @@
   [data-edrv-diff-dock-shell] .edrv-diffbar-editor-content { width: max-content; }
   [data-edrv-diff-dock-shell] .edrv-diffbar-files .edrv-diffbar-file { max-width: 160px; }
 }
+/* 侧栏差异栏在编辑内容底部居中悬浮，按内容宽度收缩；窄栏只在工具条内横滚。@author ddj 2026年09月29号 */
+[data-edrv-view] .edrv-side-diff-dock[data-edrv-diff-dock-shell] { position: absolute; left: 50%; bottom: 28px; z-index: 25; width: max-content; max-width: calc(100% - 20px); max-height: min(300px, calc(100% - 38px)); margin: 0; transform: translateX(-50%); border-radius: 12px; background: var(--dsw-alias-bg-overlay, #fff); box-shadow: 0 6px 20px rgba(0,0,0,.18); overflow-x: hidden; overflow-y: auto; }
+[data-edrv-view] .edrv-side-diff-dock .edrv-diffbar-editor-row { padding-inline: 8px; }
+[data-edrv-view] .edrv-side-diff-dock .edrv-diffbar-editor-content { gap: 5px; width: max-content; }
+[data-edrv-view] .edrv-side-diff-dock .edrv-diffbar-nav,
+[data-edrv-view] .edrv-side-diff-dock .edrv-diffbar-files,
+[data-edrv-view] .edrv-side-diff-dock .edrv-diffbar-actions { gap: 3px; }
+[data-edrv-view] .edrv-side-diff-dock .edrv-pill { padding-inline: 5px; }
+[data-edrv-view] .edrv-side-diff-dock .edrv-diffbar-files .edrv-diffbar-file { min-width: 0; max-width: 72px; }
+[data-edrv-view] .edrv-side-diff-dock .edrv-diffbar-details-toggle { width: 26px; min-width: 26px; }
+[data-edrv-view] .edrv-side-diff-dock .edrv-diffbar-body { max-height: min(180px, 25vh); max-width: 100%; }
+[data-edrv-view] .edrv-side-diff-dock .edrv-diff-details { max-height: min(260px, 35vh); overflow-y: auto; }
 
 /* ===== 侧边栏（活动栏 + 面板区 + 文件树） ===== */
 [data-edrv-view] .edrv-editor-row { display: flex; flex: 1 1 auto; min-width: 0; min-height: 0; overflow: hidden; }

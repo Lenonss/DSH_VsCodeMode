@@ -3,17 +3,21 @@
  * 迁移自原 src/index.ts 的 fs/ctx IO 部分，语义一字不改。
  * 作者 ddj 2026-08-20
  */
-import type { ArchiveBatch, ArchiveData, DiffRecord, SidecarData } from './shared/types.js'
+import type { ArchiveBatch, DiffRecord, SidecarData } from './shared/types.js'
 import type { ReadState } from './shared/diff.js'
 import { fingerprint, isNoopHunk, locateHunks, normalizeForCompare, normalizeHunk, preciseHunk } from './shared/diff.js'
-import { archiveEntryFor, groupByBatch, normalizeRecord } from './model.js'
+import { archiveEntryFor, normalizeRecord } from './model.js'
 import { SIDECAR, SIDECAR_ARCHIVE } from './paths.js'
 import { log } from './log.js'
+import { debugRecord } from './debugLog.js'
+import { activeReady, appendArchive, checkActiveSource, commitActive, committedRecord, migrateActive, restoreReverts, type ActiveChange } from './archiveDb.js'
 
 export { SIDECAR, SIDECAR_ARCHIVE }
 export const READ_CAP = 8 * 1024 * 1024
 /** 二进制预览/写回上限（PDF 等整文件 base64 传输；文本侧仍用 READ_CAP）。 */
 export const BINARY_READ_CAP = 32 * 1024 * 1024
+/** 旧文件首次全量指纹核验后，每次操作优先检查 DSH fs stat 身份。 */
+const sourceStats = new Map<string, string>()
 
 /** DSH 上下文与会话类型较宽松：本地无 dsh 类型声明，显式 any + 文档约束。 */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -76,33 +80,88 @@ export function parseSidecar(text: string | null): SidecarData | null {
   }
 }
 
-/** 加载某工作区的记录桶（内存 Map；缺失 → 空）。 */
+/**
+ * 严格读取旧 sidecar：仅确认确实不存在时才允许从空记录迁移。
+ * @author ddj 2026年09月30号
+ * @param ctx DSH 上下文
+ * @param cwd 工作区
+ * @returns 旧文件内容或确认缺失
+ */
+async function migrationText(ctx: Ctx, cwd: string): Promise<string | null> {
+  const fs = ctx.get('fs')
+  if (!fs) throw new Error('无法迁移差异记录：缺少 fs')
+  const target = await fs.resolve(SIDECAR, { cwd })
+  const info = await fs.stat(target)
+  if (!info) return null
+  if (info.type !== 'file') throw new Error('旧活跃 sidecar 非文件')
+  return fs.readText(target)
+}
+
+/**
+ * 读取旧 sidecar 文件的版本身份；缺少可靠版本令牌时返回 null 走全文核验。
+ * @author ddj 2026年09月30号
+ * @param ctx DSH 上下文
+ * @param cwd 工作区
+ * @returns 文件身份或 null
+ */
+async function sourceStat(ctx: Ctx, cwd: string): Promise<string | null> {
+  const fs = ctx.get('fs')
+  if (!fs) throw new Error('无法核验旧 sidecar：缺少 fs')
+  const info = await fs.stat(await fs.resolve(SIDECAR, { cwd }))
+  if (!info) return 'absent'
+  const version = info.version ?? info.rev
+  return typeof version === 'string' && version.length ? version : null
+}
+
+/**
+ * 首次读取旧文件全文确认数据库来源，后续只在 stat 版本变动时重新核验。
+ * @author ddj 2026年09月30号
+ * @param ctx DSH 上下文
+ * @param cwd 工作区
+ */
+async function checkSource(ctx: Ctx, cwd: string): Promise<void> {
+  const now = await sourceStat(ctx, cwd)
+  if (now !== null && sourceStats.get(cwd) === now) return
+  checkActiveSource(cwd, await migrationText(ctx, cwd))
+  if (now !== null) sourceStats.set(cwd, now)
+}
+
+/** 加载某工作区的记录桶（内存 Map；首次在隔离切换窗口严格迁移）。 */
 export async function loadBucket(ctx: Ctx, cwd: string): Promise<Map<string, DiffRecord>> {
-  const text = await readSidecarText(ctx, cwd)
-  const data = parseSidecar(text)
-  const map = new Map<string, DiffRecord>()
-  if (data && data.workspaces[cwd] && typeof data.workspaces[cwd].records === 'object') {
-    for (const rec of Object.values(data.workspaces[cwd].records)) {
-      const n = normalizeRecord(rec)
-      if (n) map.set(n.callId, n)
+  const source = await migrationText(ctx, cwd)
+  const map = await migrateActive(cwd, source, () => migrationText(ctx, cwd))
+  await checkSource(ctx, cwd)
+  for (const rec of map.values()) {
+    if (rec.archived) continue
+    const previous = JSON.stringify(rec)
+    restoreReverts(cwd, rec)
+    const committed = committedRecord(cwd, rec.callId, rec.path, rec.batch ?? null)
+    if (committed) {
+      rec.decisions = committed.decisions
+      rec.superseded = committed.superseded
+      rec.archived = true
     }
+    if (JSON.stringify(rec) !== previous) commitActive(cwd, { upserts: [rec], removed: [] })
   }
   return map
 }
 
-/** 保存某工作区的记录桶（写前合并，不覆盖其他工作区）。 */
-export async function saveBucket(ctx: Ctx, cwd: string, recsMap: Map<string, DiffRecord>, session?: Session): Promise<void> {
-  const fs = ctx.get('fs')
-  if (!fs || !cwd) return
+/**
+ * 仅把明确变动的记录行写入 SQLite；旧 sidecar 不再写入。
+ * @author ddj 2026年09月30号
+ * @param ctx DSH 上下文
+ * @param cwd 工作区
+ * @param recsMap 供当前调用点核对的记录桶
+ * @param session 会话（保留旧 API）
+ * @param changes 明确的更新和删除集合
+ */
+export async function saveBucket(ctx: Ctx, cwd: string, recsMap: Map<string, DiffRecord>, session?: Session, changes?: ActiveChange): Promise<void> {
+  if (!changes) throw new Error('增量保存缺少变更集合')
+  for (const rec of changes.upserts) if (recsMap.get(rec.callId) !== rec) throw new Error('增量记录不在工作区桶内')
   try {
-    const target = await fs.resolve(SIDECAR, { cwd })
-    const existing = parseSidecar(await readSidecarText(ctx, cwd)) ?? { version: 2, updatedAt: '', workspaces: {} } as SidecarData
-    existing.workspaces[cwd] = { at: Date.now(), records: Object.fromEntries(recsMap) }
-    existing.updatedAt = new Date().toISOString()
-    await fs.writeText(target, JSON.stringify(existing), void 0, void 0, policyOf(ctx, session))
-  } catch (error) {
-    log.error('saveBucket failed: ' + String(error))
-  }
+    await checkSource(ctx, cwd)
+    commitActive(cwd, changes)
+  } catch (error) { log.error('saveBucket failed: ' + String(error)); throw error }
 }
 
 /**
@@ -172,8 +231,18 @@ export async function autoArchiveStale(ctx: Ctx, session: Session, cwd: string, 
     if (await recordIsStale(ctx, session, cache, rec)) stale.push(rec)
   }
   if (!stale.length) return 0
+  const original = stale.map((rec) => ({ rec, at: rec.at, superseded: rec.superseded }))
   for (const r of stale) { r.superseded = true; r.at = new Date().toISOString() }
-  await archiveRecords(ctx, session, cwd, bucket, stale, '差异无法定位（已被后续修改覆盖），自动归档')
+  try {
+    await archiveRecords(ctx, session, cwd, bucket, stale, '差异无法定位（已被后续修改覆盖），自动归档')
+  } catch (error) {
+    for (const item of original) {
+      if (item.rec.archived) continue
+      item.rec.superseded = item.superseded
+      item.rec.at = item.at
+    }
+    throw error
+  }
   return stale.length
 }
 
@@ -198,40 +267,49 @@ export function parseArchive(text: string | null): ArchiveBatch[] {
   return []
 }
 
-/** 追加归档条目（按 cwd+path+batch 合并，同 callId 去重）。 */
-export async function appendArchiveEntries(ctx: Ctx, cwd: string, entries: Array<ReturnType<typeof archiveEntryFor>>, session?: Session): Promise<void> {
-  const fs = ctx.get('fs')
-  if (!fs || !cwd) return
+/**
+ * 追加归档条目（按 cwd+path+batch 合并，同 callId 去重）。
+ * @author ddj 2026年09月30号
+ * @param ctx DSH 上下文
+ * @param cwd 工作区
+ * @param entries 待归档批次
+ * @param session 会话
+ * @param traceId 可选诊断追踪标识；有值时输出分段耗时
+ */
+export async function appendArchiveEntries(ctx: Ctx, cwd: string, entries: Array<ReturnType<typeof archiveEntryFor>>, session?: Session, traceId?: string): Promise<void> {
+  if (!cwd || !entries.length) return
+  // #region debug log
+  const started = traceId ? performance.now() : 0
+  // #endregion
   try {
-    const target = await fs.resolve(SIDECAR_ARCHIVE, { cwd })
-    const existing = parseArchive(await readArchiveText(ctx, cwd))
-    for (const e of entries) {
-      const idx = existing.findIndex((x) => x.cwd === e.cwd && x.path === e.path && x.batch === e.batch)
-      if (idx >= 0) {
-        const exist = existing[idx]
-        const seen = new Set((exist.records || []).map((r) => r.callId))
-        for (const rec of e.records) {
-          if (!seen.has(String(rec.callId))) {
-            exist.records.push(rec as unknown as ArchiveBatch['records'][number])
-            seen.add(String(rec.callId))
-          }
-        }
-        exist.lastAt = e.at
-        exist.reason = e.reason
-      } else {
-        existing.push(e as unknown as ArchiveBatch)
-      }
-    }
-    const data: ArchiveData = { version: 1, updatedAt: new Date().toISOString(), batches: existing }
-    await fs.writeText(target, JSON.stringify(data), void 0, void 0, policyOf(ctx, session))
+    await checkSource(ctx, cwd)
+    const added = appendArchive(cwd, entries as unknown as ArchiveBatch[])
+    // #region debug log
+    try {
+      if (traceId) debugRecord(ctx, cwd, `[DEBUG diffArchive] trace=${traceId} stage=done mode=sqlite entries=${entries.length} insertedBatches=${added} dbMs=${(performance.now() - started).toFixed(1)} totalMs=${(performance.now() - started).toFixed(1)}`)
+    } catch { /* 诊断不可影响归档 */ }
+    // #endregion
   } catch (error) {
+    // #region debug log
+    try {
+      if (traceId) debugRecord(ctx, cwd, `[DEBUG diffArchive] trace=${traceId} stage=error mode=sqlite totalMs=${(performance.now() - started).toFixed(1)}`)
+    } catch { /* 诊断不可影响归档 */ }
+    // #endregion
     log.error('appendArchiveEntries failed: ' + String(error))
+    throw error
   }
 }
 
 /**
  * 归档记录：标记 archived、按批次写入归档、落盘工作区桶。
- * @param opts.deferSave 为 true 时只写归档、不落盘桶（由批量调用方统一 saveBucket 一次）
+ * @author ddj 2026年09月30号
+ * @param ctx DSH 上下文
+ * @param session 会话
+ * @param cwd 工作区
+ * @param bucket 当前工作区记录桶
+ * @param recs 待归档记录
+ * @param reason 归档原因
+ * @param opts deferSave 为 true 时只写归档、不落盘桶；traceId 用于可选分段计时
  */
 export async function archiveRecords(
   ctx: Ctx,
@@ -240,13 +318,34 @@ export async function archiveRecords(
   bucket: Map<string, DiffRecord>,
   recs: DiffRecord[],
   reason: string,
-  opts?: { deferSave?: boolean },
+  opts?: { deferSave?: boolean; traceId?: string; changed?: DiffRecord[] },
 ): Promise<void> {
   if (!recs.length) return
   const fresh = recs.filter((r) => !r.archived)
-  for (const r of recs) r.archived = true
-  const entries: Array<ReturnType<typeof archiveEntryFor>> = []
-  for (const list of groupByBatch(recs).values()) entries.push(archiveEntryFor(list, cwd, reason))
-  await appendArchiveEntries(ctx, cwd, entries, session)
-  if (fresh.length && !opts?.deferSave) await saveBucket(ctx, cwd, bucket, session)
+  const byFile = new Map<string, DiffRecord[]>()
+  for (const rec of recs) {
+    const key = JSON.stringify([rec.path, Number.isInteger(rec.batch) ? rec.batch : null])
+    const list = byFile.get(key) ?? []
+    list.push(rec)
+    byFile.set(key, list)
+  }
+  const entries = [...byFile.values()].map((list) => archiveEntryFor(list, cwd, reason))
+  const changed = new Map((opts?.changed ?? []).map((rec) => [rec.callId, rec]))
+  for (const rec of recs) changed.set(rec.callId, rec)
+  const start = opts?.traceId ? performance.now() : 0
+  await checkSource(ctx, cwd)
+  const original = recs.map((rec) => rec.archived)
+  for (const rec of recs) rec.archived = true
+  try {
+    const added = commitActive(cwd, { upserts: [...changed.values()], removed: [] }, entries as unknown as ArchiveBatch[])
+    // #region debug log
+    try {
+      if (opts?.traceId) debugRecord(ctx, cwd, `[DEBUG diffArchive] trace=${opts.traceId} stage=done mode=sqlite entries=${entries.length} insertedBatches=${added} dbMs=${(performance.now() - start).toFixed(1)} totalMs=${(performance.now() - start).toFixed(1)}`)
+    } catch { /* 诊断不可影响归档 */ }
+    // #endregion
+  } catch (error) {
+    recs.forEach((rec, idx) => { rec.archived = original[idx] })
+    throw error
+  }
+  if (fresh.length && !opts?.deferSave) return
 }

@@ -30,6 +30,24 @@ export function countLinesBefore(text: string, index: number): number {
 }
 
 /**
+ * 在预计算的换行位置中找出 offset 前的行数。
+ * @author ddj 2026年09月29号
+ * @param breaks 换行符位置（递增）
+ * @param offset 目标位置
+ * @returns 目标位置前的换行数
+ */
+function lineAt(breaks: number[], offset: number): number {
+  let left = 0
+  let right = breaks.length
+  while (left < right) {
+    const middle = (left + right) >>> 1
+    if (breaks[middle] < offset) left = middle + 1
+    else right = middle
+  }
+  return left
+}
+
+/**
  * 行级公共前缀/后缀裁剪：old/new 首尾相同的行视为未变化（上下文），只保留真正变更的中间段。
  * @author ddj 2026年08月20号
  * @param oldLines 替换前内容按行拆分
@@ -58,6 +76,8 @@ export function diffRegions(records: RecordView[], content: string | null): Regi
   if (content === null) return regions
   const normalized = normalizeForCompare(content)
   const lines = splitLines(normalized)
+  const breaks: number[] = []
+  for (let index = normalized.indexOf('\n'); index >= 0; index = normalized.indexOf('\n', index + 1)) breaks.push(index)
   for (const rec of records) {
     if (rec.create) {
       for (let i = 0; i < rec.hunks.length; i++) {
@@ -81,7 +101,7 @@ export function diffRegions(records: RecordView[], content: string | null): Regi
         regions.push({ callId: rec.callId, idx: entry.idx, stale: true, status, create: false, oldLines: entry.hunk.oldText === null ? [] : entry.hunk.oldText.split('\n'), newLines: entry.hunk.newText ? entry.hunk.newText.split('\n') : [], rec, superseded: rec.superseded === true })
         continue
       }
-      const start = countLinesBefore(normalized, location.start) + 1
+      const start = lineAt(breaks, location.start) + 1
       const oldLines = entry.hunk.oldText === null ? [] : entry.hunk.oldText.split('\n')
       const newLines = entry.hunk.newText.split('\n')
       const trimmed = trimCommonLines(oldLines, newLines)
