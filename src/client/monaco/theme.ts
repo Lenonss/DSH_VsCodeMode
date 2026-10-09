@@ -118,6 +118,30 @@ const LIGHT_RULES = [
   { token: 'invalid', foreground: 'cd3131' },
 ]
 
+/** 截图对齐回落色盘；未取得官方差异令牌，不宣称这些值为官方精确色值。 */
+const DIFF_PALETTE = {
+  light: ['#e6f4e8', '#fbe7e3', '#b7e3bf80', '#f1b1a780'],
+  dark: ['#203b2c', '#482b2b', '#2d684880', '#8c454580'],
+}
+
+/**
+ * 行内与 Monaco 差异视图共享色盘，避免通用 hover 令牌覆盖增删语义。
+ * @public @author ddj 2026年10月09号
+ * @param scheme 明暗主题
+ * @returns Monaco 差异颜色键；调用方可安全修改返回对象
+ */
+export function diffColorsOf(scheme) {
+  const [added, removed, addText, delText] = DIFF_PALETTE[scheme === 'light' ? 'light' : 'dark']
+  return {
+    'diffEditor.insertedLineBackground': added,
+    'diffEditor.removedLineBackground': removed,
+    'diffEditor.insertedTextBackground': addText,
+    'diffEditor.removedTextBackground': delText,
+    'diffEditorGutter.insertedLineBackground': added,
+    'diffEditorGutter.removedLineBackground': removed,
+  }
+}
+
 /** 编辑器 UI 配色（与语法配色同套，保证 gutter/minimap/selection 一致）。 */
 const DARK_COLORS = {
   'editor.background': '#1e1e1e',
@@ -137,14 +161,7 @@ const DARK_COLORS = {
   'scrollbarSlider.background': '#79797966',
   'scrollbarSlider.hoverBackground': '#646464b3',
   'scrollbarSlider.activeBackground': '#bfbfbf66',
-  // 差异视图色块（本仓库 vendored Monaco 无 .line-insert 静态背景规则，靠主题键保证；
-  // 色相取自研差异 UI 同源：绿 #0f9d58 / 红 #d9534f，alpha 提到肉眼可辨）
-  'diffEditor.insertedLineBackground': '#0f9d5830',
-  'diffEditor.removedLineBackground': '#d9534f2e',
-  'diffEditor.insertedTextBackground': '#0f9d5833',
-  'diffEditor.removedTextBackground': '#d9534f40',
-  'diffEditorGutter.insertedLineBackground': '#0f9d5859',
-  'diffEditorGutter.removedLineBackground': '#d9534f59',
+  ...diffColorsOf('dark'),
 }
 
 const LIGHT_COLORS = {
@@ -165,13 +182,7 @@ const LIGHT_COLORS = {
   'scrollbarSlider.background': '#64646466',
   'scrollbarSlider.hoverBackground': '#646464b3',
   'scrollbarSlider.activeBackground': '#00000099',
-  // 差异视图色块（同上：主题键保证整行背景可见；色相/透明度与暗色一致）
-  'diffEditor.insertedLineBackground': '#0f9d5830',
-  'diffEditor.removedLineBackground': '#d9534f2e',
-  'diffEditor.insertedTextBackground': '#0f9d5833',
-  'diffEditor.removedTextBackground': '#d9534f40',
-  'diffEditorGutter.insertedLineBackground': '#0f9d5859',
-  'diffEditorGutter.removedLineBackground': '#d9534f59',
+  ...diffColorsOf('light'),
 }
 
 /**

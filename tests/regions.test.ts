@@ -5,6 +5,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import type { RecordView } from '../src/shared/types.js'
+import { annotateHunks, fingerprint } from '../src/shared/diff.js'
 import { countLinesBefore, diffRegions, trimCommonLines } from '../src/client/state/regions.js'
 
 function rec(partial: Partial<RecordView>): RecordView {
@@ -122,6 +123,55 @@ describe('diffRegions', () => {
     ], decisions: { call: 'pending', perHunk: ['pending', 'pending', 'pending'] } })
     const regs = diffRegions([r], '\uFEFFfirst\r\nMARK1\r\nthird\r\nMARK2\r\nfifth\r\nMARK3')
     expect(regs.map(({ start, stale }) => [start, stale])).toEqual([[2, undefined], [4, undefined], [6, undefined]])
+  })
+  it('旧记录无快照时不把当前行号伪装成旧号', () => {
+    expect(diffRegions([rec({})], 'first\nb')[0].oldStart).toBeUndefined()
+  })
+  it('原快照复原并计入前块行数变化和公共前缀，当前文件插行不影响原号', () => {
+    const before = 'head\nold1\nold2\ncontext\nold3\ntail'
+    const after = 'head\nnew1\ncontext\nnew3\ntail'
+    const hunks = annotateHunks([
+      { oldText: 'old1\nold2', newText: 'new1' },
+      { oldText: 'context\nold3', newText: 'context\nnew3' },
+    ], before, after)
+    const regs = diffRegions([rec({ after, hunks, baseFingerprint: fingerprint(before) })], 'inserted\n' + after)
+    expect(regs.map((r) => [r.start, r.oldStart])).toEqual([[3, 2], [5, 5]])
+  })
+  it('纯删除保留精确删除点，不制造空新增行；原号来自反向验证', () => {
+    const before = 'head\ngone\ntail'
+    const after = 'head\ntail'
+    const hunks = annotateHunks([{ oldText: 'gone\n', newText: '' }], before, after)
+    const regs = diffRegions([rec({ after, hunks, baseFingerprint: fingerprint(before) })], after)
+    expect(regs[0]).toMatchObject({ start: 2, end: 2, oldStart: 2, newLines: [] })
+    expect(regs[0].stale).toBeUndefined()
+  })
+  it('BOM/CRLF 纯删除坐标归一化，旧行号仍正确', () => {
+    const before = '\uFEFFhead\r\ngone\r\ntail'
+    const after = '\uFEFFhead\r\ntail'
+    const hunks = annotateHunks([{ oldText: 'gone\r\n', newText: '' }], before, after)
+    const regs = diffRegions([rec({ after, hunks, baseFingerprint: fingerprint(before) })], after)
+    expect(regs[0]).toMatchObject({ start: 2, oldStart: 2, newLines: [] })
+    expect(regs[0].oldLines).toEqual(['gone'])
+  })
+  it('指纹冲突/不完整快照不显示猜测旧号', () => {
+    const before = 'a'
+    const after = 'b'
+    const hunks = annotateHunks([{ oldText: before, newText: after }], before, after)
+    expect(diffRegions([rec({ after, hunks, baseFingerprint: fingerprint('wrong') })], after)[0].oldStart).toBeUndefined()
+    expect(diffRegions([rec({ after: 'missing', hunks })], after)[0].oldStart).toBeUndefined()
+  })
+  it('没有原指纹时只接受每块均验证过的精确坐标', () => {
+    const after = 'head\nb'
+    const hunks = annotateHunks([{ oldText: 'a', newText: 'b' }], 'head\na', after)
+    expect(diffRegions([rec({ after, hunks })], after)[0].oldStart).toBe(2)
+    expect(diffRegions([rec({ after })], after)[0].oldStart).toBeUndefined()
+  })
+  it('纯删除快照改变后不复用可能错位的旧删除点', () => {
+    const before = 'head\ngone\ntail'
+    const after = 'head\ntail'
+    const hunks = annotateHunks([{ oldText: 'gone\n', newText: '' }], before, after)
+    const regs = diffRegions([rec({ after, hunks })], 'inserted\n' + after)
+    expect(regs[0].stale).toBe(true)
   })
   it('content 为 null 返回空', () => {
     expect(diffRegions([rec()], null)).toHaveLength(0)

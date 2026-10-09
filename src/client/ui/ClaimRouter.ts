@@ -78,7 +78,7 @@ export function createClaimRouter(spec) {
       const line = resolveNavLine(navigation?.params)
       let left = FORWARD_ATTEMPTS
       const attempt = () => {
-        if (forwardToEditor(service, parsed.path, line)) {
+        if (forwardToEditor(service, parsed.path, line, navigation?.params?.preview)) {
           closeTab(tab)
           return
         }

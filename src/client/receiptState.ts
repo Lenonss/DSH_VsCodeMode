@@ -87,6 +87,7 @@ export function receiptReadyFor(request: EditorRequest, view: ReceiptView): bool
   if (view.kind === 'pdf') return view.pdfLoaded
   if (!view.contentReady || !view.contentPath || receiptPath(view.contentPath, view.cwd) !== receiptPath(request.path, view.cwd)) return false
   const positioned = request.line != null || request.column != null
+  if (request.preview === true && !positioned && view.kind !== 'markdown') return false
   if (view.kind === 'markdown') return !positioned
   return view.modelMatches && (!positioned || view.positionMatches)
 }

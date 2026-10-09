@@ -51,6 +51,14 @@
   引用/KaTeX），「以源码打开」切回编辑。渲染走官方 `MarkdownText` 原语，零新增依赖、
   自动跟随 DSH 主题；旧版 DSH 缺该原语时降级为纯文本预览。活动文件不是 Markdown 时
   不吞 `Ctrl+Shift+V`（保留「粘贴为纯文本」）。
+- **DSH 计划模式接入**：工作区 `plans/`、DSH `.dsh/plans/` 下的 Markdown 计划文件，
+  以及成功生成且以 `# 计划：` / `# 计划:` 标题显式关联的 Markdown，默认以预览打开；
+  指定行号的链接仍进入源码定位，普通 Markdown 的既有打开方式不变。
+  当前会话成功写入/修改计划文件、提交完整计划后自动打开预览；刷新、历史翻页、重连和
+  切换会话不会重播旧计划。官方「打开计划」及待审批计划同样转入文件编辑器的只读计划
+  页签（最多保留 32 份，退出编辑器后不持久化虚拟正文），不写磁盘、不接入 LSP/SVN/保存；
+  审批仍使用对话中的官方控件。打开失败可点击「在官方计划查看器打开」，不影响原审批。
+  缺少官方 Sidebar/计划服务的旧版 DSH 保留原查看器；自动生成检测需要 Session 事件源。
 - **Monaco Editor**：语法高亮 / 行号 / `Ctrl+F` / `Ctrl+G` / `Ctrl+S` /
   700ms 防抖自动保存；顶部工具栏显示 路径 / 语言 / Ln,Col / 保存状态，提供
   差异 / 侧边栏 / 刷新入口。
@@ -451,18 +459,18 @@ DSH 每次启动监听随机端口，`http://127.0.0.1:<port>` 就是浏览器 o
 
 官方 `dsh plugin` 方式，三选一。下面以 `web` profile 为例；Desktop 或其他命名
 profile 请替换为实际目标，不要把示例目录当成当前运行 profile。升级前可阅读
-[0.14.4 发布说明](docs/release-0.14.4.md)；从 0.14.2 或更旧版本升级还须阅读
+[0.14.5 发布说明](docs/release-0.14.5.md)；从 0.14.2 或更旧版本升级还须阅读
 [0.14.3 数据迁移与回退说明](docs/release-0.14.3.md)。
 
 ```bash
 # ① Git 安装（clone + prepare 构建；推荐打固定 tag）
-dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.14.4
+dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.14.5
 
 # ② npm 注册表（发布到 npm 后）
-dsh plugin --profile web add dsh-vscode-mode@0.14.4
+dsh plugin --profile web add dsh-vscode-mode@0.14.5
 
 # ③ GitHub Release tgz 直装（Release asset 可用后）
-dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.14.4/dsh-vscode-mode-0.14.4.tgz
+dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.14.5/dsh-vscode-mode-0.14.5.tgz
 ```
 
 > **DSH 0.2 兼容范围**：`0.14.1` 起精确放行 `0.2.0-rc.1`，`0.14.4` 再加入
@@ -798,6 +806,7 @@ Keep All / Undo All 却是亮的。修复：单文件 Keep / Undo 覆盖冲突�
 完整变更见 [GitHub Releases](https://github.com/Lenonss/DSH_VsCodeMode/releases)。
 近期关键版本：
 
+- **v0.14.5**：**计划模式接入与行内差异显示修复**——计划文件默认预览，当前会话新生成计划自动打开；官方计划及待审批计划可转入只读虚拟页签，审批仍由官方控件完成。行内增删与 Monaco diff 共用明暗色盘，删除代码按当前语言着色，旧行号仅在快照可验证时显示；修复纯删除的 BOM/CRLF 定位，清理过期异步结果与监听。验证及真实 GUI 冒烟边界见 [0.14.5 发布说明](docs/release-0.14.5.md)。
 - **v0.14.4**：**Desktop rc.2 兼容与 MCP 管理修复**——六项 DSH peer 精确纳入 `0.2.0-rc.2`；MCP 状态不再把配置启用或 ACTIVE 当成在线证据，只读快照轮询避免重复配置扫描，配置修改串行防止丢更新，跨全局/项目拒绝工具命名空间交叠并安全隐藏历史歧义工具。编辑器在没有待处理差异时隐藏底部操作条，其他文件的差异和冲突入口保留。验证范围、升级及回退注意事项见 [0.14.4 发布说明](docs/release-0.14.4.md)。
 - **v0.14.3**：**差异审查性能与持久化**——差异定位/行号与多块应用避免重复全文扫描/复制；归档从全量 JSON 改为每工作区 SQLite 事务追加，活跃记录由整份重写改为逐条更新，同库原子提交决策及 Undo 意图；归档列表按页加载、详情按批次读取。Web 实测单块 Keep RPC 17/22ms（样本值），旧归档 JSON 与迁移前活跃 JSON 保留；侧栏编辑器内的差异栏改为居中悬浮 banner。升级和回退注意事项见 [0.14.3 发布说明](docs/release-0.14.3.md)。
 - **v0.14.2**：**全局搜索选项行为修复**——未勾选「区分大小写」时显式使用内容搜索 `--ignore-case`，大写查询仍命中小写内容，不改变文件 glob 的大小写规则；「仅当前文件」无活动文件时不再误搜整个工作区，切换活动文件时自动重搜。大小写、全词、正则与包含/排除开关补充定向测试；详见 [0.14.2 发布说明](docs/release-0.14.2.md)。

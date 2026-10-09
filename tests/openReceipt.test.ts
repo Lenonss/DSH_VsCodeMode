@@ -35,6 +35,26 @@ describe('actual editor receipt bridge', () => {
     expect(vi.getTimerCount()).toBe(0)
   })
 
+  it('carries explicit preview and virtual payload without passing an address as a file path', async () => {
+    const plan = { address: 'dsh-resource://plan/s/c', markdown: '# Plan', title: 'Plan' }
+    const result = requestOpen(null, undefined, undefined, 's', { preview: true, plan })
+    const request = peekOpen('s')!
+    expect(request).toMatchObject({ path: null, plan, preview: true })
+    finishOpen(request.requestId, true)
+    expect(await result).toBe(true)
+  })
+
+  it('cancels claimed requests on scope disposal and refuses already-aborted requests', async () => {
+    const controller = new AbortController()
+    const result = requestOpen('/plans/a.md', undefined, undefined, 's', { signal: controller.signal })
+    const request = peekOpen('s')!
+    controller.abort()
+    expect(await result).toBe(false)
+    expect(hasOpen(request.requestId)).toBe(false)
+    expect(vi.getTimerCount()).toBe(0)
+    expect(await requestOpen(null, undefined, undefined, 's', { signal: controller.signal })).toBe(false)
+  })
+
   it('propagates editor failure after claim', async () => {
     const result = requestOpen('/a.cs', undefined, undefined, 'session-a')
     finishOpen(peekOpen('session-a')!.requestId, false, 'model load failed')

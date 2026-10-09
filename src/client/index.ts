@@ -64,6 +64,7 @@ import { disposeSnippets } from './snippets/provider.js'
 import { disposeLaunchJson } from './dap/launchSnippetProvider.js'
 import { disposeAiInline } from './ai/inlineProvider.js'
 import { readSessionScope, subscribeScope } from './sessionScope.js'
+import { installPlanBridge } from './planBridge.js'
 import { flushUiState, hydrateUiState, installUiStatePersist, onUiStateReady, reportUiStateEvent, uiStateSettled } from './state/uiStatePersist.js'
 import { workspaceScopeOf } from './state/scopeStore.js'
 import { dapStore } from './dap/store.js'
@@ -188,6 +189,7 @@ export async function apply(ctx: any): Promise<void> {
   const registry: FileOpenerRegistry = createFileOpenerRegistry()
   const workspaces = ctx.get('workspaces')
   const sessions = ctx.get('sessions')
+  ctx.effect(() => installPlanBridge(ctx, schedule), 'vscode-mode: plan integration')
 
   // 外部深链落地：Windows 右键菜单 / Unity 外部编辑器 → 浏览器 URL 参数 → 打开规则路由
   ctx.effect(() => setupExtOpen(ctx), 'vscode-mode: external open')

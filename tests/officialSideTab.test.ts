@@ -10,7 +10,7 @@ vi.mock('../src/client/ui/EditorView.js', () => ({ EditorView: () => null }))
 import { OfficialSideTab } from '../src/client/ui/OfficialSideTab.js'
 import { isEditorTabActive, markEditorActive, markEditorMounted } from '../src/client/officialSidebar.js'
 
-afterEach(() => { effects.length = 0; markEditorActive(false) })
+afterEach(() => { effects.length = 0; markEditorActive(false); vi.unstubAllGlobals() })
 
 /**
  * Exercise the component's actual mount and deferred cleanup effects without Monaco.
@@ -28,6 +28,14 @@ function mount(props: Record<string, unknown>) {
 }
 
 describe('OfficialSideTab actual cleanup lifecycle', () => {
+  it('propagates explicit Markdown preview while preserving line navigation', () => {
+    const dispatchEvent = vi.fn()
+    vi.stubGlobal('window', { dispatchEvent })
+    OfficialSideTab({ sessionId: 's', useTabInfo: () => ({ tab: { navigation: { revision: 1, params: { openPath: 'plans/a.md', preview: true, line: 10 } } } }) })
+    effects[1]()
+    expect(dispatchEvent.mock.calls[0][0].detail).toEqual({ path: 'plans/a.md', focusDiff: false, line: 10, preview: true })
+  })
+
   it('clears activity when the same session closes the tab', () => {
     const finish = mount({ readSessionScope: () => ({ sessionId: 'session-a' }) })
     finish()

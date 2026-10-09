@@ -60,6 +60,8 @@ export function deferToOfficial(path: unknown): boolean {
 export interface OfficialTabParams {
   openPath?: string
   focusDiff?: boolean
+  /** Open Markdown in rendered mode; explicit line navigation still selects source. */
+  preview?: boolean
   /** 目标行号（行引用/工具行跳转透传；缺省仅打开文件）。 */
   line?: number
 }
@@ -72,7 +74,7 @@ export interface SidebarRightTabsLike {
 /** sidebarRight 服务的最小结构面（openTab 页路由 + openResource 资源路由 + 可选查询/定向打开）。 */
 export interface SidebarRightServiceLike {
   openTab: (kind: string, options?: { params?: unknown }) => void
-  openResource?: (address: string, options?: { params?: unknown }) => void
+  openResource?: (address: string, options?: { params?: unknown; kind?: string }) => void
   /** 挂载会话的激活 Tab（判读编辑 Tab 是否已激活；无 seat 时 undefined）。 */
   active?: () => { kind?: string } | undefined
   /** 向指定会话的停靠面打开页类型（store 未 adopt 时 no-op）。 */
@@ -226,16 +228,19 @@ export function buildFileAddress(path: string, sessionId?: string): string {
  * @param service 官方 sidebarRight 服务（缺失/缺 openTab 返回 false）
  * @param path 目标文件路径（空值返回 false）
  * @param line 可选行号（透传给编辑器页签导航参数）
+ * @param preview 可选 Markdown 渲染模式（行号导航优先源码）
  * @returns 转发是否成功（openTab 抛错返回 false，由调用方决定重试或兜底）
  */
 export function forwardToEditor(
   service: SidebarRightServiceLike | undefined | null,
   path: string | null,
   line?: number,
+  preview?: boolean,
 ): boolean {
   if (!service || typeof service.openTab !== 'function' || !path) return false
   const params: OfficialTabParams = { openPath: path }
   if (line !== undefined) params.line = line
+  if (preview !== undefined) params.preview = preview
   try {
     // 官方语义：页类型恒去重，故转发只会聚焦既有编辑器页签，不产生新实例
     service.openTab(OFFICIAL_TAB_KIND, { params })

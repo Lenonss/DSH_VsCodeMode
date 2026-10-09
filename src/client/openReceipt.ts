@@ -1,6 +1,9 @@
 import { openEditorView } from './events.js'
 
-export interface EditorRequest { requestId: string; sessionId: string; path: string | null; line?: number; column?: number }
+import type { PlanDocument } from './planState.js'
+
+export interface EditorRequest { requestId: string; sessionId: string; path: string | null; line?: number; column?: number; preview?: boolean; plan?: PlanDocument }
+export interface OpenOptions { preview?: boolean; plan?: PlanDocument; signal?: AbortSignal }
 interface Waiter { request: EditorRequest; finish: (success: boolean) => void; claimed?: boolean }
 const waiters = new Map<string, Waiter>()
 
@@ -33,19 +36,26 @@ export function finishOpen(requestId: string, success: boolean, error?: string):
  * @param line Optional target line.
  * @param column Optional target column.
  * @param sessionId Owning session, required for routing.
+ * @param options Explicit preview, read-only plan document and optional cancellation signal.
  * @returns Actual completion; timeout and disposal are false.
  */
-export function requestOpen(path: string | null, line?: number, column?: number, sessionId = ''): Promise<boolean> {
-  if (typeof window === 'undefined' || !sessionId) return Promise.resolve(false)
+export function requestOpen(path: string | null, line?: number, column?: number, sessionId = '', options: OpenOptions = {}): Promise<boolean> {
+  if (typeof window === 'undefined' || !sessionId || options.signal?.aborted) return Promise.resolve(false)
   const request: EditorRequest = { requestId: crypto.randomUUID(), sessionId, path, line, column }
+  if (options.preview !== undefined) request.preview = options.preview
+  if (options.plan) request.plan = options.plan
   return new Promise((resolve) => {
     let timer: ReturnType<typeof setTimeout>
     /** @private @author ddj 2026年09月28号 Complete once and release the deadline. */
     function finish(success: boolean): void {
       clearTimeout(timer)
+      options.signal?.removeEventListener('abort', abort)
       waiters.delete(request.requestId)
       resolve(success)
     }
+    /** @private @author ddj 2026年10月08号 Cancel a stale plan open on scope change or disposal. */
+    function abort(): void { finish(false) }
+    options.signal?.addEventListener('abort', abort, { once: true })
     waiters.set(request.requestId, { request, finish })
     timer = setTimeout(() => finish(false), 20_000)
     openEditorView(null)

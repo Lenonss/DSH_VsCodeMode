@@ -18,6 +18,9 @@ import { clampZoom, clearZoomMem, dataUrlOf, isImagePath, isSvgPath, recallZoom,
 import { isMarkdownPath } from '../markdownPreview.js'
 import { setActiveEditorPath } from '../activePathStore.js'
 import { MarkdownPanel } from '../md/mdPanel.js'
+import { isPlanPath, planDocument } from '../planState.js'
+import { MarkdownText, MarkdownDelegateProvider } from '@deepseek-ai/dsh-client-ui-primitives'
+import { isComponentType } from '../md/componentType.js'
 import { base64ToBytes, bytesToBase64, isPdfPath } from '../pdfPreview.js'
 import { inNativePath, tryNativeOpen } from '../nativeOpenStore.js'
 import { clearPendingNav, putPendingNav, readPendingNav } from '../pendingNav.js'
@@ -126,6 +129,8 @@ function syncTypeSuggest(ed, monaco) {
 
 /** 日志弹窗每次加载条数（「加载更多」按此步长递增；上限由 host 的 SVN_LOG_SHOW_ALL_CAP 约束）。 */
 const SVN_LOG_PAGE = 100
+/** Stable Markdown chrome for virtual plans; content stays in session-local memory. */
+const PLAN_MD_LABELS = { code: { copyLabel: '复制', copiedLabel: '已复制' }, footnotes: '脚注' }
 
 /**
  * 日志弹窗状态 → 取数选项（P1-4/P1-5/P1-6：soc/mrg/range 与状态层键保持同源）。
@@ -238,7 +243,15 @@ export function EditorView(props) {
   const [monacoErr, setMonacoErr] = React.useState(null)
   const [records, setRecords] = React.useState({})
   const [tabs, setTabs] = React.useState([])
-  const [active, setActive] = React.useState(null)
+  const [active, setDiskActive] = React.useState(null)
+  const [planTabs, setPlanTabs] = React.useState([])
+  const [planActive, setPlanActive] = React.useState(null)
+  const planActiveRef = React.useRef(null)
+  planActiveRef.current = planActive
+  const planHostRef = React.useRef(null)
+  React.useEffect(() => { setPlanTabs([]); setPlanActive(null) }, [sessionId, cwd])
+  /** @private @author ddj 2026年10月08号 @param path Disk tab selection. Leave read-only plan mode before any disk navigation. */
+  function setActive(path) { setPlanActive(null); setDiskActive(path) }
   const [dirtyMap, setDirtyMap] = React.useState({})
   const [content, setContent] = React.useState(null)
   const [contentPath, setContentPath] = React.useState(null)
@@ -512,9 +525,13 @@ export function EditorView(props) {
   lineRegionMapRef.current = lineRegionMap
   const sum = React.useMemo(() => summarize(Object.values(records)), [records])
 
-  const addTab = (path, select) => {
+  /** @private @author ddj 2026年10月08号 @param path Disk path. @param select Select tab. @param preview Optional explicit Markdown mode. */
+  function addTab(path, select, preview) {
     setTabs((prev) => insertTab(prev, path))
-    if (select) setActive(path)
+    if (select) {
+      if (typeof preview === 'boolean' || isPlanPath(path, cwd, sessionId)) setMdPreview(path, typeof preview === 'boolean' ? preview : true)
+      setActive(path)
+    }
   }
 
   /**
@@ -536,11 +553,11 @@ export function EditorView(props) {
    * @param select 是否设为活动页签
    * @returns 归一后的路径（空值返回 null）
    */
-  const addTabNorm = (path, select) => {
+  const addTabNorm = (path, select, preview) => {
     if (!path) return null
     const normalized = tabPath(path)
     if (!normalized) return null
-    addTab(normalized, select)
+    addTab(normalized, select, preview)
     return normalized
   }
 
@@ -1238,28 +1255,32 @@ export function EditorView(props) {
     return () => window.removeEventListener('edrv:snippets-changed', onChanged)
   }, [])
 
-  React.useEffect(() => {
-    const onOpen = (e) => {
-      const p = e?.detail?.path
-      if (!p) return
-      // G9：入口统一归一为工作区相对路径（差异栏/对话链接/LSP 跳转等都经此事件）
-      const normalized = tabPath(p)
-      if (!normalized) return
-      if (e?.detail?.focusDiff === true) {
-        recordNav()
-        pendingFocusRef.current = { path: normalized, region: null }
-        setFocusRequest((value) => value + 1)
-        addTab(normalized, true)
-        return
-      }
-      if (e?.detail?.line != null) {
-        // LSP/搜索跳转：打开并定位到行列（endLine/endColumn 为目标区间，供落地高亮）
-        openFileAt(normalized, e?.detail?.line, e?.detail?.column, e?.detail?.endLine, e?.detail?.endColumn)
-        return
-      }
+  const fileOpenRef = React.useRef(null)
+  /** @private @author ddj 2026年10月08号 @param e Routed file request. Always uses the current workspace and save/preview callbacks. */
+  fileOpenRef.current = (e) => {
+    const p = e?.detail?.path
+    if (!p) return
+    // G9：入口统一归一为工作区相对路径（差异栏/对话链接/LSP 跳转等都经此事件）
+    const normalized = tabPath(p)
+    if (!normalized) return
+    if (e?.detail?.focusDiff === true) {
       recordNav()
-      addTab(normalized, true)
+      pendingFocusRef.current = { path: normalized, region: null }
+      setFocusRequest((value) => value + 1)
+      addTab(normalized, true, false)
+      return
     }
+    if (e?.detail?.line != null) {
+      // LSP/搜索跳转：打开并定位到行列（endLine/endColumn 为目标区间，供落地高亮）
+      openFileAt(normalized, e?.detail?.line, e?.detail?.column, e?.detail?.endLine, e?.detail?.endColumn)
+      return
+    }
+    recordNav()
+    addTab(normalized, true, e?.detail?.preview)
+  }
+  React.useEffect(() => {
+    /** @private @author ddj 2026年10月08号 @param event File navigation event. Dispatch to the latest render closure. */
+    const onOpen = (event) => fileOpenRef.current?.(event)
     const onShowLauncher = (event) => {
       const tab = event?.detail?.tab
       if (tab === 'pending' || tab === 'archive') setLauncherTab(tab)
@@ -1807,7 +1828,11 @@ export function EditorView(props) {
   React.useEffect(() => {
     if (!monaco) return
     registerThemes(monaco)
-    const apply = () => applyOfficial(monaco)
+    /** @private @author ddj 2026年10月09号 同步 Monaco 主题与行内删除代码着色。 */
+    const apply = () => {
+      const themeId = applyOfficial(monaco)
+      diffRendererRef.current.refresh(themeId)
+    }
     apply()
     window.addEventListener('edrv:theme-change', apply)
     const query = typeof window.matchMedia === 'function' ? window.matchMedia('(prefers-color-scheme: dark)') : null
@@ -2619,13 +2644,19 @@ export function EditorView(props) {
    * @author ddj 2026年09月18号
    * @param path Markdown 文件路径
    */
+  /** @private @author ddj 2026年10月08号 @param path Markdown disk path. @param preview Desired mode; explicit line opens always select source. */
+  function setMdPreview(path, preview) {
+    if (!isMarkdownPath(path) || mdPreviewRef.current.has(path) === preview) return
+    toggleMdPreview(path)
+  }
+  /** @private @author ddj 2026年10月08号 @param path Markdown file. Toggle preview after flushing the active file's save and view state. */
   const toggleMdPreview = (path) => {
     if (!path) return
     const next = new Set(mdPreviewRef.current)
     const entering = !next.has(path)
     if (entering) {
       flushSave()
-      saveViewState(path)
+      saveViewState(active)
       next.add(path)
     } else {
       next.delete(path)
@@ -3220,6 +3251,7 @@ export function EditorView(props) {
 
   /** 关闭当前活动页签（Ctrl+F4 与菜单动作共用；无页签时提示）。 */
   const closeActiveTab = () => {
+    if (planActiveRef.current) { closePlan(planActiveRef.current); return }
     if (!activeRef.current) { setStatus('无打开的文件'); return }
     closeTab(activeRef.current)
   }
@@ -3346,7 +3378,7 @@ export function EditorView(props) {
     dapTrace('open-file-at', { input: path, normalized: tracePath, line, cwd })
     recordNav()
     // G9：同 openFile，先归一再进页签，保证待跳转路径与 active 同形态
-    const normalized = addTabNorm(path, true)
+    const normalized = addTabNorm(path, true, false)
     if (!normalized) return
     stageFileAt(normalized, line, column, endLine, endColumn)
   }
@@ -3366,12 +3398,28 @@ export function EditorView(props) {
     setFocusRequest((value) => value + 1)
   }
 
-  /**
-   * Open a receipt target without losing edits or leaving the requested source hidden.
-   * @private @author ddj 2026年09月28号
-   * @param request Claimed external open request.
-   */
+  /** @private @author ddj 2026年10月08号 @param plan Complete virtual document. Keeps virtual addresses out of all disk/save/LSP/SVN flows. */
+  function openPlanDoc(plan) {
+    const document = planDocument(plan?.address, plan)
+    if (!document) return
+    flushSave()
+    saveViewState(active)
+    setSvnDiff(null)
+    setDiskActive(null)
+    setPlanTabs((prev) => [...prev.filter((item) => item.address !== document.address), document].slice(-32))
+    setPlanActive(document.address)
+    setError(null)
+    setStatus('计划预览 · 只读')
+  }
+  /** @private @author ddj 2026年10月08号 @param address Virtual tab. @param event Optional close click. Removes only in-memory plan content. */
+  function closePlan(address, event) {
+    event?.stopPropagation()
+    setPlanTabs((prev) => prev.filter((item) => item.address !== address))
+    if (planActiveRef.current === address) setActive(tabsRef.current[0]?.path ?? null)
+  }
+  /** @private @author ddj 2026年10月08号 @param request Claimed disk or virtual open. Flushes saves without replacing dirty models. */
   function openReceiptFile(request) {
+    if (request.plan) { openPlanDoc(request.plan); return }
     if (!request.path) return
     let path = receiptTabPath(request.path, cwd)
     const existing = tabsRef.current.find((tab) => receiptPath(tab.path, cwd) === receiptPath(path, cwd))
@@ -3384,7 +3432,7 @@ export function EditorView(props) {
     if (positioned && mdPreviewRef.current.has(path)) toggleMdPreview(path)
     setError(null)
     if (monacoErr) setMonacoErr(null)
-    addTab(path, true)
+    addTab(path, true, positioned ? false : request.preview)
     if (positioned) stageFileAt(path, request.line ?? 1, request.column ?? 1)
     const moved = receiptLoad && receiptPath(receiptLoad.path, receiptLoad.cwd) !== receiptPath(path, cwd)
     if (path !== active || !(loadError || receiptLoad?.status === 'error' || moved)) return
@@ -3423,10 +3471,14 @@ export function EditorView(props) {
 
   /** @private @author ddj 2026年09月28号 @param request Claimed target. @returns Correlated actual readiness. */
   function receiptReady(request) {
+    if (request.plan) return request.sessionId === sessionId && planActive === request.plan.address
+      && planTabs.some((item) => item.address === request.plan.address && item.markdown === request.plan.markdown)
+      && planHostRef.current?.getAttribute('data-plan-address') === request.plan.address && !svnDiff
     return receiptReadyFor(request, receiptView(request))
   }
   /** @private @author ddj 2026年09月28号 @param request Claimed target. @returns Only its current load/render error. */
   function receiptError(request) {
+    if (request.plan) return planDocument(request.plan.address, request.plan) ? null : '计划内容或资源地址无效'
     return receiptErrorFor(request, receiptView(request))
   }
   useOpenReceipt({ sessionId, open: openReceiptFile, ready: receiptReady, error: receiptError })
@@ -3514,11 +3566,20 @@ export function EditorView(props) {
       // @author ddj 2026年09月09号
       (dirtyMap[t.path] ? React.createElement('span', { className: 'edrv-tab-star', title: '未保存修改' }, '*') : null),
       (t.pinned ? null : React.createElement('span', { className: 'edrv-tab-x', title: '关闭', onClick: (e) => { e.stopPropagation(); closeTab(t.path) } }, '×')))),
+    planTabs.map((plan) => React.createElement('div', {
+      key: plan.address, className: 'edrv-tab' + (plan.address === planActive ? ' edrv-tab-active' : ''),
+      title: plan.title + '（计划预览 · 只读）', onClick: () => openPlanDoc(plan),
+    }, React.createElement('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 180 } }, plan.title),
+    React.createElement('span', { className: 'edrv-tab-x', title: '关闭', onClick: (event) => closePlan(plan.address, event) }, '×'))),
     (openInput
       ? React.createElement('input', { className: 'edrv-path-input', autoFocus: true, placeholder: '输入工作区相对/绝对路径，回车打开', value: pathDraft, onChange: (e) => setPathDraft(e.target.value), onKeyDown: (e) => { if (e.key === 'Enter') openPath(); if (e.key === 'Escape') setOpenInput(false) } })
       : React.createElement('button', { className: 'edrv-tab-add', title: '打开文件（输入路径）', onClick: () => setOpenInput(true) }, '+')))
 
-  const pathBar = React.createElement('div', { className: 'edrv-pathbar', title: active || '' },
+  const activePlan = planTabs.find((plan) => plan.address === planActive)
+  const pathBar = activePlan ? React.createElement('div', { className: 'edrv-pathbar', title: activePlan.address },
+    React.createElement('span', { className: 'edrv-pb-name' }, activePlan.title),
+    React.createElement('span', { className: 'edrv-pb-meta' }, '计划预览 · 只读 · 审批请使用对话中的官方控件'))
+    : React.createElement('div', { className: 'edrv-pathbar', title: active || '' },
     React.createElement('span', { className: 'edrv-pb-name' }, active ? String(active).split(/[\\/]/).pop() : '未打开文件'),
     React.createElement('span', { className: 'edrv-pb-full' }, active || '使用右上搜索框 (' + (chordOf('edrv.quickOpen') ?? 'Ctrl+P') + ') 打开文件'),
     (recentUpdate && !svnUpdateDialog && sameUpdateOwner(recentUpdate, sessionId, scope)
@@ -3681,7 +3742,17 @@ export function EditorView(props) {
     retry ? React.createElement('button', { className: 'edrv-pill edrv-pill-ghost', onClick: retry }, '重试') : null)
 
   let body
-  if (svnDiff) {
+  if (activePlan) {
+    const labels = PLAN_MD_LABELS
+    const text = activePlan.markdown
+    const render = isComponentType(MarkdownText)
+      ? React.createElement(MarkdownDelegateProvider, {
+          openFile: (path, options) => options?.line != null ? openFileAt(path, options.line) : openFile(path, false),
+        }, React.createElement(MarkdownText, { text, streaming: false, labels, variant: 'body' }))
+      : React.createElement('pre', { className: 'edrv-mdview-pre' }, text)
+    body = React.createElement('div', { className: 'edrv-mdview', ref: planHostRef, 'data-plan-address': activePlan.address },
+      React.createElement('div', { className: 'edrv-mdview-stage' }, React.createElement('div', { className: 'edrv-mdview-doc' }, render)))
+  } else if (svnDiff) {
     // 差异视图优先占位（覆盖编辑器主体）：只读审阅态，关闭后回到原编辑器
     body = React.createElement(SvnDiffPanel, {
       key: 'edrv-svndiff:' + svnDiff.scheme + ':' + svnDiff.path,

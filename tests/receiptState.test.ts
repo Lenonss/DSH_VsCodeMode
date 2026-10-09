@@ -4,6 +4,7 @@ import ts from 'typescript'
 import { acceptsLoad, receiptErrorFor, receiptPath, receiptReadyFor, receiptTabPath } from '../src/client/receiptState.js'
 import type { ReceiptView } from '../src/client/receiptState.js'
 import type { EditorRequest } from '../src/client/openReceipt.js'
+import { planDocument } from '../src/client/planState.js'
 
 const request: EditorRequest = { requestId: 'request-b', sessionId: 's', path: '/work/B.ts', line: 10, column: 2 }
 
@@ -107,6 +108,13 @@ describe('correlated receipt predicates', () => {
     expect(receiptErrorFor({ ...request, path: '/other/B.ts' }, state)).toBeNull()
   })
 
+  it('requires rendered Markdown for an explicit preview request but gives line navigation precedence', () => {
+    const target = { ...request, line: undefined, column: undefined, preview: true }
+    expect(receiptReadyFor(target, view())).toBe(false)
+    expect(receiptReadyFor(target, view({ kind: 'markdown', modelMatches: false }))).toBe(true)
+    expect(receiptReadyFor({ ...target, line: 10 }, view())).toBe(true)
+  })
+
   it('requires source mode for an explicit Markdown line', () => {
     const state = view({ kind: 'markdown' })
     expect(receiptReadyFor(request, state)).toBe(false)
@@ -143,6 +151,38 @@ describe('actual EditorView receipt adapters', () => {
     expect(editorFunction('receiptReady', state)(request)).toBe(false)
   })
 
+  it('opens virtual plans without any disk load, save target, LSP model or SVN path', () => {
+    let plans: any[] = []
+    const scope = { active: 'dirty.ts', flushSave: vi.fn(), saveViewState: vi.fn(), setSvnDiff: vi.fn(), setDiskActive: vi.fn(),
+      setPlanTabs: (update: (prev: any[]) => any[]) => { plans = update(plans) }, setPlanActive: vi.fn(), setError: vi.fn(), setStatus: vi.fn(), planDocument }
+    const open = editorFunction('openPlanDoc', scope)
+    const plan = { address: 'dsh-resource://plan/s/c', markdown: '# Plan\nbody', title: 'Plan' }
+    open(plan)
+    open(plan)
+    expect(plans).toHaveLength(1)
+    expect(scope.flushSave).toHaveBeenCalledTimes(2)
+    expect(scope.saveViewState).toHaveBeenCalledWith('dirty.ts')
+    expect(scope.setDiskActive).toHaveBeenCalledWith(null)
+    expect(scope.setPlanActive).toHaveBeenCalledWith(plan.address)
+  })
+
+  it('requires the actual virtual plan DOM and matching content/session before acknowledgement', () => {
+    const plan = { address: 'dsh-resource://plan/s/c', markdown: '# Plan', title: 'Plan' }
+    const scope = { sessionId: 's', planActive: plan.address, planTabs: [plan], svnDiff: null,
+      planHostRef: { current: { getAttribute: () => plan.address } } }
+    expect(editorFunction('receiptReady', scope)({ ...request, path: null, plan })).toBe(true)
+    expect(editorFunction('receiptReady', { ...scope, sessionId: 'other' })({ ...request, path: null, plan })).toBe(false)
+    expect(editorFunction('receiptReady', { ...scope, planHostRef: { current: null } })({ ...request, path: null, plan })).toBe(false)
+    expect(editorFunction('receiptReady', scope)({ ...request, path: null, plan: { ...plan, markdown: '# Changed' } })).toBe(false)
+  })
+
+  it('preserves explicit preview on disk receipts and switches to source for positioned plans', () => {
+    const scope = openState('plans/a.md')
+    editorFunction('openReceiptFile', scope)({ ...request, path: '/work/plans/a.md', line: undefined, column: undefined, preview: true })
+    expect(scope.addTab).toHaveBeenCalledWith('plans/a.md', true, true)
+    expect(scope.loadContent).toHaveBeenCalledWith('plans/a.md', 's', false)
+  })
+
   it('retries failed same-path loads without a forced disk overwrite and exits hidden source modes', () => {
     const scope = openState()
     scope.mdPreviewRef.current.add('B.ts')
@@ -150,7 +190,7 @@ describe('actual EditorView receipt adapters', () => {
     expect(scope.flushSave).toHaveBeenCalledOnce()
     expect(scope.setSvnDiff).toHaveBeenCalledWith(null)
     expect(scope.toggleMdPreview).toHaveBeenCalledWith('B.ts')
-    expect(scope.addTab).toHaveBeenCalledWith('B.ts', true)
+    expect(scope.addTab).toHaveBeenCalledWith('B.ts', true, false)
     expect(scope.stageFileAt).toHaveBeenCalledWith('B.ts', 10, 2)
     expect(scope.loadContent).toHaveBeenCalledWith('B.ts', 's', false)
   })
@@ -178,7 +218,7 @@ describe('actual EditorView receipt adapters', () => {
       receiptPath, receiptTabPath, flushSave: vi.fn(), saveViewState: vi.fn(), recordNav: vi.fn(), setSvnDiff: vi.fn(),
       toggleMdPreview: vi.fn(), setError: vi.fn(), setMonacoErr: vi.fn(), addTab: vi.fn(), stageFileAt: vi.fn(), loadContent: vi.fn() }
     editorFunction('openReceiptFile', scope)(request)
-    expect(scope.addTab).toHaveBeenCalledWith('B.ts', true)
+    expect(scope.addTab).toHaveBeenCalledWith('B.ts', true, false)
     expect(scope.loadContent).not.toHaveBeenCalled()
   })
 

@@ -61,15 +61,16 @@
 [data-edrv-view] .edrv-chip-btn:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(255,255,255,.06)); }
 [data-edrv-view] .edrv-chip-btn:disabled { opacity: .35; cursor: default; }
 [data-edrv-view] .edrv-chip-btn:disabled:hover { background: transparent; }
-[data-edrv-view] .edrv-mn-add-line { background: var(--dsw-alias-interactive-bg-hover, rgba(15,157,88,.10)); }
-[data-edrv-view] .edrv-mn-gutter-add { color: var(--dsw-alias-state-success-primary, #0f9d58) !important; font-weight: 700; display: flex !important; align-items: center; justify-content: center; }
+/* 行内和原生 Monaco diff 共用主题色盘；不再借用普通 hover 的灰底。 */
+[data-edrv-view] .edrv-mn-add-line { background: var(--edrv-diff-add, #e6f4e8); }
+[data-edrv-view] .edrv-mn-gutter-add { background: var(--edrv-diff-add, #e6f4e8); color: var(--dsw-alias-state-success-primary, #0f9d58) !important; display: flex !important; align-items: center; justify-content: center; }
 [data-edrv-view] .edrv-mn-gutter-add::before { content: "+"; }
-[data-edrv-view] .edrv-del-zone { background: var(--dsw-alias-interactive-bg-hover-danger, rgba(217,83,79,.14)); border-top: 1px solid var(--dsw-alias-state-error-primary, rgba(217,83,79,.35)); border-bottom: 1px solid var(--dsw-alias-state-error-primary, rgba(217,83,79,.35)); box-shadow: inset 0 0 0 1px var(--dsw-alias-interactive-bg-hover-danger, rgba(217,83,79,.12)); }
-[data-edrv-view] .edrv-del-row { white-space: pre; font-family: var(--ds-font-family-code, ui-monospace, monospace); font-size: 12.5px; line-height: 20px; color: var(--dsw-alias-state-error-primary, #c0392b); }
+[data-edrv-view] .edrv-del-zone, [data-edrv-view] .edrv-del-margin { background: var(--edrv-diff-del, #fbe7e3); color: var(--edrv-diff-fg, #1e1e1e); }
+[data-edrv-view] .edrv-del-row { white-space: pre; height: var(--edrv-line-height, 20px); line-height: var(--edrv-line-height, 20px); }
 [data-edrv-view] .edrv-del-text { display: inline-block; white-space: pre; }
-[data-edrv-view] .edrv-minus-overlay { position: absolute; left: 0; top: 0; width: 100%; height: 100%; max-width: 100%; overflow: visible; pointer-events: none; z-index: 6; }
-[data-edrv-view] .edrv-minus-item { position: absolute; box-sizing: border-box; max-width: 100%; overflow: hidden; }
-[data-edrv-view] .edrv-minus-item::before { content: ''; position: absolute; left: 4px; top: 50%; width: 8px; height: 2px; transform: translateY(-50%); border-radius: 2px; background: var(--dsw-alias-state-error-primary, #d9534f); }
+[data-edrv-view] .edrv-del-margin-row { position: relative; height: var(--edrv-line-height, 20px); line-height: var(--edrv-line-height, 20px); }
+[data-edrv-view] .edrv-del-number { position: absolute; left: var(--edrv-number-left); width: var(--edrv-number-width); color: var(--edrv-diff-number, #6c6c6c); text-align: right; }
+[data-edrv-view] .edrv-del-marker { position: absolute; left: var(--edrv-marker-left); width: var(--edrv-marker-width); color: var(--dsw-alias-state-error-primary, #d9534f); text-align: center; }
 [data-edrv-view] .edrv-monaco-host { flex: 1 1 auto; min-width: 0; min-height: 0; position: relative; overflow: hidden; }
 [data-edrv-view] .edrv-monaco-host > div { position: absolute; inset: 0; min-width: 0; min-height: 0; }
 [data-edrv-view] .edrv-imgview { flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }

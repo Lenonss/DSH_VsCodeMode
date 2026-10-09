@@ -4,7 +4,7 @@
  * 作者 ddj 2026-08-20
  */
 import type { Hunk, RecordView } from '../../shared/types.js'
-import { locateHunks, lineBefore, normalizeForCompare, normalizeHunk, preciseHunk, splitLines } from '../../shared/diff.js'
+import { applyLocations, fingerprint, locateHunks, lineBefore, normalizeForCompare, normalizeHunk, preciseHunk, splitLines } from '../../shared/diff.js'
 import { ST, noopHunk, statusAt } from './records.js'
 import type { Status } from './records.js'
 
@@ -14,6 +14,8 @@ export interface Region {
   idx: number
   start?: number
   end?: number
+  /** 原快照中的 1 基行号；历史证据不足时不伪造为当前行号。 */
+  oldStart?: number
   oldLines: string[]
   newLines: string[]
   whole?: boolean
@@ -65,6 +67,77 @@ export function trimCommonLines(oldLines: string[], newLines: string[]): { oldLi
 }
 
 /**
+ * 从执行后快照反向验证原文本，计算每块原行号（而非当前文件行号）。
+ * @private @author ddj 2026年10月09号
+ * @param rec 审查记录
+ * @returns 按 hunk 索引的原行号；不完整/指纹冲突时全部留空
+ */
+function oldStartsOf(rec: RecordView): Array<number | undefined> {
+  if (typeof rec.after !== 'string' || rec.create) return []
+  const hunks = rec.hunks.map((_, index) => preciseHunk(rec, index))
+  if (hunks.some((hunk) => !hunk || hunk.oldText === null)) return []
+  const locations = locateHunks(rec.after, hunks as Hunk[])
+  // 没有原指纹时，要求每块有验证过的快照坐标，避免重复 newText 被猜中。
+  for (const location of locations) {
+    const hunk = location.hunk
+    if (!location.matched || location.end > rec.after.length || location.end - location.start !== hunk.newText.length) return []
+    if (!rec.baseFingerprint && (hunk.afterStart !== location.start || hunk.afterEnd !== location.end)) return []
+  }
+  const original = applyLocations(rec.after, locations, true)
+  if (original.stale.length || (rec.baseFingerprint && fingerprint(original.content) !== rec.baseFingerprint)) return []
+  const breaks: number[] = []
+  for (let index = rec.after.indexOf('\n'); index >= 0; index = rec.after.indexOf('\n', index + 1)) breaks.push(index)
+  const starts: Array<number | undefined> = []
+  let shift = 0
+  for (const location of locations.slice().sort((a, b) => a.start - b.start)) {
+    starts[location.idx] = lineAt(breaks, location.start) + shift + 1
+    const hunk = location.hunk
+    shift += lineBefore(hunk.oldText!, hunk.oldText!.length) - lineBefore(hunk.newText, hunk.newText.length)
+  }
+  return starts
+}
+
+/**
+ * 将快照坐标一次性映射到 LF/BOM 归一化坐标，避免每块扫描文件前缀。
+ * @private @author ddj 2026年10月09号
+ * @param after 已确认相同的原始快照 @param hunks 块集合
+ * @returns 原偏移到展示偏移的映射；O(文本长度 + 块数 log 块数)
+ */
+function offsetsOf(after: string | undefined, hunks: Hunk[]): Map<number, number> {
+  const offsets = new Map<number, number>()
+  if (after === undefined) return offsets
+  const points = hunks.flatMap((hunk) => [hunk.afterStart, hunk.afterEnd])
+    .filter((point): point is number => Number.isInteger(point) && point! >= 0 && point! <= after.length)
+    .sort((a, b) => a - b)
+  let cursor = 0
+  let removed = 0
+  for (const point of points) {
+    while (cursor < point) {
+      if ((cursor === 0 && after[cursor] === '\uFEFF') || (after[cursor] === '\r' && after[cursor + 1] === '\n')) removed++
+      cursor++
+    }
+    offsets.set(point, point - removed)
+  }
+  return offsets
+}
+
+/**
+ * 保留可验证的归一化快照坐标，让纯删除也能在 CRLF/BOM 文本中定位。
+ * @private @author ddj 2026年10月09号
+ * @param hunk 原始块 @param after 已确认与当前文本相同的执行后快照 @param offsets 展示偏移映射
+ * @returns 展示用块；快照已变化时不借用删除点
+ */
+function viewHunk(hunk: Hunk, after: string | undefined, offsets: Map<number, number>): Hunk {
+  const normalized = normalizeHunk(hunk)
+  if (after === undefined) return normalized
+  const start = hunk.afterStart
+  const end = hunk.afterEnd
+  if (!Number.isInteger(start) || !Number.isInteger(end) || start! < 0 || end! < start! || end! > after.length) return normalized
+  if (after.slice(start, end) !== hunk.newText) return normalized
+  return { ...normalized, afterStart: offsets.get(start!), afterEnd: offsets.get(end!) }
+}
+
+/**
  * 计算文件内各差异区域（行范围 + old/new + 状态），用于行内绿标注与 DiffBox。
  * 定位统一基于归一化文本（剥 BOM、CRLF→LF）：外部工具可能改变行尾/BOM，
  * 与 edit 工具的 LF hunk 口径不一致会导致定位失败（差异被误标 stale）。
@@ -87,10 +160,13 @@ export function diffRegions(records: RecordView[], content: string | null): Regi
       }
       continue
     }
+    const oldStarts = oldStartsOf(rec)
+    const snapshot = typeof rec.after === 'string' && normalizeForCompare(rec.after) === normalized ? rec.after : undefined
+    const offsets = offsetsOf(snapshot, rec.hunks)
     const entries: Array<{ idx: number; hunk: Hunk }> = []
     for (let i = 0; i < rec.hunks.length; i++) {
       const hunk = preciseHunk(rec, i)
-      if (hunk && !noopHunk(rec, hunk)) entries.push({ idx: i, hunk: normalizeHunk(hunk) })
+      if (hunk && !noopHunk(rec, hunk)) entries.push({ idx: i, hunk: viewHunk(hunk, snapshot, offsets) })
     }
     const locations = locateHunks(normalized, entries.map((entry) => entry.hunk))
     for (let i = 0; i < entries.length; i++) {
@@ -105,8 +181,12 @@ export function diffRegions(records: RecordView[], content: string | null): Regi
       const oldLines = entry.hunk.oldText === null ? [] : entry.hunk.oldText.split('\n')
       const newLines = entry.hunk.newText.split('\n')
       const trimmed = trimCommonLines(oldLines, newLines)
+      // 保留尾换行的公共空行裁剪，但空字符串自身不制造增删占位行。
+      if (entry.hunk.oldText === '') trimmed.oldLines = []
+      if (entry.hunk.newText === '') trimmed.newLines = []
       const regionStart = start + trimmed.shift
-      regions.push({ callId: rec.callId, idx: entry.idx, start: regionStart, end: regionStart + trimmed.newLines.length, oldLines: trimmed.oldLines, newLines: trimmed.newLines, status, create: false, rec, superseded: rec.superseded === true })
+      const oldStart = oldStarts[entry.idx] === undefined ? undefined : oldStarts[entry.idx]! + trimmed.shift
+      regions.push({ callId: rec.callId, idx: entry.idx, start: regionStart, end: regionStart + trimmed.newLines.length, oldStart, oldLines: trimmed.oldLines, newLines: trimmed.newLines, status, create: false, rec, superseded: rec.superseded === true })
     }
   }
   regions.sort((a, b) => (a.start ?? Infinity) - (b.start ?? Infinity))

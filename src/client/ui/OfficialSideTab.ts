@@ -69,14 +69,14 @@ export function OfficialSideTab(props) {
     if (fileHit) {
       const line = navigation?.params?.line
       window.dispatchEvent(new CustomEvent('edrv:open-editor', {
-        detail: { path: fileHit.path, line: typeof line === 'number' ? line : undefined },
+        detail: { path: fileHit.path, line: typeof line === 'number' ? line : undefined, preview: navigation?.params?.preview },
       }))
       return
     }
     // 页类型 Tab：params 携带打开请求（line = 行引用/工具行跳转的行号定位）
     const request = resolveNavOpen(navigation?.params)
     window.dispatchEvent(new CustomEvent('edrv:open-editor', {
-      detail: { path: request.path, focusDiff: request.focusDiff, line: resolveNavLine(navigation?.params) },
+      detail: { path: request.path, focusDiff: request.focusDiff, line: resolveNavLine(navigation?.params), preview: navigation?.params?.preview },
     }))
   })
 

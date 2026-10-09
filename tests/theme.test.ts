@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest'
 import {
   EDRV_DARK,
   applyOfficial,
+  diffColorsOf,
   observeScheme,
   officialThemeOf,
   readCssVar,
@@ -97,6 +98,24 @@ describe('readCssVar / observeScheme（非浏览器环境安全降级）', () =>
     const stop = observeScheme(() => {})
     expect(typeof stop).toBe('function')
     expect(() => stop()).not.toThrow()
+  })
+})
+
+describe('差异共享色盘', () => {
+  it('亮色为独立浅绿/浅红底色，原生 diff 与行内展示来源一致', () => {
+    const colors = diffColorsOf('light')
+    expect(colors['diffEditor.insertedLineBackground']).toBe('#e6f4e8')
+    expect(colors['diffEditor.removedLineBackground']).toBe('#fbe7e3')
+    expect(colors['diffEditorGutter.insertedLineBackground']).toBe(colors['diffEditor.insertedLineBackground'])
+    expect(officialThemeOf('light').colors).toMatchObject(colors)
+  })
+  it('暗色独立色盘，不复用亮色大色块；返回值互不污染', () => {
+    const colors = diffColorsOf('dark')
+    expect(colors['diffEditor.insertedLineBackground']).toBe('#203b2c')
+    expect(colors['diffEditor.removedLineBackground']).toBe('#482b2b')
+    expect(officialThemeOf('dark').colors).toMatchObject(colors)
+    colors['diffEditor.insertedLineBackground'] = '#000000'
+    expect(diffColorsOf('dark')['diffEditor.insertedLineBackground']).toBe('#203b2c')
   })
 })
 
