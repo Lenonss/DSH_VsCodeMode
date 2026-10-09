@@ -65,6 +65,20 @@ describe('upsertViewState', () => {
     expect(upsertViewState({}, 'a.ts', {})).toEqual({})
     expect(upsertViewState({ 'b.ts': { cursorState: [] } }, 'b.ts', null)).toEqual({ 'b.ts': { cursorState: [] } })
   })
+  it('纯滚动状态连同光标、选区和折叠信息完整往返', () => {
+    const state = {
+      cursorState: [{ position: { lineNumber: 1, column: 1 }, selectionStart: { lineNumber: 1, column: 1 } }],
+      viewState: { scrollTop: 2400, scrollLeft: 16 },
+      contributionsState: { folding: { collapsed: [10, 30] } },
+    }
+    const states = upsertViewState({}, 'long.ts', state)
+    expect(parseViewStates(serializeViewStates(states))?.['long.ts']).toEqual(state)
+  })
+  it('空路径与无效快照不能覆盖既有滚动位置', () => {
+    const states = { 'a.ts': { viewState: { scrollTop: 2400 } } }
+    expect(upsertViewState(states, '', { viewState: { scrollTop: 0 } })).toBe(states)
+    expect(upsertViewState(states, 'a.ts', null)).toBe(states)
+  })
   it('超大状态拒绝（体积上限）', () => {
     const huge = { cursorState: [{ lineNumber: 1 }], blob: 'x'.repeat(80 * 1024) }
     expect(upsertViewState({}, 'huge.ts', huge)).toEqual({})

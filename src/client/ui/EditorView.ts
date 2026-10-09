@@ -53,7 +53,7 @@ import { displayDiffTotal, editorDockMode } from '../diffDock.js'
 import { editorHeight } from '../editorLayout.js'
 import { revealInExplorer as revealPathInExplorer } from '../fileReveal.js'
 import { setSidePending, SIDEBAR_INSTALL_CMD } from '../sidebarBridge.js'
-import { upsertViewState, viewStatesLoad, viewStatesSave } from '../state/viewStateCache.js'
+import { createViewKeeper } from '../state/editorViewState.js'
 import { mdPreviewLoad, mdPreviewSave } from '../state/mdPreviewCache.js'
 import { onUiStateReady, reportUiStateEvent, uiStateSettled } from '../state/uiStatePersist.js'
 import { migrateScopedKeys, workspaceScopeOf } from '../state/scopeStore.js'
@@ -333,8 +333,8 @@ export function EditorView(props) {
   const modelsRef = React.useRef(null)
   // model 跨挂载缓存（按工作区作用域）：重挂载秒显内容，消除切换对话闪烁
   if (!modelsRef.current) modelsRef.current = modelsForScope(scope)
-  // 视图状态缓存（path → Monaco viewState；重启后恢复光标/滚动/折叠位置）
-  const viewStatesRef = React.useRef({})
+  // 视图/查找生命周期跟随实际绑定的 model，不能从新一帧 active/scope 猜旧模型归属。
+  const viewKeeperRef = React.useRef(null)
   // 防抖保存槽（arm/flush/cancel；见 saveDebounce.ts 的缺陷说明，勿退回单一取消句柄）
   const saveTimerRef = React.useRef(createSaveTimer())
   const savingRef = React.useRef(new Set()) // 在途保存的路径（关闭前落盘去重，防同内容双发）
@@ -561,39 +561,16 @@ export function EditorView(props) {
     return normalized
   }
 
-  /**
-   * 保存当前活动文件的视图状态（光标/滚动/折叠）到工作区作用域缓存。
-   * @author ddj 2026年08月28号
-   * @param path 要保存的文件路径（缺省 = 当前 active）
-   */
-  const saveViewState = (path) => {
-    const ed = editorRef.current
-    const target = path ?? active
-    if (!ed || !target) return
-    try {
-      const state = ed.saveViewState()
-      if (!state) return
-      viewStatesRef.current = upsertViewState(viewStatesRef.current, target, state)
-      viewStatesSave(scope, viewStatesRef.current)
-    } catch (e) { /* 视图状态保存失败忽略 */ }
-  }
+  /** @private @author ddj 2026年10月09号 @param path 可选预期文件路径。按已绑定模型归属保存，避免新 active 覆盖旧文件状态。 */
+  const saveViewState = (path) => viewKeeperRef.current?.save(path)
   saveViewStateRef.current = saveViewState
 
-  /**
-   * 恢复指定文件的视图状态（内容就绪、setModel 后调用；恢复后即消费删除）。
-   * @author ddj 2026年08月28号
-   * @param path 文件路径
-   */
-  const restoreViewState = (path) => {
-    const ed = editorRef.current
-    if (!ed || !path) return
-    const saved = viewStatesRef.current[path]
-    if (!saved) return
-    const next = Object.assign({}, viewStatesRef.current)
-    delete next[path]
-    viewStatesRef.current = next
-    try { ed.restoreViewState(saved) } catch (e) { /* 恢复失败忽略（行号越界自动兜底） */ }
-  }
+  /** @private @author ddj 2026年10月09号 ref 脱离与 effect 卸载共用：保存视图/查找后销毁，重复调用无副作用。 */
+  const disposeEditor = React.useCallback(() => {
+    viewKeeperRef.current?.dispose()
+    viewKeeperRef.current = null
+    editorRef.current = null
+  }, [])
 
   /**
    * 采集当前焦点条目：路径从编辑器 model 实时读取（避免空依赖闭包读到过期 active），
@@ -1366,7 +1343,6 @@ export function EditorView(props) {
     restoredScopeRef.current = scope
     // model 缓存跟随作用域（切工作区释放旧作用域模型；同工作区跨挂载复用）
     modelsRef.current = modelsForScope(scope)
-    viewStatesRef.current = viewStatesLoad(scope)
     // Markdown 预览态同样按作用域恢复（重启/换端口后由界面状态镜像回填，见 lateHydrateRef 分支）
     mdPreviewRef.current = mdPreviewLoad(String(scope))
     try {
@@ -2077,11 +2053,10 @@ export function EditorView(props) {
     if (!monaco || !editorRef.current || !active || !contentReady) return
     const ed = editorRef.current
     const model = getModel(active, content)
-    if (ed.getModel() !== model) ed.setModel(model)
+    viewKeeperRef.current?.bind(String(scope), active, model)
     syncTypeSuggest(ed, monaco)
-    restoreViewState(active)
     setLoadStage((prev) => ({ progress: Math.max(96, prev.progress), message: '创建编辑器视图…' }))
-  }, [monaco, active, content, contentReady, mdPreviewing, svnDiff])
+  }, [monaco, scope, active, content, contentReady, mdPreviewing, svnDiff])
 
   // PDF 面板外壳 ref 回调（div 仅在 PDF 分支渲染，refs 先于 effect 就绪）
   const ensurePdfHost = (node) => { pdfHostRef.current = node }
@@ -2140,7 +2115,7 @@ export function EditorView(props) {
     // 跳转目标高亮的计时器随卸载清理（装饰随编辑器 dispose 一并消失）
     if (navFlashTimerRef.current) { clearTimeout(navFlashTimerRef.current); navFlashTimerRef.current = null }
     navFlashRef.current = []
-    if (editorRef.current) { editorRef.current.dispose(); editorRef.current = null }
+    disposeEditor()
     // model 不在此销毁：跨挂载缓存按作用域存活（modelCache 切作用域时统一释放）
     for (const ctl of pdfCtlRef.current.values()) ctl.destroy()
     pdfCtlRef.current.clear()
@@ -2155,7 +2130,7 @@ export function EditorView(props) {
   // 普通 Monaco 编辑器（可编辑、单列行号）+ 自绘行内差异（decoration 绿底+ / view zone 删除块）
   const ensureEditor = React.useCallback((node) => {
     if (!node) {
-      if (editorRef.current) { editorRef.current.dispose(); editorRef.current = null }
+      disposeEditor()
       return
     }
     if (editorRef.current || !monacoRef.current) return
@@ -2367,6 +2342,7 @@ export function EditorView(props) {
     }
     node.addEventListener('contextmenu', onBpCtxCapture, true)
     editorRef.current = ed
+    viewKeeperRef.current = createViewKeeper(ed)
   }, [])
 
   // 调试断点装饰：断点表/活动文件变化时全量替换行首圆点（独立 collection，与差异/下划线互不干扰）；

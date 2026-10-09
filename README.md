@@ -459,18 +459,18 @@ DSH 每次启动监听随机端口，`http://127.0.0.1:<port>` 就是浏览器 o
 
 官方 `dsh plugin` 方式，三选一。下面以 `web` profile 为例；Desktop 或其他命名
 profile 请替换为实际目标，不要把示例目录当成当前运行 profile。升级前可阅读
-[0.14.5 发布说明](docs/release-0.14.5.md)；从 0.14.2 或更旧版本升级还须阅读
+[0.14.6 发布说明](docs/release-0.14.6.md)；从 0.14.2 或更旧版本升级还须阅读
 [0.14.3 数据迁移与回退说明](docs/release-0.14.3.md)。
 
 ```bash
 # ① Git 安装（clone + prepare 构建；推荐打固定 tag）
-dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.14.5
+dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.14.6
 
 # ② npm 注册表（发布到 npm 后）
-dsh plugin --profile web add dsh-vscode-mode@0.14.5
+dsh plugin --profile web add dsh-vscode-mode@0.14.6
 
 # ③ GitHub Release tgz 直装（Release asset 可用后）
-dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.14.5/dsh-vscode-mode-0.14.5.tgz
+dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.14.6/dsh-vscode-mode-0.14.6.tgz
 ```
 
 > **DSH 0.2 兼容范围**：`0.14.1` 起精确放行 `0.2.0-rc.1`，`0.14.4` 再加入
@@ -806,6 +806,7 @@ Keep All / Undo All 却是亮的。修复：单文件 Keep / Undo 覆盖冲突�
 完整变更见 [GitHub Releases](https://github.com/Lenonss/DSH_VsCodeMode/releases)。
 近期关键版本：
 
+- **v0.14.6**：**对话切换位置保持与共享查找**——同工作区切换对话时，在编辑器释放前保存实际模型的滚动、光标和选区等视图状态；只在模型重新绑定时恢复，显式行号导航仍优先。跨文件共享 Ctrl+F 查询、大小写/全词/正则与开关状态，不共享选区搜索范围或匹配序号，不抢焦点；工作区隔离并释放监听。验证范围与真实 GUI 验收缺口见 [0.14.6 发布说明](docs/release-0.14.6.md)。
 - **v0.14.5**：**计划模式接入与行内差异显示修复**——计划文件默认预览，当前会话新生成计划自动打开；官方计划及待审批计划可转入只读虚拟页签，审批仍由官方控件完成。行内增删与 Monaco diff 共用明暗色盘，删除代码按当前语言着色，旧行号仅在快照可验证时显示；修复纯删除的 BOM/CRLF 定位，清理过期异步结果与监听。验证及真实 GUI 冒烟边界见 [0.14.5 发布说明](docs/release-0.14.5.md)。
 - **v0.14.4**：**Desktop rc.2 兼容与 MCP 管理修复**——六项 DSH peer 精确纳入 `0.2.0-rc.2`；MCP 状态不再把配置启用或 ACTIVE 当成在线证据，只读快照轮询避免重复配置扫描，配置修改串行防止丢更新，跨全局/项目拒绝工具命名空间交叠并安全隐藏历史歧义工具。编辑器在没有待处理差异时隐藏底部操作条，其他文件的差异和冲突入口保留。验证范围、升级及回退注意事项见 [0.14.4 发布说明](docs/release-0.14.4.md)。
 - **v0.14.3**：**差异审查性能与持久化**——差异定位/行号与多块应用避免重复全文扫描/复制；归档从全量 JSON 改为每工作区 SQLite 事务追加，活跃记录由整份重写改为逐条更新，同库原子提交决策及 Undo 意图；归档列表按页加载、详情按批次读取。Web 实测单块 Keep RPC 17/22ms（样本值），旧归档 JSON 与迁移前活跃 JSON 保留；侧栏编辑器内的差异栏改为居中悬浮 banner。升级和回退注意事项见 [0.14.3 发布说明](docs/release-0.14.3.md)。
