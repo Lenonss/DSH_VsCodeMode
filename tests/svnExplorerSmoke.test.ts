@@ -1,5 +1,5 @@
 /** Real disposable local repository; never touches the user's working copy. @author ddj 2026年10月09号 */
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -9,6 +9,9 @@ import { parseRemoteStatusXml, parseStatusXml } from '../src/svn.js'
 import { statusXmlValid, scopeEntriesOf } from '../src/svnExplorer.js'
 import { explorerIndexOf, explorerMarkOf, remoteIndexOf } from '../src/shared/svnExplorer.js'
 import { ExplorerQueue } from '../src/svnExplorerCache.js'
+
+const HAS_SVN = spawnSync('svnadmin', ['--version'], { stdio: 'ignore' }).status === 0
+  && spawnSync('svn', ['--version', '--quiet'], { stdio: 'ignore' }).status === 0
 
 /** @private @author ddj 2026年10月09号 @param args SVN arguments. @param cwd Scratch directory. @returns Actual CLI output; errors throw. */
 function svn(args: string[], cwd: string): string {
@@ -28,7 +31,7 @@ function setup(scratch: string) {
   return { first, second }
 }
 
-it('real SVN verbose local status and explicit remote status identify overlays without update', () => {
+it.skipIf(!HAS_SVN)('real SVN verbose local status and explicit remote status identify overlays without update', () => {
   const scratch = mkdtempSync(join(tmpdir(), 'dsh-svn-icons-'))
   const expected = resolve(tmpdir()) + '\\dsh-svn-icons-'
   try {
@@ -66,7 +69,7 @@ async function settled(queue: ExplorerQueue): Promise<void> {
   await expect.poll(() => queue.state().complete, { timeout: 5000, interval: 25 }).toBe(true)
 }
 
-it('real scoped queue replaces renamed/deleted/ignored paths and downgrades the last dirty ancestor', async () => {
+it.skipIf(!HAS_SVN)('real scoped queue replaces renamed/deleted/ignored paths and downgrades the last dirty ancestor', async () => {
   const scratch = mkdtempSync(join(tmpdir(), 'dsh-svn-icons-'))
   let queue: ExplorerQueue | undefined
   try {
