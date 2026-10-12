@@ -17,6 +17,8 @@ namespace UnityEditor
         public static string TextField(string label, string value) { return value; }
         /// <summary>Compile-only API shape. @author ddj 2026-09-28</summary>
         public static void HelpBox(string text, MessageType type) { }
+        /// <summary>Compile-only API shape. @author ddj 2026-10-12</summary>
+        public static int Popup(string label, int selectedIndex, string[] displayedOptions) { return selectedIndex; }
     }
     public static class EditorPrefs
     {

@@ -35,9 +35,9 @@ internal static class UnityHintProbe
         string profile = Path.Combine(Path.Combine(root, "profile bridge"), "dsh-open.ini");
         File.WriteAllText(hint, "[dsh]\nconfig=" + profile + "\n");
         Equal(DshCodeEditor.DefaultConfig(root, fallback), profile);
-        Equal(new DshOpenWorker(string.Empty, root, 0, 0, root, fallback).SelectConfig(), profile);
+        Equal(new DshOpenWorker(string.Empty, root, 0, 0, root, fallback, "auto").SelectConfig(), profile);
         File.WriteAllText(hint, "[dsh]\nmode=desktop\n");
-        Equal(new DshOpenWorker(profile, root, 0, 0, root, fallback).SelectConfig(), profile);
+        Equal(new DshOpenWorker(profile, root, 0, 0, root, fallback, "auto").SelectConfig(), profile);
         RejectHint(root, fallback);
         File.WriteAllText(hint, "config=relative.ini\n");
         RejectHint(root, fallback);
@@ -47,6 +47,46 @@ internal static class UnityHintProbe
         RejectHint(root, fallback);
         File.Delete(hint);
         Equal(DshCodeEditor.DefaultConfig(root, fallback), fallback);
+        CheckTargets(root, fallback);
+    }
+
+    /// <summary>Exercise per-target bridge selection under a controlled DSH_HOME. @author ddj 2026-10-12</summary>
+    /// <param name="root">Disposable project root.</param><param name="fallback">Legacy INI candidate.</param>
+    private static void CheckTargets(string root, string fallback)
+    {
+        string previous = Environment.GetEnvironmentVariable("DSH_HOME");
+        string home = Path.Combine(root, "dsh-home");
+        string desktopBridge = Path.Combine(Path.Combine(Path.Combine(Path.Combine(home, "profiles"), "desktop"), "dsh-vscode-mode"), "bridge", "dsh-open.ini");
+        string webBridge = Path.Combine(Path.Combine(Path.Combine(Path.Combine(home, "profiles"), "web"), "dsh-vscode-mode"), "bridge", "dsh-open.ini");
+        try
+        {
+            Environment.SetEnvironmentVariable("DSH_HOME", home);
+            // Missing desktop bridge must fail closed, never fall back to web or legacy.
+            RequireFailure(new DshOpenWorker(string.Empty, root, 0, 0, root, fallback, "desktop"));
+            Equal(new DshOpenWorker(string.Empty, root, 0, 0, root, fallback, "web").SelectConfig(), fallback);
+            // A matching per-profile bridge wins over the project hint and legacy fallback.
+            Directory.CreateDirectory(Path.GetDirectoryName(desktopBridge));
+            File.WriteAllText(desktopBridge, "[dsh]\nmode=desktop\nnode=node.exe\nhelper=x.mjs\n");
+            Equal(new DshOpenWorker(string.Empty, root, 0, 0, root, fallback, "desktop").SelectConfig(), desktopBridge);
+            Directory.CreateDirectory(Path.GetDirectoryName(webBridge));
+            File.WriteAllText(webBridge, "[dsh]\nmode=web\nnode=node.exe\nhelper=x.mjs\n");
+            Equal(new DshOpenWorker(string.Empty, root, 0, 0, root, fallback, "web").SelectConfig(), webBridge);
+            Equal(new DshOpenWorker(string.Empty, root, 0, 0, root, fallback, "auto").SelectConfig(), fallback);
+        }
+        finally
+        {
+            if (previous == null) Environment.SetEnvironmentVariable("DSH_HOME", null);
+            else Environment.SetEnvironmentVariable("DSH_HOME", previous);
+        }
+    }
+
+    /// <summary>Require an explicit desktop target without a provisioned bridge to throw. @author ddj 2026-10-12</summary>
+    /// <param name="worker">Worker bound to the desktop target.</param>
+    private static void RequireFailure(DshOpenWorker worker)
+    {
+        try { worker.SelectConfig(); }
+        catch (FileNotFoundException) { checks++; return; }
+        throw new Exception("Desktop target without a bridge did not fail closed.");
     }
 
     /// <summary>Require malformed hints to fail instead of silently selecting another profile. @author ddj 2026-09-28</summary>

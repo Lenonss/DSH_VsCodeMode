@@ -2,7 +2,7 @@
 import { registerRoutes } from './routes.js'
 import { captureToolResult } from './capture.js'
 import { closeArchiveDbs } from './archiveDb.js'
-import { handleRpc } from './rpc.js'
+import { handleRpc, integrationBaseUrlOf } from './rpc.js'
 import { newSearcher } from './search/orchestrator.js'
 import { newContentSearcher } from './search/content.js'
 import { installIsolation } from './mcpIsolation.js'
@@ -13,6 +13,7 @@ import type { SettingsDeps } from './fileOpenSettings.js'
 import z from '@deepseek-ai/schemastery'
 import { shellMenuLifecycle } from './integrate.js'
 import { startOpenInbox } from './openInbox.js'
+import { ensureActiveBridge } from './openBridge.js'
 import { installPlanTool } from './svnPlanTool.js'
 import { disposeIndex } from './treeIndex.js'
 import { sweepTreeCache } from './paths.js'
@@ -142,6 +143,13 @@ export async function apply(ctx: Ctx, config?: unknown): Promise<void> {
   await installPlanTool(ctx, submitPlan)
   ctx.effect(mountInbox, 'vscode-mode:open-inbox')
   ctx.effect(() => shellMenuLifecycle(ctx), 'vscode-mode:integration')
+  /** @author ddj 2026年10月12号 @returns Active-profile bridge disposer; failures never block boot. */
+  async function provisionBridge(): Promise<() => void> {
+    try { await ensureActiveBridge(ctx, await integrationBaseUrlOf(ctx)) }
+    catch (error) { noteWarning('外部打开桥接未就绪：' + String(error)) }
+    return () => {}
+  }
+  ctx.effect(provisionBridge, 'vscode-mode:bridge')
   void sweepTreeCache()
   await logCompatSummary(ctx, warnings)
   log.info('编辑差异审查已装配（认证路由、项目 MCP 作用域、SVN 方案工具与外部打开通道）')

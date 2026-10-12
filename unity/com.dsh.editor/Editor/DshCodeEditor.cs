@@ -15,8 +15,13 @@ namespace Dsh.EditorIntegration
     {
         private const string EditorName = "DSH 文件编辑";
         private const string VirtualPath = "dsh-editor://vscode-mode";
-        private const string DshVersion = "0.3.0";
+        private const string DshVersion = "0.3.1";
         internal const string VersionText = DshVersion;
+        private const string TargetAuto = "auto";
+        private const string TargetWeb = "web";
+        private const string TargetDesktop = "desktop";
+        private static readonly string[] TargetLabels = { "自动", "DSH Web", "DSH 桌面端" };
+        private static readonly string[] TargetValues = { TargetAuto, TargetWeb, TargetDesktop };
 
         /// <summary>Register this editor without changing the user's selection. @author ddj 2026-09-28</summary>
         static DshCodeEditor()
@@ -57,7 +62,13 @@ namespace Dsh.EditorIntegration
             string selected = EditorPrefs.GetString(key, string.Empty);
             string value = EditorGUILayout.TextField("DSH 桥接配置", selected);
             if (value != selected) EditorPrefs.SetString(key, value.Trim());
-            EditorGUILayout.HelpBox("留空时自动读取本项目 UserSettings/dsh-editor.ini；没有安装提示时使用 DSH_HOME 中的旧 shell 配置。填写绝对路径可覆盖自动选择。请求须收到 ACK 才确认成功。", MessageType.Info);
+            string targetKey = TargetKey();
+            string current = EditorPrefs.GetString(targetKey, TargetAuto);
+            int picked = System.Array.IndexOf(TargetValues, current);
+            if (picked < 0) picked = 0;
+            int chosen = EditorGUILayout.Popup("打开目标", picked, TargetLabels);
+            if (TargetValues[chosen] != current) EditorPrefs.SetString(targetKey, TargetValues[chosen]);
+            EditorGUILayout.HelpBox("留空时自动读取本项目 UserSettings/dsh-editor.ini；没有安装提示时使用 DSH_HOME 中的旧 shell 配置。填写绝对路径可覆盖自动选择。打开目标选择 DSH 桌面端或 DSH Web 时优先使用对应 profile 的独立 bridge。请求须收到 ACK 才确认成功。", MessageType.Info);
             if (GUILayout.Button("测试：在 DSH 中打开当前项目")) BeginOpen(ProjectRoot(), 0, 0);
         }
 
@@ -134,7 +145,8 @@ namespace Dsh.EditorIntegration
         private static void BeginOpen(string path, int line, int column)
         {
             string config = EditorPrefs.GetString(ConfigKey(), string.Empty);
-            var worker = new DshOpenWorker(config, path, line, column, ProjectRoot(), LegacyConfig());
+            string target = EditorPrefs.GetString(TargetKey(), TargetAuto);
+            var worker = new DshOpenWorker(config, path, line, column, ProjectRoot(), LegacyConfig(), target);
             var thread = new Thread(worker.Run) { IsBackground = true };
             thread.Start();
         }
@@ -142,6 +154,10 @@ namespace Dsh.EditorIntegration
         /// <summary>Derive a project-specific preference key. @author ddj 2026-09-28</summary>
         /// <returns>Project-local editor preference key.</returns>
         private static string ConfigKey() { return "DshEditor.Config." + ProjectRoot(); }
+
+        /// <summary>Derive a project-specific open-target preference key. @author ddj 2026-10-12</summary>
+        /// <returns>Project-local open-target preference key.</returns>
+        private static string TargetKey() { return "DshEditor.Target." + ProjectRoot(); }
 
         /// <summary>Read the project's installed profile hint on the worker. @author ddj 2026-09-28</summary>
         /// <param name="root">Project root captured on the main thread.</param><param name="fallback">Legacy shell INI.</param>
@@ -172,9 +188,47 @@ namespace Dsh.EditorIntegration
         /// <returns>Legacy installed shell INI path, without filesystem IO.</returns>
         private static string LegacyConfig()
         {
+            return Path.Combine(Path.Combine(Path.Combine(Home(), "dsh-vscode-mode"), "shell"), "dsh-open.ini");
+        }
+
+        /// <summary>Resolve the user DSH home honoring DSH_HOME. @author ddj 2026-10-12</summary>
+        /// <returns>Absolute user DSH home directory.</returns>
+        internal static string Home()
+        {
             string home = Environment.GetEnvironmentVariable("DSH_HOME");
             if (string.IsNullOrEmpty(home)) home = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".dsh");
-            return Path.Combine(Path.Combine(Path.Combine(home, "dsh-vscode-mode"), "shell"), "dsh-open.ini");
+            return home;
+        }
+
+        /// <summary>Find the first profile bridge whose mode matches a requested target. @author ddj 2026-10-12</summary>
+        /// <param name="mode">Target mode (web or desktop) stored in the bridge INI.</param>
+        /// <returns>Absolute matching bridge INI path, or null when no profile provides it.</returns>
+        internal static string FindBridge(string mode)
+        {
+            string profiles = Path.Combine(Home(), "profiles");
+            if (!Directory.Exists(profiles)) return null;
+            foreach (string profile in Directory.GetDirectories(profiles))
+            {
+                string ini = Path.Combine(Path.Combine(Path.Combine(profile, "dsh-vscode-mode"), "bridge"), "dsh-open.ini");
+                if (!File.Exists(ini) || ModeOf(ini) != mode) continue;
+                return Path.GetFullPath(ini);
+            }
+            return null;
+        }
+
+        /// <summary>Read the mode value of a bridge INI without guessing a profile. @author ddj 2026-10-12</summary>
+        /// <param name="ini">Absolute bridge INI path.</param><returns>mode value, or empty when absent.</returns>
+        private static string ModeOf(string ini)
+        {
+            foreach (string text in File.ReadAllLines(ini))
+            {
+                int equal = text.IndexOf('=');
+                if (equal < 0) continue;
+                string key = text.Substring(0, equal).Trim();
+                if (!string.Equals(key, "mode", StringComparison.OrdinalIgnoreCase)) continue;
+                return text.Substring(equal + 1).Trim();
+            }
+            return string.Empty;
         }
 
         /// <summary>Resolve asset paths from the Unity project root. @author ddj 2026-09-28</summary>

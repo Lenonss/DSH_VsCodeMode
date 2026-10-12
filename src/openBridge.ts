@@ -56,6 +56,19 @@ export async function ensureOpenBridge(ctx: Ctx, baseUrl: string): Promise<strin
   return join(dir, 'dsh-open.ini')
 }
 
+/** @public @author ddj 2026年10月12号
+ * Provision the active profile's independent bridge at startup (desktop or web).
+ * Mirrors unityInstall's per-profile bridge without requiring a registered project,
+ * so Unity can select either target. Unknown profile returns null instead of failing.
+ * @param ctx Active host context.
+ * @param baseUrl Selected public Web URL (unused for desktop wake).
+ * @returns Absolute profile bridge INI path, or null when no owned profile is active.
+ */
+export async function ensureActiveBridge(ctx: Ctx, baseUrl: string): Promise<string | null> {
+  if (!findProfileDir(ctx)) return null
+  return ensureOpenBridge(ctx, baseUrl)
+}
+
 /** @private @author ddj 2026年09月28号
  * Replace a bridge file atomically without following a preexisting file link.
  * @param path Destination in the validated bridge directory.

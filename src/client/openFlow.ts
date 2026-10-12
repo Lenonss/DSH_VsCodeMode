@@ -10,7 +10,7 @@ import { rpc } from './rpc.js'
 import { chooseWorkspace } from './chooseDialog.js'
 import { requestOpen } from './openReceipt.js'
 import { toastDom } from './externalOpen.js'
-import { createAddToConversation } from './addToConversation.js'
+import { createAddToConversation, newDraftSession } from './addToConversation.js'
 import type { AddOutcome, CtxLike } from './addToConversation.js'
 import type { OpenParams } from '../shared/externalOpen.js'
 
@@ -307,12 +307,42 @@ function realDeps(ctx: unknown, overrides: Partial<OpenDeps> = {}): OpenDeps {
       const snap = (service('sessions')?.list?.getSnapshot?.() ?? {}) as { ids?: string[]; byId?: Record<string, SessionRow>; phase?: string }
       return { ids: snap.ids ?? [], byId: snap.byId ?? {}, ready: snap.phase !== 'pending' }
     },
-    createSession: async (opts) => await service('sessions').create(opts),
+    createSession: async (opts) => {
+      // 桌面端 sessions 服务面缺 create（实证缺 open；create 同代面可能缺）——
+      // 直连 create 不可用时回落 newDraftSession 的多通道建会话（宽松解析 id）。
+      const sessions = service('sessions') as { create?: (o: object) => unknown } | undefined
+      if (typeof sessions?.create === 'function') {
+        try {
+          const created = await sessions.create(opts)
+          const id = typeof created === 'string' && created ? created
+            : typeof (created as { id?: unknown } | null)?.id === 'string' ? (created as { id: string }).id
+            : typeof (created as { sessionId?: unknown } | null)?.sessionId === 'string' ? (created as { sessionId: string }).sessionId
+            : ''
+          if (id) return id
+        } catch { /* 回落下一通道 */ }
+      }
+      const draft = await newDraftSession(ctx as CtxLike, opts.cwd)
+      if (draft.ok && draft.id) return draft.id
+      throw new Error('新建会话失败')
+    },
     createWorkspace: async (path) => {
       const ws = await service('workspaces').create({ path })
       return { workspaceId: ws.workspaceId, title: ws.title }
     },
-    openSession: (id) => service('sessions').open(id),
+    openSession: (id) => {
+      // 桌面端 sessions 服务面缺 .open（实证 TypeError）——按 startDraftSession 同款
+      // 多面切换：materializeScope 铸 scope → manager.select 切会话 → open 兜底，缺面静默。
+      try {
+        const sessions = service('sessions') as {
+          materializeScope?: (id: string) => unknown
+          manager?: { select?: (id: string) => void }
+          open?: (id: string) => void
+        } | undefined
+        sessions?.materializeScope?.(id)
+        void sessions?.manager?.select?.(id)
+        void sessions?.open?.(id)
+      } catch { /* 面能力缺失不致命：打开失败由 openChecked 抛错兜底 */ }
+    },
     reference: async (sessionId, path, appearance) => {
       const outcome: AddOutcome = await add.appendReference(sessionId, path, undefined, appearance)
       // ok/busy（纯文本降级）都算已落点；unavailable/failed 交给 settleRef 继续重试

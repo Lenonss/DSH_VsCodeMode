@@ -5,7 +5,7 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
 
 # dsh-vscode-mode 开发/发布经验集（自我更新型技能）
 
-> updated: 2026-10-09 · 维护者：ddj（AI 会话按文末协议更新，保持精炼、去重）
+> updated: 2026-10-12 · 维护者：ddj（AI 会话按文末协议更新，保持精炼、去重）
 > **发布时先读「发布流程」与「失败恢复」**；下方实录是历史证据，不授权当前重跑发布、改 tag 或部署。冲突旧口径以更新后的规则为准。
 - 2026-10-09 实证（v0.14.5）：三门绿（2583通过/14跳过）；未改的 `tests/dapFakeAdapter.test.ts:26:9/:236:5` 报 `Error: waitFor 超时`，同提交Release与本地绿，仅CI失败任务重跑1次成功。npm响应 `Your package is being processed and may take a few minutes to become available.` 后约**25分23秒**才公开（01:32:53Z接受 / registry time 01:58:16.247Z）；15×30s Verify先超时，但main/tag/registry gitHead最终同为 `7833fac5c8b94ea940be34689e20d2345a5baea5`。npm实包与GitHub asset SHA256同为 `351280c1a7c19502a3212b8f6f20bf87defbd3524892e1b3b4516fc7c97719f7`，SRI与双入口通过。**未重跑Release、未重打tag、未部署DSH；真实GUI缺口经用户明确接受**。只确认异步处理中超过回读窗口，不猜测底层队列/CDN/stage原因。
 - 2026-10-08 MCP 审计：`mcp__${serverName}__${rawName}` 非单射，不能凭最长前缀反解归属；跨全局/项目双向拒绝 `__` 命名交叠，并对历史歧义工具 fail-closed。`ACTIVE`/工具数不是健康证据，`unverified` 应中性色；右侧绿色开关仅启用。状态轮询用只读 `mcp.snapshot`，不复用带文件/reconcile 的列表；初读并发用 `Promise.allSettled` 等所有传输结束，避免半失败导致重叠请求。配置读取—修改—写入需串行，避免并发丢服务；模块加载的 rejected Promise 不能永久缓存，否则刷新无法恢复。官方回归设置 `DSH_MCP_HOST_ROOT` 后才算真实模块测试，资源-only 零工具合法。
@@ -541,6 +541,16 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
 - 极简 JSON 提取器偏移：`"key":` 起点 = `key.Length + 3`；`"key":"` 起点 = `key.Length + 4`。
 - 内嵌包更新 = 整目录替换 + Unity 重新聚焦自动生效；版本号驱动设置页「可更新」徽标；
   Unity 生成的 `.meta` 文件要随 git 提交（稳定 GUID）。
+- 2026-10-12 坑：桌面端 client 的 `ctx.get('sessions')` 服务面缺 `.open`（直调抛
+  `TypeError: ... .open is not a function`）且可能缺 `.create` → 外部打开走 catch → ACK
+  success=false → Unity 报「编辑器打开失败或取消」。**禁止直调 `sessions.open/create`**；
+  改用 `materializeScope?.(id)` → `manager?.select?.(id)` → `open?.(id)` 多面切换（同
+  `addToConversation.startDraftSession`），建会话缺 `.create` 时回落 `newDraftSession`
+  多通道。客户端日志只有 `dbg(sessionId,text,level)` 经 `edrv.debug` 落 host
+  `~/.dsh/dsh-vscode-mode/logs/debug.*.log`，console sink 不落盘——排查 client 侧原因靠
+  dbg 探针而非 console.log。桌面 profile bridge 由 `ensureActiveBridge`（`vscode-mode:bridge`
+  effect）开机自动 provisioning，`FindBridge(mode)` 在 `~/.dsh/profiles/*/dsh-vscode-mode/bridge/dsh-open.ini`
+  按 `mode=` 定位。
 
 ## 插件技能组（随包 skills/）
 

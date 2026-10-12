@@ -461,7 +461,7 @@ async function latestPatchBackup(patchPath: string): Promise<string | undefined>
 }
 
 /** 读取设置中的深链基址（缺省/非法回退默认 3080）。 */
-async function integrationBaseUrlOf(ctx: Ctx): Promise<string> {
+export async function integrationBaseUrlOf(ctx: Ctx): Promise<string> {
   const settings = ctx.get('settings')
   const value = sectionOf(settings, FILE_OPEN_SETTINGS_NS)?.value as { integrationBaseUrl?: unknown } | undefined
   const raw = typeof value?.integrationBaseUrl === 'string' ? value.integrationBaseUrl.trim() : ''

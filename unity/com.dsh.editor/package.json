@@ -1,7 +1,7 @@
 {
   "name": "com.dsh.editor",
   "displayName": "DSH 文件编辑",
-  "description": "DSH（dsh-vscode-mode）外部脚本编辑器：通过当前用户私有 OPEN REQUEST/ACK 文件队列打开脚本、Console 行列或项目；确认匹配 ACK 后才报告成功，支持官方桌面与所选 Web profile。",
-  "version": "0.3.0",
+  "description": "DSH（dsh-vscode-mode）外部脚本编辑器：通过当前用户私有 OPEN REQUEST/ACK 文件队列打开脚本、Console 行列或项目；确认匹配 ACK 后才报告成功，支持官方桌面与所选 Web profile，可在外部工具面板选择打开目标（自动/DSH Web/DSH 桌面端）。",
+  "version": "0.3.1",
   "unity": "2019.4"
 }

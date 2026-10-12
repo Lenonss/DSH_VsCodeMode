@@ -331,7 +331,7 @@ producer 只承担「打开」请求，不是通用 RPC 代理。旧 `edrvOpen/e
 目录根据是否位于已注册工作区内选择复用或新建。选择取消会结束该请求。行列定位
 与真正加载的目标文件绑定，避免切换文件时把其他 model 的内容当成完成证据。
 
-**② Unity 外部脚本编辑器（内嵌包 `com.dsh.editor` 0.3.0）**
+**② Unity 外部脚本编辑器（内嵌包 `com.dsh.editor` 0.3.1）**
 
 1. 在设置卡片中选择 Unity 项目，执行安装/更新，将随包 UPM 目录复制到
    `<项目>/Packages/com.dsh.editor`；无需修改项目 manifest。
@@ -459,18 +459,18 @@ DSH 每次启动监听随机端口，`http://127.0.0.1:<port>` 就是浏览器 o
 
 官方 `dsh plugin` 方式，三选一。下面以 `web` profile 为例；Desktop 或其他命名
 profile 请替换为实际目标，不要把示例目录当成当前运行 profile。升级前可阅读
-[0.14.7 发布说明](docs/release-0.14.7.md)；从 0.14.2 或更旧版本升级还须阅读
+[0.14.8 发布说明](docs/release-0.14.8.md)；从 0.14.2 或更旧版本升级还须阅读
 [0.14.3 数据迁移与回退说明](docs/release-0.14.3.md)。
 
 ```bash
 # ① Git 安装（clone + prepare 构建；推荐打固定 tag）
-dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.14.7
+dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.14.8
 
 # ② npm 注册表（发布到 npm 后）
-dsh plugin --profile web add dsh-vscode-mode@0.14.7
+dsh plugin --profile web add dsh-vscode-mode@0.14.8
 
 # ③ GitHub Release tgz 直装（Release asset 可用后）
-dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.14.7/dsh-vscode-mode-0.14.7.tgz
+dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.14.8/dsh-vscode-mode-0.14.8.tgz
 ```
 
 > **DSH 0.2 兼容范围**：`0.14.1` 起精确放行 `0.2.0-rc.1`，`0.14.4` 再加入
@@ -806,6 +806,7 @@ Keep All / Undo All 却是亮的。修复：单文件 Keep / Undo 覆盖冲突�
 完整变更见 [GitHub Releases](https://github.com/Lenonss/DSH_VsCodeMode/releases)。
 近期关键版本：
 
+- **v0.14.8**：**Unity 打开目标选择与桌面端打开修复**——Unity 外部脚本编辑器 `com.dsh.editor` 0.3.1 新增「打开目标」选择（自动/DSH Web/DSH 桌面端），桌面端按 profile bridge 定位、缺失明确报错；桌面 profile 开机自动准备独立 bridge，无需先注册 OS 菜单。修复桌面端 sessions 服务面缺 `.open`/`.create` 导致的「编辑器打开失败或取消」（改走 `materializeScope → manager.select` 多面切换与 `newDraftSession` 回落）。验证范围与真实 GUI 验收缺口见 [0.14.8 发布说明](docs/release-0.14.8.md)。
 - **v0.14.7**：**SVN 资源管理器状态图标与编辑过程自抵消自动归档**——文件树叠加 SVN 状态图标（含目录子树聚合、远程状态、冲突/缺失等标记与矢量叠加），有界快照单飞投影、流式状态解析与写操作后定向刷新；新增后再还原的编辑过程自抵消记录自动归档跳过审查，先保存再独立归档、事务失败回滚内存标志。修复 DAP 帧源码路径按语言过滤候选、不回落错误语言文件；刷新事件携带 scope/paths 细化。验证范围与真实 GUI 验收缺口见 [0.14.7 发布说明](docs/release-0.14.7.md)。
 - **v0.14.6**：**对话切换位置保持与共享查找**——同工作区切换对话时，在编辑器释放前保存实际模型的滚动、光标和选区等视图状态；只在模型重新绑定时恢复，显式行号导航仍优先。跨文件共享 Ctrl+F 查询、大小写/全词/正则与开关状态，不共享选区搜索范围或匹配序号，不抢焦点；工作区隔离并释放监听。验证范围与真实 GUI 验收缺口见 [0.14.6 发布说明](docs/release-0.14.6.md)。
 - **v0.14.5**：**计划模式接入与行内差异显示修复**——计划文件默认预览，当前会话新生成计划自动打开；官方计划及待审批计划可转入只读虚拟页签，审批仍由官方控件完成。行内增删与 Monaco diff 共用明暗色盘，删除代码按当前语言着色，旧行号仅在快照可验证时显示；修复纯删除的 BOM/CRLF 定位，清理过期异步结果与监听。验证及真实 GUI 冒烟边界见 [0.14.5 发布说明](docs/release-0.14.5.md)。
@@ -835,9 +836,10 @@ Keep All / Undo All 却是亮的。修复：单文件 Keep / Undo 覆盖冲突�
   项目 MCP 改为每 agent 挂载，隔离工具/资源/指令，新增配置态、未验证状态与实例数；
   开发形态切换使用实际 `profileContext` 并支持失败恢复；子进程环境清理与进程树
   回收收敛；在 **0.12 已有官方快捷键接管**上修复 normalized 绑定、录制收尾及
-  按会话 scope 首开。C#/PowerShell/Bash launcher 与 Unity 0.3.0 共用私有
+  按会话 scope 首开。C#/PowerShell/Bash launcher 与 Unity 0.3.1 共用私有
   OPEN/lease ACK 链路，真正加载目标 model/预览后才确认；Unity 首装自动配置
-  profile bridge，无需注册 OS 菜单。迁移、部署、回滚和验证边界见
+  profile bridge，无需注册 OS 菜单；外部工具面板可选打开目标（自动/DSH Web/DSH
+   桌面端），桌面 profile 开机自动准备独立 bridge。迁移、部署、回滚和验证边界见
   [0.13.0 发布说明](docs/release-0.13.0.md)。
 - **v0.12.0**：**用户规则双目录兼容 + 官方快捷键接管**——用户规则同时读取
   `DSH_HOME/rules/` 和 `~/.dsh/rules/`，同名以当前目录为准，旧规则原地管理，

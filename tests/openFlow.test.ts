@@ -259,6 +259,69 @@ describe('openDeepLink 编排', () => {
   })
 })
 
+describe('桌面端 sessions 面回归（sessions 服务缺 .open/.create，实证 TypeError）', () => {
+  /** 模拟桌面端 ctx：sessions 仅 list + manager.select + materializeScope，无 .open/.create。 */
+  function desktopCtx() {
+    return {
+      get: (name: string) => {
+        if (name === 'sessions') {
+          return {
+            list: { getSnapshot: () => ({ ids: ['s1', 's2'], byId: { s1: { id: 's1', updatedAt: 100 }, s2: { id: 's2', updatedAt: 500 } }, phase: 'ready' }) },
+            manager: { select: (id: string) => void 0 },
+            materializeScope: (id: string) => void 0,
+            // 桌面端实证：无 open / create
+          }
+        }
+        if (name === 'workspaces') return { list: { getSnapshot: () => ({ items: [], phase: 'ready' }) } }
+        return undefined
+      },
+    }
+  }
+
+  it('fileRecent：sessions 无 .open 时编排不抛错，走 manager.select 切换，编辑器照常打开', async () => {
+    const st = baseState()
+    st.ids = ['s1', 's2']
+    st.byId = { s1: { id: 's1', updatedAt: 100 }, s2: { id: 's2', updatedAt: 500 } }
+    st.kinds['D:\\proj\\Boot.lua'] = 'file'
+    // 刻意不覆盖 openSession/createSession → 走 realDeps 加固实现（桌面缺 .open 也能切会话）
+    const result = await openDeepLink(desktopCtx(), { paths: ['D:\\proj\\Boot.lua'] }, {
+      stat: async (p) => st.kinds[p] ?? 'missing',
+      workspaces: () => ({ items: st.items, ready: true }),
+      sessions: () => ({ ids: st.ids, byId: st.byId, ready: true }),
+      reference: async () => true,
+      openEditor: async (path, line, column) => { st.editors.push({ path, line, column }); return true },
+      schedule: (fn) => fn(),
+      notify: (t) => st.notified.push(t),
+    })
+    expect(result).toBe(true)
+    expect(st.editors).toEqual([{ path: 'D:\\proj\\Boot.lua', line: undefined, column: undefined }])
+    expect(st.notified).toEqual([])
+  })
+
+  it('folderNew：sessions 无 .create 时回落 newDraftSession 通道失败 → 明确报「新建会话失败」而非 TypeError 崩溃', async () => {
+    const st = baseState()
+    st.kinds['D:\\Other\\Notes'] = 'directory'
+    const result = await openDeepLink(desktopCtx(), { paths: ['D:\\Other\\Notes'] }, {
+      stat: async (p) => st.kinds[p] ?? 'missing',
+      workspaces: () => ({ items: st.items, ready: true }),
+      sessions: () => ({ ids: [], byId: {}, ready: true }),
+      createWorkspace: async (path) => {
+        st.createdWs.push(path)
+        const ws = { workspaceId: 'ws-new-' + st.createdWs.length, title: path }
+        st.items.push({ ...ws, path, sessionIds: [] })
+        return ws
+      },
+      reference: async () => true,
+      openEditor: async (path, line, column) => { st.editors.push({ path, line, column }); return true },
+      schedule: (fn) => fn(),
+      notify: (t) => st.notified.push(t),
+    })
+    expect(result).toBe(false)
+    expect(st.notified.some((t) => t.includes('新建会话失败'))).toBe(true)
+    expect(st.editors).toEqual([])
+  })
+})
+
 
 describe('actual completion outcomes', () => {
   it('waits each file receipt before opening the next and reporting success', async () => {

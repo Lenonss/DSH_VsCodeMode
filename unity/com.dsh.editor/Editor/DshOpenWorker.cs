@@ -16,6 +16,7 @@ namespace Dsh.EditorIntegration
         private readonly string targetPath;
         private readonly string projectRoot;
         private readonly string legacyConfig;
+        private readonly string target;
         private readonly int line;
         private readonly int column;
 
@@ -23,12 +24,14 @@ namespace Dsh.EditorIntegration
         /// <param name="config">Selected INI path.</param><param name="path">Absolute asset or project.</param>
         /// <param name="row">One-based line.</param><param name="col">One-based column.</param>
         /// <param name="root">Project root.</param><param name="fallback">Legacy shell INI path.</param>
-        internal DshOpenWorker(string config, string path, int row, int col, string root, string fallback)
+        /// <param name="mode">Requested target (auto/web/desktop); empty means auto. @author ddj 2026-10-12</param>
+        internal DshOpenWorker(string config, string path, int row, int col, string root, string fallback, string mode)
         {
             configPath = config;
             targetPath = path;
             projectRoot = root;
             legacyConfig = fallback;
+            target = string.IsNullOrEmpty(mode) ? "auto" : mode;
             line = row;
             column = col;
         }
@@ -105,7 +108,15 @@ namespace Dsh.EditorIntegration
         /// <returns>Selected bridge INI path; missing or malformed hints are handled by the caller.</returns>
         internal string SelectConfig()
         {
-            return string.IsNullOrEmpty(configPath) ? DshCodeEditor.DefaultConfig(projectRoot, legacyConfig) : configPath;
+            if (!string.IsNullOrEmpty(configPath)) return configPath;
+            if (target == "web") return DshCodeEditor.FindBridge("web") ?? DshCodeEditor.DefaultConfig(projectRoot, legacyConfig);
+            if (target == "desktop")
+            {
+                string desktop = DshCodeEditor.FindBridge("desktop");
+                if (desktop != null) return desktop;
+                throw new FileNotFoundException("No DSH desktop bridge configuration found. Open the DSH desktop app once, then retry, or set an explicit bridge configuration in External Tools.");
+            }
+            return DshCodeEditor.DefaultConfig(projectRoot, legacyConfig);
         }
 
         /// <summary>Build helper arguments without routing files through a URL. @author ddj 2026-09-28</summary>

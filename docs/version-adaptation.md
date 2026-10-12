@@ -1,6 +1,6 @@
 # DSH 版本适配机制（dsh-vscode-mode）
 
-> 更新于 2026-10-08；第 1～7 节记录插件 0.13.0 对 DSH `0.1.7-rc.2` 的历史基线，
+> 更新于 2026-10-12；第 1～7 节记录插件 0.13.0 对 DSH `0.1.7-rc.2` 的历史基线，
 > 第 8 节另列插件 0.14.1 对 Web DSH `0.2.0-rc.1`，第 9 节记录 0.14.4 对 Desktop `0.2.0-rc.2` 的限定适配。
 > API 能力探测、包版本范围、自动化测试和真实应用验收分别记录；其中任何一项都不能替代其他项。
 
@@ -39,7 +39,7 @@
 | `profileContext` | 优先读取真实 `dir` 与 `packageManager`；旧宿主仅允许唯一 profile 候选回退 | 无效/歧义时拒绝猜测；安装失败恢复 manifest、lockfile 和原入口；恢复失败保留备份位置 |
 | shortcuts | 对齐官方返回的 normalized 绑定，保留物理 Control/Meta 区别；录制前后正确切换 recording；命令首开使用当前会话 scope | 0.12 已引入官方接管；0.13 修正转换和生命周期。Web 搜索绑定以当前官方平台目录为准 |
 | 外部打开 | 本机私有、按 profile 隔离的 OPEN 请求与 lease/ACK；各 launcher 和 Unity 共用 producer | 只有目标实际 model/预览内容加载完成才确认成功；旧 URL 深链仅作兼容入口 |
-| Unity bridge | 内嵌包 0.3.0，首次安装自动准备 profile bridge 并写项目 UserSettings hint；UI 覆盖优先 | 不依赖 OS 菜单注册；没有真实 Unity EditMode 验证，不能据编译桩声称完整 Unity 运行通过 |
+| Unity bridge | 内嵌包 0.3.1，首次安装自动准备 profile bridge 并写项目 UserSettings hint；UI 覆盖优先；桌面 profile 开机自动 provisioning 独立 bridge；Unity 外部工具面板可显式选择打开目标（自动/DSH Web/DSH 桌面端） | 不依赖 OS 菜单注册；没有真实 Unity EditMode 验证，不能据编译桩声称完整 Unity 运行通过 |
 | 子进程 | 共用 `childEnv` 清理隐式凭据/DSH 环境，显式配置保留；LSP/DAP 按平台回收进程树/进程组 | 清理依赖变量名规则，进程树回收是 best effort；Linux/macOS 本轮未现场验证 |
 
 ### 设置策略仍按能力选择
