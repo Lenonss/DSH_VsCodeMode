@@ -4,7 +4,7 @@
  * 作者 ddj 2026-08-20
  */
 import type { Decision, DiffRecord, Hunk, RecordSummary } from './shared/types.js'
-import { applyLocations, fingerprint, isNoopHunk, locateHunks, preciseHunk } from './shared/diff.js'
+import { applyLocations, fingerprint, isNoopHunk, locateHunks, normalizeForCompare, normalizeHunk, preciseHunk } from './shared/diff.js'
 
 /** 工作区记录桶上限（超过后按 at 最旧剔除）。 */
 export const MAX_RECORDS = 200
@@ -156,6 +156,117 @@ export function reconstructOriginal(records: DiffRecord[], content: string): { c
     stale: rebuilt.stale.map((idx) => ({ callId: pending[idx].rec.callId, idx: pending[idx].idx })),
   }
 }
+
+// #region 过程抵消
+
+/**
+ * @public
+ * @author ddj 2026年10月10号
+ * 判断记录是否完全未决策；缺少逐块状态时沿用 pending 的 call 状态。
+ * @param record 审查记录
+ * @returns 未归档、未覆盖且没有用户决策时为 true
+ */
+export function fullyPending(record: DiffRecord): boolean {
+  return !record.archived && !record.superseded && record.decisions.call === 'pending'
+    && record.decisions.perHunk.every((value) => value === 'pending')
+}
+
+/**
+ * @public
+ * @author ddj 2026年10月10号
+ * 比较整组 hunk 是否逐块精确逆反；不把新建或纯 no-op 当作抵消。
+ * @param prior 先前修改的差异块
+ * @param later 后续修改的差异块
+ * @returns 文本归一化后整组逆反且包含真实修改时为 true
+ */
+export function hunksInverse(prior: Hunk[], later: Hunk[]): boolean {
+  if (!prior.length || prior.length !== later.length) return false
+  let changed = false
+  for (let idx = 0; idx < prior.length; idx++) {
+    const a = normalizeHunk(prior[idx])
+    const b = normalizeHunk(later[idx])
+    if (a.oldText !== b.newText || a.newText !== b.oldText) return false
+    if (!isNoopHunk(a)) changed = true
+  }
+  return changed
+}
+
+/**
+ * @private
+ * @author ddj 2026年10月10号
+ * 同路径优先按捕获批次排序；旧记录仅使用有效时间，不拿 callId 伪造先后证据。
+ * @param a 第一条记录
+ * @param b 第二条记录
+ * @returns 负数表示 a 更早，零表示先后无法区分
+ */
+function recordOrder(a: DiffRecord, b: DiffRecord): number {
+  if (a.path !== b.path) return a.path.localeCompare(b.path)
+  if (Number.isInteger(a.batch) && Number.isInteger(b.batch)
+    && a.batch > 0 && b.batch > 0 && a.batch !== b.batch) return a.batch - b.batch
+  const delta = Date.parse(a.at) - Date.parse(b.at)
+  return Number.isFinite(delta) ? delta : 0
+}
+
+/**
+ * @private
+ * @author ddj 2026年10月10号
+ * 确认完整文件快照往返，防止相同文本在不同位置的反向修改被误隐藏。
+ * @param prior 先前记录
+ * @param later 后续记录
+ * @returns 两端快照互换且文件存在性未变化时为 true；缺少证据时保留审查
+ */
+function snapshotsRestore(prior: DiffRecord, later: DiffRecord): boolean {
+  if (prior.create || later.create) return false
+  if (typeof prior.before !== 'string' || typeof prior.after !== 'string'
+    || typeof later.before !== 'string' || typeof later.after !== 'string') return false
+  return normalizeForCompare(prior.before) === normalizeForCompare(later.after)
+    && normalizeForCompare(prior.after) === normalizeForCompare(later.before)
+}
+
+/**
+ * @public
+ * @author ddj 2026年10月10号
+ * 查找最近一条未决的整记录逆反；必须有文件快照证明原内容确实恢复。
+ * @param records 工作区记录（不修改输入）
+ * @param record 新记录
+ * @returns 可安全配对的先前记录，证据不足或部分撤销时为 null
+ */
+export function findInversePrior(records: DiffRecord[], record: DiffRecord): DiffRecord | null {
+  if (!fullyPending(record)) return null
+  let found: DiffRecord | null = null
+  for (const prior of records) {
+    if (prior.callId === record.callId || prior.path !== record.path || !fullyPending(prior)) continue
+    if (recordOrder(prior, record) >= 0 || !hunksInverse(prior.hunks, record.hunks)) continue
+    if (!snapshotsRestore(prior, record)) continue
+    if (!found || recordOrder(found, prior) < 0) found = prior
+  }
+  return found
+}
+
+/**
+ * @public
+ * @author ddj 2026年10月10号
+ * 按捕获顺序贪心配对历史抵消记录，每条最多使用一次；桶上限为 200。
+ * @param records 工作区记录（不修改输入或记录状态）
+ * @returns 可以整对归档的记录对
+ */
+export function findCanceledPairs(records: DiffRecord[]): Array<[DiffRecord, DiffRecord]> {
+  const available: DiffRecord[] = []
+  const pairs: Array<[DiffRecord, DiffRecord]> = []
+  const ordered = [...records].sort(recordOrder)
+  for (const record of ordered) {
+    const prior = findInversePrior(available, record)
+    if (!prior) {
+      if (fullyPending(record)) available.push(record)
+      continue
+    }
+    pairs.push([prior, record])
+    available.splice(available.indexOf(prior), 1)
+  }
+  return pairs
+}
+
+// #endregion
 
 /** 文件当前最大批次号（无记录为 0）。 */
 export function fileMaxBatch(records: Map<string, DiffRecord>, path: string): number {

@@ -6,8 +6,9 @@
  * 保留旧条目强制后台重列（force）；每次用户发起加载后预取 ≤4 个子目录（排除重型
  * 目录、缓存新鲜跳过、不级联）；10s 轻量跟随已展开目录（命中索引，RPC 近零成本）。
  * 差异角标/右键菜单/展开状态持久化行为不变；行图标用官方原语（文件夹图标 + 文件类型图标）。
- * SVN 状态徽标（P2）：行尾方形字母，数据来自 ctx.svnChangeMap（客户端合成，不改 listDir 契约）。
- * 作者 ddj 2026-08-26 / 2026-08-27 / 2026-08-31 / 2026-09-10 / 2026-09-16
+ * SVN 图标叠加：受控正常绿色对勾、本地修改红色感叹号；目录聚合后代状态。
+ * 远端更新箭头由显式只读检查提供，与本地状态并存，不执行更新。
+ * 作者 ddj 2026-08-26 / 2026-08-27 / 2026-08-31 / 2026-09-10 / 2026-09-16 / 2026-10-09
  */
 import React from 'react'
 import { IconFolderClose16, IconFolderOpen16, IconRefreshOutline16, fileIconEl } from '../../ui/icons.js'
@@ -19,7 +20,10 @@ import { entriesCacheGet, entriesCacheIsFresh, entriesCachePut } from '../../sta
 import { workspaceScopeOf } from '../../state/scopeStore.js'
 import { ancestorDirsOf } from '../../tabActions.js'
 import { refreshSvnChanges, refreshSvnStatus } from '../../svnStatus.js'
-import { SVN_STATUS_TONE, svnBadgeOf, svnBadgeTitle } from '../../../shared/svn.js'
+import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
+import { emitRefresh } from '../../events.js'
+import { svnOverlayEl, viewOverlayOf } from '../../ui/SvnOverlay.js'
+import { useExplorerSvn } from './useExplorerSvn.js'
 import type { SidebarCtx } from '../types.js'
 
 const DIR_CAP = 4000
@@ -73,6 +77,26 @@ function refreshIconEl() {
 }
 // --endregion
 
+/** @private @author ddj 2026年10月10号 @param props Stable primitive row fields and compact mark. @returns Official file icon with independently fresh SVN evidence. */
+function rowView(props) {
+  const { path, name, type, depth, isDir, isOpen, pending, active, context, reveal, mark, remote, onSelect, onContext } = props
+  /** @private @author ddj 2026年10月10号 Handle row activation. */
+  function select() { onSelect(path, isDir) }
+  /** @private @author ddj 2026年10月10号 @param event Context trigger. */
+  function menu(event) { onContext(path, type, event) }
+  return React.createElement('div', {
+    className: 'edrv-tree-row' + (active ? ' edrv-tree-active' : '') + (context ? ' edrv-tree-context' : '')
+      + (reveal ? ' edrv-tree-reveal' : '') + (mark?.stale ? ' edrv-tree-stale' : ''),
+    title: path + (mark?.stale ? '；SVN 状态陈旧，等待确认' : ''), 'data-edrv-path': path,
+    style: { paddingLeft: 6 + depth * 14 }, onClick: select, onContextMenu: menu,
+  },
+    React.createElement('span', { className: 'edrv-tree-chev' }, isDir ? (isOpen ? '▾' : '▸') : ''),
+    React.createElement('span', { className: 'edrv-tree-iconbox' }, rowIconEl({ name }, isDir, isOpen), svnOverlayEl(viewOverlayOf(mark), remote)),
+    React.createElement('span', { className: 'edrv-tree-name' + (type === 'other' ? ' edrv-tree-dim' : '') }, name),
+    pending > 0 ? React.createElement('span', { className: 'edrv-tree-badge' }, String(pending)) : null)
+}
+const ExplorerRow = React.memo(rowView)
+
 /**
  * 转义 CSS 属性选择器的值（路径含引号/反斜杠时避免选择器语法错误）。
  * @author ddj 2026年09月11号
@@ -92,10 +116,11 @@ export function FileExplorer(props) {
   const sessionId = ctx?.sessionId
   // 状态作用域：展开树/条目缓存按工作区隔离（同工作区切对话恢复同一份），无 cwd 回退会话
   const scope = ctx?.scope ?? workspaceScopeOf(null, sessionId)
+  const scopeRef = React.useRef(scope)
+  scopeRef.current = scope
   const openFile = ctx?.openFile
   const activePath = ctx?.activePath ?? null
   const pendingByPath = ctx?.pendingByPath ?? {}
-  const svnChangeMap = ctx?.svnChangeMap ?? {}
   const [root, setRoot] = React.useState(null)
   const [dirs, setDirs] = React.useState({}) // rel → 最新条目（本会话内存态）
   const [expanded, setExpanded] = React.useState({})
@@ -239,7 +264,9 @@ export function FileExplorer(props) {
   }
   revealInTreeRef.current = revealInTree
 
-  const refresh = () => {
+  const refresh = (event) => {
+    if (event?.detail?.scope && event.detail.scope !== scope) return
+    if (event?.detail?.paths?.length) { for (const path of event.detail.paths) onFileChanged(path); return }
     const keep = Object.keys(expandedRef.current).filter((k) => expandedRef.current[k] === true)
     tokensRef.current = {}
     setMenu(null)
@@ -274,7 +301,7 @@ export function FileExplorer(props) {
     if (typeof path !== 'string' || !path) return
     const rel = path.replace(/\\/g, '/').replace(/^\.\//, '')
     const parts = rel.split('/').filter(Boolean)
-    if (parts.length > 1) changedRelRef.current.add(parts.slice(0, -1).join('/'))
+    changedRelRef.current.add(parts.slice(0, -1).join('/'))
     // 绝对路径（或已在更深层目录）：补上所有已展开的祖先目录
     for (const dir of ancestorDirsOf(rel)) {
       if (expandedRef.current[dir] === true) changedRelRef.current.add(dir)
@@ -293,7 +320,10 @@ export function FileExplorer(props) {
 
   // edrv:file-changed（外部改动同步）：按变化路径强制重列对应目录（去抖合并）
   React.useEffect(() => {
-    const handler = (event) => onFileChanged(event?.detail?.path)
+    const handler = (event) => {
+      if (event?.detail?.scope && event.detail.scope !== scopeRef.current) return
+      for (const path of event?.detail?.paths ?? [event?.detail?.path]) onFileChanged(path)
+    }
     window.addEventListener('edrv:file-changed', handler)
     return () => {
       window.removeEventListener('edrv:file-changed', handler)
@@ -343,7 +373,7 @@ export function FileExplorer(props) {
 
   // edrv:refresh（差异决策/回滚后）：保留旧条目，强制后台重列
   React.useEffect(() => {
-    const onRefresh = () => refreshRef.current?.()
+    const onRefresh = (event) => refreshRef.current?.(event)
     window.addEventListener('edrv:refresh', onRefresh)
     return () => window.removeEventListener('edrv:refresh', onRefresh)
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -367,6 +397,7 @@ export function FileExplorer(props) {
   React.useEffect(() => {
     if (!scope) return
     const timer = setInterval(() => {
+      if (document.visibilityState === 'hidden') return
       const open = Object.keys(expandedRef.current).filter((k) => expandedRef.current[k] === true)
       if (!open.length) return
       for (const rel of open) loadDirRef.current?.(rel, {})
@@ -375,69 +406,49 @@ export function FileExplorer(props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scope])
 
+  /** @private @author ddj 2026年10月10号 @returns Expanded tree descriptors; icon refreshes never re-walk the tree. */
+  function flatten() {
+    const result = []
+    /** @private @author ddj 2026年10月10号 @param rel Directory. @param depth Indent level. Appends only expanded rows and placeholders. */
+    function visit(rel, depth) {
+      const entries = dirs[rel] ?? entriesCacheGet(scope, rel)
+      if (!entries) { result.push({ key: rel + ':loading', depth, text: loading[rel] ? '加载中…' : '无法加载' }); return }
+      for (const e of entries) {
+        const isDir = e.type === 'directory', isOpen = expanded[e.path] === true
+        result.push({ key: e.path, e, depth, isDir, isOpen })
+        if (isDir && isOpen) visit(e.path, depth + 1)
+      }
+      if (entries.length >= DIR_CAP) result.push({ key: rel + ':cap', depth, text: '目录条目过多，仅显示前 ' + DIR_CAP + ' 项' })
+    }
+    visit('', 0)
+    return result
+  }
+  const treeRows = React.useMemo(flatten, [dirs, expanded, loading, scope])
+  /** @private @author ddj 2026年10月10号 @returns Stable RPC row projection, independent of icon-only renders. */
+  function projectRows() { return treeRows.filter((row) => row.e).map((row) => ({ path: row.e.path, isDir: row.isDir })) }
+  const svnRows = React.useMemo(projectRows, [treeRows])
+  const svn = useExplorerSvn(ctx, svnRows)
+  /** @private @author ddj 2026年10月10号 @param path Row path. @param isDir Row kind. Routes selection through latest callback. */
+  function selectRow(path, isDir) { if (isDir) toggle(path); else openFile?.(path) }
+  const selectRef = React.useRef(selectRow)
+  selectRef.current = selectRow
+  /** @private @author ddj 2026年10月10号 @param path Row path. @param type Entry type. @param event Context trigger. */
+  function contextRow(path, type, event) {
+    event.preventDefault(); event.stopPropagation()
+    setMenu({ x: event.clientX, y: event.clientY, target: { path, type } })
+  }
+  const onSelect = React.useCallback((path, isDir) => selectRef.current(path, isDir), [])
+  const onContext = React.useCallback(contextRow, [])
   const rootName = root ? String(root).split(/[\\/]/).pop() || root : ''
 
-  const rowEl = (e, depth, isDir, isOpen) => {
-    const pending = isDir ? 0 : (pendingByPath[e.path] ?? 0)
-    const active = !isDir && e.path === activePath
-    const contextTarget = Boolean(menu && menuEntries.length && menu.target.path === e.path)
-    const dim = e.type === 'other'
-    // SVN 状态徽标：客户端由变更清单合成的查表（未加载/干净/未版本控制被过滤时不出徽标）
-    const svnEntry = svnChangeMap[e.path]
-    const svnLetter = svnEntry ? svnBadgeOf(svnEntry) : ''
-    return React.createElement('div', {
-      key: e.path,
-      className: 'edrv-tree-row'
-        + (active ? ' edrv-tree-active' : '')
-        + (contextTarget ? ' edrv-tree-context' : '')
-        + (revealPath === e.path ? ' edrv-tree-reveal' : ''),
-      title: e.path,
-      'data-edrv-path': e.path,
-      style: { paddingLeft: 6 + depth * 14 },
-      onClick: () => { if (isDir) toggle(e.path); else openFile(e.path) },
-      onContextMenu: (ev) => {
-        ev.preventDefault()
-        ev.stopPropagation()
-        // 菜单左上角对齐鼠标点击位置（视口坐标，ContextMenu 内再做 viewport clamp）
-        setMenu({ x: ev.clientX, y: ev.clientY, target: { path: e.path, type: e.type } })
-      },
-    },
-      React.createElement('span', { className: 'edrv-tree-chev' },
-        isDir ? (isOpen ? '▾' : '▸') : ''),
-      rowIconEl(e, isDir, isOpen),
-      React.createElement('span', { className: 'edrv-tree-name' + (dim ? ' edrv-tree-dim' : '') },
-        e.name),
-      (svnLetter
-        ? React.createElement('span', {
-            className: 'edrv-tree-svn edrv-svn-ch-' + (SVN_STATUS_TONE[svnEntry.status] ?? 'plain'),
-            title: 'SVN ' + svnBadgeTitle(svnEntry),
-          }, svnLetter)
-        : null),
-      (pending > 0
-        ? React.createElement('span', { className: 'edrv-tree-badge' }, String(pending))
-        : null))
-  }
-
-  const rowsOf = (rel, depth) => {
-    const entries = entriesOf(rel)
-    if (!entries) {
-      return [React.createElement('div', { key: rel + ':loading', className: 'edrv-tree-loading', style: { paddingLeft: 6 + depth * 14 } },
-        loading[rel] ? '加载中…' : '无法加载')]
-    }
-    const rows = []
-    const cap = entries.length
-    for (let i = 0; i < cap; i++) {
-      const e = entries[i]
-      const isDir = e.type === 'directory'
-      const isOpen = expanded[e.path] === true
-      rows.push(rowEl(e, depth, isDir, isOpen))
-      if (isDir && isOpen) rows.push(...rowsOf(e.path, depth + 1))
-    }
-    if (cap >= DIR_CAP) {
-      rows.push(React.createElement('div', { key: rel + ':cap', className: 'edrv-tree-loading', style: { paddingLeft: 6 + depth * 14 } },
-        '目录条目过多，仅显示前 ' + DIR_CAP + ' 项'))
-    }
-    return rows
+  /** @private @author ddj 2026年10月10号 @param row Flat descriptor. @returns Memo row; unaffected status objects retain identity. */
+  function renderRow(row) {
+    if (!row.e) return React.createElement('div', { key: row.key, className: 'edrv-tree-loading', style: { paddingLeft: 6 + row.depth * 14 } }, row.text)
+    const { e, depth, isDir, isOpen } = row
+    return React.createElement(ExplorerRow, { key: e.path, path: e.path, name: e.name, type: e.type, depth, isDir, isOpen,
+      pending: isDir ? 0 : pendingByPath[e.path] ?? 0, active: !isDir && e.path === activePath,
+      context: Boolean(menu && menuEntries.length && menu.target.path === e.path), reveal: revealPath === e.path,
+      mark: svn.local?.get(e.path), remote: svn.remote?.get(e.path) ?? 0, onSelect, onContext })
   }
 
   // 面板区右键（空白处）→ 工作区根目录菜单；行内右键已在 rowEl 阻止冒泡。
@@ -467,14 +478,20 @@ export function FileExplorer(props) {
       React.createElement('span', { className: 'edrv-side-title' }, '资源管理器'),
       React.createElement('span', { className: 'edrv-side-root', title: root || '' }, rootName),
       React.createElement('span', { style: { flex: 1 } }),
-      React.createElement('button', { className: 'edrv-side-btn', title: '刷新目录树', onClick: refresh }, refreshIconEl())),
+      ctx?.svn?.managed ? React.createElement(Button, {
+        variant: 'toolbar', size: 'sm', disabled: !svn.canCheck || svn.busy,
+        title: '检查仓库更新（只读；不会执行 svn update）', onClick: svn.checkRemote,
+        'aria-label': '检查仓库更新',
+      }, svn.busy ? '…' : '↓') : null,
+      React.createElement('button', { className: 'edrv-side-btn', title: '刷新目录树', onClick: () => emitRefresh({ scope, kind: 'unknown' }) }, refreshIconEl())),
+    svn.message ? React.createElement('div', { className: 'edrv-tree-status', role: 'status' }, svn.message) : null,
     React.createElement('div', { className: 'edrv-tree', ref: treeRef },
       (errorText
         ? React.createElement('div', { className: 'edrv-tree-error' },
             React.createElement('span', null, String(errorText)),
-            React.createElement('button', { className: 'edrv-side-btn', onClick: () => refresh() }, '重试'))
+            React.createElement('button', { className: 'edrv-side-btn', onClick: () => emitRefresh({ scope, kind: 'unknown' }) }, '重试'))
         : null),
-      rowsOf('', 0)),
+      treeRows.map(renderRow)),
     (menu && menuEntries.length
       ? React.createElement(ContextMenu, { x: menu.x, y: menu.y, entries: menuEntries, onClose: () => setMenu(null) })
       : null))

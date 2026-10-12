@@ -1143,14 +1143,14 @@ export function EditorView(props) {
   const onDiskChange = (change) => {
     if (!change || !change.path) return
     // 文件树同步：目录缓存按该路径失效并强制重列（外部新增/删除/改名都能看到）
-    emitFileChanged(change.path)
+    const eventId = emitFileChanged(change.path, { scope, kind: change.kind === 'deleted' ? 'structure' : 'text' })
     if (change.kind === 'modified') {
       // 干净缓冲：强制从磁盘重读（跳过 model 复用），差异标记随之重算
       loadContent(change.path, sessionId, true)
       clearSync(scope, change.path)
       setDiskFlag((prev) => (prev && prev.path === change.path ? null : prev))
       setStatus('已同步外部修改 ' + new Date().toTimeString().slice(0, 8))
-      emitRefresh()
+      emitRefresh({ scope, paths: [change.path], kind: 'text', eventId })
       return
     }
     const kind = change.kind === 'deleted' ? 'deleted' : 'conflict'
@@ -1968,7 +1968,7 @@ export function EditorView(props) {
         clearSync(scope, path)
         acceptSaved(path, text, savedModel)
         refreshRecords()
-        emitRefresh()
+        emitRefresh({ scope, paths: [path], kind: 'text' })
         // 片段配置文件保存后失效补全缓存（下次补全即读到新片段）
         if (/\.code-snippets$/i.test(path)) window.dispatchEvent(new CustomEvent('edrv:snippets-changed'))
         return
@@ -2556,7 +2556,7 @@ export function EditorView(props) {
         setDirtyMap((d) => Object.assign({}, d, { [path]: false }))
         setDiskFlag((prev) => (prev && prev.path === path ? null : prev))
         setStatus('已覆盖磁盘')
-        emitRefresh()
+        emitRefresh({ scope, paths: [path], kind: 'text' })
         return
       }
       setStatus('覆盖失败')
@@ -2769,7 +2769,7 @@ export function EditorView(props) {
       // #endregion
       if (res && res.ok) {
         setRecords((prev) => Object.assign({}, prev, { [region.callId]: res.record }))
-        if (!silent) { reloadFile(); emitRefresh() }
+        if (!silent) { reloadFile(); emitRefresh({ scope, paths: [res.record?.path || active], kind: 'structure' }) }
         return true
       }
       if (!silent) setError(res?.error ? String(res.error) : '操作失败')
@@ -2858,7 +2858,7 @@ export function EditorView(props) {
     actMany(decideRegions.map((r) => itemOf(r, false))).then((result) => {
       batchBusyRef.current = false
       reloadFile(true)
-      emitRefresh()
+      emitRefresh({ scope, paths: active ? [active] : undefined, kind: 'structure' })
       setStatus(decideStatus('已采纳 ', result))
       if (result.fail) setError(result.fail + ' 处差异处理失败（可能已被后续修改影响），可刷新后重试')
     }).catch(() => { batchBusyRef.current = false })
@@ -2869,7 +2869,7 @@ export function EditorView(props) {
     actMany([...decideRegions].reverse().map((r) => itemOf(r, true))).then((result) => {
       batchBusyRef.current = false
       reloadFile(true)
-      emitRefresh()
+      emitRefresh({ scope, paths: active ? [active] : undefined, kind: 'structure' })
       setStatus(decideStatus('已不采纳 ', result))
       if (result.fail) setError(result.fail + ' 处差异处理失败（可能已被后续修改影响），可刷新后重试')
     }).catch(() => { batchBusyRef.current = false })
@@ -2899,10 +2899,11 @@ export function EditorView(props) {
     if (batchBusyRef.current || !allPending.length) return
     batchBusyRef.current = true
     const list = reject ? [...allPending].sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : b.idx - a.idx)) : allPending
+    const paths = [...new Set(list.map((r) => records[r.callId]?.path).filter(Boolean))]
     actMany(list.map((r) => itemOf(r, reject))).then((result) => {
       batchBusyRef.current = false
       reloadFile(true)
-      emitRefresh()
+      emitRefresh({ scope, paths: paths.length ? paths : undefined, kind: 'structure' })
       setStatus(decideStatus(reject ? '已不采纳 ' : '已采纳 ', result))
       if (result.fail) setError(result.fail + ' 处差异处理失败（可能已被后续修改影响），可刷新后重试')
     }).catch(() => { batchBusyRef.current = false })
@@ -2915,7 +2916,7 @@ export function EditorView(props) {
     rpc('edrv.rollback', { sessionId, path: active }).then((res) => {
       if (res && res.ok) {
         setStatus('已回滚'); reloadFile()
-        emitRefresh()
+        emitRefresh({ scope, paths: [active], kind: 'structure' })
       } else setError(res?.error ? String(res.error) : '回滚失败')
     }).catch((e) => setError('回滚异常:' + String(e)))
   }
@@ -4197,7 +4198,7 @@ export function EditorView(props) {
     setStatus(message)
     setRecentUpdate({ path: result.target, sessionId, scope, resumeJobId: result.jobId })
     refreshSvnChanges(sessionId, scope)
-    emitRefresh()
+    emitRefresh({ scope, kind: 'svn', eventId: 'svn-update-' + result.jobId })
   }
   const svnUpdateEl = sameUpdateOwner(svnUpdateDialog, sessionId, scope)
     ? React.createElement(SvnUpdateDialog, {

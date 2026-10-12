@@ -22,7 +22,7 @@ import { childEnv } from '../childEnv.js'
 import { stopTree } from '../processTree.js'
 import { join } from 'node:path'
 import { createFrameParser, encodeMessage } from '../lsp/jsonrpc.js'
-import { sourceBaseOf, sourceKeyOf, sourcePathOf, normalizeSourcePath } from './sourcePath.js'
+import { sourceBaseOf, sourceKeyOf, sourcePathOf, normalizeSourcePath, rankSourceCandidates } from './sourcePath.js'
 import { bpAcksOfResponse, DAP_ACTIONS, needsConfigurationDone, requestOfConfig, threadIdOfStopped, type DapAction, type DapBreakpointInput, type DapBreakpointAck, type DapDebugConfig, type DapEventView, type DapFrameView, type DapPhase, type DapPollResult, type DapScopeView, type DapStateView, type DapVariableView } from '../shared/dap.js'
 import { dapRequest, eventBody, initializeArgs, isDapEvent, isDapResponse, responseBody, type DapEvent, type DapMessage, type DapRequest } from './protocol.js'
 import type { DapAdapterSpec } from './provider.js'
@@ -458,18 +458,50 @@ export class DapSession {
     return '会话在初始化完成前终止（attach/连接目标失败）' + dotrushLog
   }
 
-  /** findFileReq 反向应答：按完整 chunkname 排序工作区候选并缓存首命中。 */
+  /**
+   * 按当前语言过滤并排序源码候选，供反向应答与栈帧解析共用。
+   * @private
+   * @author ddj 2026年10月09号
+   * @param chunk 适配器上报的源码标识
+   * @returns 语言合法、按路径相关度排序的候选
+   */
+  private async sourceCandidates(chunk: string): Promise<string[]> {
+    const files = await this.deps.findFiles(this.workspacePath, chunk)
+    const exts = this.frameExts()
+    const allowed = exts.length ? files.filter((file) => hasSourceExtension(file, exts)) : files
+    return rankSourceCandidates(chunk, allowed, this.workspacePath)
+  }
+
+  /**
+   * 更新源码标识及 basename 缓存；无合法候选时删除旧映射。
+   * @private
+   * @author ddj 2026年10月09号
+   * @param chunk 适配器上报的源码标识
+   * @param file 合法候选首项，空值表示未解析
+   * @description 副作用：更新当前会话源码缓存
+   */
+  private cacheSource(chunk: string, file: string): void {
+    for (const key of [sourceKeyOf(chunk), sourceKeyOf(sourceBaseOf(chunk))]) {
+      if (!key) continue
+      if (file) this.sourceFiles.set(key, file)
+      else this.sourceFiles.delete(key)
+    }
+  }
+
+  /**
+   * findFileReq 反向应答：只返回当前语言合法源码并缓存首命中。
+   * @private
+   * @author ddj 2026年10月09号
+   * @param body 反向请求参数
+   * @description 副作用：更新源码缓存并发送 findFileRsp
+   */
   private async respondFindFile(body: Record<string, unknown>): Promise<void> {
     const seq = typeof body.seq === 'number' ? body.seq : -1
     const chunk = String(body.file ?? '')
-    const files = await this.deps.findFiles(this.workspacePath, chunk)
+    const files = await this.sourceCandidates(chunk)
     log.debug('[dap-trace] findFileReq seq=' + seq + ' chunk=' + chunk + ' candidates=' + files.length + ' first=' + (files[0] ?? ''))
     this.deps.trace?.(this.workspacePath, '[DEBUG findFileReq] seq=' + seq + ' chunk=' + chunk + ' candidates=' + files.length + ' first=' + (files[0] ?? ''))
-    const first = files[0]
-    if (first) {
-      this.sourceFiles.set(sourceKeyOf(chunk), first)
-      this.sourceFiles.set(sourceKeyOf(sourceBaseOf(chunk)), first)
-    }
+    this.cacheSource(chunk, files[0] ?? '')
     this.send({ seq: this.msgSeq++, type: 'request', command: 'findFileRsp', arguments: { seq, files } })
   }
 
@@ -583,27 +615,43 @@ export class DapSession {
     if (phase === 'idle') { this.events = []; this.config = null; this.pid = undefined; this.error = undefined }
   }
 
-  /** 适配器上报路径 → 帧视图（file 始终保留可打开的规范路径）。 */
+  /**
+   * 适配器源码标识转帧视图；完整合法路径优先，错误语言缓存须重新解析。
+   * @private
+   * @author ddj 2026年10月09号
+   * @param item 适配器栈帧
+   * @param index 栈帧下标（EmmyLua frameId）
+   * @returns 保留原始行号、只含合法源码路径的帧视图
+   * @description 副作用：按需查找源码并更新会话缓存
+   */
   private async frameViewOf(item: unknown, index: number): Promise<DapFrameView> {
     const raw = item as Record<string, unknown>
     const source = (raw.source ?? {}) as Record<string, unknown>
     const sourcePath = typeof source.path === 'string' ? source.path : ''
     const sourceName = typeof source.name === 'string' ? source.name : ''
+    const exts = this.frameExts()
     const cached = this.sourceFiles.get(sourceKeyOf(sourcePath)) ?? this.sourceFiles.get(sourceKeyOf(sourceName))
-    let selected = cached || sourcePath || sourceName
-    const needsLookup = !selected || !hasSourceExtension(selected, this.frameExts())
+    const validPath = sourcePath && !isBareChunk(sourcePath)
+      && (exts.length ? hasSourceExtension(sourcePath, exts) : sourceBaseOf(sourcePath).includes('.'))
+    const validCache = cached && (!exts.length || hasSourceExtension(cached, exts))
+    let selected = validPath ? sourcePath : validCache ? cached : sourcePath || sourceName
+    const needsLookup = !validPath && !validCache
+    if (cached && !validCache) {
+      this.cacheSource(sourcePath, '')
+      this.cacheSource(sourceName, '')
+    }
     log.debug('[dap-trace] frame rawPath=' + sourcePath + ' name=' + sourceName + ' cached=' + (cached ?? '') + ' needsLookup=' + needsLookup + ' selected=' + selected)
     this.deps.trace?.(this.workspacePath, '[DEBUG frame] rawPath=' + sourcePath + ' name=' + sourceName + ' cached=' + (cached ?? '') + ' needsLookup=' + needsLookup + ' selected=' + selected)
-    if (!cached && needsLookup) {
-      const candidates = await this.deps.findFiles(this.workspacePath, sourceName || sourcePath)
+    if (needsLookup) {
+      const candidates = await this.sourceCandidates(sourceName || sourcePath)
       log.debug('[dap-trace] frameLookup source=' + (sourceName || sourcePath) + ' candidates=' + candidates.length + ' first=' + (candidates[0] ?? ''))
       this.deps.trace?.(this.workspacePath, '[DEBUG frameLookup] source=' + (sourceName || sourcePath) + ' candidates=' + candidates.length + ' first=' + (candidates[0] ?? ''))
       if (candidates[0]) {
         selected = candidates[0]
-        this.sourceFiles.set(sourceKeyOf(sourceName || sourcePath), candidates[0])
-      } else if (isBareChunk(sourceName || sourcePath)) {
-        // 反查失败 + 裸 chunkname：无可打开路径。置空而非回退原串，
-        // 避免客户端按工作区根拼出必然不存在的路径、打开注定失败的页签。
+        this.cacheSource(sourceName || sourcePath, candidates[0])
+      } else if (exts.length || isBareChunk(sourceName || sourcePath)) {
+        // 反查失败且当前语言已知或只有裸 chunk：不回退到错误语言文件，
+        // 也不让客户端按工作区根拼出不存在的 chunk 路径。
         selected = ''
       }
     }

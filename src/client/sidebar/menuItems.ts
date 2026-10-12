@@ -126,9 +126,10 @@ async function fsCall<M extends RpcMethod>(method: M, args: RpcRequestMap[M]): P
  * @param ctx 面板上下文
  * @param okText 成功反馈文案
  */
-function fsDone(ctx: SidebarCtx, okText: string): void {
+let fsSequence = 0
+function fsDone(ctx: SidebarCtx, okText: string, paths: string[]): void {
   ctx.notify?.(okText)
-  emit('edrv:refresh', {})
+  emit('edrv:refresh', { scope: ctx.scope, paths, kind: 'structure', eventId: 'fs-' + Date.now() + '-' + (++fsSequence) })
   ctx.refreshSvnChanges?.()
 }
 
@@ -176,7 +177,7 @@ async function createEntry(target: TreeMenuTarget, ctx: SidebarCtx, kind: 'file'
     return
   }
   if (kind === 'file') ctx.openFile(path)
-  fsDone(ctx, (kind === 'file' ? '已新建文件 ' : '已新建文件夹 ') + path)
+  fsDone(ctx, (kind === 'file' ? '已新建文件 ' : '已新建文件夹 ') + path, [path])
 }
 
 /**
@@ -205,7 +206,7 @@ async function renameEntry(target: TreeMenuTarget, ctx: SidebarCtx): Promise<voi
     return
   }
   if (res.to !== res.from) emit('edrv:path-renamed', { from: res.from, to: res.to })
-  fsDone(ctx, '已重命名')
+  fsDone(ctx, '已重命名', [res.from, res.to])
 }
 
 /**
@@ -227,7 +228,7 @@ async function deleteEntry(target: TreeMenuTarget, ctx: SidebarCtx): Promise<voi
     return
   }
   emit('edrv:path-deleted', { path: target.path })
-  fsDone(ctx, (dirTarget ? '已永久删除「' : '已删除「') + name + '」')
+  fsDone(ctx, (dirTarget ? '已永久删除「' : '已删除「') + name + '」', [target.path])
 }
 
 /**
@@ -252,7 +253,7 @@ async function pasteInto(target: TreeMenuTarget, ctx: SidebarCtx): Promise<void>
     clearFileClip()
     emit('edrv:path-renamed', { from: res.from, to: res.to })
   }
-  fsDone(ctx, (cut ? '已移动到 ' : '已复制到 ') + (target.path || '工作区根目录'))
+  fsDone(ctx, (cut ? '已移动到 ' : '已复制到 ') + (target.path || '工作区根目录'), cut ? [res.from, res.to] : [res.to])
 }
 
 // --endregion

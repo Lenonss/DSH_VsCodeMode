@@ -413,6 +413,61 @@ export function svnBadgeTitle(entry: SvnChangeEntry): string {
   return letter + ' ' + SVN_STATUS_LABEL[entry.status]
 }
 
+/** 文件夹子树聚合状态（资源管理器目录徽标数据源）。 */
+export interface SvnFolderAgg {
+  /** 子树内最强子项状态（决胜见 SVN_FOLDER_STATUS_RANK）。 */
+  status: SvnItemStatus
+  /** 子树内变更条目总数（含更深层目录下的）。 */
+  count: number
+}
+
+/**
+ * 文件夹聚合决胜优先级（强→弱）：冲突/障碍/缺失等 danger 态先于常规修改，
+ * 未版本控制最弱；未列出的状态（normal/external/ignored）不参与聚合。
+ */
+export const SVN_FOLDER_STATUS_RANK: Partial<Record<SvnItemStatus, number>> = {
+  conflicted: 90,
+  obstructed: 80,
+  missing: 70,
+  incomplete: 60,
+  deleted: 50,
+  replaced: 40,
+  modified: 30,
+  added: 20,
+  unversioned: 10,
+}
+
+/**
+ * 变更清单 → 目录路径 → 子树聚合状态表（P2-15 资源管理器文件夹徽标）。
+ * svn status 只报告目录自身状态、子项变更不上卷，受版本控制目录因此缺席清单；
+ * 此处对每条变更沿路径拆出全部祖先目录，累计计数并按 SVN_FOLDER_STATUS_RANK
+ * 取最强状态。目录自身被报告（A/?/属性M 等）时调用方以直接条目优先，本表只兜底。
+ * @author ddj 2026年10月09号
+ * @param entries 变更清单（host `svn.changes` 原始条目，路径 `/` 分隔）
+ * @returns 目录相对路径 → 聚合状态（根路径 '' 不入表；入参为空返回空表）
+ */
+export function svnFolderStatusOf(entries: readonly SvnChangeEntry[]): Record<string, SvnFolderAgg> {
+  const result: Record<string, SvnFolderAgg> = {}
+  for (const entry of entries) {
+    if (!isSvnChange(entry)) continue
+    const parts = String(entry.path ?? '').replace(/\\/g, '/').split('/').filter(Boolean)
+    const rank = SVN_FOLDER_STATUS_RANK[entry.status] ?? 0
+    let dir = ''
+    // 最后一段是条目自身，只向上聚合到祖先目录（目录自身的行走直接条目）
+    for (let i = 0; i < parts.length - 1; i++) {
+      dir = dir ? dir + '/' + parts[i] : parts[i]
+      const prev = result[dir]
+      if (!prev) {
+        result[dir] = { status: entry.status, count: 1 }
+        continue
+      }
+      prev.count += 1
+      if (rank > (SVN_FOLDER_STATUS_RANK[prev.status] ?? 0)) prev.status = entry.status
+    }
+  }
+  return result
+}
+
 // --endregion
 
 // --region P2 动作文案与判定

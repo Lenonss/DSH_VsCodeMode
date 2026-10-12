@@ -24,6 +24,7 @@ import type { DapAction, DapAdapterInfo, DapBreakpointAck, DapBreakpointInput, D
 import { DAP_ACTIONS } from './dap.js'
 import { appUrl } from './appUrl.js'
 import type { LoggerLevel } from './logger.js'
+import type { SvnViewRequest, SvnViewPayload } from './svnExplorer.js'
 
 /** webServer 精确路由。 */
 export const RPC_PATH = '/edrv/rpc'
@@ -464,6 +465,8 @@ export interface RpcRequestMap {
   'snippets.entries': { sessionId?: string }
   'svn.status': { sessionId?: string; force?: boolean }
   'svn.changes': { sessionId?: string; force?: boolean }
+  'svn.explorerStatus': { sessionId?: string; force?: boolean }
+  'svn.explorerView': SvnViewRequest
   'svn.diffBase': { sessionId?: string; path: string }
   'svn.revert': { sessionId?: string; paths: string[] }
   'svn.add': { sessionId?: string; paths: string[] }
@@ -624,6 +627,8 @@ export interface RpcOkMap {
   'snippets.entries': { entries: SnippetEntry[] }
   'svn.status': SvnStatusPayload
   'svn.changes': { wcRoot: string; entries: SvnChangeEntry[]; truncated: boolean }
+  'svn.explorerStatus': { entries: SvnChangeEntry[]; truncated: boolean; prefix: string }
+  'svn.explorerView': SvnViewPayload
   'svn.diffBase': { base: string | null; working: string; reason?: string; error?: string; binary?: boolean; encodingHint?: boolean }
   'svn.revert': { count: number; summary: string; output: string }
   'svn.add': { count: number; summary: string; output: string }
@@ -642,7 +647,7 @@ export interface RpcOkMap {
   'svn.tortoise': { launched: string }
   'svn.patchText': { text: string; truncated: boolean; binary: boolean }
   'svn.diffSum': { entries: SvnSumEntry[]; truncated: boolean }
-  'svn.remoteStatus': { outdated: SvnRemoteOutdatedEntry[]; againstRev: number | null }
+  'svn.remoteStatus': { outdated: SvnRemoteOutdatedEntry[]; againstRev: number | null; truncated: boolean }
   'svn.conflictArtifacts': { artifacts: SvnConflictArtifact[] }
   'svn.diffLocalPair': SvnDiffRevResult
   'svn.fileSizes': { sizes: Array<{ path: string; size: number | null }> }

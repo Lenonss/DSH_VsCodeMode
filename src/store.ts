@@ -6,7 +6,7 @@
 import type { ArchiveBatch, DiffRecord, SidecarData } from './shared/types.js'
 import type { ReadState } from './shared/diff.js'
 import { fingerprint, isNoopHunk, locateHunks, normalizeForCompare, normalizeHunk, preciseHunk } from './shared/diff.js'
-import { archiveEntryFor, normalizeRecord } from './model.js'
+import { archiveEntryFor, findCanceledPairs, findInversePrior, normalizeRecord } from './model.js'
 import { SIDECAR, SIDECAR_ARCHIVE } from './paths.js'
 import { log } from './log.js'
 import { debugRecord } from './debugLog.js'
@@ -244,6 +244,41 @@ export async function autoArchiveStale(ctx: Ctx, session: Session, cwd: string, 
     throw error
   }
   return stale.length
+}
+
+/**
+ * @public
+ * @author ddj 2026年10月10号
+ * 归档整记录精确抵消对；捕获时仅检查新记录，列表维护时检查整个桶。
+ * @param ctx DSH 上下文
+ * @param session 当前会话
+ * @param cwd 工作区
+ * @param bucket 活跃记录桶
+ * @param record 可选的新捕获记录
+ * @returns 本次归档记录数（不是配对数）
+ * @throws 归档失败时恢复内存标志并透传错误，已保存的捕获记录不受影响
+ */
+export async function archiveCanceled(
+  ctx: Ctx, session: Session, cwd: string, bucket: Map<string, DiffRecord>, record?: DiffRecord,
+): Promise<number> {
+  const records = [...bucket.values()]
+  const prior = record ? findInversePrior(records, record) : null
+  const pairs = record ? (prior ? [[prior, record]] : []) : findCanceledPairs(records)
+  const canceled = pairs.flat()
+  if (!canceled.length) return 0
+  const original = canceled.map((rec) => ({ rec, at: rec.at, superseded: rec.superseded }))
+  const at = new Date().toISOString()
+  for (const rec of canceled) { rec.superseded = true; rec.at = at }
+  try {
+    await archiveRecords(ctx, session, cwd, bucket, canceled, '编辑过程自抵消（新增后还原），自动跳过审查')
+  } catch (error) {
+    for (const item of original) {
+      item.rec.superseded = item.superseded
+      item.rec.at = item.at
+    }
+    throw error
+  }
+  return canceled.length
 }
 
 /** 读取归档 sidecar 文本（缺失/失败 → null）。 */

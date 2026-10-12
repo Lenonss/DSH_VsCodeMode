@@ -4,6 +4,7 @@
  * 诊断开关运行时化：内存缓存 + localStorage 持久（日志弹窗开关即改即生效，免刷新）。
  * 作者 ddj 2026-08-20 / 2026-09-17
  */
+import { svnNotice } from './svnNotice.js'
 import { appUrl } from '../shared/appUrl.js'
 import { RPC_PATH } from '../shared/rpc.js'
 import type { RpcMethod, RpcRequestMap, RpcResult } from '../shared/rpc.js'
@@ -45,6 +46,15 @@ export function setDebugEnabled(on: boolean): void {
  * @returns A validated business result; transport failures reject with a readable error.
  */
 export async function rpc<M extends RpcMethod>(method: M, args: RpcRequestMap[M], signal?: AbortSignal): Promise<RpcResult<M>> {
+  try {
+    const out = await rpcFetch(method, args, signal)
+    svnNotice(method, args, out.ok)
+    return out
+  } catch (error) { svnNotice(method, args, false); throw error }
+}
+
+/** @private @author ddj 2026年10月10号 @param method Typed method. @param args Request. @param signal Fetch lifetime. @returns Validated authenticated business response. @throws Transport/format errors. */
+async function rpcFetch<M extends RpcMethod>(method: M, args: RpcRequestMap[M], signal?: AbortSignal): Promise<RpcResult<M>> {
   const res = await fetch(appUrl(RPC_PATH), {
     method: 'POST',
     credentials: 'same-origin',

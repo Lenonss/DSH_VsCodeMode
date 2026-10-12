@@ -5,7 +5,9 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
 
 # dsh-vscode-mode 开发/发布经验集（自我更新型技能）
 
-> updated: 2026-10-08 · 维护者：ddj（AI 会话按文末协议追加，保持精炼、去重）
+> updated: 2026-10-09 · 维护者：ddj（AI 会话按文末协议更新，保持精炼、去重）
+> **发布时先读「发布流程」与「失败恢复」**；下方实录是历史证据，不授权当前重跑发布、改 tag 或部署。冲突旧口径以更新后的规则为准。
+- 2026-10-09 实证（v0.14.5）：三门绿（2583通过/14跳过）；未改的 `tests/dapFakeAdapter.test.ts:26:9/:236:5` 报 `Error: waitFor 超时`，同提交Release与本地绿，仅CI失败任务重跑1次成功。npm响应 `Your package is being processed and may take a few minutes to become available.` 后约**25分23秒**才公开（01:32:53Z接受 / registry time 01:58:16.247Z）；15×30s Verify先超时，但main/tag/registry gitHead最终同为 `7833fac5c8b94ea940be34689e20d2345a5baea5`。npm实包与GitHub asset SHA256同为 `351280c1a7c19502a3212b8f6f20bf87defbd3524892e1b3b4516fc7c97719f7`，SRI与双入口通过。**未重跑Release、未重打tag、未部署DSH；真实GUI缺口经用户明确接受**。只确认异步处理中超过回读窗口，不猜测底层队列/CDN/stage原因。
 - 2026-10-08 MCP 审计：`mcp__${serverName}__${rawName}` 非单射，不能凭最长前缀反解归属；跨全局/项目双向拒绝 `__` 命名交叠，并对历史歧义工具 fail-closed。`ACTIVE`/工具数不是健康证据，`unverified` 应中性色；右侧绿色开关仅启用。状态轮询用只读 `mcp.snapshot`，不复用带文件/reconcile 的列表；初读并发用 `Promise.allSettled` 等所有传输结束，避免半失败导致重叠请求。配置读取—修改—写入需串行，避免并发丢服务；模块加载的 rejected Promise 不能永久缓存，否则刷新无法恢复。官方回归设置 `DSH_MCP_HOST_ROOT` 后才算真实模块测试，资源-only 零工具合法。
 - 当前桌面 profile 路径必须依据实际进程核验，不能套用下方旧版本 home 经验；2026-10-08 本机为 `C:\Users\1\.dsh\profiles\desktop`，Electron userData 与 Host profile 不是同一目录。
 - 2026-10-08 坑：`ctx.fs.readText` 的缺失错误为官方 `FS_NOT_FOUND`，只认 Node `ENOENT` 会让无 `.mcp.json` 的其他注册项目阻断当前项目重名检查与挂载；按结构化错误码兼容两者，权限/IO/JSON 错误仍报告并保留最后有效连接，测试须模拟官方错误码而非仅模拟 Node errno。
@@ -95,7 +97,7 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
   cwd（Received `/home/runner/work/DSH_VsCodeMode/DSH_VsCodeMode/C:/Users/test/.dsh/cordis.patch.yml`），
   `build` job 同断言同挂。修法 = `src/settingsDocPath.ts` 按 `platform` 参数选 `win32`/`posix`
   resolve（生产只传 process.platform，语义不变；win32 分支在 Linux CI 也能被真实覆盖）+ 补 POSIX
-  大小写敏感用例；重发布按老规矩：删远端 tag → push 修复 `6a53f78` → 重打 tag → CI 全绿
+  大小写敏感用例；当时在发布前失败后删tag、push修复 `6a53f78`、重打tag后CI绿（历史记录，不授权当前重打；现按「失败恢复」严格前提与单独审批）
   （release 7m30s / build 1m30s）。四向闭环一次对齐：registry 0.11.0 `gitHead==6a53f78`（release
   commit）、`dist-tags.latest=0.11.0`、tag 同 commit、Release 挂 tgz（7,076,539 B，
   digest sha256:955c0c0829…）。**坑（新测试上 CI 的判据）**：本地 Windows 全绿 ≠ CI 绿——断言里只要
@@ -108,7 +110,7 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
   --failed` **4m38s 绿**（本轮连 Verify 一次过，无第三结局）。四向闭环一次对齐：registry 0.10.0
   HTTP 200 且 `gitHead==909df00`（release commit）、`dist-tags.latest=0.10.0`、tag v0.10.0 同
   commit、Release 挂 tgz（digest sha256:b051563e…）。规矩不变：该用例已**连续三次**发布首跑抖动，
-  遇之直接 `rerun --failed` 勿查代码。
+  后续先核对失败日志、改动范围与publish是否已尝试，再按「失败恢复」有限重跑无发布副作用的任务。
 - 2026-09-23 实录 + 坑（v0.9.0 发布，远端差异审查 issue #7 + SVN 变更 AI 智能分组 +
   0.1.7-alpha.2 适配 + Ctrl+点击首开落点修复；**Release 首跑直接绿**）：三门本地全绿
   （typecheck 0 / **1974 passed · 11 skipped · 147 文件 · 17.63s** / lockfile
@@ -142,15 +144,15 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
   全中：失败文件不在本次 diff + 本地全绿 + 前次 CI 绿）→ `gh run rerun <run-id> --failed` **53s 绿**；
   `release` 一次过 **5m30s**（含 Verify，无第三结局）。四向闭环：registry `0.8.0` 200、
   `dist-tags.latest=0.8.0`、`gitHead==4abf0f7`（release commit）、tag 同 commit + Release 挂 tgz。
-  **该用例已连续两次发布首跑抖动——后续发布遇它直接 `rerun --failed`，勿再查代码**。
+  该用例的历史抖动仅作线索；后续必须核对三项判据及任务发布副作用，遵守「失败恢复」最多2次预算。
 - 2026-09-22 实录（v0.7.0 发布，资源管理器右键菜单；**经历首跑失败→重跑→第三结局**，四向闭环仍一次对齐）：
   三门本地全绿（typecheck 0 err / **1745 passed · 7 skipped · 137 文件 · 19.7s** / build 双面绿）；`build` job 37s success。
   **首跑 `release` 35 秒即挂**：`tests/dapFakeAdapter.test.ts:234` 握手用例 `waitFor 超时`——该文件与 `src/dap/*`
   本次未改动、本地与 v0.6.0 CI 均绿 → 判**抖动非回归**，处置用 **`gh run rerun <run-id> --failed` 原地重跑**
   （发布未发生时无需走「删远端 tag 重推」流程，更省）。重跑测试全过、Release 已产出，但
   `Verify published tarball` 走满 15×30s 仍 `not retrievable` → 查 registry：`0.7.0` HTTP 200、
-  `dist-tags.latest=0.7.0`、`gitHead==c7e15b0`（release commit）→ **v0.4.4 第三结局再现（CDN 慢于重试窗口，
-  CI 红叉是误报，勿重跑防 409）**，GitHub Release tgz digest `sha256:ffb9fb0f…` 补齐四向闭环。
+  `dist-tags.latest=0.7.0`、`gitHead==c7e15b0`（release commit）→ **v0.4.4 第三结局再现（公开可读晚于Verify窗口，
+  不据此猜测CDN或stage根因；勿重跑publish防冲突）**，GitHub Release tgz digest `sha256:ffb9fb0f…` 补齐四向闭环。
   教训：`Verify` 步失败**先查 registry 三个字段（200 / latest / gitHead）再决定动作**；判「抖动 vs 回归」的
   判据 = 失败用例所在文件是否在本次 diff 中 + 本地与前次 CI 是否双绿。
 - 2026-09-22 实录（v0.6.0 发布，全绿）：`build` 54s success、`release` **5m29s** success（含
@@ -222,11 +224,11 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
   仍钉 v0.5.2）。发版清单里把它当固定动作：安装示例 3 处 tag（git/Release tgz 的文件名）
   + 顶部「近期关键版本」追加本条。
 - 2026-09-18 实录（v0.5.2 发布，全绿）：`build` job 41s success、`release` job 4m32s success
-  （含 `Verify published tarball`，**无需等满重试窗口**，CDN 本次很快）。三向闭环一次性对齐：
+  （含 `Verify published tarball`，**无需等满重试窗口**，本次公开核验很快完成，不据此归因CDN）。三向闭环一次性对齐：
   registry `dsh-vscode-mode/0.5.2` 的 `gitHead` == `980b7b2`（release commit SHA）、
   `dist-tags.latest` → `0.5.2`、git tag `v0.5.2` → 同 commit、GitHub Release 挂 tgz asset。
   事实：本次 **未** stash——改动全部 mtime 集中在同一 5 分钟内（16:30–16:34）且逐条核对确属本次内容，
-  直接 `git add -A` 单提交（沿用 2026-09-11 条目口径）；打 tag 前先确认远端无该 tag 且 npm 该版本 404。
+  当时用 `git add -A` 单提交（仅历史实录，现须获批精确清单）；打 tag 前先确认远端无该 tag 且 npm 该版本 404。
 - 2026-09-18 坑（v0.5.2 实测，**用户端 vs 开发形态差异**）：**开发形态（`link:` + junction）会掩盖
   npm 安装缺陷**——本仓 `node_modules` 有 devDependency 副本，`import('schemastery')` 能命中
   `.pnpm/schemastery@3.18.0`，而**用户 npm 安装（profile `nodeLinker: hoisted` + `autoInstallPeers: false`）
@@ -252,11 +254,10 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
   看代码怎么都找不到问题。修法：`pnpm install --lockfile-only` 后提交 lockfile；本地自检 =
   `pnpm install --frozen-lockfile --lockfile-only` 返回 0。
   （判据：失败时间远小于跑测试所需时间 ⇒ 问题在安装/构建前置步骤，别去翻测试。）
-- 2026-09-18 事实（v0.5.1 实测）：重发同版本前确认**失败的那次没产出 Release**（
-  `GET /releases/tags/v<ver>` 应 404）→ 才可删远端 tag 重推；本轮 13 步全 success，
-  `Verify published tarball` 约 **4.5 分钟**属正常 CDN 延迟（非 staged），闭环三向对齐即可：
+- 2026-09-18 事实（v0.5.1 实测，恢复判据已收紧）：**Release 404本身不足以证明可安全重发**；还须证明publish从未尝试、版本未占用且取得单独审批（见「失败恢复」）。本轮 13 步全 success，
+  `Verify published tarball` 约 **4.5 分钟**后成功；只能确认公开核验耗时，不据此判定CDN/stage原因。当时核对：
   registry `<pkg>/<ver>` 的 `gitHead` == release commit SHA、`dist-tags.latest` 已切换、
-  git tag 指向同一 commit。
+  git tag 指向同一 commit；现行验收还须下载实包核验SRI/manifest/入口（见「发布验收」）。
 - 2026-09-18 事实（v0.5.1）：本仓 `tests/outline.test.ts`（自 v0.1.21 起未改）存在**既有顺序依赖**
   ——`npx vitest run --sequence.shuffle` 会偶发失败，而 CI 用默认顺序（不 shuffle）恒绿；
   排查「偶发失败」时先用 shuffle 复现并区分是否本次引入，别把它当自己的回归去改别人的测试。
@@ -280,12 +281,12 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
   `TESTED_DSH_MAX` 而磁盘 bundle 已是新值。判别「跑的是不是新 host」= 调一个只有新代码才有的行为/RPC；
   **改 host 后必须重启 DSH 才能验收 host 侧效果**，别把「磁盘已改」当「已生效」。
 - 2026-09-18 事实（v0.5.1）：`plans/` 在 `.gitignore:19` 被忽略 → 计划文件不会进发布提交（本轮 22 个
-  文件全为 `src/`、`tests/`、`docs/`、`package.json`、`README.md` 改动，可直接 `git add -A`）。
+  文件全为 `src/`、`tests/`、`docs/`、`package.json`、`README.md`；现按获批精确清单暂存，不因目录被忽略就默认 `git add -A`）。
 - 2026-09-18 事实（v0.5.0 实测，四条全绿一次过）：① **真实仓库数据样本不入库**——测试若依赖真实仓库导出（如 `svn log -g` 的 XML），把样本放 `tests/fixtures/*.xml` 并加进 `.gitignore`（已加），用例写成
   `const f = fileURLToPath(new URL('./fixtures/x.xml', import.meta.url)); it.skipIf(!existsSync(f))('…', () => …)`：本地有文件即真跑，CI 无文件自动 skip（v0.5.0 实测 43→42 passed + 1 skipped，两面都绿）；
-  别指望 `git rm --cached` 之后 CI 还能找到它。② 发布前**本地跑全量**（本仓 1337 用例≈8s）= CI 的 Test 步骤，别把 ubuntu 未知项留给 CI。
-  ③ 本次 `release` 工作流 13 步全 success，含 `Verify published tarball`（**5 分 34 秒**才拿到 tarball，属正常 CDN 延迟，不是 staged）；判别仍按既有条目：registry `latest` 的
-  `gitHead` == release commit SHA 即闭环。④ 顺手更新 README 的**安装示例固定 tag** 与「更新日志」段——它常年停在旧版本号（v0.5.0 时发现还写着 v0.1.23）。
+  别指望 `git rm --cached` 之后 CI 还能找到它。② 本仓JS发布套件按获批范围执行（当时1337用例≈8s）；日常验证只跑受影响最小集，不扩展为Unity全量。
+  ③ 本次 `release` 工作流 13 步全 success，含 `Verify published tarball`（**5 分 34 秒**才拿到 tarball，不据此归因CDN/stage）；当时核对registry `latest` 的
+  `gitHead` == release commit SHA；现行验收还须核验实包完整性与入口，SHA元数据本身不闭环。④ 顺手更新 README 的**安装示例固定 tag** 与「更新日志」段——它常年停在旧版本号（v0.5.0 时发现还写着 v0.1.23）。
 ## 何时使用
 
 - 发布新版本（commit/push/tag/npm 相关操作）。
@@ -315,7 +316,7 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
   走 reloadDirRef）= 死代码。规矩：**渲染期 ref 镜像赋值必须放在被引用 const 定义之后**；删 ref 前先 grep 消费方。
 - 2026-09-22 坑：发布前仅跑三门不抓组件渲染期错误（tests 全是纯逻辑，无 DOM 渲染测试）——v0.4.5 带着上述回归过全量
   1082 用例照发。**客户端 UI 改动发版前必须真实浏览器冒烟核心入口**（官方侧栏「文件编辑」Tab 打开 + 资源管理器挂载）；
-  复现用 chrome-devtools：点侧栏入口卡片 → 看 console 是否 slot entry crashed。
+  复现用 chrome-devtools：点侧栏入口卡片 → 看 console 是否 slot entry crashed。工具缺失时不得以三门绿替代；明确记录缺口并获用户接受，发布不等于已完成GUI验收。
 - 2026-09-17 坑：Ctrl+点击「只打开文件不跳转行」的真因在 **EditorView 而非 opener**——跳转/model 同步 effect 用
   `content === null` 当就绪判据，跨文件切换那一帧 content 仍是**上一个文件**的内容（非 null），于是先建 model(A 内容)
   → reveal/setPosition(目标行) 生效 → B 真实内容到达触发 `setValue` → Monaco 重置光标到 1:1，而 pendingFocus 已消费
@@ -328,58 +329,47 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
 
 ## 发布流程（必须照做，禁止偏离）
 
-1. 最终三门：`npm run typecheck` → `npm run test` → `npm run build` 全绿。
-2. `git add -A` + commit：`release: vX.Y.Z <摘要>`（版本与 package.json 一致）。
-3. `git push origin main` → `git tag vX.Y.Z` → `git push origin vX.Y.Z`。
-4. tag 推送**自动触发** `.github/workflows/release.yml`：验证 tag==package.json 版本 → 三门 →
-   npm pack → GitHub Release 挂 tgz → **有 NPM_TOKEN secret 才 npm publish** 并回读校验
-   registry tarball 含 lib/index.js + lib/client.js。
-5. **禁止本地 `npm publish`**：本机 npm 无凭据（whoami 401），发布只由 CI 完成。
-6. 修复 CI 后重发布：删远端 tag（`git push origin :refs/tags/vX.Y.Z`）→ push 修复 → 重打 tag 推送。
-7. CI 失败排查：jobs 日志 API 需 admin 权限；用公开接口
-   `GET /repos/Lenonss/DSH_VsCodeMode/commits/<sha>/check-runs` → 失败 check 的
-   `/annotations` 可直接拿到失败用例名与断言差异（无需任何凭据）。
-- 2026-09-08 坑：工作区有未提交 WIP 时，步骤 2 的 `git add -A` 会把未完成代码扫进发布，且 CI 构建
-  的是推送树而非本地目录（脏树跑过的三门不代表发布内容）→ 先 `git stash push -u` 隔离，净树跑
-  三门，release commit 只 add package.json，tag 推送后 `git stash pop` 还原（v0.1.57 实测）。
-- 2026-09-11 事实：CI 失败时 GitHub API 可能同时 504 不稳定——先等几分钟再取 check-runs；
-  实在拿不到就用 `GET /commits/<sha>/check-runs` 的 `/annotations`（无需凭据）直接读失败用例名与断言差异，
-  别靠猜。v0.3.3 实测：首 tag 的 build/release 双双 failure，annotations 一次就给出 `tests/skills.test.ts:158`
-  的 `'/D:/pkg/skills' !== 'D:/pkg/skills'`。
-- 2026-09-14 坑（**新机制，发版前必读**）：npm 已上线 **staged publishing（暂存发布）**——`npm publish`
-  可能不再直接上架，而是进入 stage 队列，**需维护者在 npmjs.com 或 `npm stage approve <id>` 用 2FA 人工批准**
-  才对外可装（[docs](https://docs.npmjs.com/staged-publishing/)、[changelog](https://github.blog/changelog/2026-05-22-staged-publishing-and-new-install-time-controls-for-npm/)）。
-  症状链（v0.4.2 实测）：CI 里 `npm publish` 打印 `+ dsh-vscode-mode@X` **看似成功**，但
-  `Verify published tarball` 步骤 15×30s 全部拿不到 → `::error::published tarball ... not retrievable after retries` → job failure；
-  重跑则报决定性线索 `409 Conflict - Cannot publish over previously staged version "X"`。
-  判别：`npm view <pkg> time` 有该版本时间戳，但 `npm view <pkg>@<ver>` 404、`dist-tags.latest` 未变
-  （staged 与已发布共享同一 semver 唯一索引，故不能重复 publish）。
-  处置：**这一步只能人工做**——到 npmjs.com 包页面的 stage 队列，或用 npm CLI ≥11.15.0
-  （本机 11.6.1 无 `stage` 命令、亦无凭据，`npm whoami` 401）执行 `npm stage approve`。
-  **CI 判断成功不能只看 `npm publish` 那一步**：要看最后一个 `Verify published tarball` 步骤；
-  该步骤失败 = 版本未真正上线（此时 GitHub Release 与 tgz 通常已正常产出，可先用 Release 分发）。
-- 2026-09-15 对照（v0.4.3）：**staged 与 CDN 传播延迟症状相同，别提前判 staged**——`npm publish` 成功后注册表 404、
-  `dist-tags.latest` 未变，可能只是传播慢：先等 `Verify published tarball` 走完重试窗口（v0.4.3 实测 **4 分 34 秒**后
-  该步骤 success、job 全绿、`dist-tags.latest` 同步 0.4.3）；只有该步骤最终 failure（重跑报 `409 Conflict`）才是真 staged。
-- 2026-09-15 第三结局（v0.4.4 实测）：`Verify published tarball` 最终 failure 但版本**已实际发布**——CDN 传播比
-  15×30s 重试窗口还慢（本次 ~8.5 分钟仍未可拉、随后可达）；判别：`registry.npmjs.org/<pkg>/<ver>` 返回 **200** 且
-  `dist-tags.latest` 已切换 = 已上线，CI 红叉是误报，**勿重跑**（会 `409 Conflict`），用 gitHead 三向对齐闭环即可。
-- 2026-09-08 事实：awesome 收录条目（PR #2532，category git）的 `tarball:` 钉在 v0.1.36，发版即过期；
-  npm 映射自动、该字段冗余 → 改自己条目时删 tarball 行，勿再钉版本号。
-- 2026-09-11 事实：本环境**不必** stash 隔离——当场核对 `git status --porcelain` 全部改动确属本次
-  待发布内容后再 `git add -A` 即可（v0.3.2 实测：26 文件全为本会话产物，直接单提交发布）。
-  关键前置动作是**逐条核对清单**，而不是无脑 stash。
-- 2026-09-11 事实：发布后可用 registry 元数据的 `gitHead` 反证「线上 tarball == 本地提交」
-  （`GET registry.npmjs.org/<pkg>/<ver>` → `gitHead` 应等于 release commit SHA）；
-  配合 `git ls-remote --tags origin` 与 GitHub Release 的 `assets[].digest` 三向对齐即可闭环。
-- 2026-09-11 坑：同一仓库可能被**多个会话并行开发**，`git status` 里混着别人的完整特性（v0.3.3 实测：
-  QuickOpen 键盘导航 + 技能组 provider 两份改动同树，且 package.json 的 0.3.3 号码由后者所改）
-  → 判据是 **mtime 分簇 + 谁改了版本号 + 该特性自带测试是否全绿**（都满足=可发，而非 WIP）；
-  但**发不发别人的特性必须当场问用户**，不能默认 `git add -A` 扫进去一起发布。
-- 2026-09-11 事实：发布前确认「线上最新版本」用 registry `dist-tags.latest` + `git ls-remote --tags`
-  对照 HEAD，别只看本地 tag（本地 tag 可能落后或超前）。
-- 2026-09-09 事实：pnpm 在本环境跑 run 脚本会先做 deps-status check 触发 store SQLite 报错
-  （`unable to open database file`）→ 三门直接调 node_modules/.bin（tsc.cmd/vitest.cmd/tsdown.cmd）绕过。
+### 发布前与推送
+
+1. **先审批、后写入/外部动作**：明确版本、具体文件清单、原有本地修改归属、验证范围、GUI缺口、恢复边界。发布不等于安装或部署，不能自动改profile/重启DSH。mtime与测试结果只辅助判断，不替代用户授权。
+2. 用 `Get-Location`、`git status --porcelain`、remote/分支/HEAD、远端main/tag、registry版本与 `dist-tags.latest` 核对真实checkout和基线；远端前移或版本/tag已占用即停，不force push。不自动stash/merge别人的改动；如需隔离WIP或前移基线，追加审批并保存原件。
+3. 版本同步 `package.json`、README安装示例（git/npm/tgz）、最新日志及发布说明；历史兼容声明不整体替换。仅依赖/peer变更时同步lock并验证frozen install，纯版本/文档改动不无谓重生lock。备份和验证报告可落 `plans/`，每次仍核对git忽略，不假定其状态永远不变。
+4. 最终三门顺序为 `npm run typecheck` → `npm run test` → `npm run build`；本仓JS发布套件范围须在计划中写清，不扩大为Unity全量。保存退出码、测试通过/跳过/失败/耗时、双bundle结果与warning。先核验prebuild清理的绝对 `lib` 目标为本工作区普通目录、非junction。失败先定位，不偷偷修范围外源码。
+5. UI改动须真实浏览器冒烟受影响入口、回退、主题/滚动并检查Console；测试与mock DOM不能替代。工具不可用时写清“未验证”，**取得用户明确接受缺口后**才发布，不伪造验收；不为冒烟启动替代GUI或自动部署。
+6. **精确暂存获批清单**（`git add -- <paths>`），比较 `git diff --cached --name-only` 与清单、核对暂存diff及 `git diff --cached --check`。提交必须与三门已验证的内容一致；混合WIP不能仅暂存一部分却用脏树绿灯充当验证，需先获准隔离/验证实际提交树。commit：`release: vX.Y.Z <摘要>`。
+7. 再查远端基线/版本占用 → `git push origin main` → `git tag vX.Y.Z` → `git push origin vX.Y.Z`；任一步失败即停，记录已成功的步骤，不能盲重复整串命令。核对main/tag指向发布提交。
+8. tag触发 `.github/workflows/release.yml`：tag/版本一致 → 三门 → pack → GitHub Release tgz → 有NPM_TOKEN才publish → Verify；记录CI/Release run ID和步骤结论。**本仓禁止本地 `npm publish`**，只走获批CI，不读取凭据。观察权限/CLI版本以当前证据为准，不沿用旧whoami/版本结论。
+
+### 发布验收与有限等待
+
+- 分别记录：提交/tag、CI构建、Release资产、npm上传接受、npm公开元数据/实包、当前DSH部署与GUI验收。`npm publish`退出0或 `+ pkg@ver` **仅表示上传接受**；Verify失败**仅表示该窗口未验证完成**，不能推导“未上线”或“staged”。
+- 读 `https://registry.npmjs.org/<pkg>/<ver>` 与 `/latest`（本仓稳定版目标latest）；确认version、`gitHead == 发布SHA`、目标dist-tag，再下载 `dist.tarball` 验证 `dist.integrity`（SRI）/shasum、包版本与 `package/lib/index.js` + `package/lib/client.js`。GitHub asset单独下载比API digest；若两端设计为同一个pack产物，还要比完整摘要。SHA/SRI/版本/入口不一致立即停止并报告，不当作传播慢；metadata SHA本身不证明实包字节或部署生效。
+- `404`、latest未切换、time字段或Verify超时都不能证明staged；`Your package is being processed and may take a few minutes to become available.` 按“接受后待公开”处理，不猜CDN/安全扫描/队列根因。只有明确stage列表/响应或**已出现** `Cannot publish over previously staged version` 才判暂存并请维护者走官方2FA审批；不能用再次publish来试探stage，不代办审批。
+- 等待建议：接受上传起最多60min、120s间隔，按当前工具/审批能力运行**一个**可取消后台任务；用job_output等待通知/结果，不另开重复探针。60min是操作预算，不是npm保证；404/408/429/5xx/超时按分类记录，429尊重Retry-After，401/403立即停查权限。TLS/代理/沙箱错误不证明registry未上架，按工具边界处理，不绕过限制。metadata就绪后进入独立完整性检查，不能把检查异常catch为“继续等待”。超时先复核现状，报告“上传接受、公开核验未完成”，保存时间/错误/证据并征求延长或暂停；没有用户批准不无限等待。
+- 发布报告须含SHA/run链接、测试范围及计数/耗时、metadata/dist-tag、实包完整性/入口、未验证项与部署边界。只要独立核验闭环，可以报告“已发布”；同时如实保留Release workflow历史Verify红灯，不用重跑发布来洗绿。
+
+### 失败恢复（先判断发布是否已尝试）
+
+| 失败位置/证据 | 允许动作 | 禁止动作 |
+| --- | --- | --- |
+| 安装/typecheck/新测试/构建失败 | 查原文与改动范围；需要源码修复时追加审批 | 把平台路径断言失败一概判为抖动 |
+| 已知计时抖动，失败测试及实现未改、本地与同提交/前次CI绿 | 记录用例与stack；按获批预算最多2次 `gh run rerun <id> --failed`，仅无发布副作用CI任务或publish从未运行的Release任务 | 不看日志直接重跑；已尝试publish后重跑整Release job |
+| publish被跳过、拒绝，或日志/传输结果不明确 | 明确记录未尝试/失败/未知，查metadata与原响应，请用户决定凭据/CI恢复 | 未知状态当成安全重发；本地publish兜底 |
+| 上传已接受后Verify失败或404 | 只读有限等待；就绪后独立校验实包 | 重跑含publish的job、重打同tag、擅自升版本 |
+| 明确stage证据 | 引导维护者用当前官方支持的CLI/Web与2FA确认/审批 | AI代办审批，重发探针 |
+| gitHead/SRI/入口不一致 | 立即停止，保留证据并请求恢复方案 | 当成延迟盲重试/宣称已发布 |
+
+- 已知抖动锚点：`tests/dapFakeAdapter.test.ts:26` 的 `waitFor 超时`；`tests/treeIndex.test.ts:195` 的 `expected null not to be null`。行号会漂移，核对测试名/当前stack。两次重跑仍失败就停并汇报，既有经验不是永远免责。
+- **重打tag不是默认恢复动作**：只有明确证明publish从未尝试、版本未被占用/暂存且无Release资产，并取得用户对删tag/重打的单独批准后才考虑。已公开/已接受/未知的版本保持不可变；需要修复时另批新版本，不覆盖发布历史。
+- 日志优先 `gh run view <id> --log-failed` 或定向读取publish/verify步骤；再按实际权限回落check-runs/annotations。不能把旧“日志API需admin”当现行事实；504等临时故障有限重试，拿不到就明说，不猜失败原因，不输出token/env配置。
+
+### 历史教训（已纠偏）
+
+- v0.4.2出现 `409 Conflict - Cannot publish over previously staged version "X"` 是明确stage证据；不能复刻“再publish看409”的危险诊断。v0.4.3/v0.4.4/v0.14.5证明相似404/Verify超时也会自行公开，不能单凭时间窗口归因。
+- `git add -A` / 自动stash是早期实录，不作默认动作：先逐条确认归属与发布授权，优先精确清单；WIP隔离和恢复都须用户确认，不能盲stash pop覆盖前移基线。
+- v0.3.3平台错误 `tests/skills.test.ts:158` 的 `'/D:/pkg/skills' !== 'D:/pkg/skills'` 说明Windows本地绿不保证ubuntu绿；先查失败步骤和断言。awesome PR #2532曾有过期固定tarball，修改外部收录要单独授权，优先npm映射避免冗余固定版本。
+- 历史pnpm报 `unable to open database file` 不授权跳过脚本；本次用 `npm run` 保留pre/post hooks成功。换执行入口必须确认钩子/测试链等价并按现行沙箱规则处理，不能只调vitest而漏掉native-open或prebuild。
+
 
 ## 差异审查（DiffBox / 旁车）设计口径
 

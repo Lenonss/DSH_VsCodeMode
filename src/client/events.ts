@@ -49,9 +49,13 @@ export function openDiffView(path: string): void {
   }, 80)
 }
 
-/** 差异状态变化：触发角标/DiffBox 重拉。 */
-export function emitRefresh(): void {
-  window.dispatchEvent(new CustomEvent('edrv:refresh'))
+export interface RefreshNotice { scope?: string; paths?: string[]; eventId?: string; kind?: 'text' | 'structure' | 'svn' | 'unknown' }
+let refreshSeq = 0
+/** @public @author ddj 2026年10月10号 @param notice Scope/path/id; absent detail means legacy unknown/full. @returns Shared id for multi-channel deduplication. */
+export function emitRefresh(notice: RefreshNotice = {}): string {
+  const eventId = notice.eventId ?? 'change-' + Date.now() + '-' + (++refreshSeq)
+  window.dispatchEvent(new CustomEvent('edrv:refresh', { detail: { ...notice, eventId } }))
+  return eventId
 }
 
 /**
@@ -60,9 +64,11 @@ export function emitRefresh(): void {
  * @author ddj 2026年09月15号
  * @param path 发生变化的文件路径
  */
-export function emitFileChanged(path: string): void {
+export function emitFileChanged(path: string, notice: RefreshNotice = {}): string | undefined {
   if (!path) return
-  window.dispatchEvent(new CustomEvent('edrv:file-changed', { detail: { path } }))
+  const eventId = notice.eventId ?? 'change-' + Date.now() + '-' + (++refreshSeq)
+  window.dispatchEvent(new CustomEvent('edrv:file-changed', { detail: { ...notice, path, paths: notice.paths ?? [path], eventId } }))
+  return eventId
 }
 
 /** 打开指定路径到编辑区页签。 */

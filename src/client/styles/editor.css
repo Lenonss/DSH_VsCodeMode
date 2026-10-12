@@ -277,6 +277,16 @@
 /* 树行图标：官方原语（文件夹/文件类型），尺寸与行高对齐 @author ddj 2026-09-10 */
 [data-edrv-view] .edrv-tree-icon { flex-shrink: 0; display: inline-flex; align-items: center; color: var(--dsw-alias-label-tertiary, #9aa5b1); }
 [data-edrv-view] .edrv-tree-row.edrv-tree-active .edrv-tree-icon { color: var(--dsw-alias-label-secondary, #52606d); }
+/* SVN overlays: official file icon remains visible, independent local/remote signs. ddj 2026-10-09 */
+[data-edrv-view] .edrv-tree-iconbox { position: relative; display: inline-flex; width: 20px; height: 20px; align-items: center; flex-shrink: 0; }
+[data-edrv-view] .edrv-svn-overlay { position: absolute; inset: 0; }
+[data-edrv-view] .edrv-svn-local { position: absolute; right: -1px; bottom: -2px; display: flex; border-radius: 50%; box-shadow: 0 0 0 1px var(--dsw-alias-bg-layer-1, #fff); }
+[data-edrv-view] .edrv-svn-icon-clean { color: #16853b; }
+[data-edrv-view] .edrv-svn-icon-modified, [data-edrv-view] .edrv-svn-icon-deleted { color: #d12e35; }
+[data-edrv-view] .edrv-svn-icon-conflict { color: #c27300; }
+[data-edrv-view] .edrv-svn-icon-added { color: #2465c9; }
+[data-edrv-view] .edrv-svn-icon-unversioned, [data-edrv-view] .edrv-svn-icon-ignored, [data-edrv-view] .edrv-svn-icon-external { color: #75808c; }
+[data-edrv-view] .edrv-svn-remote { position: absolute; right: -3px; top: -4px; color: #2465c9; background: var(--dsw-alias-bg-layer-1, #fff); border-radius: 3px; font-size: 11px; font-weight: 900; line-height: 12px; }
 [data-edrv-view] .edrv-rail-badge { position: absolute; top: 2px; right: 2px; min-width: 14px; height: 14px; padding: 0 3px; border-radius: 999px; background: var(--dsw-alias-brand-primary, #0f9d58); color: var(--dsw-alias-label-primary-inverted, #fff); font-size: 9px; font-weight: 600; line-height: 14px; text-align: center; box-sizing: border-box; }
 [data-edrv-view] .edrv-side-body { flex: 1; min-width: 0; min-height: 0; display: flex; overflow: hidden; }
 [data-edrv-view] .edrv-side-panel { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; position: relative; }
@@ -298,6 +308,8 @@
 [data-edrv-view] .edrv-tree-name.edrv-tree-dim { color: var(--dsw-alias-label-tertiary, #9aa5b1); }
 [data-edrv-view] .edrv-tree-badge { min-width: 14px; height: 14px; padding: 0 4px; border-radius: 999px; background: var(--dsw-alias-state-warn-primary, #d97706); color: var(--dsw-alias-label-primary-inverted, #fff); font-size: 9px; font-weight: 600; line-height: 14px; text-align: center; box-sizing: border-box; flex-shrink: 0; }
 [data-edrv-view] .edrv-tree-loading { height: 22px; line-height: 22px; color: var(--dsw-alias-label-tertiary, #9aa5b1); font-size: 11px; }
+/* SVN 状态独立占位：换行不覆盖文件树，长错误在栏内滚动。@author ddj 2026-10-12 */
+[data-edrv-view] .edrv-tree-status { flex: 0 0 auto; min-width: 0; max-height: 96px; overflow: auto; padding: 4px 8px; box-sizing: border-box; line-height: 18px; white-space: normal; overflow-wrap: anywhere; color: var(--dsw-alias-label-tertiary, #9aa5b1); font-size: 11px; }
 [data-edrv-view] .edrv-tree-error { display: flex; align-items: center; gap: 8px; margin: 4px 2px 6px; padding: 6px 8px; border: 1px solid var(--dsw-alias-state-error-primary, rgba(217,83,79,.4)); border-radius: 6px; background: var(--dsw-alias-interactive-bg-hover-danger, rgba(217,83,79,.12)); color: var(--dsw-alias-state-error-primary, #d9534f); font-size: 11px; }
 /* 大纲面板：kind 字形 / detail / 行号 */
 [data-edrv-view] .edrv-outline-kind { display: inline-flex; align-items: center; justify-content: center; width: 14px; flex-shrink: 0; font-size: 12px; font-weight: 600; text-align: center; }

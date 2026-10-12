@@ -19,6 +19,12 @@ import { attrOf, numAttrOf, scanXmlTags, textOf, unescapeXml } from './svnXml.js
 import { TEXT_OUTPUT_CAP, batchResultOf, tailOfText, updateResultOf } from './svnText.js'
 import { LOG_CAP, LOG_DEFAULT_LIMIT, SVN_LOG_SHOW_ALL_CAP, parseLogXml, parseSvnInfoRevision } from './svnLog.js'
 import { SvnUpdateJobs } from './svnUpdateJob.js'
+import { EXPLORER_CAP, explorerViewOf, scopeEntriesOf, statusXmlValid, viewArgsValid } from './svnExplorer.js'
+import { ExplorerScopes, explorerKey } from './svnExplorerCache.js'
+import type { ExplorerScan } from './svnExplorerCache.js'
+import type { SvnViewRequest } from './shared/svnExplorer.js'
+import { readStatusPipe } from './svnStatusStream.js'
+import type { StatusPipe } from './svnStatusStream.js'
 import type { UpdateProcess } from './svnUpdateJob.js'
 export { batchResultOf, commitResultOf, updateResultOf } from './svnText.js'
 export { mapRepoPath, parseLogXml } from './svnLog.js'
@@ -245,7 +251,8 @@ export function parseStatusXml(xml: string, cap: number = CHANGES_CAP): { entrie
     if (!pendingPath) continue
     const rawItem = attrOf(hit.attrs, 'item')
     const item = (rawItem || 'modified') as SvnItemStatus
-    const status: SvnItemStatus = KNOWN_ITEM_STATUS.has(item) ? item : 'modified'
+    const status: SvnItemStatus = attrOf(hit.attrs, 'tree-conflicted') === 'true'
+      ? 'conflicted' : (KNOWN_ITEM_STATUS.has(item) ? item : 'modified')
     const path = changePathOf(pendingPath)
     if (!path) { pendingPath = null; continue }
     if (entries.length >= cap) { truncated = true }
@@ -370,13 +377,14 @@ export function parseRemoteStatusXml(
     const repos = /<repos-status\b([^>]*?)\/?>/.exec(match[2])
     if (!repos) continue
     const item = attrOf(repos[1], 'item')
-    if (!item || item === 'none') continue
+    const props = attrOf(repos[1], 'props')
+    if ((!item || item === 'none' || item === 'normal') && props !== 'modified') continue
     // 路径形态双兼容（同 parseSummarizeXml：绝对/相对取决于调用目标形态）
     const rawPath = attrOf(match[1], 'path')
     const rel = relPathOfAbs(rawPath, wcRoot) ?? changePathOf(rawPath)
     if (!rel) continue
     if (outdated.length >= cap) { truncated = true; break }
-    outdated.push({ path: rel, item })
+    outdated.push({ path: rel, item: item && item !== 'none' && item !== 'normal' ? item : 'modified' })
   }
   return { outdated, againstRev, truncated }
 }
@@ -500,6 +508,9 @@ export function createSvnRpc(deps: SvnRpcDeps): { handlers: Record<string, unkno
   const updateRootCache = new Map<string, { at: number; root: string }>()
   /** 变更清单缓存（键 = 工作副本根；TTL 短，仅合并同一轮 UI 的多处拉取）。 */
   const changesCache = new Map<string, { at: number; value: { entries: SvnChangeEntry[]; truncated: boolean } }>()
+  /** Explorer snapshots are bounded and short-lived; concurrent scans share one subprocess. */
+  const explorerCache = new Map<string, { at: number; entries: SvnChangeEntry[]; truncated: boolean }>()
+  const explorerFlight = new Map<string, Promise<{ entries: SvnChangeEntry[]; truncated: boolean }>>()
   /** 混合通道方案收件箱（key = 工作副本根；覆盖式入箱 + TTL，见 svn.aiPlanSubmit/Pending）。 */
   const planInbox = new Map<string, { plan: SvnAiPlan; dropped: number; at: number }>()
   /** 工作副本根 relative-url 缓存（日志路径映射用；探测失败也缓存空串避免反复 spawn）。 */
@@ -936,7 +947,96 @@ export function createSvnRpc(deps: SvnRpcDeps): { handlers: Record<string, unkno
     return { ok, count, summary, output: [...notes, ...failures].join('\n') }
   }
 
+  /** @private @author ddj 2026年10月10号 @param root Native WC root. @param prefix Session prefix. @param paths Subtree targets. @returns Existing parent roots, merged with segment boundaries; missing session forces full. */
+  const scopeRootsOf = async (root: string, prefix: string, paths: readonly string[]): Promise<string[]> => {
+    const roots: string[] = []
+    for (const raw of paths) {
+      let path = raw
+      while (path) {
+        try { if ((await stat(join(root, prefix, path))).isDirectory()) break } catch { /* Deleted subtree: climb. */ }
+        path = path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : ''
+      }
+      if (roots.some((parent) => !parent || path === parent || path.startsWith(parent + '/'))) continue
+      for (let i = roots.length - 1; i >= 0; i--) if (!path || roots[i].startsWith(path + '/')) roots.splice(i, 1)
+      roots.push(path)
+    }
+    return roots
+  }
+
+  /** @private @author ddj 2026年10月10号 @param cwd Session directory. @param root WC root. @param roots Bounded subtrees. @param signal Owner disposal. @returns Confirmed local statuses; malformed/pipe-empty output rejects. */
+  const scanExplorer = async (cwd: string, root: string, roots: readonly string[] = [''], signal?: AbortSignal): Promise<ExplorerScan> => {
+    const target = svnPathOf(cwd, root, '')
+    if (target === null) throw new Error('工作区不在 SVN 根目录内')
+    const spawn = subprocess()
+    if (!spawn) throw new Error('缺少 subprocess 服务')
+    const fs = ctx.get('fs') as { resolve?: (p: string, o: object) => Promise<unknown>; processPath?: (t: unknown) => string } | null
+    const realRoot = fs?.resolve && fs?.processPath ? fs.processPath(await fs.resolve(root, {})) : root
+    const validRoots = await scopeRootsOf(realRoot, target, roots)
+    const targets = validRoots.map((path) => {
+      const rel = [target === '.' ? '' : target, path].filter(Boolean).join('/') || '.'
+      return rel.includes('@') ? rel + '@' : rel
+    })
+    const handle = spawn({
+      argv: [settings.svn().svnPath.trim() || SVN_CLI_DEFAULT, '--non-interactive', 'status', '--xml', '--verbose', '--no-ignore', '--', ...targets],
+      cwd: realRoot, stdio: { stdout: 'pipe', stderr: { maxBytes: OUTPUT_CAP }, stdin: 'ignore' }, graceMs: STATUS_GRACE_MS,
+    }) as StatusPipe
+    const parsed = await readStatusPipe(handle, parseStatusXml, EXPLORER_CAP, STATUS_GRACE_MS, signal)
+    return { entries: scopeEntriesOf(parsed.entries, target), truncated: parsed.truncated, roots: validRoots }
+  }
+
+  /** @private @author ddj 2026年10月09号 @param cwd Session directory. @param root WC root. @param force Bypass TTL. @returns Shared bounded scan; old cache entries are evicted. */
+  const explorerOf = async (cwd: string, root: string, force: boolean) => {
+    const pending = explorerFlight.get(cwd)
+    if (pending) return pending
+    const hit = explorerCache.get(cwd)
+    if (!force && hit && now() - hit.at < CHANGES_TTL_MS) return hit
+    const work = scanExplorer(cwd, root)
+    explorerFlight.set(cwd, work)
+    try {
+      const result = await work
+      explorerCache.delete(cwd)
+      if (explorerCache.size >= 2) explorerCache.delete(explorerCache.keys().next().value!)
+      explorerCache.set(cwd, { at: now(), ...result })
+      return result
+    } finally { explorerFlight.delete(cwd) }
+  }
+
+  const explorerScopes = new ExplorerScopes()
+  /** @private @author ddj 2026年10月10号 @param args Validated view projection. @returns Scope-isolated compact evidence; no repository contact. */
+  const viewExplorer = async (args: SvnViewRequest) => {
+    if (!viewArgsValid(args)) return { ok: false as const, error: 'SVN 图标请求无效或超出行数/路径上限' }
+    const sc = await requireSvnSession(ctx, args.sessionId)
+    if ('err' in sc) return { ok: false as const, error: sc.err }
+    const status = await statusOf(sc.cwd)
+    if (!status.managed || !status.wcRoot || !status.svnCli) return { ok: false as const, error: 'SVN 工作副本或命令不可用' }
+    try {
+      const root = status.wcRoot
+      const scopeId = JSON.stringify([explorerKey(root), explorerKey(sc.cwd)])
+      /** @private @author ddj 2026年10月10号 @param roots Scoped subtrees. @param signal Owner disposal. @returns Streamed scan. */
+      const scan = (roots: readonly string[], signal: AbortSignal) => scanExplorer(sc.cwd, root, roots, signal)
+      const queue = explorerScopes.get(scopeId, scan, now)
+      const reason = args.reason ?? 'read'
+      if (reason !== 'read' && (reason !== 'calibrate' || now() - queue.state().confirmedAt > CHANGES_TTL_MS)) {
+        queue.invalidate({ full: reason !== 'paths', paths: args.paths, event: JSON.stringify([args.clientId, args.eventId]) })
+      }
+      await queue.initial()
+      return { ok: true as const, ...explorerViewOf(queue, scopeId, svnPathOf(sc.cwd, root, '') ?? '.', args) }
+    } catch (error) { return { ok: false as const, error: '读取 SVN 图标状态失败：' + String(error) } }
+  }
+
   const handlers = {
+    'svn.explorerView': viewExplorer,
+    /** @public @author ddj 2026年10月09号 @param args Session and refresh flag. @returns Read-only explorer snapshot; no repository contact. */
+    'svn.explorerStatus': async (args: { sessionId?: string; force?: boolean }) => {
+      const sc = await requireSvnSession(ctx, args.sessionId)
+      if ('err' in sc) return { ok: false as const, error: sc.err }
+      const status = await statusOf(sc.cwd)
+      if (!status.managed || !status.wcRoot || !status.svnCli) return { ok: false as const, error: 'SVN 工作副本或命令不可用' }
+      try {
+        const result = await explorerOf(sc.cwd, status.wcRoot, args.force === true)
+        return { ok: true as const, ...result, prefix: svnPathOf(sc.cwd, status.wcRoot, '') ?? '.' }
+      } catch (error) { return { ok: false as const, error: '读取 SVN 图标状态失败：' + String(error) } }
+    },
     'svn.status': async (args: { sessionId?: string; force?: boolean }) => {
       const sc = await requireSvnSession(ctx, args.sessionId)
       if ('err' in sc) return { ok: false as const, error: sc.err }
@@ -1174,12 +1274,14 @@ export function createSvnRpc(deps: SvnRpcDeps): { handlers: Record<string, unkno
       if (!status.svnCli) return { ok: false as const, error: 'svn 命令不可用（可在设置页配置 svn 路径）' }
       try {
         // W2-3：M3 实测 —— 离线/无凭据会长时间挂起，REMOTE_GRACE_MS 短超时是硬约束
-        const argv = ['status', '-u', '--xml']
-        if (rel) argv.push('--', rel)
+        const target = svnPathOf(sc.cwd, status.wcRoot, rel)
+        if (target === null) return { ok: false as const, error: '路径不在 SVN 工作副本内' }
+        const argv = ['status', '-u', '--xml', '--', target]
         const outcome = await runSvn(status.wcRoot, argv, REMOTE_GRACE_MS, SUM_OUTPUT_CAP)
         if (outcome.code !== 0) {
           return { ok: false as const, error: '远端检查失败：' + tailOfText([outcome.stderr, outcome.stdout].filter(Boolean).join('\n')) }
         }
+        if (!statusXmlValid(outcome.stdout)) return { ok: false as const, error: '远端状态输出为空或不完整' }
         return { ok: true as const, ...parseRemoteStatusXml(outcome.stdout, status.wcRoot) }
       } catch (error) {
         return { ok: false as const, error: '远端检查失败：' + String(error) }
@@ -1492,5 +1594,5 @@ export function createSvnRpc(deps: SvnRpcDeps): { handlers: Record<string, unkno
       }
     },
   }
-  return { handlers, dispose: () => { updateJobs.dispose(); updateRootCache.clear() } }
+  return { handlers, dispose: () => { explorerScopes.dispose(); explorerCache.clear(); updateJobs.dispose(); updateRootCache.clear() } }
 }

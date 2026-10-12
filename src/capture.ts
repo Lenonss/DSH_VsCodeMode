@@ -13,7 +13,7 @@ import { dirname } from 'node:path'
 import type { DiffRecord, Hunk } from './shared/types.js'
 import { annotateHunks, fingerprint } from './shared/diff.js'
 import type { Ctx, Session } from './store.js'
-import { READ_CAP, loadBucket, saveBucket } from './store.js'
+import { READ_CAP, archiveCanceled, loadBucket, saveBucket } from './store.js'
 import { fileMaxBatch, prune } from './model.js'
 import type { Registry } from './registry.js'
 import { cwdOf } from './registry.js'
@@ -253,6 +253,9 @@ async function persistRecord(ctx: Ctx, registry: Registry, session: Session, cwd
     for (const [callId, rec] of prior) bucket.set(callId, rec)
     throw error
   }
+  // 先保存再独立归档：优化失败不得撤回已捕获的记录，下次列表维护可重试。
+  try { await archiveCanceled(ctx, session, cwd, bucket, record) }
+  catch (error) { log.warn('archive canceled edits failed: ' + String(error)) }
 }
 
 /**

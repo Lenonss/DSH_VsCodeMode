@@ -11,7 +11,10 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { captureToolResult } from '../src/capture.js'
-import { closeArchiveDbs } from '../src/archiveDb.js'
+import { closeArchiveDbs, readActive, readArchives } from '../src/archiveDb.js'
+import { archiveCanceled } from '../src/store.js'
+import { archiveDbFile } from '../src/paths.js'
+import { DatabaseSync } from 'node:sqlite'
 import type { DiffRecord } from '../src/shared/types.js'
 import type { Registry } from '../src/registry.js'
 import { clearWsCache } from '../src/remoteWorkspace.js'
@@ -181,6 +184,75 @@ describe('captureToolResult · remote_ssh_write（issue #7）', () => {
     const exec = execOf('remote_ssh_write', { path: 'a.txt', content: 'x' }, cwd)
     await captureToolResult(fakeCtx(), registry, { ...exec, callId: undefined }, okResult)
     expect(recOf(registry, cwd, 'c1')).toBeUndefined()
+  })
+})
+
+describe('captureToolResult · 过程抵消归档', () => {
+  it('本地 edit 新增后移除立即归档，真实修改仍保留待审查', async () => {
+    const cwd = mkWorkspace(false)
+    const registry: Registry = new Map()
+    const ctx = fakeCtx()
+    const path = join(cwd, 'a.txt')
+    await captureToolResult(ctx, registry,
+      execOf('edit', { file_path: path, old_string: 'base', new_string: 'fixed' }, cwd, 'real'),
+      { value: { path, before: 'base\n', after: 'fixed\n' } })
+    await captureToolResult(ctx, registry,
+      execOf('edit', { file_path: path, old_string: '', new_string: 'debug\n' }, cwd, 'add'),
+      { value: { path, before: 'fixed\n', after: 'fixed\ndebug\n' } })
+    await captureToolResult(ctx, registry,
+      execOf('edit', { file_path: path, old_string: 'debug\n', new_string: '' }, cwd, 'remove'),
+      { value: { path, before: 'fixed\ndebug\n', after: 'fixed\n' } })
+    expect(recOf(registry, cwd, 'real')).toMatchObject({ superseded: false, archived: false })
+    expect(recOf(registry, cwd, 'add')).toMatchObject({ superseded: true, archived: true })
+    expect(recOf(registry, cwd, 'remove')).toMatchObject({ superseded: true, archived: true })
+    expect(readArchives(cwd, path)).toHaveLength(2)
+    expect(readActive(cwd).get('remove')).toMatchObject({ archived: true, superseded: true })
+  })
+
+  it('归档事务失败回滚全部标志，但新捕获记录仍落盘；维护扫描可重试', async () => {
+    const cwd = mkWorkspace(false)
+    const registry: Registry = new Map()
+    const ctx = fakeCtx()
+    const path = join(cwd, 'a.txt')
+    await captureToolResult(ctx, registry,
+      execOf('write', { file_path: path, content: 'base debug' }, cwd, 'add'),
+      { value: { path, before: 'base', after: 'base debug' } })
+    const firstAt = recOf(registry, cwd, 'add')!.at
+    const db = new DatabaseSync(archiveDbFile(cwd))
+    db.exec("CREATE TRIGGER fail_archive BEFORE INSERT ON batches WHEN NEW.batch=2 BEGIN SELECT RAISE(ABORT, 'archive denied'); END")
+    try {
+      await captureToolResult(ctx, registry,
+        execOf('write', { file_path: path, content: 'base' }, cwd, 'remove'),
+        { value: { path, before: 'base debug', after: 'base' } })
+      expect(recOf(registry, cwd, 'add')).toMatchObject({ archived: false, superseded: false, at: firstAt })
+      const removed = recOf(registry, cwd, 'remove')!
+      expect(removed).toMatchObject({ archived: false, superseded: false })
+      expect(readActive(cwd).get('remove')).toEqual(removed)
+      expect(readArchives(cwd, path)).toEqual([])
+      const removedAt = removed.at
+      // 第二次（维护扫描）也失败，仍须恢复 at/superseded/archived，数据库没有半对归档。
+      await expect(archiveCanceled(ctx, {}, cwd, registry.get(cwd)!)).rejects.toThrow('archive denied')
+      expect(removed.at).toBe(removedAt)
+      expect(removed.archived).toBe(false)
+      expect(removed.superseded).toBe(false)
+      db.exec('DROP TRIGGER fail_archive')
+      expect(await archiveCanceled(ctx, {}, cwd, registry.get(cwd)!)).toBe(2)
+      expect(readArchives(cwd, path)).toHaveLength(2)
+      expect(await archiveCanceled(ctx, {}, cwd, registry.get(cwd)!)).toBe(0)
+    } finally { db.close() }
+  })
+
+  it('remote_ssh_write 使用相同抵消机制，镜像写穿仍保持最终内容', async () => {
+    const cwd = mkWorkspace(true)
+    const path = join(cwd, 'a.txt')
+    writeFileSync(path, 'base')
+    const registry: Registry = new Map()
+    const ctx = fakeCtx()
+    await captureToolResult(ctx, registry, execOf('remote_ssh_write', { path: 'a.txt', content: 'base debug' }, cwd, 'add'), okResult)
+    await captureToolResult(ctx, registry, execOf('remote_ssh_write', { path: 'a.txt', content: 'base' }, cwd, 'remove'), okResult)
+    expect(recOf(registry, cwd, 'add')).toMatchObject({ archived: true, superseded: true })
+    expect(recOf(registry, cwd, 'remove')).toMatchObject({ archived: true, superseded: true })
+    expect(readFileSync(path, 'utf8')).toBe('base')
   })
 })
 

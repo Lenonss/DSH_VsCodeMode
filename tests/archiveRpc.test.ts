@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import { closeArchiveDbs, commitActive, listArchives, migrateActive, readArchives, revertState } from '../src/archiveDb.js'
+import { closeArchiveDbs, commitActive, listArchives, migrateActive, readActive, readArchives, revertState } from '../src/archiveDb.js'
 import { archiveDbFile } from '../src/paths.js'
 import { buildHandlers } from '../src/rpc.js'
 import { loadBucket } from '../src/store.js'
@@ -30,6 +30,7 @@ function record(): DiffRecord {
 function fakeFs(failSidecar = false) {
   const files = new Map<string, string>([[FILE, 'new'], [LEGACY, JSON.stringify({ version: 1, batches: [{ cwd: CWD, path: FILE, batch: 99, records: [] }] })]])
   const fs = {
+    processPath: (path: string) => path,
     resolve: vi.fn(async (path: string, opts?: { cwd?: string }) => path.startsWith('/') ? path : (opts?.cwd ?? CWD) + '/' + path),
     readText: vi.fn(async (path: string): Promise<string> => {
       if (!files.has(path)) throw new Error('not found')
@@ -70,6 +71,41 @@ afterAll(() => {
 })
 
 describe('SQLite archive RPC', () => {
+  it('list 清理历史抵消对：真实修改保留、原文重建正确、归档与重载一致', async () => {
+    const { fs, files } = fakeFs()
+    files.set(FILE, 'base fixed\n')
+    const real = { ...record(), callId: 'real', before: 'base\n', after: 'base fixed\n',
+      hunks: [{ oldText: 'base', newText: 'base fixed' }], batch: 1 }
+    const add = { ...record(), callId: 'add-debug', before: real.after, after: 'base fixed\ndebug\n',
+      hunks: [{ oldText: '', newText: 'debug\n' }], batch: 2 }
+    const remove = { ...record(), callId: 'remove-debug', before: add.after, after: real.after,
+      hunks: [{ oldText: 'debug\n', newText: '' }], batch: 3 }
+    const records = [real, add, remove]
+    commitActive(CWD, { upserts: records, removed: [] })
+    const ctx = fakeCtx(fs)
+    const bucket = new Map(records.map((rec) => [rec.callId, rec]))
+    const handlers = buildHandlers(ctx, new Map([[CWD, bucket]]))
+    const wanted = await handlers['edrv.list']({ sessionId: 's1', callIds: [add.callId, remove.callId] })
+    expect(wanted.ok && wanted.records).toHaveLength(2)
+    expect(add.archived).toBe(false)
+    const skipped = await handlers['edrv.list']({ sessionId: 's1', skipStale: true })
+    expect(skipped.ok && skipped.records).toHaveLength(3)
+    const listed = await handlers['edrv.list']({ sessionId: 's1' })
+    expect(listed.ok && listed.records.map((rec) => rec.callId)).toEqual([real.callId])
+    const original = await handlers['edrv.original']({ sessionId: 's1', path: FILE })
+    expect(original).toMatchObject({ ok: true, content: 'base\n', stale: [] })
+    const archived = readArchives(CWD, FILE)
+    expect(archived).toHaveLength(2)
+    expect(archived.every((entry) => entry.reason === '编辑过程自抵消（新增后还原），自动跳过审查')).toBe(true)
+    expect(readActive(CWD).get(add.callId)).toMatchObject({ archived: true, superseded: true })
+    const reloaded = await loadBucket(ctx, CWD)
+    expect(reloaded.get(remove.callId)).toMatchObject({ archived: true, superseded: true })
+    expect(reloaded.get(real.callId)).toMatchObject({ archived: false, superseded: false })
+    const badges = await handlers['edrv.list']({ sessionId: 's1', callIds: [add.callId, remove.callId] })
+    expect(badges.ok && badges.records.every((rec) => rec.superseded)).toBe(true)
+    expect(fs.writeText).not.toHaveBeenCalled()
+  })
+
   it('旧 JSON 保留且不读入新列表；详情仅取目标路径，批次回滚可恢复', async () => {
     const { fs, files } = fakeFs()
     const ctx = fakeCtx(fs)

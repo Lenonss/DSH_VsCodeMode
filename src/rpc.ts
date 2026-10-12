@@ -13,6 +13,7 @@ import {
   READ_CAP,
   appendArchiveEntries,
   archiveRecords,
+  archiveCanceled,
   autoArchiveStale,
   policyOf,
   resolveTarget,
@@ -613,6 +614,7 @@ export function buildHandlers(
           const staleStart = performance.now()
           // #endregion
           await autoArchiveStale(ctx, sc.session, sc.cwd, bucket)
+          await archiveCanceled(ctx, sc.session, sc.cwd, bucket)
           // #region debug log
           staleMs = performance.now() - staleStart
           // #endregion

@@ -9,7 +9,11 @@ import type { DiffRecord } from '../src/shared/types.js'
 import {
   archiveEntryFor,
   fileMaxBatch,
+  findCanceledPairs,
+  findInversePrior,
+  fullyPending,
   groupByBatch,
+  hunksInverse,
   markDecision,
   normalizeRecord,
   prune,
@@ -145,6 +149,118 @@ describe('reconstructOriginal', () => {
   it('短 perHunk 不会把未决 hunk 误判为已解决', () => {
     const r = rec({ hunks: [{ oldText: 'a', newText: 'b' }, { oldText: 'c', newText: 'd' }], decisions: { call: 'pending', perHunk: ['accepted'] } })
     expect(recordResolved(r)).toBe(false)
+  })
+})
+
+describe('过程抵消 · 整记录逆反', () => {
+  /**
+   * @private
+   * @author ddj 2026年10月10号
+   * 构造同一文件的往返快照，复用已有记录 fixture。
+   * @param partial 后记录覆盖字段
+   * @returns 新增与移除两条未决记录
+   */
+  function cancelPair(partial: Partial<DiffRecord> = {}): [DiffRecord, DiffRecord] {
+    const added = rec({ callId: 'add', before: 'base\n', after: 'base\ndebug\n',
+      hunks: [{ oldText: '', newText: 'debug\n' }], batch: 1 })
+    const removed = rec({ callId: 'remove', before: added.after!, after: added.before,
+      hunks: [{ oldText: 'debug\n', newText: '' }], batch: 2, ...partial })
+    return [added, removed]
+  }
+
+  it('整组逐块逆反成立；数量不等、非逆反、空组、新建和纯 noop 不匹配', () => {
+    const a = [{ oldText: 'a', newText: 'b' }, { oldText: '', newText: 'debug' }]
+    const b = [{ oldText: 'b', newText: 'a' }, { oldText: 'debug', newText: '' }]
+    expect(hunksInverse(a, b)).toBe(true)
+    expect(hunksInverse(a, b.slice(0, 1))).toBe(false)
+    expect(hunksInverse(a, a)).toBe(false)
+    expect(hunksInverse([], [])).toBe(false)
+    expect(hunksInverse([{ oldText: null, newText: 'x' }], [{ oldText: 'x', newText: '' }])).toBe(false)
+    expect(hunksInverse([{ oldText: 'x', newText: 'x' }], [{ oldText: 'x', newText: 'x' }])).toBe(false)
+  })
+
+  it('BOM/CRLF 采用既有比较口径归一化，归一化 noop 不配对', () => {
+    expect(hunksInverse([{ oldText: '\uFEFFa\r\n', newText: 'b\r\n' }],
+      [{ oldText: 'b\n', newText: 'a\n' }])).toBe(true)
+    expect(hunksInverse([{ oldText: 'a\r\n', newText: 'a\n' }],
+      [{ oldText: 'a\n', newText: 'a\r\n' }])).toBe(false)
+    const [a, b] = cancelPair({ before: '\uFEFFbase\r\ndebug\r\n', after: 'base\r\n' })
+    expect(findInversePrior([a], b)).toBe(a)
+  })
+
+  it('全部 pending 才允许抵消，缺少 perHunk 沿用 call 状态', () => {
+    expect(fullyPending(rec({}))).toBe(true)
+    expect(fullyPending(rec({ decisions: { call: 'pending', perHunk: [] } }))).toBe(true)
+    expect(fullyPending(rec({ archived: true }))).toBe(false)
+    expect(fullyPending(rec({ superseded: true }))).toBe(false)
+    expect(fullyPending(rec({ decisions: { call: 'accepted', perHunk: ['pending'] } }))).toBe(false)
+    expect(fullyPending(rec({ decisions: { call: 'pending', perHunk: ['rejected'] } }))).toBe(false)
+  })
+
+  it('相同时间仍可由不同捕获批次确认先后，不改变输入记录', () => {
+    const [a, b] = cancelPair()
+    const records = [b, a]
+    const snapshot = JSON.stringify(records)
+    expect(findInversePrior(records, b)).toBe(a)
+    expect(findCanceledPairs(records)).toEqual([[a, b]])
+    expect(JSON.stringify(records)).toBe(snapshot)
+  })
+
+  it('文本互换但在不同位置修改时不抵消', () => {
+    const a = rec({ callId: 'a', before: 'one a / two b', after: 'one b / two b', batch: 1 })
+    const b = rec({ callId: 'b', before: a.after!, after: 'one b / two a',
+      hunks: [{ oldText: 'b', newText: 'a' }], batch: 2 })
+    expect(hunksInverse(a.hunks, b.hunks)).toBe(true)
+    expect(findInversePrior([a], b)).toBeNull()
+  })
+
+  it('不隐藏不同路径、部分撤销或移除时夹带真实修改的记录', () => {
+    const [a, b] = cancelPair()
+    expect(findInversePrior([a], { ...b, path: '/other' })).toBeNull()
+    expect(findInversePrior([a], { ...b, hunks: [{ oldText: 'debug', newText: '' }] })).toBeNull()
+    expect(findInversePrior([a], { ...b, after: 'base changed\n' })).toBeNull()
+    expect(findInversePrior([a], { ...b, hunks: [...b.hunks, { oldText: 'base', newText: 'new' }] })).toBeNull()
+  })
+
+  it('缺失快照、新建后清空和 noop 都保留审查', () => {
+    const [a, b] = cancelPair()
+    expect(findInversePrior([{ ...a, after: undefined }], b)).toBeNull()
+    expect(findInversePrior([a], { ...b, before: null })).toBeNull()
+    expect(findInversePrior([{ ...a, before: null, create: true }], b)).toBeNull()
+    expect(findInversePrior([{ ...a, create: true }], b)).toBeNull()
+    const noop = rec({ before: 'x', after: 'x', hunks: [{ oldText: 'x', newText: 'x' }] })
+    expect(findCanceledPairs([noop, { ...noop, callId: 'n2', batch: 2 }])).toEqual([])
+  })
+
+  it.each(['accepted', 'rejected'] as const)('任一方已有 %s 决策时不抵消', (value) => {
+    const [a, b] = cancelPair()
+    expect(findInversePrior([{ ...a, decisions: { call: value, perHunk: [] } }], b)).toBeNull()
+    expect(findInversePrior([a], { ...b, decisions: { call: 'pending', perHunk: [value] } })).toBeNull()
+  })
+
+  it('已归档或已覆盖任一方不再配对', () => {
+    const [a, b] = cancelPair()
+    expect(findCanceledPairs([{ ...a, archived: true }, b])).toEqual([])
+    expect(findCanceledPairs([a, { ...b, superseded: true }])).toEqual([])
+  })
+
+  it('优先批次顺序；批次不能证明先后时须有严格有效时间，不能靠 callId', () => {
+    const [a, b] = cancelPair()
+    expect(findInversePrior([a], { ...b, batch: 0 })).toBeNull()
+    expect(findInversePrior([a], { ...b, batch: 1, at: 'invalid' })).toBeNull()
+    expect(findInversePrior([a], { ...b, batch: 0, at: '2026-08-20T00:01:00.000Z' })).toBe(a)
+    expect(findInversePrior([a], { ...b, batch: 0, at: '2026-08-19T00:00:00.000Z' })).toBeNull()
+    expect(findInversePrior([a], { ...b, batch: 2, at: '2026-08-19T00:00:00.000Z' })).toBe(a)
+  })
+
+  it('挑选最近候选；多对和奇数次往返每条最多配一次', () => {
+    const [a, b] = cancelPair()
+    const newer = { ...a, callId: 'newer', batch: 2 }
+    expect(findInversePrior([a, newer], { ...b, batch: 3 })).toBe(newer)
+    const c = { ...a, callId: 'add-again', batch: 3 }
+    const d = { ...b, callId: 'remove-again', batch: 4 }
+    expect(findCanceledPairs([d, b, c, a])).toEqual([[a, b], [c, d]])
+    expect(findCanceledPairs([a, b, c])).toEqual([[a, b]])
   })
 })
 
