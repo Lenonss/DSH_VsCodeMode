@@ -7,6 +7,7 @@
  * 作者 ddj 2026年09月10号
  */
 import { panelAvailable, runPanelCommand } from '../panelCommands.js'
+import { pageKeysAllowed } from '../pageReload.js'
 import { hasEditorModel, hasOpenTabs } from '../editorModelState.js'
 import { activeEditorPath } from '../activePathStore.js'
 import { isMarkdownPath } from '../markdownPreview.js'
@@ -195,6 +196,21 @@ function svnEventOf(action: SvnActionDef): string {
  * @author ddj 2026年09月10号 / 2026年10月
  */
 export const EDITOR_COMMANDS: readonly CommandDef[] = [
+  {
+    id: 'edrv.toggleComment', label: '切换行注释', category: '编辑', order: 20,
+    available: needsModel,
+    run: () => emit('toggleComment'),
+  },
+  {
+    id: 'edrv.duplicateLine', label: '向下复制行（Ctrl+D，编辑器本地）', category: '编辑', order: 30,
+    available: needsModel,
+    run: () => emit('duplicateLine'),
+  },
+  {
+    id: 'edrv.reloadWindow', label: '刷新当前界面（不重启 Host）', category: '视图', order: 40,
+    available: pageKeysAllowed,
+    run: () => emit('reloadWindow'),
+  },
   {
     id: 'edrv.save', label: '保存文件', category: '文件', order: 10,
     available: needsModel,

@@ -92,6 +92,32 @@ function makeHarness(options: {
   }
 }
 
+describe('refresh-only strict mirror flush', () => {
+  it('rejects until installed and settled', async () => {
+    const { mirror } = makeHarness()
+    await expect(mirror.flushStrict()).rejects.toThrow('尚未就绪')
+  })
+  it('resends current state after a failed lenient flush and reports rejection', async () => {
+    const { mirror, storage } = makeHarness({ failPush: true })
+    mirror.install()
+    await mirror.hydrate()
+    storage.setItem('edrv.editor.v3.ws:test', 'view')
+    expect(await mirror.flush()).toBe(1)
+    await expect(mirror.flushStrict()).rejects.toThrow('界面状态保存失败')
+  })
+  it('resends an already-flushed view snapshot successfully', async () => {
+    const { mirror, storage, pushes } = makeHarness()
+    mirror.install()
+    await mirror.hydrate()
+    storage.setItem('edrv.editor.v3.ws:test', 'view')
+    await mirror.flush()
+    const before = pushes.length
+    await expect(mirror.flushStrict()).resolves.toBeUndefined()
+    expect(pushes.length).toBeGreaterThan(before)
+    expect(pushes.at(-1)?.payload.keys).toEqual({ 'edrv.editor.v3.ws:test': 'view' })
+  })
+})
+
 describe('isMirroredKey', () => {
   it('只镜像 edrv. 前缀且排除自身标记键与派生条目缓存', () => {
     expect(isMirroredKey('edrv.editor.v3.ws:d:/a')).toBe(true)

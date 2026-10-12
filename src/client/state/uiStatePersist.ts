@@ -101,6 +101,8 @@ export interface UiStateMirror {
   hydrate(): Promise<number>
   /** 立即上送待推送批次，返回最终丢弃的键数（0 = 全部落盘；供卸载与测试驱动）。 */
   flush(): Promise<number>
+  /** Refresh-only strict resend; rejects on lost current state. */
+  flushStrict(): Promise<void>
   /** 是否已完成一次水合。 */
   hydrated(): boolean
   /** 水合阶段是否已结束（成功或重试耗尽）。未结束时界面不应写入存档，否则会把空初值推给 host。 */
@@ -269,6 +271,19 @@ export function createUiStateMirror(deps: UiStateMirrorDeps): UiStateMirror {
     return run
   }
 
+  /** @private @author ddj 2026年10月12号 @returns Durable refresh snapshot. @throws When state is unreadable, unsettled or rejected by Host. @sideEffects Resends current local state after waiting for inflight writes. */
+  async function flushStrict(): Promise<void> {
+    if (!settleDone || !installed) throw new Error('界面状态镜像尚未就绪')
+    if (inflight) await inflight
+    // Read directly: the lenient key scanner intentionally hides storage errors.
+    for (let index = 0; index < storage.length; index++) {
+      const key = storage.key(index)
+      if (key && isMirroredKey(key)) queue(key, storage.getItem(key))
+    }
+    const lost = await flush()
+    if (lost > 0) throw new Error('界面状态保存失败（' + lost + ' 个键）：' + lastError)
+  }
+
   /** 回填本地缺失键（本地已有值一律保留）。 */
   function applyHydration(snapshot: UiStateSnapshot): number {
     let filled = 0
@@ -393,6 +408,7 @@ export function createUiStateMirror(deps: UiStateMirrorDeps): UiStateMirror {
     },
     hydrate,
     flush,
+    flushStrict,
     hydrated(): boolean {
       return done
     },
@@ -558,5 +574,11 @@ export function onUiStateReady(listener: () => void): () => void {
  */
 export async function flushUiState(): Promise<void> {
   if (singleton) await singleton.flush()
+}
+
+/** @public @author ddj 2026年10月12号 @returns Durable page state. @throws If the mirror is unavailable or cannot persist. */
+export async function flushPageState(): Promise<void> {
+  if (!singleton) throw new Error('界面状态镜像不可用')
+  await singleton.flushStrict()
 }
 // --endregion

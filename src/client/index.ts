@@ -65,7 +65,8 @@ import { disposeLaunchJson } from './dap/launchSnippetProvider.js'
 import { disposeAiInline } from './ai/inlineProvider.js'
 import { readSessionScope, subscribeScope } from './sessionScope.js'
 import { installPlanBridge } from './planBridge.js'
-import { flushUiState, hydrateUiState, installUiStatePersist, onUiStateReady, reportUiStateEvent, uiStateSettled } from './state/uiStatePersist.js'
+import { installPageReload } from './pageReload.js'
+import { flushPageState, flushUiState, hydrateUiState, installUiStatePersist, onUiStateReady, reportUiStateEvent, uiStateSettled } from './state/uiStatePersist.js'
 import { workspaceScopeOf } from './state/scopeStore.js'
 import { dapStore } from './dap/store.js'
 import type { CompatAdapter } from '../shared/compat.js'
@@ -185,6 +186,13 @@ export async function apply(ctx: any): Promise<void> {
 
   // 指令系统（命令栏 + 指令注册表）先装配：命令栏在被任何 React slot 渲染前即可唤起
   const commands = setupCommands(ctx)
+  /** @private @author ddj 2026年10月12号 @param message Refresh refusal; surfaced in mounted editor status and diagnostic log. */
+  const notifyReload = (message: string): void => {
+    log.warn(message)
+    window.dispatchEvent(new CustomEvent('edrv:reload-status', { detail: message }))
+    window.alert(message)
+  }
+  ctx.effect(() => installPageReload(flushPageState, notifyReload), 'vscode-mode: guarded page reload')
 
   const registry: FileOpenerRegistry = createFileOpenerRegistry()
   const workspaces = ctx.get('workspaces')

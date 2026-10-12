@@ -13,6 +13,9 @@
 /** 命令 id → 默认键位（可为多候选）。命令目录以此为准，新增命令只需加一项。 */
 export const KEYBINDING_DEFAULTS: Record<string, string> = {
   'edrv.save': 'Ctrl+S',
+  'edrv.toggleComment': 'Ctrl+Alt+/',
+  'edrv.duplicateLine': '', // Ctrl+D is Monaco-local, never a page-wide binding.
+  'edrv.reloadWindow': '', // Desktop-only defaults are declared below.
   'edrv.quickOpen': 'Ctrl+P',
   'edrv.toggleSidebar': 'Ctrl+B',
   'edrv.searchInFiles': 'Ctrl+Shift+F',
@@ -206,6 +209,19 @@ function bind(code: string, modifiers: OfficialModifier[]): OfficialBinding {
  */
 export const SHORTCUT_PROFILES: Record<string, ShortcutProfiles> = {
   'edrv.toggleSidebar': {},
+  'edrv.duplicateLine': {},
+  'edrv.toggleComment': {
+    'desktop:macos': bind('Slash', ['primary', 'alt']),
+    'desktop:windows': bind('Slash', ['primary', 'alt']),
+    'desktop:linux': bind('Slash', ['primary', 'alt']),
+    'web:macos': bind('Slash', ['primary', 'alt']),
+    'web:windows': bind('Slash', ['primary', 'alt']),
+  },
+  'edrv.reloadWindow': {
+    'desktop:macos': bind('KeyR', ['primary', 'shift']),
+    'desktop:windows': bind('KeyR', ['primary', 'shift']),
+    'desktop:linux': bind('KeyR', ['primary', 'shift']),
+  },
   'edrv.save': {
     'desktop:macos': bind('KeyS', ['primary']),
     'desktop:windows': bind('KeyS', ['primary']),

@@ -32,6 +32,15 @@ function registryFor(profile: string) {
   const registry = new Registry(runtime, platform)
   const ctx = { shortcuts: registry, effect: (install: () => void) => install(), locale: { bind: () => (key: string) => key } }
   installWorkspace(ctx, {}, {}, () => {})
+  registry.register({ id: 'shortcuts.open', label: () => 'Shortcuts', aliases: [], regions: ['page', 'editable'], modals: [],
+    defaults: {
+      'desktop:macos': { code: 'Slash', modifiers: ['primary'] },
+      'desktop:windows': { code: 'Slash', modifiers: ['primary'] },
+      'desktop:linux': { code: 'Slash', modifiers: ['primary'] },
+      'web:macos': { code: 'Slash', modifiers: ['primary'] },
+      'web:windows': { code: 'Slash', modifiers: ['primary'] },
+      'web:linux': { code: 'Slash', modifiers: ['primary'] },
+    }, resolve: () => ({ status: 'pass' }) })
   return registry
 }
 

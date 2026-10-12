@@ -135,6 +135,7 @@ describe('chordToBinding / bindingToChord', () => {
 
   it('全部默认主候选弦 ↔ 官方绑定往返一致', () => {
     for (const chord of Object.values(KEYBINDING_DEFAULTS)) {
+      if (!chord) continue // Explicitly unbound page commands have no chord to round-trip.
       const first = chord.split('|')[0]
       const binding = chordToBinding(first)
       expect(binding, first).not.toBeNull()

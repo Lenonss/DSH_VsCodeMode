@@ -14,6 +14,8 @@ import { bindPanelCommand } from '../panelCommands.js'
 import { dbg, isDebug, rpc } from '../rpc.js'
 import { emitFileChanged, emitRefresh } from '../events.js'
 import { langOf, loadMonaco, snippetLanguageOf } from '../monaco/loader.js'
+import { bindEditActions, runEditAction } from '../monaco/editActions.js'
+import { addReloadGuard } from '../pageReload.js'
 import { clampZoom, clearZoomMem, dataUrlOf, isImagePath, isSvgPath, recallZoom, rememberZoom, zoomKeyOf, zoomStepOf } from '../imagePreview.js'
 import { isMarkdownPath } from '../markdownPreview.js'
 import { setActiveEditorPath } from '../activePathStore.js'
@@ -564,6 +566,24 @@ export function EditorView(props) {
   /** @private @author ddj 2026年10月09号 @param path 可选预期文件路径。按已绑定模型归属保存，避免新 active 覆盖旧文件状态。 */
   const saveViewState = (path) => viewKeeperRef.current?.save(path)
   saveViewStateRef.current = saveViewState
+
+  React.useEffect(() => {
+    /** @private @author ddj 2026年10月12号 @returns Unsafe editor state without saving or discarding file content. */
+    function checkReload() {
+      if (Object.values(dirtyRef.current).some(Boolean)) return '存在未保存文件'
+      if (saveTimerRef.current.isPending() || savingRef.current.size) return '文件正在等待保存或保存中'
+      for (const ctl of pdfCtlRef.current.values()) {
+        if (ctl.isDirty?.()) return '存在未保存 PDF'
+      }
+      for (const path of tabPathsRef.current) {
+        if (readSync(scope, path)) return '存在外部文件冲突'
+      }
+      return null
+    }
+    /** @private @author ddj 2026年10月12号 Captures view state only; never flushes file auto-save. */
+    function prepareReload() { saveViewStateRef.current?.() }
+    return addReloadGuard({ check: checkReload, prepare: prepareReload })
+  }, [scope])
 
   /** @private @author ddj 2026年10月09号 ref 脱离与 effect 卸载共用：保存视图/查找后销毁，重复调用无副作用。 */
   const disposeEditor = React.useCallback(() => {
@@ -1690,6 +1710,9 @@ export function EditorView(props) {
       ['edrv.command.svnTortoiseDiff', () => runSvnTortoise('diff', activeRef.current)],
       ['edrv.command.svnTortoiseBlame', () => runSvnTortoise('blame', activeRef.current)],
       ['edrv.command.svnTortoiseRevert', () => runSvnTortoise('revert', activeRef.current)],
+      ['edrv:reload-status', (event) => setStatus(event.detail)],
+      ['edrv.command.toggleComment', () => runEditAction(editorRef.current, monacoRef.current, 'editor.action.commentLine')],
+      ['edrv.command.duplicateLine', () => runEditAction(editorRef.current, monacoRef.current, 'editor.action.copyLinesDownAction')],
       // 转到行：转发 Monaco 原生 action（widget 本体/占位/跳转全原生，插件只补键位与命令栏入口）
       ['edrv.command.goToLine', () => {
         const ed = editorRef.current
@@ -1702,7 +1725,7 @@ export function EditorView(props) {
     const onCommand = (event) => {
       const action = byName.get(event.type)
       if (!action) return
-      try { action() } catch (error) { dbg(sessionId, '指令 ' + event.type + ' 失败：' + String(error)) }
+      try { action(event) } catch (error) { dbg(sessionId, '指令 ' + event.type + ' 失败：' + String(error)) }
     }
     for (const [eventName] of handlers) window.addEventListener(eventName, onCommand)
     return () => {
@@ -2157,6 +2180,7 @@ export function EditorView(props) {
       // AI 内联补全（ghost text）：开关经 edrv.ai.configGet 拉取；provider 见 client/ai/inlineProvider
       inlineSuggest: { enabled: true },
     })
+    bindEditActions(ed, m)
     // 保存改由窗口级快捷键监听执行（键位可配置；见上方 edrv.save 监听）
     ed.onDidChangeModelContent(() => {
       if (!ed.getModel() || programmaticRef.current) return

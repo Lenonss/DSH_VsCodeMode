@@ -459,18 +459,18 @@ DSH 每次启动监听随机端口，`http://127.0.0.1:<port>` 就是浏览器 o
 
 官方 `dsh plugin` 方式，三选一。下面以 `web` profile 为例；Desktop 或其他命名
 profile 请替换为实际目标，不要把示例目录当成当前运行 profile。升级前可阅读
-[0.14.8 发布说明](docs/release-0.14.8.md)；从 0.14.2 或更旧版本升级还须阅读
+[0.14.9 发布说明](docs/release-0.14.9.md)；从 0.14.2 或更旧版本升级还须阅读
 [0.14.3 数据迁移与回退说明](docs/release-0.14.3.md)。
 
 ```bash
 # ① Git 安装（clone + prepare 构建；推荐打固定 tag）
-dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.14.8
+dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.14.9
 
 # ② npm 注册表（发布到 npm 后）
-dsh plugin --profile web add dsh-vscode-mode@0.14.8
+dsh plugin --profile web add dsh-vscode-mode@0.14.9
 
 # ③ GitHub Release tgz 直装（Release asset 可用后）
-dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.14.8/dsh-vscode-mode-0.14.8.tgz
+dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.14.9/dsh-vscode-mode-0.14.9.tgz
 ```
 
 > **DSH 0.2 兼容范围**：`0.14.1` 起精确放行 `0.2.0-rc.1`，`0.14.4` 再加入
@@ -806,6 +806,7 @@ Keep All / Undo All 却是亮的。修复：单文件 Keep / Undo 覆盖冲突�
 完整变更见 [GitHub Releases](https://github.com/Lenonss/DSH_VsCodeMode/releases)。
 近期关键版本：
 
+- **v0.14.9**：**编辑快捷键与桌面安全刷新**——`Ctrl+/` 保留官方快捷键入口，行注释改为 `Ctrl+Alt+/`（Web Linux 默认不绑定）；编辑器本地 `Ctrl+D` 调用 Monaco 原生向下复制行，块注释不变。桌面 `Ctrl+Shift+R` 刷新当前界面、不重启 Host；未保存代码/PDF、待保存、保存中或外部冲突时拒绝刷新，界面状态镜像失败/超时也不刷新。真实 GUI 按键和状态恢复尚未验收，详见 [0.14.9 发布说明](docs/release-0.14.9.md)。
 - **v0.14.8**：**Unity 打开目标选择与桌面端打开修复**——Unity 外部脚本编辑器 `com.dsh.editor` 0.3.1 新增「打开目标」选择（自动/DSH Web/DSH 桌面端），桌面端按 profile bridge 定位、缺失明确报错；桌面 profile 开机自动准备独立 bridge，无需先注册 OS 菜单。修复桌面端 sessions 服务面缺 `.open`/`.create` 导致的「编辑器打开失败或取消」（改走 `materializeScope → manager.select` 多面切换与 `newDraftSession` 回落）。验证范围与真实 GUI 验收缺口见 [0.14.8 发布说明](docs/release-0.14.8.md)。
 - **v0.14.7**：**SVN 资源管理器状态图标与编辑过程自抵消自动归档**——文件树叠加 SVN 状态图标（含目录子树聚合、远程状态、冲突/缺失等标记与矢量叠加），有界快照单飞投影、流式状态解析与写操作后定向刷新；新增后再还原的编辑过程自抵消记录自动归档跳过审查，先保存再独立归档、事务失败回滚内存标志。修复 DAP 帧源码路径按语言过滤候选、不回落错误语言文件；刷新事件携带 scope/paths 细化。验证范围与真实 GUI 验收缺口见 [0.14.7 发布说明](docs/release-0.14.7.md)。
 - **v0.14.6**：**对话切换位置保持与共享查找**——同工作区切换对话时，在编辑器释放前保存实际模型的滚动、光标和选区等视图状态；只在模型重新绑定时恢复，显式行号导航仍优先。跨文件共享 Ctrl+F 查询、大小写/全词/正则与开关状态，不共享选区搜索范围或匹配序号，不抢焦点；工作区隔离并释放监听。验证范围与真实 GUI 验收缺口见 [0.14.6 发布说明](docs/release-0.14.6.md)。

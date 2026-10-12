@@ -39,6 +39,9 @@ describe('keybindings shared defaults', () => {
   it('declares every editor command with defaults', () => {
     expect(KEYBINDING_DEFAULTS).toEqual({
       'edrv.save': 'Ctrl+S',
+      'edrv.toggleComment': 'Ctrl+Alt+/',
+      'edrv.duplicateLine': '',
+      'edrv.reloadWindow': '',
       'edrv.quickOpen': 'Ctrl+P',
       'edrv.toggleSidebar': 'Ctrl+B',
       'edrv.searchInFiles': 'Ctrl+Shift+F',

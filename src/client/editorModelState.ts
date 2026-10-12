@@ -19,6 +19,22 @@ export const EDITOR_ROOT_SELECTOR = '.edrv-editor-row'
 /** Monaco 编辑器实例选择器（限定在插件编辑器行内，排除官方预览等其它 Monaco）。 */
 export const EDITOR_MODEL_SELECTOR = EDITOR_ROOT_SELECTOR + ' .monaco-editor'
 
+/** @public @author ddj 2026年10月12号 @param target Optional shortcut target. @returns Whether focus belongs to plugin code input, excluding widgets and read-only editors. */
+export function hasCodeFocus(target?: unknown): boolean {
+  if (typeof document === 'undefined') return false
+  const node = target ?? document.activeElement
+  if (!(node instanceof Element)) return false
+  const editor = node.closest(EDITOR_MODEL_SELECTOR)
+  if (!editor || editor.classList.contains('readonly')) return false
+  if (node.closest('.find-widget, .suggest-widget, .rename-box, .monaco-inputbox')) return false
+  const host = typeof window === 'undefined' ? null : window as unknown as {
+    monaco?: { editor?: { getEditors?(): Array<{ getDomNode(): unknown; hasTextFocus(): boolean; getModel(): unknown }> } }
+  }
+  return host?.monaco?.editor?.getEditors?.().some((item) =>
+    item.getDomNode() === editor && item.hasTextFocus() && Boolean(item.getModel()),
+  ) ?? false
+}
+
 /**
  * 已打开文件页签选择器（页签栏在编辑器行内；空态时无此节点）。
  * 判据同样不依赖 Monaco：图片/PDF 页签没有 Monaco 实例，但仍是「有页签可关」。

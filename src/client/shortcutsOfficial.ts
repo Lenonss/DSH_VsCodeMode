@@ -11,6 +11,15 @@ import { bindingToChord, chordToBinding, defaultKeybindings, normalizeKeybinding
 import { applyKeyAria, matchEvent, parseChords } from './keybindings.js'
 import type { OfficialBinding, ShortcutProfileKey } from '../shared/keybindings.js'
 import { log } from './log.js'
+import { hasCodeFocus } from './editorModelState.js'
+import { pageKeysAllowed } from './pageReload.js'
+
+/** @private @author ddj 2026年10月12号 @param id Command id. @param target Shortcut target. @returns Whether new page commands can safely run from this context. */
+function shortcutAllowed(id: string, target?: unknown): boolean {
+  if (id === 'edrv.toggleComment' || id === 'edrv.duplicateLine') return pageKeysAllowed() && hasCodeFocus(target)
+  if (id === 'edrv.reloadWindow') return pageKeysAllowed()
+  return true
+}
 
 const bridgeLog = log.child('shortcuts-official')
 
@@ -197,6 +206,7 @@ export function installLegacyKeys(
   const onKey = (event: Event): void => {
     if (disposed) return
     const key = event as KeyboardEvent
+    if (key.isComposing || key.keyCode === 229 || key.defaultPrevented) return
     const current = chords()
     for (const def of defs) {
       const chord = current[def.id]
@@ -206,7 +216,8 @@ export function installLegacyKeys(
         bindings = parseChords(chord)
         cache.set(chord, bindings)
       }
-      if (!matchEvent(key, bindings) || !runner.isAvailable(def.id)) continue
+      if (def.id === 'edrv.duplicateLine') continue // Monaco owns Ctrl+D; no global duplicate dispatch.
+      if (!matchEvent(key, bindings) || !shortcutAllowed(def.id, key.target) || !runner.isAvailable(def.id)) continue
       key.preventDefault()
       key.stopPropagation()
       runner.run(def.id)
@@ -239,8 +250,8 @@ export function officialCommandOf(def: { id: string; label: string }, runner: Co
     defaults: undefined,
     regions: ['page', 'editable'],
     modals: [],
-    resolve: () => {
-      if (!runner.isAvailable(def.id)) return { status: 'pass' }
+    resolve: (context) => {
+      if (context.modal !== null || !shortcutAllowed(def.id, context.target) || !runner.isAvailable(def.id)) return { status: 'pass' }
       return {
         status: 'handled',
         run: () => {
