@@ -464,18 +464,20 @@ profile 请替换为实际目标，不要把示例目录当成当前运行 profi
 
 ```bash
 # ① Git 安装（clone + prepare 构建；推荐打固定 tag）
-dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.14.9
+dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.14.10
 
 # ② npm 注册表（发布到 npm 后）
-dsh plugin --profile web add dsh-vscode-mode@0.14.9
+dsh plugin --profile web add dsh-vscode-mode@0.14.10
 
 # ③ GitHub Release tgz 直装（Release asset 可用后）
-dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.14.9/dsh-vscode-mode-0.14.9.tgz
+dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.14.10/dsh-vscode-mode-0.14.10.tgz
 ```
 
-> **DSH 0.2 兼容范围**：`0.14.1` 起精确放行 `0.2.0-rc.1`，`0.14.4` 再加入
-> Desktop `0.2.0-rc.2`；其他 0.2 版本（含 rc.3 与正式版）须另行适配。`0.14.4`
-> 同时修复 MCP 状态/配置管理和空差异栏显示；npm 安装前应确认注册表中版本可查询。
+> **DSH 版本政策（0.14.10 起）**：六项 DSH peer 统一声明为 `*`，不再维护逐版
+> 白名单或版本上界。DSH 的 `includePrerelease` 检查接受 alpha、rc 与正式版；
+> npm 默认 semver 的 `*` 仍排除预发布版本，可能产生 peer 不匹配提示。
+> 运行时按实际能力检查，不再仅因版本较新告警；允许安装不代表未来版本已通过
+> 全功能验收。已发布包仍以其实际声明为准；npm 安装前应确认注册表中版本可查询。
 > 替换已有包后需重启目标 DSH Host 并强制刷新原页面；仅刷新不会更新 Host。
 > 从 0.14.2 或更旧版本升级时，首次访问工作区会执行 0.14.3 引入的 SQLite 活跃记录迁移。
 >
@@ -806,6 +808,7 @@ Keep All / Undo All 却是亮的。修复：单文件 Keep / Undo 覆盖冲突�
 完整变更见 [GitHub Releases](https://github.com/Lenonss/DSH_VsCodeMode/releases)。
 近期关键版本：
 
+- **v0.14.10**：**简化 DSH 版本政策**——六项 DSH peer 统一为 `*`，取消逐版白名单、上界和仅因版本较新的告警，保留实际能力与冲突诊断；开发依赖固定原版本，避免自动解析漂移。npm 默认预发布语义和验收边界见 [0.14.10 发布说明](docs/release-0.14.10.md)。
 - **v0.14.9**：**编辑快捷键与桌面安全刷新**——`Ctrl+/` 保留官方快捷键入口，行注释改为 `Ctrl+Alt+/`（Web Linux 默认不绑定）；编辑器本地 `Ctrl+D` 调用 Monaco 原生向下复制行，块注释不变。桌面 `Ctrl+Shift+R` 刷新当前界面、不重启 Host；未保存代码/PDF、待保存、保存中或外部冲突时拒绝刷新，界面状态镜像失败/超时也不刷新。真实 GUI 按键和状态恢复尚未验收，详见 [0.14.9 发布说明](docs/release-0.14.9.md)。
 - **v0.14.8**：**Unity 打开目标选择与桌面端打开修复**——Unity 外部脚本编辑器 `com.dsh.editor` 0.3.1 新增「打开目标」选择（自动/DSH Web/DSH 桌面端），桌面端按 profile bridge 定位、缺失明确报错；桌面 profile 开机自动准备独立 bridge，无需先注册 OS 菜单。修复桌面端 sessions 服务面缺 `.open`/`.create` 导致的「编辑器打开失败或取消」（改走 `materializeScope → manager.select` 多面切换与 `newDraftSession` 回落）。验证范围与真实 GUI 验收缺口见 [0.14.8 发布说明](docs/release-0.14.8.md)。
 - **v0.14.7**：**SVN 资源管理器状态图标与编辑过程自抵消自动归档**——文件树叠加 SVN 状态图标（含目录子树聚合、远程状态、冲突/缺失等标记与矢量叠加），有界快照单飞投影、流式状态解析与写操作后定向刷新；新增后再还原的编辑过程自抵消记录自动归档跳过审查，先保存再独立归档、事务失败回滚内存标志。修复 DAP 帧源码路径按语言过滤候选、不回落错误语言文件；刷新事件携带 scope/paths 细化。验证范围与真实 GUI 验收缺口见 [0.14.7 发布说明](docs/release-0.14.7.md)。

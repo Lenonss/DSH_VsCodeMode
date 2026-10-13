@@ -159,7 +159,7 @@ describe('detectGuards / buildReport', () => {
   })
 })
 
-describe('版本上界与 Config volatile 告警', () => {
+describe('能力检查与 Config volatile 告警', () => {
   const ctx = {
     get: (name: string) => {
       if (name === 'webServer') return { exact: new Map(), prefixes: new Map() }
@@ -184,12 +184,11 @@ describe('版本上界与 Config volatile 告警', () => {
     number() { return { default: (value: unknown) => this.lift({ value }) } },
   }
 
-  it('0.1.7-rc.2 不再报「高于已实测版本」；更高预发布仍报且带上界新值', async () => {
+  it.each(['0.1.7-rc.2', '0.1.7-rc.3', '0.2.0-rc.3', '0.2.0', '1.0.0', '9.0.0-alpha.1'])('%s 不因版本较新产生告警', async (dshVersion) => {
     resetConfigVolatileState()
-    const ok = await buildReport(ctx, { depsAvailable: true, version: '9.9.9', dshVersion: '0.1.7-rc.2' })
-    expect(ok.warnings.some((w) => w.includes('高于已实测版本'))).toBe(false)
-    const next = await buildReport(ctx, { depsAvailable: true, version: '9.9.9', dshVersion: '0.1.7-rc.3' })
-    expect(next.warnings.some((w) => w.includes('0.1.7-rc.2'))).toBe(true)
+    const report = await buildReport(ctx, { depsAvailable: true, version: '9.9.9', dshVersion })
+    expect(report.dshVersion).toBe(dshVersion)
+    expect(report.warnings).toEqual([])
   })
 
   it('volatile 标记不完整且在 0.1.7 线 → 显式告警 + 适配行红', async () => {

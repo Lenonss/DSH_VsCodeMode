@@ -13,20 +13,23 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as {
   peerDependencies?: Record<string, string>
   dependencies?: Record<string, string>
+  devDependencies?: Record<string, string>
 }
 
-/** 本插件实际需要跨版本运行的 DSH alpha 版本线（0.1.2 起为 alpha 线）。 */
-const ALPHA_LINES = ['0.1.2', '0.1.3', '0.1.4', '0.1.5', '0.1.6', '0.1.7']
+/** 跨版本样本用于验证宽松策略，不构成安装白名单。 */
+const RELEASES = ['0.0.1', '0.1.7', '0.2.0', '1.0.0', '9.0.0']
+const PRERELEASES = ['0.0.1-rc.1', '0.1.5-rc.3', '0.1.6-alpha.2', '0.1.7-alpha.2', '0.1.7-rc.2', '0.2.0-rc.1', '0.2.0-rc.2', '0.2.0-rc.3', '0.3.0-alpha.1', '1.0.0-rc.1', '9.0.0-alpha.1']
+const dshPeers = Object.entries(pkg.peerDependencies ?? {}).filter(([name]) => name.startsWith('@deepseek-ai/dsh-'))
 
-for (const [name, range] of Object.entries(pkg.peerDependencies ?? {}).filter(([key]) => key.startsWith('@deepseek-ai/dsh-'))) {
+for (const [name, range] of dshPeers) {
   describe(name + ' semantic range', () => {
-    it.each(['0.1.5-rc.3', '0.1.6-alpha.2', '0.1.7-alpha.2', '0.1.7-rc.1', '0.1.7-rc.2', '0.2.0-rc.1', '0.2.0-rc.2'])('accepts %s in npm and the DSH gate', (version) => {
+    it.each(RELEASES)('accepts release %s in npm and the DSH gate', (version) => {
       expect(satisfies(version, range)).toBe(true)
       expect(satisfies(version, range, { includePrerelease: true })).toBe(true)
     })
-    it.each(['0.2.0-alpha.1', '0.2.0-rc.3', '0.2.0', '1.0.0'])('rejects unadapted %s', (version) => {
+    it.each(PRERELEASES)('accepts prerelease %s in DSH; npm retains its default exclusion', (version) => {
       expect(satisfies(version, range)).toBe(false)
-      expect(satisfies(version, range, { includePrerelease: true })).toBe(false)
+      expect(satisfies(version, range, { includePrerelease: true })).toBe(true)
     })
   })
 }
@@ -45,18 +48,17 @@ describe('peerDependencies', () => {
     expect(Object.keys(peers)).toContain('@deepseek-ai/dsh-client-ui-primitives')
   })
 
-  it('每条 @deepseek-ai peer 区间都显式放行各 alpha 版本线', () => {
-    // @deepseek-ai/schemastery 已移入 dependencies（见下一条），peer 面只剩 DSH 核心包
-    const dshPeers = Object.entries(peers).filter(([name]) => name.startsWith('@deepseek-ai/') && name !== '@deepseek-ai/schemastery')
-    expect(dshPeers.length).toBeGreaterThan(0)
+  it('六项 DSH peer 统一使用 *，不再枚举版本线或设置上界', () => {
+    expect(dshPeers.map(([name]) => name).sort()).toEqual([
+      '@deepseek-ai/dsh-client-ui-primitives',
+      '@deepseek-ai/dsh-client-ui-settings',
+      '@deepseek-ai/dsh-client-ui-slots',
+      '@deepseek-ai/dsh-llm',
+      '@deepseek-ai/dsh-settings',
+      '@deepseek-ai/dsh-tools',
+    ])
     for (const [name, range] of dshPeers) {
-      // 低频版本线（0.1.2+）必须带 `-0` 预发布比较器，否则 alpha 一个都匹配不上
-      for (const line of ALPHA_LINES) {
-        expect(range, name + ' 缺少 ' + line + ' 预发布区间（需形如 >=' + line + '-0 <0.2.0-0）')
-          .toContain('>=' + line + '-0')
-      }
-      // 上界仍须排除 0.2.0（避免误放行到未适配的次版本）
-      expect(range, name + ' 缺少 <0.2.0-0 上界').toContain('<0.2.0-0')
+      expect(range, name).toBe('*')
     }
   })
 
@@ -68,10 +70,25 @@ describe('peerDependencies', () => {
     expect(peers.schemastery).toBeTruthy()
   })
 
-  it('slots / llm / tools 仍兼容 0.0.x 早期线', () => {
-    for (const name of ['@deepseek-ai/dsh-client-ui-slots', '@deepseek-ai/dsh-llm', '@deepseek-ai/dsh-tools']) {
-      expect(peers[name]).toContain('>=0.0.1-rc.1 <0.1.0')
+  it('开发期 DSH 版本独立固定，不随宽松 peer 自动漂移', () => {
+    const expected = {
+      '@deepseek-ai/dsh-client-ui-primitives': '0.1.6-alpha.1',
+      '@deepseek-ai/dsh-client-ui-settings': '0.1.0-rc.8',
+      '@deepseek-ai/dsh-client-ui-slots': '0.0.1-rc.1',
+      '@deepseek-ai/dsh-llm': '0.0.1-rc.1',
+      '@deepseek-ai/dsh-settings': '0.1.0-rc.8',
+      '@deepseek-ai/dsh-tools': '0.0.1-rc.1',
     }
+    for (const [name, version] of Object.entries(expected)) {
+      expect(pkg.devDependencies?.[name], name).toBe(version)
+    }
+  })
+
+  it('非 DSH 依赖约束保持不变', () => {
+    expect(peers.cordis).toBe('>=4.0.0-rc <5')
+    expect(peers.react).toBe('^18.2.0')
+    expect(peers['react-dom']).toBe('^18.2.0')
+    expect(peers.schemastery).toBe('^3.18.0')
   })
 
   it('peer 区间不出现空串或占位值', () => {

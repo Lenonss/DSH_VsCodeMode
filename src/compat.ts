@@ -132,11 +132,6 @@ export function detectGuards(ctx: Ctx): CompatAdapter[] {
   ]
 }
 
-/** 已实测覆盖的最高 DSH 版本（适配矩阵上界，超过则提示，见 buildReport）。
- * 0.1.7-rc.2 已在官方已签名打包 Desktop 上实机装配（认证路由、同源 RPC、项目 MCP
- * 与私有打开队列均生效）；更高版本仍按能力探测运行并提示。 */
-const TESTED_DSH_MAX = '0.1.7-rc.2'
-
 /** Config volatile 标记起效的版本线（此前设置走 section 安装，与 volatile 无关）。 */
 const CONFIG_VOLATILE_MIN = '0.1.7-alpha.1'
 
@@ -193,10 +188,6 @@ export async function buildReport(
   const strategy = settingsInstallStrategy()
   if (strategy === 'none') warnings.push('设置 section 安装不可用：' + settingsInstallNote())
   const parsed = parseDshVersion(dshVersion)
-  const testedMax = parseDshVersion(TESTED_DSH_MAX)
-  if (parsed && testedMax && compareDshVersions(parsed, testedMax) > 0) {
-    warnings.push('DSH ' + dshVersion + ' 高于已实测版本（' + TESTED_DSH_MAX + '）：设置 API 按能力探测运行，异常时请回报适配矩阵')
-  }
   // 0.1.7 线上 Config 未完成 volatile 标记 = 设置页不可用（ns 不下发），显式告警而非静默
   const volatileState = configVolatileState()
   const volatileMin = parseDshVersion(CONFIG_VOLATILE_MIN)

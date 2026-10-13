@@ -163,3 +163,11 @@
 - `familyLabel` 单列 rc.2；完整实测上界 `TESTED_DSH_MAX` 仍保留 0.1.7-rc.2，避免把静态审计/安装冒烟误当全功能覆盖。定向测试 `peerDeps` / `dshVersion` / `compat`：103/103 通过，类型检查和 Host/Client 构建通过；构建中的 `INVALID_ANNOTATION` 为现存 Rolldown 告警。
 - 从桌面安装目录的 `@deepseek-ai/dsh-desktop-host/lib/cli.js` 调用 Desktop 专属 `plugin --profile desktop add <tgz>`：退出码 0，profile manifest 新增 `dsh-vscode-mode` 依赖与 bundle，安装目录读回 `0.14.4` 和双面产物。保留安装源于 `C:\Users\1\.dsh\plugin-archives\dsh-vscode-mode-0.14.4-desktop-rc2.tgz`（SHA256 `5274B4B97601CB10F098570CA67A961B3E4422B9B6C0D48CA72309DFB4B8D717`）；profile 原始五文件备份于 `C:\Users\1\.dsh\profiles\desktop\backup-dsh-vscode-mode-0.14.4-20261008-110914`。原 `cordis.yml` / `cordis.patch.yml` / `pnpm-workspace.yaml` 哈希不变，manifest 原依赖保留，未使用风险豁免。
 - Desktop 专属 CLI 的 pnpm `peers check` 仍报告缺少内置 DSH peer、react、cordis 等（其他插件也受影响）；这是 profile 包管理器视角，官方包实际在打包 ASAR 内，不能据此判为全部运行时功能正常或异常。桌面应用当时仍运行，本次**不自动退出或重启**，新 Host 挂载/侧栏 UI 待用户自行重启后验收。回退时先记录重启后的新改动，在 Desktop 专属 CLI 运行 `plugin --profile desktop remove dsh-vscode-mode`，再比对备份而非直接覆盖用户新配置；保留 tgz 直至确认无需重装。
+
+## 10. 0.14.10 宽松版本政策（2026-10-13）
+
+- 六项 `@deepseek-ai/dsh-*` peerDependencies 统一改为 `*`，取消逐版白名单和版本上界；Node、React、Cordis、schema 约束不变。
+- DSH 的 `includePrerelease` 检查接受旧版、未来 alpha/rc、正式版及未来主版本；npm 默认 semver 的 `*` 仍排除预发布，可能产生 peer 不匹配提示。测试分别验证两种规则，不再枚举未来版本来绕过 npm 的默认语义。
+- 六项 DSH 开发依赖显式固定原有版本，与发布 peer 分离：primitives 为 `0.1.6-alpha.1`，ui-settings / settings 为 `0.1.0-rc.8`，slots / llm / tools 为 `0.0.1-rc.1`。避免 `*` 自动解析造成依赖漂移及 frozen-lockfile 失败；锁文件仅移动 importer 项，不升级解析版本。
+- 移除 `TESTED_DSH_MAX` 及「高于已实测版本」告警，保留版本探测、实际能力检查、设置依赖/volatile 标记不完整和路由/重复装配诊断。
+- 允许安装不等于已验证未来 DSH 的所有 API；此为源码政策调整，不是发布、部署或跨版本全功能验收。此前章节保留当时的适配证据，不代表当前源码仍有精确放行限制。
