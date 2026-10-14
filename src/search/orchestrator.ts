@@ -15,7 +15,7 @@ import type { CandidateRanker, SearchCandidate, WorkspaceSearchProvider, Workspa
 const CACHE_TTL = 60_000
 const CACHE_LIMIT = 100
 const RESULT_LIMIT = 50
-const PROVIDER_VERSION = 'ripgrep-v1'
+const PROVIDER_VERSION = 'ripgrep-fuzzy-v2'
 const POLICY_VERSION = 'search-policy-v1'
 
 type CacheEntry<T> = { at: number; result: T }

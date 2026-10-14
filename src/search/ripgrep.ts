@@ -70,19 +70,34 @@ interface SearchSubprocess {
  * @returns 安全 glob
  */
 export function queryGlob(query: string): string {
+  return '**/*' + Array.from(pathText(query), globChar).join('') + '*'
+}
+
+/**
+ * @private
+ * @author ddj 2026年10月14号
+ * @description 将字面字符转为安全且大小写不敏感的 glob 片段。
+ * @param char 单个 Unicode 字符
+ * @returns 转义字符或大小写字符类
+ */
+function globChar(char: string): string {
+  const lower = char.toLowerCase()
+  const upper = char.toUpperCase()
+  if (lower !== upper && lower.length === 1 && upper.length === 1) return '[' + lower + upper + ']'
+  return /[\*?\[\]{}!]/.test(char) ? '\\' + char : char
+}
+
+/**
+ * @public
+ * @author ddj 2026年10月14号
+ * @description 构造仅匹配文件名的有序子序列 glob，不让星号跨目录。
+ * @param query 无目录的字面查询文本
+ * @returns 模糊 glob；空查询或带目录时返回 null
+ */
+export function fuzzyGlob(query: string): string | null {
   const value = pathText(query)
-  let body = ''
-  for (const char of value) {
-    const lower = char.toLowerCase()
-    const upper = char.toUpperCase()
-    // 有大小写之分的字符（单字符映射，避开 ß→SS 这类长度变化）→ 字符类
-    if (lower !== upper && lower.length === 1 && upper.length === 1) {
-      body += '[' + lower + upper + ']'
-      continue
-    }
-    body += /[\*?\[\]{}!]/.test(char) ? '\\' + char : char
-  }
-  return '**/*' + body + '*'
+  if (!value || value.includes('/')) return null
+  return '**/*' + Array.from(value, globChar).join('*') + '*'
 }
 
 /**
@@ -193,6 +208,8 @@ export function rgExitFailure(code: number | null | undefined, stderrText: strin
  */
 export function filesArgv(binary: string, root: string, query: string): string[] {
   const argv = [binary, '--no-config', '--files', '--hidden', '--no-ignore', '--glob', queryGlob(query)]
+  const fuzzy = fuzzyGlob(query)
+  if (fuzzy) argv.push('--glob', fuzzy)
   for (const excluded of EXCLUDES) argv.push('--glob', '!**/' + excluded + '/**')
   for (const excluded of FILE_EXCLUDES) argv.push('--glob', '!' + excluded)
   argv.push('--', root)

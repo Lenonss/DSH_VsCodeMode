@@ -7,8 +7,9 @@ import { execFileSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { filesArgv, queryGlob, parseOutput, ripgrepPath, searchRoot } from '../src/search/ripgrep.js'
-import { pathText, prepareQuery } from '../src/search/query.js'
+import { filesArgv, queryGlob, fuzzyGlob, chunkFilesArgv, parseOutput, ripgrepPath, searchRoot } from '../src/search/ripgrep.js'
+import { pathText, pathMatch, prepareQuery } from '../src/search/query.js'
+import { searchFallback } from '../src/search/fallback.js'
 import { candidateOf, rankCandidates } from '../src/search/ranker.js'
 import { SearchCache, SearchOrchestrator } from '../src/search/orchestrator.js'
 import type { WorkspaceSearchProvider } from '../src/search/types.js'
@@ -53,6 +54,38 @@ describe('file search query', () => {
   })
 })
 
+describe('fuzzy filename query', () => {
+  it.each([
+    ['BaseNavigationManager.cs', 'bn', true],
+    ['ISTaskSystemData.lua', 'ISTSD', true],
+    ['ISTaskSystemData.lua', 'istsd', true],
+    ['BaseNavigationManager.cs', 'nb', false],
+    ['ab.cs', 'aa', false],
+    ['aba.cs', 'aa', true],
+    ['队伍成员数据.lua', '队数', true],
+    ['a[b]c.lua', '[c', true],
+    ['abc.lua', 'a*', false],
+    ['a*b.lua', 'a*', true],
+    ['Assets/Build/Logic.lua', 'build/logic', true],
+    ['Assets/Build/Logic.lua', 'bd/lg', false],
+    ['bn/data.lua', 'bn', true],
+    ['b/n/data.lua', 'bn', false],
+    ['file.lua', '', false],
+  ])('matches %s against %s as %s', (path, query, expected) => {
+    expect(pathMatch(path, prepareQuery(query))).toBe(expected)
+  })
+
+  it('keeps fuzzy positives before excludes and leaves DAP contiguous', () => {
+    expect(fuzzyGlob('bn')).toBe('**/*[bB]*[nN]*')
+    expect(fuzzyGlob('a*中')).toBe('**/*[aA]*\\**中*')
+    expect(fuzzyGlob('Assets\\Scripts')).toBeNull()
+    expect(fuzzyGlob('')).toBeNull()
+    const argv = filesArgv('rg', 'root', 'bn')
+    expect(argv.indexOf(fuzzyGlob('bn')!)).toBeLessThan(argv.indexOf('!**/build/**'))
+    expect(chunkFilesArgv('rg', 'root', 'bn')).not.toContain(fuzzyGlob('bn'))
+  })
+})
+
 describe('search root', () => {
   it('prefers policy workspace root and processes the resolved target', async () => {
     const fs = fakeFs()
@@ -84,6 +117,19 @@ describe('ranker and cache', () => {
     expect(rankCandidates(candidates, query).map((item) => item.path)).toEqual(['SkyDashData.lua', 'Assets/sky/data.lua'])
   })
 
+  it('orders exact, prefix, substring, fuzzy boundaries, compact fuzzy and path', () => {
+    const paths = ['bn/data.lua', 'longbxxxxn.lua', 'longb_n.lua', 'BigName.cs', 'xbn.lua', 'bn.lua', 'bn']
+    const candidates = paths.map((path) => candidateOf(path, 'workspace'))
+    expect(rankCandidates(candidates, prepareQuery('bn')).map((item) => item.path))
+      .toEqual(['bn', 'bn.lua', 'xbn.lua', 'BigName.cs', 'longb_n.lua', 'longbxxxxn.lua', 'bn/data.lua'])
+    expect(candidates.map((item) => item.path)).toEqual(paths)
+  })
+
+  it('uses stable path ordering on tied fuzzy candidates', () => {
+    const candidates = ['z/BigName.cs', 'a/BigName.cs'].map((path) => candidateOf(path, 'workspace'))
+    expect(rankCandidates(candidates, prepareQuery('bn')).map((item) => item.path)).toEqual(['a/BigName.cs', 'z/BigName.cs'])
+  })
+
   it('bounds cache entries and expires them', () => {
     const cache = new SearchCache()
     cache.set('root|query', result(['a']), 1)
@@ -110,6 +156,49 @@ describe('orchestrator', () => {
     await searcher.search({ session: { header: { cwd: 'ws' } }, cwd: 'ws', query: 'SkyDash', activePaths: [] })
     await searcher.search({ session: { header: { cwd: 'ws' } }, cwd: 'ws', query: 'SkyDash', activePaths: [] })
     expect(provider.search).toHaveBeenCalledOnce()
+  })
+})
+
+describe('fuzzy providers and merge', () => {
+  it('merges and deduplicates fuzzy provider/active candidates through the cache', async () => {
+    const fs = fakeFs()
+    const provider: WorkspaceSearchProvider = { search: vi.fn(async () => result(['BaseNavigationManager.cs', 'noise.lua'])) }
+    const searcher = new SearchOrchestrator(context(fs), provider, provider)
+    const request = { session: { header: { cwd: 'ws' } }, cwd: 'ws', query: 'bn', activePaths: ['BaseNavigationManager.cs', 'BigName.cs'] }
+    expect((await searcher.search(request)).files).toEqual(['BigName.cs', 'BaseNavigationManager.cs'])
+    expect((await searcher.search(request)).files).toEqual(['BigName.cs', 'BaseNavigationManager.cs'])
+    expect(provider.search).toHaveBeenCalledOnce()
+  })
+
+  it('filters fallback relative to the root, including when display paths are absent', async () => {
+    const fs = {
+      resolve: vi.fn(async () => ({ displayPath: 'D:/bn-root' })),
+      listDir: vi.fn(async (target: any) => target.displayPath === 'D:/bn-root' ? [
+        { name: 'noise.lua', type: 'file', target: { displayPath: 'D:/bn-root/noise.lua' } },
+        { name: 'src', type: 'directory', target: { displayPath: 'src' } },
+      ] : [
+        { name: 'BaseNavigationManager.cs', type: 'file', target: {} },
+        { name: 'BigName.cs', type: 'file', target: { displayPath: 'D:/bn-root/src/BigName.cs' } },
+      ]),
+    }
+    const input: any = { ctx: context(fs), session: { header: { cwd: 'ws' } }, cwd: 'ws', query: 'bn', maxResults: 500 }
+    expect((await searchFallback(input)).files).toEqual(['src/BaseNavigationManager.cs', 'D:/bn-root/src/BigName.cs'])
+    expect((await searchFallback({ ...input, query: 'src/bas' })).files).toEqual(['src/BaseNavigationManager.cs'])
+    expect((await searchFallback({ ...input, query: 'bn', maxResults: 1 })).truncated).toBe(true)
+    const controller = new AbortController()
+    controller.abort()
+    await expect(searchFallback({ ...input, signal: controller.signal })).rejects.toThrow('搜索已取消')
+  })
+
+  it('applies fuzzy filtering to fallback and active-only degradation', async () => {
+    const provider: WorkspaceSearchProvider = { search: vi.fn(async () => { throw new Error('unavailable') }) }
+    const fallback: WorkspaceSearchProvider = { search: vi.fn(async () => result(['ISTaskSystemData.lua'], true)) }
+    const request = { session: { header: { cwd: 'ws' } }, cwd: 'ws', query: 'ISTSD', activePaths: ['ISTaskSystemData.lua'] }
+    const searcher = new SearchOrchestrator(context(fakeFs()), provider, fallback)
+    expect(await searcher.search(request)).toEqual({ files: ['ISTaskSystemData.lua'], truncated: true })
+    const failed = new SearchOrchestrator(context(fakeFs()), provider, provider)
+    expect((await failed.search(request)).files).toEqual(['ISTaskSystemData.lua'])
+    expect(await failed.search({ ...request, query: 'I' })).toEqual({ files: [], truncated: false })
   })
 })
 
@@ -159,7 +248,50 @@ describe('ripgrep provider argv', () => {
  * 正确做法 = 查询词走 --iglob，排除项保持大小写敏感的 --glob。
  * 作者 ddj 2026-09-20
  */
+/**
+ * @private @author ddj 2026年10月14号
+ * @description 执行真实 rg；仅退出码 1 视为无命中，其余错误保留原文抛出。
+ * @param binary rg 绝对路径
+ * @param argv 包含二进制自身的参数列表
+ * @returns 原始路径列表
+ */
+function rgFiles(binary: string, argv: string[]): string[] {
+  try {
+    return execFileSync(binary, argv.slice(1), { encoding: 'utf8' }).split(/\r?\n/).filter(Boolean)
+  } catch (error) {
+    if ((error as { status?: number }).status !== 1) throw error
+    return []
+  }
+}
+
 describe('ripgrep case sensitivity contract', () => {
+  it('discovers fuzzy names without crossing directories or widening DAP', () => {
+    const binary = ripgrepPath()
+    expect(binary).toBeTruthy()
+    const root = mkdtempSync(join(tmpdir(), 'edrv-fuzzy-'))
+    try {
+      const paths = ['BaseNavigationManager.cs', 'ISTaskSystemData.lua', '队伍成员数据.lua',
+        'Assets/Module/Build/BuildNavigation.lua', 'build/BuildNavigation.lua',
+        'node_modules/pkg/BigName.cs', 'b/n/data.lua', 'literal/a[b]c.lua', 'literal/abc.lua']
+      for (const path of paths) {
+        const target = join(root, path)
+        mkdirSync(join(target, '..'), { recursive: true })
+        writeFileSync(target, '')
+      }
+      const hits = rgFiles(binary!, filesArgv(binary!, root, 'bn')).map(pathText)
+      expect(hits.some((path) => path.endsWith('BaseNavigationManager.cs'))).toBe(true)
+      expect(hits.some((path) => path.endsWith('Assets/Module/Build/BuildNavigation.lua'))).toBe(true)
+      expect(hits.some((path) => path.endsWith('/build/BuildNavigation.lua'))).toBe(false)
+      expect(hits.some((path) => path.includes('node_modules'))).toBe(false)
+      expect(hits.some((path) => path.endsWith('b/n/data.lua'))).toBe(false)
+      expect(rgFiles(binary!, filesArgv(binary!, root, 'ISTSD')).some((path) => path.endsWith('ISTaskSystemData.lua'))).toBe(true)
+      expect(rgFiles(binary!, filesArgv(binary!, root, '队数')).some((path) => path.endsWith('队伍成员数据.lua'))).toBe(true)
+      expect(rgFiles(binary!, filesArgv(binary!, root, '[c')).map(pathText)).toEqual([pathText(join(root, 'literal/a[b]c.lua'))])
+      expect(rgFiles(binary!, chunkFilesArgv(binary!, root, 'bn')!)).toEqual([])
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
   it('scopes case-insensitivity to the query glob only', () => {
     const argv = filesArgv('rg', 'root', 'buildlogic')
     // 查询词走大小写不敏感的字符类 glob

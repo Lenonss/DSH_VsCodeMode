@@ -464,13 +464,13 @@ profile 请替换为实际目标，不要把示例目录当成当前运行 profi
 
 ```bash
 # ① Git 安装（clone + prepare 构建；推荐打固定 tag）
-dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.14.11
+dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.14.12
 
 # ② npm 注册表（发布到 npm 后）
-dsh plugin --profile web add dsh-vscode-mode@0.14.11
+dsh plugin --profile web add dsh-vscode-mode@0.14.12
 
 # ③ GitHub Release tgz 直装（Release asset 可用后）
-dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.14.11/dsh-vscode-mode-0.14.11.tgz
+dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.14.12/dsh-vscode-mode-0.14.12.tgz
 ```
 
 > **DSH 版本政策（0.14.10 起）**：六项 DSH peer 统一声明为 `*`，不再维护逐版
@@ -807,6 +807,8 @@ Keep All / Undo All 却是亮的。修复：单文件 Keep / Undo 覆盖冲突�
 
 完整变更见 [GitHub Releases](https://github.com/Lenonss/DSH_VsCodeMode/releases)。
 近期关键版本：
+
+- **v0.14.12**：**搜索框全选与模糊文件搜索**——工作区搜索打开/再次聚焦时在输入更新后全选旧词或编辑器选区种子，便于直接改写；Ctrl+P 支持大小写不敏感的文件名有序非连续匹配（如 `bn` → `BaseNavigationManager.cs`、`ISTSD` → `ISTaskSystemData.lua`），保留带目录的连续路径查询与 DAP 文件定位规则。更新后需重启 DSH Host；真实 GUI 行为、主题/滚动和 Console 尚未验收，发布不代表现场验收完成。
 
 - **v0.14.11**：**编辑快捷键文案与动作验证**——注释菜单不再写死默认键位，避免自定义绑定后显示误导；明确编辑器本地 Ctrl+D 向下复制、不使用剪贴板；加强原生动作转发与幂等清理断言。默认键位与编辑算法不变，详见 [0.14.11 发布说明](docs/release-0.14.11.md)。
 - **v0.14.10**：**简化 DSH 版本政策**——六项 DSH peer 统一为 `*`，取消逐版白名单、上界和仅因版本较新的告警，保留实际能力与冲突诊断；开发依赖固定原版本，避免自动解析漂移。npm 默认预发布语义和验收边界见 [0.14.10 发布说明](docs/release-0.14.10.md)。

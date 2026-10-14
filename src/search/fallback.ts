@@ -5,9 +5,8 @@
  */
 import type { Ctx, Session } from '../store.js'
 import { policyOf } from '../store.js'
-import { pathText, pathMatch } from './query.js'
-import { searchRoot } from './ripgrep.js'
-import type { WorkspaceSearchInput, WorkspaceSearchProvider, WorkspaceSearchResult } from './types.js'
+import { pathText, pathMatch, prepareQuery } from './query.js'
+import type { PreparedQuery, WorkspaceSearchInput, WorkspaceSearchProvider, WorkspaceSearchResult } from './types.js'
 
 interface FsTarget { displayPath?: string }
 interface FsEntry { name: string; type: 'file' | 'directory' | 'other'; target: FsTarget }
@@ -21,27 +20,31 @@ const EXCLUDED = new Set(['node_modules', '.git', '.tmp', '.cache', 'dist', 'bui
 
 /**
  * 在一个目录树中递归查找匹配文件。
- * @author ddj 2026年08月24号
+ * @private
+ * @author ddj 2026年10月14号
  * @param fs 文件系统能力
  * @param target 当前目录目标
  * @param input 搜索输入
  * @param files 已保留候选
  * @param signal 取消信号
+ * @param query 已规范化查询
+ * @param prefix 当前目录相对于搜索根的路径
  * @returns 是否因达到上限而截断
  */
-async function walk(fs: SearchFs, target: FsTarget, input: WorkspaceSearchInput, files: string[], signal: AbortSignal): Promise<boolean> {
+async function walk(fs: SearchFs, target: FsTarget, input: WorkspaceSearchInput, files: string[], signal: AbortSignal, query: PreparedQuery, prefix = ''): Promise<boolean> {
   if (signal.aborted) throw new DOMException('搜索已取消', 'AbortError')
   const entries = await fs.listDir(target, signal)
   for (const entry of entries) {
     if (signal.aborted) throw new DOMException('搜索已取消', 'AbortError')
+    const relative = prefix + entry.name
     if (entry.type === 'directory') {
       if (EXCLUDED.has(entry.name)) continue
-      if (await walk(fs, entry.target, input, files, signal)) return true
+      if (await walk(fs, entry.target, input, files, signal, query, relative + '/')) return true
       continue
     }
     if (entry.type !== 'file') continue
-    const path = pathText(entry.target.displayPath ?? entry.name)
-    if (!pathMatch(path, { raw: input.query, text: pathText(input.query).toLocaleLowerCase('en-US') })) continue
+    const path = pathText(entry.target.displayPath ?? relative)
+    if (!pathMatch(relative, query)) continue
     files.push(path)
     if (files.length >= Math.min(input.maxResults, RESULT_CAP)) return true
   }
@@ -62,7 +65,7 @@ export async function searchFallback(input: WorkspaceSearchInput): Promise<Works
   const rootTarget = await fs.resolve(policy?.workspaceRoot ?? '.', cwd ? { cwd, signal: input.signal } : { signal: input.signal })
   const signal = input.signal ?? new AbortController().signal
   const files: string[] = []
-  const truncated = await walk(fs, rootTarget, input, files, signal)
+  const truncated = await walk(fs, rootTarget, input, files, signal, prepareQuery(input.query))
   return { files, truncated, complete: !truncated, source: 'fallback' }
 }
 

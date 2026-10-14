@@ -98,6 +98,7 @@ export function SearchPanel(props) {
   const seqRef = React.useRef(0)
   const timerRef = React.useRef(null)
   const inputRef = React.useRef(null)
+  const [focusTick, setFocusTick] = React.useState(0)
   const queryRef = React.useRef('')
   queryRef.current = query
   const activePathRef = React.useRef(activePath)
@@ -261,7 +262,6 @@ export function SearchPanel(props) {
     queryRef.current = seed
     setQuery(seed)
     runSearch(seed)
-    inputRef.current?.select?.()
     return true
   }
 
@@ -289,18 +289,26 @@ export function SearchPanel(props) {
   // 事件无人接收，故必须由挂载路径兜底。
   // ⚠️ 声明在「按作用域恢复」effect 之后：React 按声明序执行 effect，恢复值先落地，
   // 种子再覆盖，避免被记忆的旧查询词盖掉用户刚选中的内容。
-  React.useEffect(() => { applyScopeSeed(); applySeed() }, [])
+  React.useEffect(() => { applyScopeSeed(); applySeed(); setFocusTick((tick) => tick + 1) }, [])
 
-  // Ctrl+Shift+F / 「在文件夹中查找…」重复触发：消费种子（有则填入）并聚焦输入框（EditorView 派发 edrv:search-focus）
+  // Ctrl+Shift+F / 「在文件夹中查找…」：先提交恢复值/种子，再全选新内容。
   React.useEffect(() => {
+    /** @private @author ddj 2026年10月14号 @description 消费种子并请求提交后聚焦全选；不额外发起搜索。 */
     const onFocus = () => {
       applyScopeSeed()
       applySeed()
-      inputRef.current?.focus?.()
+      setFocusTick((tick) => tick + 1)
     }
     window.addEventListener('edrv:search-focus', onFocus)
     return () => window.removeEventListener('edrv:search-focus', onFocus)
   }, [])
+
+  // 一次意图对应一次提交后选区；无需定时回调，卸载后不会抢焦点。
+  React.useLayoutEffect(() => {
+    if (!focusTick) return
+    inputRef.current?.focus?.()
+    inputRef.current?.select?.()
+  }, [focusTick])
 
   // 结果按文件分组（保持 rg 输出顺序）
   const groups = React.useMemo(() => {
