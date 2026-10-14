@@ -464,13 +464,13 @@ profile 请替换为实际目标，不要把示例目录当成当前运行 profi
 
 ```bash
 # ① Git 安装（clone + prepare 构建；推荐打固定 tag）
-dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.15.1
+dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.15.2
 
 # ② npm 注册表（发布到 npm 后）
-dsh plugin --profile web add dsh-vscode-mode@0.15.1
+dsh plugin --profile web add dsh-vscode-mode@0.15.2
 
 # ③ GitHub Release tgz 直装（Release asset 可用后）
-dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.15.1/dsh-vscode-mode-0.15.1.tgz
+dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.15.2/dsh-vscode-mode-0.15.2.tgz
 ```
 
 > **DSH 版本政策（0.14.10 起）**：六项 DSH peer 统一声明为 `*`，不再维护逐版
@@ -808,7 +808,7 @@ Keep All / Undo All 却是亮的。修复：单文件 Keep / Undo 覆盖冲突�
 完整变更见 [GitHub Releases](https://github.com/Lenonss/DSH_VsCodeMode/releases)。
 近期关键版本：
 
-- **v0.15.1**：**SVN 更新窗口排序与冲突操作**——操作、路径、类型列支持升降序切换；存在冲突时右下角显示跳转按钮，按当前排序循环定位未解决项。冲突项右键提供使用对方/自身完整文件解决、标记解决与还原，操作前确认、操作后重读 SVN 状态；属性与树冲突按实际支持能力提供操作，避免误用文本冲突策略。覆盖排序、DOM 交互与真实 SVN 冲突回归。真实 GUI 尚未验收；发布不代表当前实例已升级。
+- **v0.15.2**：**SVN 更新窗口排序与冲突操作**——操作、路径、类型列支持升降序切换；存在冲突时右下角显示跳转按钮，按当前排序循环定位未解决项。冲突项右键提供使用对方/自身完整文件解决、标记解决与还原，操作前确认、操作后重读 SVN 状态；属性与树冲突按实际支持能力提供操作，避免误用文本冲突策略。覆盖排序、DOM 交互与真实 SVN 冲突回归。真实 GUI 尚未验收；发布不代表当前实例已升级。
 
 - **v0.15.0**：**文件页签拖拽与多编辑组**——拖拽重排、跨组移动、四向分屏、页面内可移动浮窗，以及拖入当前 DSH 输入框添加文件引用（不自动发送）。保留编辑缓冲与视图状态，关闭浮窗将文件归回主组；拖拽落点预览跟随主题、25% 不透明度、无描边。保留 v0.14.13 的资源管理器跟随功能，详见 [0.15.0 发布说明](docs/release-0.15.0.md)。
 
