@@ -26,6 +26,8 @@ import { SVN_LOG_ACTION_LABEL } from '../../shared/svn.js'
 import { orderLogEntries } from '../../svnLog.js'
 import { SVN_LOG_SHOW_ALL_LIMIT } from '../svnLog.js'
 import { ModalShell } from './ModalShell.js'
+import { FloatingWindow } from './FloatingWindow.js'
+import { inputOwnsKey } from '../state/floatingWindow.js'
 import { ContextMenu } from './ContextMenu.js'
 import type { ContextMenuEntry } from './ContextMenu.js'
 import { SvnLogStats } from './SvnLogStats.js'
@@ -886,9 +888,6 @@ export function SvnLogDialog(props) {
   const [sortKey, setSortKey] = React.useState(null)
   const [sortDir, setSortDir] = React.useState('desc')
   const [menu, setMenu] = React.useState(null)
-  const [dlgW, setDlgW] = React.useState(() => Math.min(DIALOG_W_DEFAULT, (typeof window !== 'undefined' ? window.innerWidth : 1280) - 24)) // P0-14：外框宽（拖拽受控）
-  const [dlgH, setDlgH] = React.useState(() => Math.min(DIALOG_H_DEFAULT, (typeof window !== 'undefined' ? window.innerHeight : 800) - 24)) // P0-14：外框高（拖拽受控）
-  const [anchor, setAnchor] = React.useState(null) // 八向拖拽锚点（null=flex 居中；非 null=absolute 定位于该视口坐标） @author ddj 2026年09月24号
   const [listH, setListH] = React.useState(LIST_H_DEFAULT) // P0-14：上段修订列表高（拖拽受控）
   const [msgH, setMsgH] = React.useState(MSG_H_DEFAULT) // P0-14：中段提交信息高（拖拽受控）
   const [statsOpen, setStatsOpen] = React.useState(false) // P1-10：统计窗开关
@@ -998,65 +997,6 @@ export function SvnLogDialog(props) {
     window.addEventListener('pointerup', up)
   }
 
-  // 八向（13-log-ui-polish 增量3）：pointerdown 取卡片视口 rect 起点并立即 absolute 锚定，
-  // 实现「拖哪边哪边动、对边固定」（flex 居中模型无法表达该语义）；clamp = 尺寸下限 680/480
-  // 与视口 12px 边距；每把手柄都以实际 rect 重锚 → CSS 截断/取整漂移自校正。
-  const startResize = (event, mode) => {
-    event.preventDefault()
-    event.stopPropagation()
-    const card = event.currentTarget.parentElement
-    const rect = card ? card.getBoundingClientRect() : null
-    if (!rect) return
-    const r0 = { left: rect.left, top: rect.top, width: rect.width, height: rect.height }
-    const startX = event.clientX
-    const startY = event.clientY
-    const moveL = mode === 'w' || mode === 'nw' || mode === 'sw'
-    const moveR = mode === 'e' || mode === 'ne' || mode === 'se'
-    const moveT = mode === 'n' || mode === 'nw' || mode === 'ne'
-    const moveB = mode === 's' || mode === 'sw' || mode === 'se'
-    const EDGE = 12 // 视口边距
-    const right0 = r0.left + r0.width
-    const bottom0 = r0.top + r0.height
-    // 起手锚定：切 absolute 到当前 rect（视觉零跳变）并同步 state=实际渲染尺寸
-    setAnchor({ left: r0.left, top: r0.top })
-    setDlgW(Math.round(r0.width))
-    setDlgH(Math.round(r0.height))
-    const move = (e) => {
-      const dx = e.clientX - startX
-      const dy = e.clientY - startY
-      let left = r0.left
-      let top = r0.top
-      let width = r0.width
-      let height = r0.height
-      if (moveR) width = Math.min(Math.max(DIALOG_W_MIN, r0.width + dx), window.innerWidth - EDGE - r0.left)
-      if (moveL) { left = Math.min(Math.max(EDGE, r0.left + dx), right0 - DIALOG_W_MIN); width = right0 - left }
-      if (moveB) height = Math.min(Math.max(DIALOG_H_MIN, r0.height + dy), window.innerHeight - EDGE - r0.top)
-      if (moveT) { top = Math.min(Math.max(EDGE, r0.top + dy), bottom0 - DIALOG_H_MIN); height = bottom0 - top }
-      const nextLeft = left
-      const nextTop = top
-      setAnchor((prev) => (prev && prev.left === nextLeft && prev.top === nextTop) ? prev : { left: nextLeft, top: nextTop })
-      setDlgW(Math.round(width))
-      setDlgH(Math.round(height))
-    }
-    const up = () => {
-      window.removeEventListener('pointermove', move)
-      window.removeEventListener('pointerup', up)
-      swallowNextClick()
-    }
-    window.addEventListener('pointermove', move)
-    window.addEventListener('pointerup', up)
-  }
-
-  /**
-   * 双击复位：清锚回 flex 居中 + 默认尺寸（视口 clamp 同初始，防小屏溢出）。
-   * @author ddj 2026年09月24号
-   */
-  const resetDlgSize = () => {
-    setAnchor(null)
-    setDlgW(Math.min(DIALOG_W_DEFAULT, window.innerWidth - 24))
-    setDlgH(Math.min(DIALOG_H_DEFAULT, window.innerHeight - 24))
-  }
-
   /** 上段修订列表高度拖拽（clamp：下限 200，上限 = body 高 - 信息区/路径区/分隔条保留空间）。 */
   const onListHDrag = (event) => startDrag(event, 'y', listH, (next) => {
     const total = bodyRef.current?.clientHeight ?? 0
@@ -1106,9 +1046,14 @@ export function SvnLogDialog(props) {
 
   // 初始/弹窗尺寸变化 fit（2026-09-24 用户反馈：固定高中段把下段变更文件区挤到 0）：
   // 挂载与 dlgH 变化时收敛一次；拖拽期间不介入（拖拽自带 clamp），双击复位经 fitHeights 显式收敛。
+  const fitRef = React.useRef(null)
+  fitRef.current = () => fitHeights(listH, msgH)
   React.useEffect(() => {
-    fitHeights(listH, msgH)
-  }, [dlgH])
+    const observer = new ResizeObserver(() => fitRef.current?.())
+    if (bodyRef.current) observer.observe(bodyRef.current)
+    fitRef.current?.()
+    return () => observer.disconnect()
+  }, [])
 
   // 勘误2（2026-09-24）：挂载 fit 量到的是数据到达前布局（终态差 ~4px → 保底 166）。
   // 初次数据到达以终态布局补 fit 一次收敛至 ≥170；单次门闩，之后刷新/加载更多/拖拽不介入。
@@ -1118,24 +1063,20 @@ export function SvnLogDialog(props) {
     fitHeights(listH, msgH)
   }, [list])
 
-  // 键盘：F5 刷新（防浏览器整页刷新）；↑↓ 在显示列表内移动选中（输入框内不劫持）
-  React.useEffect(() => {
-    const onKey = (event) => {
-      if (event.key === 'F5') { event.preventDefault(); onRefresh(); return }
-      if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
-      const tag = String(event.target?.tagName ?? '').toLowerCase()
-      if (tag === 'input' || tag === 'select' || tag === 'textarea') return
-      if (!sorted || !sorted.length) return
-      event.preventDefault()
-      const at = sorted.findIndex((item) => item.revision === selected[0]?.revision)
-      const next = at < 0 ? 0 : Math.min(sorted.length - 1, Math.max(0, at + (event.key === 'ArrowDown' ? 1 : -1)))
-      const hit = sorted[next]
-      setSelected([hit]) // ↑↓ 折叠为单选（官方同款），并重置 Shift 基准
-      setAnchorRev(hit.revision)
-    }
-    window.addEventListener('keydown', onKey, true)
-    return () => window.removeEventListener('keydown', onKey, true)
-  }, [sorted, onRefresh, selected])
+  /** @private @author ddj 2026年10月14号 @param event 日志浮窗内按键。其他窗口及输入控件保留自己的键盘行为。 */
+  function onLogKey(event) {
+    if (rangeOpen || menu || inputOwnsKey(event.target)) return
+    if (event.key === 'F5') { event.preventDefault(); event.stopPropagation(); onRefresh(); return }
+    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
+    if (!sorted || !sorted.length) return
+    event.preventDefault()
+    event.stopPropagation()
+    const at = sorted.findIndex((item) => item.revision === selected[0]?.revision)
+    const next = at < 0 ? 0 : Math.min(sorted.length - 1, Math.max(0, at + (event.key === 'ArrowDown' ? 1 : -1)))
+    const hit = sorted[next]
+    setSelected([hit])
+    setAnchorRev(hit.revision)
+  }
 
   /** 复制当前选中修订（P0-9；剪贴板不可用静默忽略）。 */
   const copyRevision = (entry) => {
@@ -1224,16 +1165,10 @@ export function SvnLogDialog(props) {
     React.createElement('div', { className: 'edrv-svnlog-pane edrv-svnlog-pathspane', ref: paneRef },
       React.createElement(LogPathsInner, { selected: visibleSelected, target, onlyAffected, onOpenFile, onOpenDiff, onPathMenu })))
 
-  return React.createElement(ModalShell, {
-    dialogClass: 'edrv-svnlog-dialog',
-    width: Math.round(dlgW) + 'px',
-    // 八向锚定（增量3）：anchor 非空时 absolute 定位于视口坐标（脱离 flex 居中，视觉零跳变）；
-    // border-box 令 rect==state（clamp/拖拽零换算）；maxHeight:none 消除 88vh 造成 state≠视觉的漂移。
-    cardStyle: Object.assign(
-      { height: Math.round(dlgH) + 'px', boxSizing: 'border-box', maxHeight: 'none' },
-      anchor ? { position: 'absolute', left: Math.round(anchor.left) + 'px', top: Math.round(anchor.top) + 'px' } : null,
-    ),
-    onClose,
+  return React.createElement(FloatingWindow, {
+    title: 'SVN 日志', dialogClass: 'edrv-svnlog-dialog',
+    width: DIALOG_W_DEFAULT, height: DIALOG_H_DEFAULT,
+    onKeyDown: onLogKey, onClose,
   },
     React.createElement(LogHead, { target, onClose }),
     React.createElement(LogFilterBar, {
@@ -1249,15 +1184,6 @@ export function SvnLogDialog(props) {
       onExportCsv: () => onExport('csv'), onExportHtml: () => onExport('html'),
       rangeActive: rangeActive === true, onOpenRange: () => setRangeOpen(true), onRangeReset: () => onRangeReset?.(),
     }),
-    // 八向手柄（增量3）：四边先渲染、四角后渲染（角盖过相邻边 2px overlap）；双击复位统一走 resetDlgSize
-    React.createElement(Grip, { mode: 'n', onDragStart: startResize, onReset: resetDlgSize }),
-    React.createElement(Grip, { mode: 's', onDragStart: startResize, onReset: resetDlgSize }),
-    React.createElement(Grip, { mode: 'w', onDragStart: startResize, onReset: resetDlgSize }),
-    React.createElement(Grip, { mode: 'e', onDragStart: startResize, onReset: resetDlgSize }),
-    React.createElement(Grip, { mode: 'nw', onDragStart: startResize, onReset: resetDlgSize }),
-    React.createElement(Grip, { mode: 'ne', onDragStart: startResize, onReset: resetDlgSize }),
-    React.createElement(Grip, { mode: 'sw', onDragStart: startResize, onReset: resetDlgSize }),
-    React.createElement(Grip, { mode: 'se', onDragStart: startResize, onReset: resetDlgSize }),
     (menu ? React.createElement(ContextMenu, { x: menu.x, y: menu.y, entries: menu.entries, onClose: () => setMenu(null) }) : null),
     (statsOpen ? React.createElement(SvnLogStats, { key: 'edrv-svnlog-stats', entries: sorted, onClose: () => setStatsOpen(false) }) : null),
     (rangeOpen ? React.createElement(ModalShell, {

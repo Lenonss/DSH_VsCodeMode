@@ -366,6 +366,7 @@ TortoiseSVN（`TortoiseProc.exe`）仅作 Windows 过渡增强：自研能力覆
   文件树行尾同步显示状态徽标。
 - **动作**：更新、刷新变更、与基线比较、加入版本控制、还原（**破坏性动作均带确认**）、
   清理工作副本（默认只清锁）；未覆盖的项回落 TortoiseSVN。
+- **页面内非模态浮窗**（v0.15.4）：SVN 更新、日志、统计、补丁、目录对比及智能整理窗口与文件编辑共用浮窗外壳，可拖动标题栏移动、拖动右下角调整大小、点击置顶；窗口外仍可操作 DSH。文件对比独立浮出，不再替换主编辑区，打开其他文件时保留对比；关闭来源于更新窗口的对比时回到同一更新任务。确认与区间选择仍使用模态弹窗，日志快捷键只在日志窗口内处理。
 - **更新窗口**（v0.11.0）：`SVN 更新` 打开插件内窗口——实时逐文件列表与动作着色（A/U/D/G/C/E/R）、
   完成汇总（版本号 / 计数 / 耗时 / 截断告警）、按右键目标限定**路径作用域**（只更新该子目录）、
   命令栏 / 文件树 / 页签 / 编辑区右键四入口一致、可取消；运行中任务按工作副本根**去重**且刷新或
@@ -464,13 +465,13 @@ profile 请替换为实际目标，不要把示例目录当成当前运行 profi
 
 ```bash
 # ① Git 安装（clone + prepare 构建；推荐打固定 tag）
-dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.15.3
+dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.15.4
 
 # ② npm 注册表（发布到 npm 后）
-dsh plugin --profile web add dsh-vscode-mode@0.15.3
+dsh plugin --profile web add dsh-vscode-mode@0.15.4
 
 # ③ GitHub Release tgz 直装（Release asset 可用后）
-dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.15.3/dsh-vscode-mode-0.15.3.tgz
+dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.15.4/dsh-vscode-mode-0.15.4.tgz
 ```
 
 > **DSH 版本政策（0.14.10 起）**：六项 DSH peer 统一声明为 `*`，不再维护逐版
@@ -807,6 +808,8 @@ Keep All / Undo All 却是亮的。修复：单文件 Keep / Undo 覆盖冲突�
 
 完整变更见 [GitHub Releases](https://github.com/Lenonss/DSH_VsCodeMode/releases)。
 近期关键版本：
+
+- **v0.15.4**：**SVN 非模态浮窗与独立文件对比**——更新、日志、统计、补丁、目录对比及智能整理采用与文件编辑相同的页面内浮窗，支持移动、调整尺寸、点击置顶与后台 DSH 交互。文件对比不再占据主编辑区，保留二进制/编码提示和来源任务返回逻辑；确认类弹窗保持模态。真实 GUI 交互尚未验收，用户已接受此发布缺口；资源管理器“目录不存在”原因未定位，本版不宣称修复该提示。
 
 - **v0.15.3**：**搜索结果强制刷新**——目标文件内容被改动后，工作区搜索不再残留过期匹配：内容变更（编辑器保存、外部改动或结构变更）会自动重新执行当前查询，同关键词重搜不再命中 60 秒结果缓存（`edrv.searchContent` 新增 `force` 选项，仅本次调用跳过缓存读取、仍写入新结果）。更新后需重启 DSH Host；真实 GUI 现场重测尚未执行，发布不代表现场验收完成，详见 [0.15.3 发布说明](docs/release-0.15.3.md)。
 

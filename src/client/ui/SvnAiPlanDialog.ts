@@ -14,7 +14,7 @@
  * 作者 ddj 2026年09月23号
  */
 import React from 'react'
-import { ModalShell } from './ModalShell.js'
+import { FloatingWindow } from './FloatingWindow.js'
 
 /**
  * 预览勾选初值：分组默认全勾（changelist 可逆），还原/忽略默认不勾（有副作用）。
@@ -282,11 +282,11 @@ export function SvnAiPlanDialog(props) {
             }, '取消剩余'))))
   }
 
-  return React.createElement(ModalShell, {
+  return React.createElement(FloatingWindow, {
+    title: 'SVN 智能整理', height: 600,
     key: 'edrv-svn-plan',
     dialogClass: 'edrv-svnplan-dialog',
-    width: 'min(680px, calc(100vw - 48px))',
-    closeOnMask: !running,
+    width: 680,
     closeOnEsc: !running,
     onClose,
   }, header, metaEl, body, footer)
