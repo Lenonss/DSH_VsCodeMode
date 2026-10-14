@@ -282,6 +282,29 @@ describe('ContentSearcher', () => {
     expect(second.warning).toBe(first.warning)
     expect(provider).toHaveBeenCalledTimes(1)
   })
+
+  it('force bypasses the cache in both directions after a file change', async () => {
+    // 手工编辑后的重搜必须看到最新内容：force 既不吃旧缓存，也不把结果回填缓存。
+    const provider = vi.fn(async () => result([{ path: 'a.lua', line: 1, startColumn: 1, endColumn: 4, text: 'x' }]))
+    const searcher = new ContentSearcher(ctx, { search: provider })
+    const request = { session: { header: { cwd: 'ws' } }, cwd: 'ws', query: 'foo' }
+    await searcher.search(request)
+    await searcher.search(request)
+    expect(provider).toHaveBeenCalledTimes(1)
+    provider.mockResolvedValueOnce(result([{ path: 'b.lua', line: 9, startColumn: 1, endColumn: 4, text: 'x' }]))
+    const forced = await searcher.search({ ...request, force: true })
+    expect(provider).toHaveBeenCalledTimes(2)
+    expect(forced.matches).toEqual([{ path: 'b.lua', line: 9, startColumn: 1, endColumn: 4, text: 'x' }])
+    // force 结果不回填缓存：随后的普通搜索仍返回旧缓存内容（真实 rg 结果只在本次返回给调用方）。
+    const plain = await searcher.search(request)
+    expect(provider).toHaveBeenCalledTimes(2)
+    expect(plain.matches).toEqual([{ path: 'a.lua', line: 1, startColumn: 1, endColumn: 4, text: 'x' }])
+    // 反向：已有缓存时 force 依然真跑 provider 拿到最新内容（这正是编辑后重搜要的语义）。
+    provider.mockResolvedValueOnce(result([{ path: 'c.lua', line: 12, startColumn: 1, endColumn: 4, text: 'x' }]))
+    const forcedAgain = await searcher.search({ ...request, force: true })
+    expect(provider).toHaveBeenCalledTimes(3)
+    expect(forcedAgain.matches).toEqual([{ path: 'c.lua', line: 12, startColumn: 1, endColumn: 4, text: 'x' }])
+  })
 })
 
 describe('edrv.searchContent RPC handler', () => {
@@ -298,8 +321,19 @@ describe('edrv.searchContent RPC handler', () => {
     expect(search).toHaveBeenCalledWith(expect.objectContaining({ query: 'foo', cwd: 'ws1', matchCase: true, maxResults: 50, include: ['*.ts'], exclude: ['*.lua'] }))
   })
 
-  it('returns error response when the searcher fails', async () => {
-    const search = vi.fn(async () => { throw new Error('ripgrep 不可用') })
+  it('passes the force flag through to the searcher', async () => {
+    const search = vi.fn(async () => ({ matches: [], truncated: false }))
+    const handlers = buildHandlers(rpcCtx(), new Map(), undefined, { search })
+    const forced = await handlers['edrv.searchContent']({ sessionId: 's1', query: 'foo', force: true })
+    expect(forced).toEqual({ ok: true, matches: [], truncated: false })
+    expect(search).toHaveBeenLastCalledWith(expect.objectContaining({ query: 'foo', force: true }))
+    // 不带 force 的普通搜索保持旧行为（缓存路径），且不因缺省字段报错。
+    const plain = await handlers['edrv.searchContent']({ sessionId: 's1', query: 'foo' })
+    expect(plain).toEqual({ ok: true, matches: [], truncated: false })
+    expect(search).toHaveBeenCalledTimes(2)
+  })
+
+  it('returns error response when the searcher fails', async () => {    const search = vi.fn(async () => { throw new Error('ripgrep 不可用') })
     const handlers = buildHandlers(rpcCtx(), new Map(), undefined, { search })
     const out = await handlers['edrv.searchContent']({ sessionId: 's1', query: 'foo' })
     expect(out.ok).toBe(false)

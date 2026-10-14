@@ -45,6 +45,8 @@ export interface ContentSearchRequest {
   include?: string[]
   /** 排除 glob（这些文件不参与搜索）。 */
   exclude?: string[]
+  /** 强制绕过短期缓存：文件变更后的重搜必须看到最新磁盘内容，每次都跑真实 rg。 */
+  force?: boolean
 }
 
 type ContentSearchResponse = { matches: ContentMatch[]; truncated: boolean; warning?: string }
@@ -257,7 +259,8 @@ export class ContentSearcher {
     const includeKey = (request.include ?? []).join(',')
     const excludeKey = (request.exclude ?? []).join(',')
     const key = [rootKey, query, request.matchCase ? 'mc' : '', request.wholeWord ? 'ww' : '', request.regex ? 'rx' : '', includeKey, excludeKey, PROVIDER_VERSION].join('|')
-    const cached = this.cache.get(key)
+    // force（文件变更后的重搜）必须看到最新磁盘内容：跳过缓存读，见下方跳过缓存写。
+    const cached = request.force ? undefined : this.cache.get(key)
     if (cached) return { matches: cached.matches, truncated: cached.truncated, warning: cached.warning }
     this.inflight.get(root)?.abort()
     const controller = new AbortController()
@@ -278,7 +281,8 @@ export class ContentSearcher {
         root,
       })
       if (controller.signal.aborted) return { matches: [], truncated: false }
-      this.cache.set(key, result)
+      // force 结果不回填缓存：本次是「读最新」，不代表该键的稳定内容。
+      if (!request.force) this.cache.set(key, result)
       return { matches: result.matches, truncated: result.truncated, warning: result.warning }
     } catch (error) {
       if (controller.signal.aborted) return { matches: [], truncated: false }

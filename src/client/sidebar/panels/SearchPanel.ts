@@ -15,6 +15,8 @@ import { workspaceScopeOf } from '../../state/scopeStore.js'
 import { takeSearchSeed, takeSearchScope } from '../../searchSeed.js'
 
 const DEBOUNCE_MS = 250
+/** 文件变更后的重搜去抖：合并一次写盘的 refresh+file-changed 双事件与批量保存。 */
+const REFRESH_DEBOUNCE_MS = 300
 const INCLUDE_PLACEHOLDER = '例如 *.ts, src/**/include'
 
 /**
@@ -54,6 +56,30 @@ export function savedSearchOf(key: string) {
   } catch (e) {
     return null
   }
+}
+
+/**
+ * 判断文件变化通知是否属于本面板作用域。
+ * @author ddj 2026年10月14号
+ * @param detail 事件 detail（scope 可缺省）
+ * @param scope 本面板作用域
+ * @returns 是否触发重搜
+ */
+export function noticeInScope(detail: any, scope: string): boolean {
+  const changed = detail?.scope
+  return !changed || changed === scope
+}
+
+/**
+ * 判断文件变化通知是否可能改变内容搜索命中。
+ * 文件增删改名（structure）会增删命中，一并重搜；SVN 状态刷新（svn）不代表内容变化，跳过以免无谓全库扫描。
+ * @author ddj 2026年10月14号
+ * @param detail 事件 detail（kind 可缺省）
+ * @returns 是否触发重搜
+ */
+export function noticeTouchesContent(detail: any): boolean {
+  const kind = detail?.kind
+  return !kind || kind === 'text' || kind === 'structure'
 }
 
 /**
@@ -103,6 +129,8 @@ export function SearchPanel(props) {
   queryRef.current = query
   const activePathRef = React.useRef(activePath)
   activePathRef.current = activePath
+  // 文件变化后的重搜定时器（与输入防抖分开：两者互不取消对方）
+  const refreshTimerRef = React.useRef(null)
   // 请求参数 ref：防抖/立即重搜闭包统一读最新值，避免陈旧选项
   const requestRef = React.useRef({ matchCase, wholeWord, regex, include: [], exclude: [] })
   requestRef.current = {
@@ -152,9 +180,11 @@ export function SearchPanel(props) {
 
   /**
    * 执行内容搜索（请求参数从 ref 读最新值）。
+   * @author ddj 2026年10月14号
    * @param text 搜索词
+   * @param force 是否强制绕过 host 短期缓存（文件变更后的重搜必须读最新磁盘内容）
    */
-  const runSearch = (text) => {
+  const runSearch = (text, force) => {
     const s = ++seqRef.current
     const clean = String(text ?? '').trim()
     if (clean.length < 2) { setMatches(null); setStatus('idle'); return }
@@ -174,6 +204,8 @@ export function SearchPanel(props) {
       sessionId, query: clean,
       matchCase: req.matchCase, wholeWord: req.wholeWord, regex: req.regex,
       include: req.include, exclude: req.exclude,
+      // 仅重搜路径带上 force：普通搜索的请求载荷与修复前保持完全一致。
+      ...(force === true ? { force: true } : {}),
     }).then((res) => {
       if (s !== seqRef.current) return
       if (res && res.ok) {
@@ -193,6 +225,10 @@ export function SearchPanel(props) {
       setStatus('error')
     })
   }
+
+  // 事件监听闭包经 ref 取最新搜索实现与最新查询词（事件注册只做一次）
+  const runSearchRef = React.useRef(runSearch)
+  runSearchRef.current = runSearch
 
   /**
    * 输入变化：防抖触发搜索。
@@ -301,6 +337,27 @@ export function SearchPanel(props) {
     }
     window.addEventListener('edrv:search-focus', onFocus)
     return () => window.removeEventListener('edrv:search-focus', onFocus)
+  }, [])
+
+  // 文件内容变化（保存/外部写盘/文件增删改名）→ 去抖强制重搜，避免面板残留已失效的旧命中。
+  // 两种事件都监听：编辑器内保存只发 edrv:refresh，外部写盘只发 edrv:file-changed。
+  React.useEffect(() => {
+    /** @private @author ddj 2026年10月14号 @description 合并同一次写盘的多条通知后强制重搜 */
+    const onChanged = (event) => {
+      const detail = event?.detail ?? {}
+      if (!noticeInScope(detail, scope)) return
+      if (!noticeTouchesContent(detail)) return
+      if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current)
+      refreshTimerRef.current = setTimeout(() => runSearchRef.current(queryRef.current, true), REFRESH_DEBOUNCE_MS)
+    }
+    window.addEventListener('edrv:file-changed', onChanged)
+    window.addEventListener('edrv:refresh', onChanged)
+    return () => {
+      window.removeEventListener('edrv:file-changed', onChanged)
+      window.removeEventListener('edrv:refresh', onChanged)
+      if (refreshTimerRef.current) { clearTimeout(refreshTimerRef.current); refreshTimerRef.current = null }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // 一次意图对应一次提交后选区；无需定时回调，卸载后不会抢焦点。

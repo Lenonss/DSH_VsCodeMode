@@ -1034,6 +1034,7 @@ export function buildHandlers(
           maxResults: args.maxResults,
           include: args.include,
           exclude: args.exclude,
+          force: args.force,
         })
         return { ok: true, ...result }
       } catch (error) {

@@ -377,7 +377,7 @@ export interface RpcRequestMap {
   'edrv.dlog.clear': { sessionId?: string; file?: string }
   'edrv.dlog.reveal': { sessionId?: string }
   'edrv.searchFiles': { sessionId?: string; query: string }
-  'edrv.searchContent': { sessionId?: string; query: string; matchCase?: boolean; wholeWord?: boolean; regex?: boolean; maxResults?: number; include?: string[]; exclude?: string[] }
+  'edrv.searchContent': { sessionId?: string; query: string; matchCase?: boolean; wholeWord?: boolean; regex?: boolean; maxResults?: number; include?: string[]; exclude?: string[]; force?: boolean }
   'edrv.listDir': { sessionId?: string; path: string; force?: boolean }
   'edrv.revealInExplorer': { sessionId?: string; path: string }
   'edrv.fsCreateFile': { sessionId?: string; path: string }
