@@ -16,6 +16,8 @@ export const CACHE_KEY = {
   viewstate: 'edrv.cache.viewstate.v1.',
   /** 编辑器页签/活动文件（EditorView v3：页签带 pinned 固定标记）。 */
   editor: 'edrv.editor.v3.',
+  /** Multi-group split tree and floating window geometry. */
+  editorLayout: 'edrv.editorLayout.v1.',
   /** 旧编辑器页签键（v2：页签为纯路径数组）——仅用于一次性回读迁移，不再写入。 */
   editorLegacy: 'edrv.editor.v2.',
   /** 侧边栏状态（EditorView；按布局 side/central 追加段）。 */

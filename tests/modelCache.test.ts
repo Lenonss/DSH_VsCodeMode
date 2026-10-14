@@ -3,7 +3,7 @@
  * 作者 ddj 2026-09-09
  */
 import { describe, expect, it } from 'vitest'
-import { MODEL_CACHE_CAP, modelsForScope, rememberModel } from '../src/client/state/modelCache.js'
+import { MODEL_CACHE_CAP, modelsForScope, rememberModel, retainModels } from '../src/client/state/modelCache.js'
 
 /** Monaco model 测试桩：可 dispose，可报告是否附着编辑器。 */
 function fakeModel(attached = false): { disposed: boolean; isAttachedToEditor: () => boolean; dispose: () => void } {
@@ -33,21 +33,35 @@ describe('modelsForScope', () => {
     const next = modelsForScope('ws:release-next')
     expect(free.disposed).toBe(true) // 未附着 → 真正释放
     expect(attached.disposed).toBe(false) // 附着中 → 保留给编辑器自毁
-    expect(prev.size).toBe(0)
+    expect(prev.size).toBe(1)
+    expect(prev.get('attached.ts')).toBe(attached)
     expect(next).not.toBe(prev)
     modelsForScope('ws:release-next') // 稳定当前作用域，后续用例不受影响
   })
 })
 
 describe('rememberModel', () => {
-  it('刷新 LRU 序；逐出附着中的模型时移出但不 dispose', () => {
+  it('never evicts retained open or dirty documents above the soft cap', () => {
+    const map = new Map<string, unknown>()
+    const paths = Array.from({ length: MODEL_CACHE_CAP + 2 }, (_, index) => 'keep-' + index)
+    retainModels(map, paths)
+    const models = paths.map(() => fakeModel())
+    paths.forEach((path, index) => rememberModel(map, path, models[index]))
+    expect(map.size).toBe(paths.length)
+    expect(models.some((model) => model.disposed)).toBe(false)
+    retainModels(map, [paths[0]])
+    rememberModel(map, 'new', fakeModel())
+    expect(map.size).toBe(MODEL_CACHE_CAP)
+    expect(map.get(paths[0])).toBe(models[0])
+  })
+  it('刷新 LRU 序；附着中的模型始终保留', () => {
     const map = new Map<string, unknown>()
     const attached = fakeModel(true)
     rememberModel(map, 'a.ts', attached)
     for (let i = 0; i < MODEL_CACHE_CAP - 1; i++) rememberModel(map, 'f' + i + '.ts', fakeModel())
-    // 容量已满：a.ts 最旧且附着中 → 被逐出但不 dispose
+    // 容量已满：a.ts 最旧但仍附着 → 保留，改逐出其他空闲模型
     rememberModel(map, 'extra.ts', fakeModel())
-    expect(map.has('a.ts')).toBe(false)
+    expect(map.has('a.ts')).toBe(true)
     expect(attached.disposed).toBe(false)
     expect(map.size).toBe(MODEL_CACHE_CAP)
   })

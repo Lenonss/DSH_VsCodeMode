@@ -8,6 +8,12 @@
  * 作者 ddj 2026-08-20
  */
 import React from 'react'
+import { createPortal } from 'react-dom'
+import { EditorPane, EditorSplit, PassiveEditor } from './EditorPane.js'
+import { FloatingEditor } from './FloatingEditor.js'
+import { createLayout, parseLayout, syncTabs, ownerOf, focusGroup, moveTab, returnGroup, GROUP_LIMIT, MAIN_GROUP } from '../state/editorLayout.js'
+import { createTabDrag, hitTarget } from '../tabDrag.js'
+import { createDocStore } from '../state/documentStore.js'
 import { useOpenReceipt } from '../useOpenReceipt.js'
 import { acceptsLoad, receiptErrorFor, receiptPath, receiptReadyFor, receiptTabPath } from '../receiptState.js'
 import { bindPanelCommand } from '../panelCommands.js'
@@ -59,7 +65,7 @@ import { createViewKeeper } from '../state/editorViewState.js'
 import { mdPreviewLoad, mdPreviewSave } from '../state/mdPreviewCache.js'
 import { onUiStateReady, reportUiStateEvent, uiStateSettled } from '../state/uiStatePersist.js'
 import { migrateScopedKeys, workspaceScopeOf } from '../state/scopeStore.js'
-import { modelsForScope, rememberModel } from '../state/modelCache.js'
+import { modelsForScope, rememberModel, retainModels } from '../state/modelCache.js'
 import { navFlashRangeOf } from '../navHighlight.js'
 import { chordOf, useKeybindingsVersion } from '../keybindings.js'
 import { getSidebarMinWidth } from '../sidebarMin.js'
@@ -253,7 +259,33 @@ export function EditorView(props) {
   const planHostRef = React.useRef(null)
   React.useEffect(() => { setPlanTabs([]); setPlanActive(null) }, [sessionId, cwd])
   /** @private @author ddj 2026年10月08号 @param path Disk tab selection. Leave read-only plan mode before any disk navigation. */
-  function setActive(path) { setPlanActive(null); setDiskActive(path) }
+  function setActive(path) {
+    setPlanActive(null)
+    setDiskActive(path)
+    setWorkbench((current) => syncTabs(current, tabsRef.current, path))
+  }
+  const [workbench, setWorkbench] = React.useState(() => createLayout())
+  const [layoutScope, setLayoutScope] = React.useState(null)
+  const benchRef = React.useRef(workbench)
+  benchRef.current = workbench
+  const [dragPreview, setDragPreview] = React.useState(null)
+  const dragRef = React.useRef(null)
+  const benchOps = React.useRef(null)
+  const fullHost = React.useMemo(() => document.createElement('div'), [])
+  fullHost.className = 'edrv-full-view'
+  const pdfNodes = React.useRef(new Map())
+  const paneEditors = React.useRef(new Map())
+  const docRef = React.useRef(null)
+  const docStores = React.useRef(new Map())
+  const docOps = React.useRef(null)
+  React.useEffect(() => {
+    setWorkbench((current) => syncTabs(current, tabs, active))
+  }, [tabs, active])
+  React.useEffect(() => {
+    dragRef.current?.cancel()
+    return () => dragRef.current?.cancel()
+  }, [sessionId, scope])
+
   const [dirtyMap, setDirtyMap] = React.useState({})
   const [content, setContent] = React.useState(null)
   const [contentPath, setContentPath] = React.useState(null)
@@ -368,6 +400,7 @@ export function EditorView(props) {
   tabsRef.current = tabs
   const tabPathsRef = React.useRef([]) // 页签路径镜像（外部改动轮询读取）
   tabPathsRef.current = tabs.map((t) => t.path)
+  retainModels(modelsRef.current, [...tabPathsRef.current, ...Object.keys(dirtyMap).filter((path) => dirtyMap[path])])
   const dirtyRef = React.useRef({}) // 脏标记最新值（菜单禁用判定与关闭时落盘读）
   dirtyRef.current = dirtyMap
   const tabsHostRef = React.useRef(null) // 页签栏容器（切换后把当前页签滚入可见区）
@@ -571,7 +604,7 @@ export function EditorView(props) {
     /** @private @author ddj 2026年10月12号 @returns Unsafe editor state without saving or discarding file content. */
     function checkReload() {
       if (Object.values(dirtyRef.current).some(Boolean)) return '存在未保存文件'
-      if (saveTimerRef.current.isPending() || savingRef.current.size) return '文件正在等待保存或保存中'
+      if (saveTimerRef.current.isPending() || savingRef.current.size || docRef.current?.unsafe()) return '文件正在等待保存或保存中'
       for (const ctl of pdfCtlRef.current.values()) {
         if (ctl.isDirty?.()) return '存在未保存 PDF'
       }
@@ -690,6 +723,8 @@ export function EditorView(props) {
     if (path === activeRef.current) { saveViewState(path); recordNav() }
     const pdfCtl = pdfCtlRef.current.get(path)
     if (pdfCtl) { pdfCtl.destroy(); pdfCtlRef.current.delete(path) }
+    pdfNodes.current.delete(path)
+    docRef.current?.release(path)
     pdfB64CacheRef.current.delete(path)
     // 关闭即失去跟踪：清磁盘版本基线/已读台账/同步标记（重开时按最新内容重建）
     clearBaseline(scope, path)
@@ -764,7 +799,12 @@ export function EditorView(props) {
       for (const key of Object.keys(prev)) next[remapPathOf(key, from, to)] = prev[key]
       return next
     })
-    setActive((prev) => (prev ? remapPathOf(prev, from, to) : prev))
+    setWorkbench((current) => ({ ...current, groups: current.groups.map((group) => ({ ...group,
+      tabs: group.tabs.map((tab) => ({ ...tab, path: remapPathOf(tab.path, from, to) })),
+      active: group.active ? remapPathOf(group.active, from, to) : null,
+    })) }))
+    setPlanActive(null)
+    setDiskActive((prev) => (prev ? remapPathOf(prev, from, to) : prev))
   }
 
   // 文件树右键的重命名/删除 → 页签同步（动作在 sidebar/menuItems.ts，经窗口事件桥接；
@@ -797,9 +837,10 @@ export function EditorView(props) {
    * @param step 步进（+1 下一个 / -1 上一个）
    */
   const cycleTab = (step) => {
-    if (tabs.length < 2) return
-    const idx = tabs.findIndex((t) => t.path === active)
-    const next = tabs[(idx + step + tabs.length) % tabs.length]
+    const groupTabs = benchRef.current.groups.find((group) => group.id === benchRef.current.focused)?.tabs ?? tabs
+    if (groupTabs.length < 2) return
+    const idx = groupTabs.findIndex((t) => t.path === active)
+    const next = groupTabs[(idx + step + groupTabs.length) % groupTabs.length]
     if (!next || next.path === active) return
     flushSave()
     saveViewState(active)
@@ -1083,9 +1124,16 @@ export function EditorView(props) {
    * @param version 已知磁盘版本（外部改动轮询触发时带入）
    */
   const loadPdf = (path, sid, seq, force, version) => {
+    if (force && pdfCtlRef.current.get(path)?.isDirty()) { setStatus('PDF 含未保存批注，未覆盖'); return }
     setPdfBytes(null)
     setLoadStage({ progress: monaco ? 72 : 12, message: '读取 PDF…' })
     const cache = pdfB64CacheRef.current
+    if (force && pdfCtlRef.current.has(path)) {
+      const controller = pdfCtlRef.current.get(path)
+      controller.destroy()
+      pdfCtlRef.current.delete(path)
+      pdfNodes.current.delete(path)
+    }
     const hit = !force ? cache.get(path) : undefined
     if (typeof hit === 'string' && hit) {
       // 刷新插入序（Map 按插入序 FIFO 驱逐）后秒切
@@ -1164,6 +1212,22 @@ export function EditorView(props) {
     if (!change || !change.path) return
     // 文件树同步：目录缓存按该路径失效并强制重列（外部新增/删除/改名都能看到）
     const eventId = emitFileChanged(change.path, { scope, kind: change.kind === 'deleted' ? 'structure' : 'text' })
+    if (change.kind === 'modified' && change.path !== activeRef.current) {
+      const currentScope = scope, map = modelsRef.current
+      void rpc('edrv.read', { sessionId, path: change.path }).then((result) => {
+        if (!result?.ok || map !== modelsRef.current || dirtyRef.current[change.path]) return
+        const model = map.get(change.path)
+        if (model && !model.isDisposed?.()) {
+          programmaticRef.current = true
+          try { model.setValue(result.content) } finally { programmaticRef.current = false }
+        }
+        revRef.current[change.path] = result.version
+        docRef.current?.baseline(change.path, result.version, false)
+        recordBaseline(currentScope, change.path, result.version)
+        clearSync(currentScope, change.path)
+      }).catch(() => {})
+      return
+    }
     if (change.kind === 'modified') {
       // 干净缓冲：强制从磁盘重读（跳过 model 复用），差异标记随之重算
       loadContent(change.path, sessionId, true)
@@ -1361,11 +1425,42 @@ export function EditorView(props) {
   React.useEffect(() => {
     if (!sessionId || restoredScopeRef.current === scope) return
     restoredScopeRef.current = scope
+    setLayoutScope(scope)
     // model 缓存跟随作用域（切工作区释放旧作用域模型；同工作区跨挂载复用）
     modelsRef.current = modelsForScope(scope)
     // Markdown 预览态同样按作用域恢复（重启/换端口后由界面状态镜像回填，见 lateHydrateRef 分支）
     mdPreviewRef.current = mdPreviewLoad(String(scope))
+    docRef.current = docStores.current.get(scope) ?? null
+    for (const controller of pdfCtlRef.current.values()) controller.destroy()
+    pdfCtlRef.current.clear()
+    pdfNodes.current.clear()
+    pdfB64CacheRef.current.clear()
+    revRef.current = {}
+    savingRef.current.clear()
+    const restoredDirty = {}
+    for (const path of modelsRef.current.keys()) {
+      const item = docRef.current?.state(path)
+      if (item?.dirty) restoredDirty[path] = true
+      if (item?.rev) revRef.current[path] = item.rev
+      if (item?.saving) savingRef.current.add(path)
+    }
+    setDirtyMap(restoredDirty)
+    setTabs([])
+    setDiskActive(null)
+    setContent(null)
+    setContentPath(null)
     try {
+      const savedLayout = parseLayout(localStorage.getItem(CACHE_KEY.editorLayout + String(scope)), cwd)
+      if (savedLayout) {
+        const restored = savedLayout.groups.flatMap((group) => group.tabs)
+        const selected = savedLayout.groups.find((group) => group.id === savedLayout.focused)?.active ?? null
+        setWorkbench(savedLayout)
+        setTabs(restored)
+        setPlanActive(null)
+        setDiskActive(selected)
+        return
+      }
+      setWorkbench(createLayout())
       // v3 优先；缺失时回读 v2（旧版纯路径数组）——normalizeTabs 兼容两种形状
       const raw = localStorage.getItem(CACHE_KEY.editor + String(scope))
         ?? localStorage.getItem(CACHE_KEY.editorLegacy + String(scope))
@@ -1429,6 +1524,11 @@ export function EditorView(props) {
     setNavTick((v) => v + 1)
   }, [scope, hydrateTick])
 
+  React.useEffect(() => {
+    if (!sessionId || layoutScope !== scope || !uiStateSettled()) return
+    try { localStorage.setItem(CACHE_KEY.editorLayout + String(scope), JSON.stringify(workbench)) } catch { /* Storage can be unavailable. */ }
+  }, [workbench, layoutScope, sessionId, scope, hydrateTick])
+
   // 导航双栈落 localStorage（同原文去重写；镜像层负责跨重启）：刷新/重启后前进后退与当前位置仍在
   React.useEffect(() => {
     if (!sessionId || !uiStateSettled()) return
@@ -1479,7 +1579,9 @@ export function EditorView(props) {
   // 复用 closeTabs：它已实现 flushSave + persistDirty（脏页签先静默落盘）+ releaseTab + commitClose，
   // 故「超限淘汰脏页签」不会丢用户编辑。淘汰后 tabs 变化 → 本 effect 复算 evictPlan 返回空 → 自然收敛。
   React.useEffect(() => {
+    const protectedPaths = new Set(benchRef.current.groups.map((group) => group.active).filter(Boolean))
     const plan = evictPlan(tabsRef.current, tabLimit, { active: activeRef.current, used: tabUseRef.current.used })
+      .filter((path) => !protectedPaths.has(path) && !dirtyRef.current[path] && !savingRef.current.has(path))
     if (!plan.length) return
     closeTabs(applyClose(tabsRef.current, new Set(plan), activeRef.current), '已关闭最久未使用的页签')
   }, [tabs, tabLimit, active])
@@ -1917,7 +2019,7 @@ export function EditorView(props) {
       const uri = window.monaco.Uri.parse('edrv:///' + encodeURI(String(path ?? '').replace(/^\/+/, '')))
       model = window.monaco.editor.getModel(uri) || window.monaco.editor.createModel(text ?? '', langOf(path), uri)
       rememberModel(cache, path, model)
-    } else if (text !== undefined && model.getValue() !== text) {
+    } else if (text !== undefined && !dirtyRef.current[path] && model.getValue() !== text) {
       programmaticRef.current = true
       model.setValue(text)
       programmaticRef.current = false
@@ -1939,6 +2041,7 @@ export function EditorView(props) {
     const target = path ?? active
     if (target && readSync(scope, target)) return false
     saveTimerRef.current?.flush()
+    if (docRef.current) void docRef.current.flush(target)
     return true
   }
 
@@ -1959,6 +2062,59 @@ export function EditorView(props) {
     setDiskFlag((prev) => (prev && prev.path === path ? null : prev))
   }
 
+  /** @private @author ddj 2026年10月14号 @returns One document save owner using latest workspace callbacks. */
+  function documents() {
+    if (!docRef.current) {
+      const documentScope = scope
+      const store = createDocStore({
+        save: (request) => rpc('edrv.save', { sessionId, ...request }),
+        changed: (path, item) => { if (docRef.current === store) docOps.current.changed(path, item) },
+        saved: (path, text, model, result) => {
+          recordBaseline(documentScope, path, result.rev)
+          if (docRef.current === store) docOps.current.saved(path, text, model, result)
+        },
+        failed: (path, result) => { if (docRef.current === store) docOps.current.failed(path, result) },
+        blocked: (path) => !!readSync(documentScope, path),
+      })
+      docRef.current = store
+      docStores.current.set(scope, store)
+    }
+    return docRef.current
+  }
+  docOps.current = {
+    save: (request) => rpc('edrv.save', { sessionId, ...request }),
+    changed: (path, item) => {
+      if (item.saving) savingRef.current.add(path)
+      else savingRef.current.delete(path)
+      setDirtyMap((current) => current[path] === item.dirty ? current : { ...current, [path]: item.dirty })
+    },
+    saved: (path, text, model, result) => {
+      if (result.rev) revRef.current[path] = result.rev
+      if (/\.code-snippets$/i.test(path)) window.dispatchEvent(new CustomEvent('edrv:snippets-changed'))
+      recordBaseline(scope, path, result.rev)
+      markReadVersion(scope, path, result.rev, true)
+      clearSync(scope, path)
+      acceptSaved(path, text, model)
+      refreshRecords()
+      emitRefresh({ scope, paths: [path], kind: 'text' })
+    },
+    failed: (path, result) => {
+      if (result.conflict) markDiskFlag({ path, kind: 'conflict', at: Date.now() })
+      setStatus(result.conflict ? '保存被拒：文件已被外部修改' : '保存失败')
+      if (result.error) setError(result.error)
+    },
+  }
+  /** @private @author ddj 2026年10月14号 @param path Canonical path. @param manual Explicit save. @returns Guarded save, never another pane's content. */
+  function saveDocument(path, manual) {
+    const model = modelsRef.current.get(path)
+    if (!model) return Promise.resolve({ ok: false })
+    const store = documents()
+    store.bind(path, model, revRef.current[path])
+    store.state(path).dirty = !!dirtyRef.current[path]
+    store.baseline(path, revRef.current[path], !!readSync(scope, path))
+    return store.save(path, manual)
+  }
+
   const doSave = (silent) => {
     if (!active) return
     // 外部改动待处理：自动保存（silent）直接放弃，避免陈旧缓冲覆盖磁盘；
@@ -1972,40 +2128,9 @@ export function EditorView(props) {
       void ctl.savePdf()
       return
     }
-    const ed = editorRef.current
-    if (!ed) return
     if (isImageActive) { setStatus('图片只读预览'); return }
-    const text = ed.getValue()
-    const savedModel = ed.getModel?.()
-    const path = active
     if (!silent) setStatus('保存中…')
-    // 在途登记：关闭路径的 persistDirty 据此跳过重复提交（内容在同一 tick 内取，必然相同）
-    savingRef.current.add(path)
-    // 版本守卫令牌：上次读取/写入时的磁盘版本；与磁盘当前版本不符时 host 拒绝写入
-    const rev = revRef.current[path]
-    rpc('edrv.save', { sessionId, path, content: text, rev: typeof rev === 'string' && rev ? rev : undefined }).then((res) => {
-      if (res && res.ok) {
-        if (res.rev) revRef.current[path] = res.rev
-        recordBaseline(scope, path, res.rev)
-        markReadVersion(scope, path, res.rev, true) // 缓冲即磁盘内容：同版本无需再读盘
-        clearSync(scope, path)
-        acceptSaved(path, text, savedModel)
-        refreshRecords()
-        emitRefresh({ scope, paths: [path], kind: 'text' })
-        // 片段配置文件保存后失效补全缓存（下次补全即读到新片段）
-        if (/\.code-snippets$/i.test(path)) window.dispatchEvent(new CustomEvent('edrv:snippets-changed'))
-        return
-      }
-      if (res && res.conflict) {
-        // 磁盘已被外部改过：保留缓冲内容与脏标记，交给用户显式选择
-        markDiskFlag({ path, kind: 'conflict', at: Date.now() })
-        setStatus('保存被拒：文件已被外部修改')
-        return
-      }
-      setStatus('保存失败')
-      setError(res?.error ? String(res.error) : '保存失败')
-    }).catch((e) => { setStatus('保存失败'); setError('保存异常:' + String(e)) })
-      .finally(() => { savingRef.current.delete(path) })
+    void saveDocument(active, !silent)
   }
   doSaveRef.current = doSave
 
@@ -2029,38 +2154,26 @@ export function EditorView(props) {
       if (savingRef.current.has(path)) continue
       const pdfCtl = pdfCtlRef.current.get(path)
       if (pdfCtl) { if (pdfCtl.isDirty()) void pdfCtl.savePdf(); continue }
-      const model = modelsRef.current.get(path)
-      if (!model) { setStatus('未保存的修改无法落盘：' + baseNameOf(path)); continue }
-      const content = model.getValue()
-      savingRef.current.add(path)
-      const rev = revRef.current[path]
-      rpc('edrv.save', { sessionId, path, content, rev: typeof rev === 'string' && rev ? rev : undefined })
-        .then((res) => {
-          if (res && res.ok) {
-            if (res.rev) revRef.current[path] = res.rev
-            recordBaseline(scope, path, res.rev)
-            markReadVersion(scope, path, res.rev, true) // 缓冲即磁盘内容：同版本无需再读盘
-            setDirtyMap((d) => Object.assign({}, d, { [path]: false }))
-          }
-        })
-        .catch((e) => dbg(sessionId, '关闭前落盘失败：' + path + ' · ' + String(e)))
-        .finally(() => { savingRef.current.delete(path) })
+      void saveDocument(path, false)
     }
   }
 
   const onEdit = () => {
     const ed = editorRef.current
-    if (!ed || !active) return
-    setDirtyMap((d) => Object.assign({}, d, { [active]: true }))
+    const model = ed?.getModel()
+    const path = [...modelsRef.current].find(([, item]) => item === model)?.[0]
+    if (!ed || !path) return
+    setDirtyMap((d) => Object.assign({}, d, { [path]: true }))
     // 编辑即「使用」：需求 2 的淘汰口径是「最近没有改动」，故有改动时刷新 LRU 序号，
     // 使长时间只在某文件里编辑的页签不会被其它文件的打开动作挤出。
-    touchTab(active)
+    touchTab(path)
     setStatus('编辑中…')
     // 外部改动尚未处理（冲突/文件被删）：抑制自动保存，避免用陈旧缓冲反复覆盖磁盘；
     // 手工 Ctrl+S 不受抑制（doSave 会走版本守卫并给冲突提示）。
-    if (readSync(scope, active)) { setStatus('外部已修改（未保存的编辑保留）'); return }
-    // 重新计时（arm 内部先取消上一轮）；到点自动保存，切页签/关闭前由 flushSave 立即提交
-    saveTimerRef.current?.arm(schedule, 700, () => doSave(true))
+    const store = documents()
+    store.bind(path, model, revRef.current[path])
+    store.edit(path)
+    if (readSync(scope, path)) setStatus('外部已修改（未保存的编辑保留）')
   }
   // @author ddj 2026年09月09号 空依赖监听只持有首帧 onEdit（active 恒 null→提前返回，星号与自动保存从未生效）：每次渲染同步最新闭包
   onEditRef.current = onEdit
@@ -2082,7 +2195,18 @@ export function EditorView(props) {
   }, [monaco, scope, active, content, contentReady, mdPreviewing, svnDiff])
 
   // PDF 面板外壳 ref 回调（div 仅在 PDF 分支渲染，refs 先于 effect 就绪）
-  const ensurePdfHost = (node) => { pdfHostRef.current = node }
+  /** @private @author ddj 2026年10月14号 @param path PDF document. @returns Stable panel container across groups and focus switches. */
+  function pdfNode(path) {
+    let node = pdfNodes.current.get(path)
+    if (!node) { node = document.createElement('div'); node.className = 'edrv-pdf-host'; pdfNodes.current.set(path, node) }
+    return node
+  }
+  const ensurePdfHost = (node) => {
+    if (!node || !active) { pdfHostRef.current = null; return }
+    const stable = pdfNode(active)
+    node.appendChild(stable)
+    pdfHostRef.current = stable
+  }
 
   // PDF 面板装配：控制器挂进外壳 div，切换 tab/卸载即销毁（重开重挂，base64 缓存兜底秒切）
   React.useEffect(() => {
@@ -2099,6 +2223,7 @@ export function EditorView(props) {
     }
     /** @author ddj 2026年09月28号 End startup error attribution before later save operations. */
     const mounted = () => { mounting = false }
+    if (pdfCtlRef.current.has(path)) { mounting = false; return }
     const ctl = createPdfPanel({
       sessionId,
       path,
@@ -2111,8 +2236,7 @@ export function EditorView(props) {
     void ctl.mount(host, pdfBytes).then(mounted, pdfError)
     return () => {
       mounting = false
-      ctl.destroy()
-      if (pdfCtlRef.current.get(path) === ctl) pdfCtlRef.current.delete(path)
+      // The document owns this controller. Reparenting/focus changes must retain unsaved annotations.
     }
   }, [isPdfActive, pdfBytes, active, receiptLoad?.sequence])
 
@@ -2127,6 +2251,7 @@ export function EditorView(props) {
 
   React.useEffect(() => () => {
     flushSave()
+    for (const store of docStores.current.values()) void store.flush().finally(() => store.dispose())
     // 卸载即切作用域/重挂载：先把待记录光标落进历史，再存当前文件视图状态
     //（经 ref 取最新闭包，修正旧实现捕获挂载时 active 的问题）
     flushNavCursor()
@@ -3287,13 +3412,35 @@ export function EditorView(props) {
    * @param path 右键目标页签路径
    * @returns id → 动作
    */
+  /** @private @author ddj 2026年10月14号 @param path Menu target. @param kind Close operation. Close only tabs in the owning group, using visible order. */
+  function closeInGroup(path, kind) {
+    const group = ownerOf(benchRef.current, path)
+    if (!group) return
+    const actions = {
+      others: () => closeOthers(group.tabs, path, group.active),
+      right: () => closeRight(group.tabs, path, group.active),
+      saved: () => closeSaved(group.tabs, dirtyRef.current, group.active),
+      all: () => closeAll(group.tabs, group.active),
+    }
+    const result = actions[kind]?.()
+    if (!result) return
+    const kept = new Set(result.tabs.map((tab) => tab.path))
+    const closing = new Set(group.tabs.filter((tab) => !kept.has(tab.path)).map((tab) => tab.path))
+    closeTabs(applyClose(tabsRef.current, closing, activeRef.current), '已关闭编辑组页签')
+  }
   const tabMenuActions = (path) => ({
     'add-to-conversation': () => addRefToChat(path),
+    'split-left': () => splitTab(path, 'left'),
+    'split-right': () => splitTab(path, 'right'),
+    'split-top': () => splitTab(path, 'top'),
+    'split-bottom': () => splitTab(path, 'bottom'),
+    'move-new-window': () => dropTab(path, { kind: 'float', rect: { left: 80, top: 80, width: 600, height: 400 } }),
+    'return-main': () => dropTab(path, { kind: 'group', group: MAIN_GROUP }),
     close: () => closeTab(path),
-    'close-others': () => closeTabs(closeOthers(tabsRef.current, path, activeRef.current), '已关闭其他页签'),
-    'close-right': () => closeTabs(closeRight(tabsRef.current, path, activeRef.current), '已关闭右侧页签'),
-    'close-saved': () => closeTabs(closeSaved(tabsRef.current, dirtyRef.current, activeRef.current), '已关闭已保存页签'),
-    'close-all': () => closeTabs(closeAll(tabsRef.current, activeRef.current), '已关闭全部页签'),
+    'close-others': () => closeInGroup(path, 'others'),
+    'close-right': () => closeInGroup(path, 'right'),
+    'close-saved': () => closeInGroup(path, 'saved'),
+    'close-all': () => closeInGroup(path, 'all'),
     'copy-path': () => copyText(absoluteOf(path, cwd), '已复制路径'),
     'copy-relative-path': () => copyText(relativeOf(path, cwd), '已复制相对路径'),
     'reveal-in-os': () => openInExplorer(path),
@@ -3313,12 +3460,15 @@ export function EditorView(props) {
     const changeMap = svnChangeMapOf(scope)
     return buildTabMenu({
       path: tabMenu.path,
-      tabs: tabsRef.current,
-      active: activeRef.current,
+      tabs: ownerOf(workbench, tabMenu.path)?.tabs ?? tabsRef.current,
+      active: ownerOf(workbench, tabMenu.path)?.active ?? activeRef.current,
       dirty: dirtyRef.current,
       cwd,
       hasSession: Boolean(sessionId),
       canAddToConversation: Boolean(addToConversation),
+      canSplit: workbench.groups.length < GROUP_LIMIT && !workbench.floats.some((item) => item.group === ownerOf(workbench, tabMenu.path)?.id),
+      canFloat: workbench.groups.length < GROUP_LIMIT,
+      canReturn: ownerOf(workbench, tabMenu.path)?.id !== MAIN_GROUP,
       svnReady: Boolean(svnStatus?.managed && svnStatus?.svnCli),
       tortoiseReady: Boolean(svnStatus?.managed && svnStatus?.tortoise),
       // 自研替换时间线：自研就绪的能力对应 Tortoise 项不出现
@@ -3547,26 +3697,136 @@ export function EditorView(props) {
     }).catch((e) => { setStatus('打开失败'); setError('打开异常:' + String(e)) })
   }
 
+  // --region Workbench drag and independent views
+  /** @private @author ddj 2026年10月14号 @param group Group id. @param path Optional selection. Route global actions only to this group. */
+  function selectGroup(group, path) {
+    saveViewState()
+    recordNav()
+    const next = focusGroup(benchRef.current, group, path)
+    setWorkbench(next)
+    setPlanActive(null)
+    setDiskActive(next.groups.find((item) => item.id === group)?.active ?? null)
+  }
+  /** @private @author ddj 2026年10月14号 @param next Atomic layout. Accept ownership without close/save side effects. */
+  function acceptLayout(next) {
+    saveViewState()
+    setWorkbench(next)
+    setPlanActive(null)
+    setDiskActive(next.groups.find((group) => group.id === next.focused)?.active ?? null)
+  }
+  /** @private @author ddj 2026年10月14号 @param path File. @param edge Split direction. Move the file into a new group. */
+  function splitTab(path, edge) {
+    const group = ownerOf(benchRef.current, path)
+    if (group) dropTab(path, { kind: 'split', group: group.id, edge })
+  }
+  /** @private @author ddj 2026年10月14号 @param path File. @param target Valid destination. Move only after acceptance. */
+  function dropTab(path, target) {
+    if (!ownerOf(benchRef.current, path)) return
+    if (target.kind === 'reference') { addRefToChat(path); return }
+    acceptLayout(moveTab(benchRef.current, path, target))
+  }
+  /** @private @author ddj 2026年10月14号 @param point Viewport pointer. @returns Current same-workbench geometry; ambiguous composers rejected. */
+  function dragHit(point) {
+    const root = viewRootRef.current
+    const groups = [...(root?.querySelectorAll('[data-edrv-group]') ?? []), ...document.querySelectorAll('[data-edrv-float][data-edrv-owner="' + String(scope).replace(/["\\]/g, '') + '"] [data-edrv-group]')]
+    const regions = groups.map((node) => ({
+      group: node.getAttribute('data-edrv-group'), rect: node.getBoundingClientRect(), floating: !!node.closest('[data-edrv-float]'),
+      tabRect: node.querySelector('[data-edrv-group-tabs]')?.getBoundingClientRect(),
+      tabs: [...node.querySelectorAll('[data-edrv-tab-path]')].map((tab) => ({ path: tab.getAttribute('data-edrv-tab-path'), rect: tab.getBoundingClientRect() })),
+    })).filter((region) => region.rect.width && region.rect.height).reverse()
+    const scroll = root?.closest('[data-conversation-scroll]')
+    const seats = [...(scroll ?? document).querySelectorAll('[data-composer-seat]')].filter((node) => { const rect = node.getBoundingClientRect(); return rect.width > 0 && rect.height > 0 })
+    const element = document.elementFromPoint(point.x, point.y)
+    const composer = seats.length === 1 && seats[0].contains(element) ? seats[0].getBoundingClientRect() : null
+    const hitGroup = element?.closest('[data-edrv-group]')?.getAttribute('data-edrv-group')
+    const visibleRegions = regions.filter((region) => region.group === hitGroup)
+    const blank = !!element && !element.closest('button,input,textarea,a,[contenteditable],.monaco-editor,[role="dialog"]')
+      && (element === document.body || element.matches('[data-conversation-scroll], [data-edrv-view], .edrv-editor-row, .edrv-workbench, .edrv-group-body'))
+    return hitTarget({ point, viewport: { width: window.innerWidth, height: window.innerHeight }, regions: visibleRegions, composer, blank, allowCreate: benchRef.current.groups.length < GROUP_LIMIT })
+  }
+  benchOps.current = { hit: dragHit, drop: dropTab }
+  React.useEffect(() => {
+    const controller = createTabDrag({ hit: (point) => benchOps.current.hit(point), drop: (path, target) => benchOps.current.drop(path, target), preview: setDragPreview }, window)
+    dragRef.current = controller
+    return () => { controller.cancel(); if (dragRef.current === controller) dragRef.current = null }
+  }, [])
+  /** @private @author ddj 2026年10月14号 @param path Trusted file. @param event Tab press. */
+  function dragTab(path, event) { dragRef.current?.start(path, event) }
+  /** @private @author ddj 2026年10月14号 @returns Whether pointer release completed a drag. */
+  function consumeDrag() { return dragRef.current?.consumeClick() ?? false }
+  /** @private @author ddj 2026年10月14号 @param path File. @param event Context trigger. */
+  function paneMenu(path, event) { setTabMenu({ path, x: event.clientX, y: event.clientY }) }
+  /** @private @author ddj 2026年10月14号 @param group Auxiliary group. Return documents rather than closing them. */
+  function returnPane(group) { acceptLayout(returnGroup(benchRef.current, group)) }
+  /** @private @author ddj 2026年10月14号 @param group Float id. @param rect Viewport-safe bounds. */
+  function floatBounds(group, rect) {
+    setWorkbench((current) => ({ ...current, floats: current.floats.map((item) => item.group === group ? { ...rect, group } : item) }))
+  }
+  /** @private @author ddj 2026年10月14号 @param host Group body. Keep the full editor subtree stable while changing group/window ownership. */
+  function mountFull(host) { if (host && fullHost.parentElement !== host) { host.appendChild(fullHost); editorRef.current?.layout() } }
+  /** @private @author ddj 2026年10月14号 @param host Passive body. @param path Canonical file. @returns View-only cleanup, models remain workbench-owned. */
+  function mountPassive(host, path) {
+    let disposed = false, keeper = null, subscription = null, observer = null
+    const focus = () => { const owner = ownerOf(benchRef.current, path); if (owner) selectGroup(owner.id, path) }
+    host.addEventListener('pointerdown', focus)
+    if (isPdfPath(path) && pdfNodes.current.has(path)) {
+      host.appendChild(pdfNode(path))
+      return () => host.removeEventListener('pointerdown', focus)
+    }
+    host.textContent = '加载中…'
+    const binary = isImagePath(path) || isPdfPath(path)
+    const cached = modelsRef.current.get(path)
+    const request = binary ? readBinaryPreview(rpc, { sessionId, path }) : cached ? Promise.resolve({ ok: true, content: cached.getValue() }) : rpc('edrv.read', { sessionId, path })
+    void request.then((result) => {
+      if (disposed) return
+      host.textContent = ''
+      if (!result?.ok) { host.textContent = result?.error || '文件加载失败'; return }
+      if (binary) {
+        const image = document.createElement(isPdfPath(path) ? 'div' : 'img')
+        if (isPdfPath(path)) image.textContent = 'PDF · 点击此编辑组继续查看和编辑'
+        else { image.src = dataUrlOf(result.via === 'binary' ? bytesToBase64(result.bytes) : result.content, result.mime); image.alt = path; image.style.maxWidth = '100%' }
+        host.appendChild(image)
+        return
+      }
+      if (!window.monaco) { host.textContent = '编辑器正在加载'; return }
+      const model = cached || getModel(path, result.content)
+      if (result.version) { revRef.current[path] = result.version; recordBaseline(scope, path, result.version) }
+      const editor = window.monaco.editor.create(host, { model, automaticLayout: true, minimap: { enabled: false }, scrollBeyondLastLine: false })
+      keeper = createViewKeeper(editor)
+      keeper.bind(scope, path, model)
+      paneEditors.current.set(path, editor)
+      const store = documents()
+      store.bind(path, model, revRef.current[path])
+      subscription = editor.onDidChangeModelContent(() => { if (!programmaticRef.current) store.edit(path) })
+      observer = new ResizeObserver(() => editor.layout())
+      observer.observe(host)
+    }).catch((failure) => { if (!disposed) host.textContent = '文件加载失败：' + String(failure) })
+    return () => { disposed = true; host.removeEventListener('pointerdown', focus); observer?.disconnect(); subscription?.dispose(); keeper?.dispose(); paneEditors.current.delete(path) }
+  }
+  const passiveOps = React.useRef(mountPassive)
+  passiveOps.current = mountPassive
+  const passiveMount = React.useCallback((host, path) => passiveOps.current(host, path), [])
+  /** @private @author ddj 2026年10月14号 @param node Split branch. @param ratio Updated branch ratio. */
+  function changeRatio(node, ratio) {
+    const replace = (current) => current === node ? { ...current, ratio } : 'group' in current ? current : { ...current, first: replace(current.first), second: replace(current.second) }
+    setWorkbench((current) => ({ ...current, tree: replace(current.tree) }))
+  }
+  /** @private @author ddj 2026年10月14号 @param id Leaf id. @returns Tabs and either focused full-feature editor or independent passive view. */
+  function renderGroup(id) {
+    const group = workbench.groups.find((item) => item.id === id)
+    if (!group) return null
+    const focused = id === workbench.focused
+    return React.createElement(EditorPane, { key: id, group, focused, dirty: dirtyMap, onSelect: selectGroup, onClose: closeTab, onMenu: paneMenu, onDrag: dragTab, consumeClick: consumeDrag },
+      focused ? React.createElement('div', { className: 'edrv-full-slot', ref: mountFull }) : React.createElement(PassiveEditor, { key: String(scope) + ':' + group.active, path: group.active, mount: passiveMount }))
+  }
+  /** @private @author ddj 2026年10月14号 @param node Layout subtree. @returns Recursive resizable panes. */
+  function renderTree(node) {
+    if ('group' in node) return renderGroup(node.group)
+    return React.createElement(EditorSplit, { axis: node.axis, ratio: node.ratio, first: renderTree(node.first), second: renderTree(node.second), onRatio: (ratio) => changeRatio(node, ratio) })
+  }
+  // --endregion
+
   const tabsEl = React.createElement('div', { className: 'edrv-tabs', ref: tabsHostRef, style: { flex: '1 1 auto', minWidth: 0 } },
-    tabs.map((t) => React.createElement('div', {
-      key: t.path,
-      className: 'edrv-tab' + (t.path === active ? ' edrv-tab-active' : '') + (t.pinned ? ' edrv-tab-pinned' : ''),
-      title: t.pinned ? t.path + '（已固定）' : t.path,
-      onClick: () => { if (t.path !== active) { flushSave(); saveViewState(active); recordNav(); setActive(t.path) } },
-      onContextMenu: (e) => {
-        e.preventDefault()
-        e.stopPropagation()
-        setTabMenu({ x: e.clientX, y: e.clientY, path: t.path })
-      },
-    },
-      // 固定页签在文件名前显示 📌 标记，且不渲染 × （与参考图一致：固定页签不显示关闭按钮）
-      // @author ddj 2026年09月11号
-      (t.pinned ? React.createElement('span', { className: 'edrv-tab-pin', title: '已固定', 'aria-label': '已固定' }, '📌') : null),
-      React.createElement('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 180 } }, t.path.split(/[\\/]/).pop() || t.path),
-      // 未保存修改页签显示 * 星号（保存成功消失、失败持续）；替换原圆点脏标记
-      // @author ddj 2026年09月09号
-      (dirtyMap[t.path] ? React.createElement('span', { className: 'edrv-tab-star', title: '未保存修改' }, '*') : null),
-      (t.pinned ? null : React.createElement('span', { className: 'edrv-tab-x', title: '关闭', onClick: (e) => { e.stopPropagation(); closeTab(t.path) } }, '×')))),
     planTabs.map((plan) => React.createElement('div', {
       key: plan.address, className: 'edrv-tab' + (plan.address === planActive ? ' edrv-tab-active' : ''),
       title: plan.title + '（计划预览 · 只读）', onClick: () => openPlanDoc(plan),
@@ -4107,13 +4367,14 @@ export function EditorView(props) {
         React.createElement('button', { className: 'edrv-pill edrv-pill-ghost', title: '复制安装命令', onClick: copyInstallCmd }, '复制命令'),
         React.createElement('button', { className: 'edrv-side-hint-close', title: '关闭提示', 'aria-label': '关闭提示', onClick: dismissHint }, '×'))
     : null
-  const mainCol = React.createElement('div', { className: 'edrv-main-col', style: { flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' } },
-    pathBar,
-    tabRow,
-    sideHintEl,
-    diskBanner(),
-    editorArea,
-    statusBar)
+  const fullView = createPortal(React.createElement('div', { 'data-edrv-view': '1', style: { display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0, minHeight: 0, overflow: 'hidden' } }, pathBar, sideHintEl, diskBanner(), editorArea, statusBar), fullHost, 'edrv-full-editor')
+  const mainCol = React.createElement('div', { className: 'edrv-main-col edrv-workbench', style: { flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' } },
+    React.createElement('div', { className: 'edrv-workbench-tools' }, tabRow),
+    renderTree(workbench.tree), fullView,
+    workbench.floats.map((item, layer) => React.createElement(FloatingEditor, { key: item.group, owner: String(scope), group: item.group, rect: item, layer, focused: item.group === workbench.focused, onBounds: floatBounds, onFocus: selectGroup, onReturn: returnPane }, renderGroup(item.group))),
+    dragPreview ? createPortal(React.createElement('div', { 'data-edrv-view': '1', style: { display: 'contents', pointerEvents: 'none' } },
+      dragPreview.rect ? React.createElement('div', { className: 'edrv-drag-overlay', style: dragPreview.rect }, React.createElement('span', { className: 'edrv-drop-label' }, dragPreview.label)) : null,
+      React.createElement('div', { className: 'edrv-drag-ghost', style: { left: dragPreview.point.x + 12, top: dragPreview.point.y + 12 } }, baseNameOf(dragPreview.path) + ' · ' + dragPreview.label)), document.body) : null)
   // 编辑器根节点按 composer 顶部边界动态限高，底部对话区域继续由 DSH 原生渲染。
   // 侧栏形态由面板容器给高（100%），不做 composer 几何同步。
   const editorRow = React.createElement('div', { className: 'edrv-editor-row' },

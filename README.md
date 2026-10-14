@@ -464,13 +464,13 @@ profile 请替换为实际目标，不要把示例目录当成当前运行 profi
 
 ```bash
 # ① Git 安装（clone + prepare 构建；推荐打固定 tag）
-dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.14.13
+dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.15.0
 
 # ② npm 注册表（发布到 npm 后）
-dsh plugin --profile web add dsh-vscode-mode@0.14.13
+dsh plugin --profile web add dsh-vscode-mode@0.15.0
 
 # ③ GitHub Release tgz 直装（Release asset 可用后）
-dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.14.13/dsh-vscode-mode-0.14.13.tgz
+dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.15.0/dsh-vscode-mode-0.15.0.tgz
 ```
 
 > **DSH 版本政策（0.14.10 起）**：六项 DSH peer 统一声明为 `*`，不再维护逐版
@@ -807,6 +807,8 @@ Keep All / Undo All 却是亮的。修复：单文件 Keep / Undo 覆盖冲突�
 
 完整变更见 [GitHub Releases](https://github.com/Lenonss/DSH_VsCodeMode/releases)。
 近期关键版本：
+
+- **v0.15.0**：**文件页签拖拽与多编辑组**——拖拽重排、跨组移动、四向分屏、页面内可移动浮窗，以及拖入当前 DSH 输入框添加文件引用（不自动发送）。保留编辑缓冲与视图状态，关闭浮窗将文件归回主组；拖拽落点预览跟随主题、25% 不透明度、无描边。保留 v0.14.13 的资源管理器跟随功能，详见 [0.15.0 发布说明](docs/release-0.15.0.md)。
 
 - **v0.14.13**：**资源管理器跟随活动文件**——打开或切换编辑文件时自动展开祖先并滚动定位；资源管理器隐藏期间保留最新活动文件，切回后定位。慢目录加载不再受短重试窗口限制，仅滚动资源树、不抢输入焦点，保留手动定位。用户已确认本地功能验收通过，详见 [0.14.13 发布说明](docs/release-0.14.13.md)。
 

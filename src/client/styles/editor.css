@@ -6,11 +6,12 @@
 [data-edrv-view] { box-sizing: border-box; --edrv-tab-h: 34px; }
 
 [data-edrv-view] .edrv-tabs { display: flex; align-items: center; gap: 2px; padding: 2px 8px 0; background: var(--dsw-alias-bg-layer-1, transparent); overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; flex-shrink: 0; overscroll-behavior-x: contain; } /* overscroll-behavior-x: 横滚到边界不把滚动链传给页面（滚轮横滚接管更可控）@author ddj 2026年09月18号 */
-[data-edrv-view] .edrv-tab { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 8px 0 12px; border: none; border-radius: 6px 6px 0 0; background: transparent; color: var(--dsw-alias-label-secondary, #aaa); font-size: 12px; cursor: pointer; white-space: nowrap; flex-shrink: 0; }
+[data-edrv-view] .edrv-tab { user-select: none; -webkit-user-select: none; display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 8px 0 12px; border: none; border-radius: 6px 6px 0 0; background: transparent; color: var(--dsw-alias-label-secondary, #aaa); font-size: 12px; cursor: pointer; white-space: nowrap; flex-shrink: 0; }
 [data-edrv-view] .edrv-tab:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(255,255,255,.06)); }
 [data-edrv-view] .edrv-tab.edrv-tab-active { background: var(--dsw-alias-bg-base, #111); color: var(--dsw-alias-label-primary, #eee); box-shadow: inset 0 -2px 0 var(--dsw-alias-brand-primary, #4f8cff); }
 [data-edrv-view] .edrv-tab .edrv-tab-star { color: var(--dsw-alias-brand-primary, #4f8cff); font-size: 13px; font-weight: 700; line-height: 1; flex-shrink: 0; } /* 未保存修改星号 @author ddj 2026年09月09号 */
-[data-edrv-view] .edrv-tab .edrv-tab-x { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; border-radius: 4px; color: var(--dsw-alias-label-tertiary, #888); font-size: 11px; }
+[data-edrv-view] .edrv-tab .edrv-tab-x { appearance: none; display: inline-flex; align-items: center; justify-content: center; flex: 0 0 16px; width: 16px; height: 16px; padding: 0; border: 0; border-radius: 4px; background: transparent; box-shadow: none; color: var(--dsw-alias-label-tertiary, #888); font-family: inherit; font-size: 11px; line-height: 1; cursor: pointer; }
+[data-edrv-view] .edrv-tab .edrv-tab-x:focus-visible { outline: 1px solid var(--dsw-alias-state-info-primary, #4d6bfe); outline-offset: 1px; }
 [data-edrv-view] .edrv-tab .edrv-tab-x:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(255,255,255,.12)); color: var(--dsw-alias-label-primary, #eee); }
 /* 固定页签：📌 标记 + 免关闭按钮（固定页签不渲染 ×，仅可经右键菜单取消固定） */
 [data-edrv-view] .edrv-tab .edrv-tab-pin { flex-shrink: 0; font-size: 10px; line-height: 1; opacity: .85; }
@@ -972,3 +973,28 @@
    不再用 sticky / `:has()`：滚动链在 .monaco-hover-content 上，sticky 会被滚走。 */
 [data-edrv-view] .monaco-hover[data-edrv-hint-host="1"] { padding-bottom: 22px; }
 [data-edrv-view] [data-edrv-hint="1"] { position: absolute; left: 0; right: 0; bottom: 0; box-sizing: border-box; height: 22px; padding: 2px 8px; font-size: 11px; line-height: 18px; color: var(--dsw-alias-label-tertiary, #8a949b); background: var(--dsw-alias-bg-overlay, #ffffff); border-top: 1px solid var(--dsw-alias-border-l1, #e0e6e8); }
+
+/* Workbench panes: existing theme, action-driven drop previews. ddj 2026年10月14号 */
+[data-edrv-view] .edrv-group, [data-edrv-view] .edrv-group-body,
+[data-edrv-view] .edrv-full-slot, [data-edrv-view] .edrv-full-view,
+[data-edrv-view] .edrv-passive-view { display: flex; flex-direction: column; flex: 1 1 auto; min-width: 0; min-height: 0; overflow: hidden; }
+[data-edrv-view] .edrv-group { border: 0; }
+[data-edrv-view] .edrv-group .edrv-tabs { flex: 0 0 auto; touch-action: none; }
+[data-edrv-view] .edrv-group-tab-name { overflow: hidden; text-overflow: ellipsis; max-width: 180px; }
+[data-edrv-view] .edrv-workbench-tools { flex: 0 0 auto; }
+[data-edrv-view] .edrv-split { display: flex; flex: 1 1 auto; min-width: 0; min-height: 0; overflow: hidden; }
+[data-edrv-view] .edrv-split-vertical { flex-direction: column; }
+[data-edrv-view] .edrv-split-child { display: flex; min-width: 0; min-height: 0; overflow: hidden; }
+[data-edrv-view] .edrv-split-handle { flex: 0 0 5px; background: var(--dsw-alias-border-l1, #e0e6e8); cursor: col-resize; touch-action: none; }
+[data-edrv-view] .edrv-split-vertical > .edrv-split-handle { cursor: row-resize; }
+[data-edrv-view] .edrv-split-handle:hover, [data-edrv-view] .edrv-split-handle:focus-visible { background: var(--dsw-alias-state-info-primary, #4d6bfe); }
+[data-edrv-view].edrv-floating { position: fixed; display: flex; flex-direction: column; overflow: hidden; box-sizing: border-box; border: 1px solid var(--dsw-alias-border-l2, #cdd6da); background: var(--dsw-alias-bg-base, #fff); color: var(--dsw-alias-label-primary, #1f2933); box-shadow: 0 8px 28px rgba(0,0,0,.22); }
+[data-edrv-view] .edrv-floating-title { display: flex; align-items: center; gap: 8px; flex: 0 0 32px; padding: 0 8px; background: var(--dsw-alias-bg-layer-1, #f7f9fa); cursor: move; touch-action: none; user-select: none; }
+[data-edrv-view] .edrv-floating-title > span { flex: 1; }
+[data-edrv-view] .edrv-floating-title > button { border: 0; background: transparent; color: inherit; cursor: pointer; }
+[data-edrv-view] .edrv-floating-grip { position: absolute; width: 16px; height: 16px; bottom: 0; right: 0; cursor: nwse-resize; touch-action: none; border-right: 3px solid var(--dsw-alias-border-l2, #cdd6da); border-bottom: 3px solid var(--dsw-alias-border-l2, #cdd6da); }
+.edrv-drag-overlay { position: fixed; z-index: 150; pointer-events: none; box-sizing: border-box; border: 0; background: color-mix(in srgb, var(--dsw-alias-state-info-primary, #4d6bfe) 25%, transparent); }
+.edrv-drop-label, .edrv-drag-ghost { position: fixed; z-index: 151; pointer-events: none; padding: 4px 8px; background: var(--dsw-alias-bg-overlay, #fff); color: var(--dsw-alias-label-primary, #1f2933); border: 1px solid var(--dsw-alias-border-l2, #cdd6da); font-size: 12px; white-space: nowrap; }
+.edrv-drop-label { position: absolute; left: 4px; top: 4px; }
+[data-edrv-view] .edrv-tab:focus-visible { outline: 2px solid var(--dsw-alias-state-info-primary, #4d6bfe); outline-offset: -2px; }
+@media (prefers-reduced-motion: reduce) { .edrv-drag-overlay { transition: none; } }

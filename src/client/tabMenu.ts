@@ -4,8 +4,8 @@
  * EditorView 只把结果映射成 ContextMenu 的 entries 并派发动作。
  *
  * 与参考图（VS Code / CodeBuddy 页签右键菜单）的对齐口径：
- * 保留其分组顺序（对话 / 关闭族 / 路径 / 定位 / 固定），**省略**本架构无法实现的
- * 「向右拆分 / Split & Move / 移动到新窗口 / 复制到新窗口」（浏览器内单编辑器实例）。
+ * 保留其分组顺序（对话 / 关闭族 / 分组 / 路径 / 定位 / 固定）。
+ * 分屏与页面内浮窗由 workbench 能力显式控制，不伪造系统窗口或复制编辑器能力。
  * 只显示**真实已绑定**的键位；参考图里的两步弦（Ctrl+K W 等）引擎不支持，故不伪造。
  *
  * 「固定 = 保护」：关闭其他 / 关闭右侧 / 关闭已保存 / 全部关闭 一律不关固定页签，
@@ -44,6 +44,10 @@ export interface TabMenuState {
   svnStatusOfTarget?: SvnItemStatus
   /** 「关闭」项的键位提示（缺省无提示；由调用方读 chordOf 注入）。 */
   closeChord?: string | null
+  /** Real workbench capabilities; omitted for legacy consumers. */
+  canSplit?: boolean
+  canFloat?: boolean
+  canReturn?: boolean
 }
 
 /** 一条页签菜单项（ContextMenu 的展示形状 + 动作 id）。 */
@@ -62,7 +66,7 @@ export interface TabMenuEntry {
 export const CLOSE_MENU_IDS = ['close', 'close-others', 'close-right', 'close-saved', 'close-all'] as const
 
 /** 本架构不支持的条目 id（参考图有、浏览器单编辑器实例无法实现）——显式登记以防误加。 */
-export const UNSUPPORTED_MENU_IDS = ['split-right', 'split-move', 'move-new-window', 'copy-new-window'] as const
+export const UNSUPPORTED_MENU_IDS = ['split-move', 'copy-new-window'] as const
 
 /**
  * 构建 SVN 组条目（动作清单来自 shared/svnActions.ts，与树菜单/命令栏同一份规则）。
@@ -123,6 +127,14 @@ export function buildTabMenu(state: TabMenuState): TabMenuEntry[] {
     { id: 'close-right', label: '关闭右侧标签页', disabled: nothingToClose(closeRight(tabs, path, active), tabs) },
     { id: 'close-saved', label: '关闭已保存', disabled: nothingToClose(closeSaved(tabs, dirty, active), tabs) },
     { id: 'close-all', label: '全部关闭', disabled: nothingToClose(closeAll(tabs, active), tabs) },
+    ...(state.canSplit !== undefined ? [
+      { id: 'split-left', label: '向左分屏', separator: true, disabled: !state.canSplit },
+      { id: 'split-right', label: '向右分屏', disabled: !state.canSplit },
+      { id: 'split-top', label: '向上分屏', disabled: !state.canSplit },
+      { id: 'split-bottom', label: '向下分屏', disabled: !state.canSplit },
+      { id: 'move-new-window', label: '移到页面内浮窗', disabled: !state.canFloat },
+      { id: 'return-main', label: '移回主编辑区', disabled: !state.canReturn },
+    ] : []),
     { id: 'copy-path', label: '复制路径', separator: true },
     { id: 'copy-relative-path', label: '复制相对路径', disabled: !hasCwd(cwd) },
     { id: 'reveal-in-os', label: '在文件资源管理器中显示', separator: true, disabled: !hasSession },

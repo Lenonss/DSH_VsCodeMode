@@ -15,6 +15,13 @@ export const MODEL_CACHE_CAP = 40
 
 /** scope →（path → model）缓存表。 */
 const caches = new Map<string, Map<string, unknown>>()
+/** Open/dirty documents must not be evicted while another group is active. */
+const retained = new WeakMap<Map<string, unknown>, Set<string>>()
+
+/** @public @author ddj 2026年10月14号 @param map Workspace model cache. @param paths Open or otherwise unsafe documents. Protect models without changing ownership. */
+export function retainModels(map: Map<string, unknown>, paths: Iterable<string>): void {
+  retained.set(map, new Set(paths))
+}
 /** 当前激活作用域（切换时释放上一个）。 */
 let activeScope: string | null = null
 // --endregion
@@ -44,9 +51,12 @@ export function modelsForScope(scope: string): Map<string, unknown> {
   if (activeScope !== null && activeScope !== scope) {
     const prev = caches.get(activeScope)
     if (prev) {
-      for (const model of prev.values()) disposeIfFree(model)
-      prev.clear()
-      caches.delete(activeScope)
+      for (const [path, model] of prev) {
+        if (retained.get(prev)?.has(path) || isAttached(model)) continue
+        disposeIfFree(model)
+        prev.delete(path)
+      }
+      if (!prev.size) caches.delete(activeScope)
     }
   }
   activeScope = scope
@@ -67,10 +77,9 @@ export function rememberModel(map: Map<string, unknown>, path: string, model: un
   if (!path || !model) return
   map.delete(path)
   map.set(path, model)
-  while (map.size > MODEL_CACHE_CAP) {
-    const oldest = map.keys().next().value
-    if (oldest === undefined) break
-    const evicted = map.get(oldest)
+  for (const [oldest, evicted] of map) {
+    if (map.size <= MODEL_CACHE_CAP) break
+    if (retained.get(map)?.has(oldest) || isAttached(evicted)) continue
     map.delete(oldest)
     disposeIfFree(evicted)
   }
