@@ -468,7 +468,9 @@ export interface RpcRequestMap {
   'svn.explorerStatus': { sessionId?: string; force?: boolean }
   'svn.explorerView': SvnViewRequest
   'svn.diffBase': { sessionId?: string; path: string }
-  'svn.revert': { sessionId?: string; paths: string[] }
+  'svn.revert': { sessionId?: string; paths: string[]; depth?: 'empty' }
+  'svn.conflictStatus': { sessionId?: string; paths: string[] }
+  'svn.resolve': { sessionId?: string; path: string; accept: import('./svn.js').SvnResolveAccept }
   'svn.add': { sessionId?: string; paths: string[] }
   'svn.changelist': { sessionId?: string; paths: string[]; name?: string; remove?: boolean }
   'svn.log': { sessionId?: string; path?: string; limit?: number; stopOnCopy?: boolean; startRev?: number; endRev?: number; showMerged?: boolean }
@@ -631,6 +633,8 @@ export interface RpcOkMap {
   'svn.explorerView': SvnViewPayload
   'svn.diffBase': { base: string | null; working: string; reason?: string; error?: string; binary?: boolean; encodingHint?: boolean }
   'svn.revert': { count: number; summary: string; output: string }
+  'svn.conflictStatus': { states: import('./svn.js').SvnConflictState[] }
+  'svn.resolve': { summary: string; output: string }
   'svn.add': { count: number; summary: string; output: string }
   'svn.changelist': { count: number; summary: string; output: string }
   'svn.log': { entries: SvnLogEntry[]; truncated: boolean; target: string; limit?: number }

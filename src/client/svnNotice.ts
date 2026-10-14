@@ -8,7 +8,7 @@ export function bindSvnScope(sessionId: string | undefined, scope: string): void
   scopes.delete(sessionId); scopes.set(sessionId, scope)
   if (scopes.size > 512) scopes.delete(scopes.keys().next().value!)
 }
-const WRITES = new Set<RpcMethod>(['svn.add', 'svn.revert', 'svn.ignore', 'svn.cleanup', 'svn.update', 'svn.tortoise'])
+const WRITES = new Set<RpcMethod>(['svn.add', 'svn.revert', 'svn.resolve', 'svn.ignore', 'svn.cleanup', 'svn.update', 'svn.tortoise'])
 /** @public @author ddj 2026年10月10号 @param method RPC operation. @returns Whether local evidence may change (launching a writable native dialog counts, not its completion). */
 export function isSvnWrite(method: RpcMethod): boolean { return WRITES.has(method) }
 /** @public @author ddj 2026年10月10号 @param method Operation. @param args Typed request. @param ok Completed successfully. Notify even failed/partially applied operations; no repository access. */

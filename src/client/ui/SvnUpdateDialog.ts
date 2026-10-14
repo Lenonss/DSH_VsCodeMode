@@ -3,14 +3,15 @@
  * @author ddj 2026年09月24号
  */
 import React from 'react'
-import type { SvnUpdateRow, SvnUpdateState } from '../../shared/svn.js'
+import type { SvnConflictState, SvnResolveAccept, SvnUpdateRow, SvnUpdateState } from '../../shared/svn.js'
 import { copyText } from '../copyText.js'
 import { rpc } from '../rpc.js'
 import { absoluteOf } from '../tabActions.js'
 import { ContextMenu } from './ContextMenu.js'
 import type { ContextMenuEntry } from './ContextMenu.js'
 import { ModalShell } from './ModalShell.js'
-import { updateActs, updateCloseMode, updateDone, updateLocked, updateParent, updateRange, updateReady, updateType } from './svnUpdateModel.js'
+import { nextConflict, nextUpdateSort, rowConflict, sortUpdateRows, updateActs, updateCloseMode, updateDone, updateLocked, updateParent, updateRange, updateReady, updateType } from './svnUpdateModel.js'
+import type { UpdateColumn, UpdateSort } from './svnUpdateModel.js'
 
 interface UpdateProps {
   sessionId?: string
@@ -28,6 +29,68 @@ interface UpdateProps {
   onOpenParent: (path: string) => void
 }
 interface UpdateMenu { x: number; y: number; row: SvnUpdateRow; kind: string }
+type ConflictChoice = SvnResolveAccept | 'revert'
+const conflictWarnings: Record<ConflictChoice, string> = {
+  'theirs-full': '使用对方完整版本，丢弃该目标本地冲突修改？',
+  'mine-full': '使用更新前自身完整版本，丢弃对方修改以及更新后编辑？这不是当前 working 内容。',
+  working: '仅标记为已解决，保留当前内容。SVN 不会自动清除文件内冲突标记；树冲突必须先手动处理。确定？',
+  revert: '还原此目标到当前 BASE，丢弃本地修改和冲突状态？这不是回到更新前版本；目录不递归。',
+}
+
+/** @private @author ddj 2026年10月14号 @param props Owner. @param paths Unique exact targets. @returns Evidence and bounded refresh action. */
+function useConflictState(props: UpdateProps, paths: string[], ready: boolean) {
+  const [states, setStates] = React.useState<Map<string, SvnConflictState>>(new Map())
+  const [error, setError] = React.useState('')
+  const [loading, setLoading] = React.useState(false)
+  const generation = React.useRef(0)
+  /** @private @author ddj 2026年10月14号 @returns Fresh evidence; failed targets remain unknown rather than clean. */
+  const refresh = React.useCallback(async () => {
+    const token = ++generation.current
+    setLoading(true)
+    const evidence = new Map<string, SvnConflictState>()
+    const errors: string[] = []
+    for (let start = 0; start < paths.length; start += 100) {
+      try {
+        const result = await rpc('svn.conflictStatus', { sessionId: props.sessionId, paths: paths.slice(start, start + 100) })
+        if (result.ok) result.states.forEach((state) => evidence.set(state.path, state))
+        else errors.push(result.error)
+      } catch (cause) { errors.push(String(cause)) }
+    }
+    if (token !== generation.current) return
+    setStates(evidence); setError(errors.join('\n')); setLoading(false)
+  }, [props.sessionId, paths])
+  React.useEffect(() => {
+    setStates(new Map()); setError('')
+    if (ready) void refresh()
+    return () => { generation.current++ }
+  }, [ready, refresh])
+  return { states, error, refresh, setStates, loading }
+}
+
+/** @private @author ddj 2026年10月14号 @param props Owner. @param ready Complete output. @param evidence Conflict reader. @returns Single-target confirmed mutation state and command. */
+function useConflictWrite(props: UpdateProps, ready: boolean, evidence: ReturnType<typeof useConflictState>) {
+  const [busy, setBusy] = React.useState(false)
+  const lock = React.useRef(false)
+  /** @private @author ddj 2026年10月14号 @param row Right-click target only. @param choice Explicit SVN operation. Execute once and always re-read status. */
+  const execute = async (row: SvnUpdateRow, choice: ConflictChoice) => {
+    if (lock.current || !ready || evidence.loading || !row.relPath) return
+    const state = evidence.states.get(row.relPath)
+    if (!state || !(state.text || state.props || state.tree)) return
+    if (state.tree && (choice === 'mine-full' || choice === 'theirs-full')) return
+    lock.current = true
+    try {
+      if (!window.confirm(conflictWarnings[choice] + '\n\n仅处理：' + row.relPath)) { lock.current = false; return }
+      setBusy(true)
+      evidence.setStates((previous) => { const next = new Map(previous); next.delete(row.relPath!); return next })
+      const result = choice === 'revert'
+        ? await rpc('svn.revert', { sessionId: props.sessionId, paths: [row.relPath], depth: 'empty' })
+        : await rpc('svn.resolve', { sessionId: props.sessionId, path: row.relPath, accept: choice })
+      props.onNote(result.ok ? result.summary : result.error)
+    } catch (cause) { props.onNote('冲突操作失败：' + String(cause)) }
+    finally { if (lock.current) { await evidence.refresh(); lock.current = false; setBusy(false) } }
+  }
+  return { busy, execute }
+}
 
 /**
  * 仅恢复明确匹配的原任务；失败时不重新触发一次 SVN 更新。
@@ -159,10 +222,22 @@ function countText(state: SvnUpdateState | null): string {
  * @param selected 已选序号
  * @returns 可点击动作列表
  */
-function menuEntries(props: UpdateProps, state: SvnUpdateState, menu: UpdateMenu, rows: SvnUpdateRow[], selected: number[]): ContextMenuEntry[] {
+function menuEntries(props: UpdateProps, state: SvnUpdateState, menu: UpdateMenu, rows: SvnUpdateRow[], selected: number[],
+  ready: boolean, evidence: ReturnType<typeof useConflictState>, write: ReturnType<typeof useConflictWrite>): ContextMenuEntry[] {
   const { row, kind } = menu
   const actions = updateActs(row, state.phase, kind, state.revision)
   const rel = row.relPath ?? ''
+  const conflict = rel ? evidence.states.get(rel) : undefined
+  const enabled = ready && !write.busy && !evidence.loading && Boolean(conflict && (conflict.text || conflict.props || conflict.tree))
+  const full = enabled && !conflict?.tree
+  const conflictEntries: ContextMenuEntry[] = row.action === 'C' ? [
+    { id: 'theirs-full', label: '使用对方完整版本解决', separator: true, disabled: !full, onClick: () => { void write.execute(row, 'theirs-full') } },
+    { id: 'mine-full', label: '使用自身完整版本解决', disabled: !full, onClick: () => { void write.execute(row, 'mine-full') } },
+    { id: 'working', label: '标记为已解决（保留当前内容）', disabled: !enabled, onClick: () => { void write.execute(row, 'working') } },
+    { id: 'revert', label: '还原此项…', disabled: !enabled, onClick: () => { void write.execute(row, 'revert') } },
+    ...(conflict?.tree ? [{ id: 'tree-hint', label: '树冲突：请先针对性处理，再标记解决', disabled: true, onClick: () => {} }] : []),
+    ...(!conflict && ready ? [{ id: 'unknown-hint', label: '状态未确认：请刷新冲突状态', disabled: true, onClick: () => {} }] : []),
+  ] : []
   const picked = new Set(selected)
   const names = rows.filter((item) => picked.has(item.seq)).map((item) => item.relPath
     ? absoluteOf(item.relPath, props.cwd) : item.path)
@@ -172,6 +247,7 @@ function menuEntries(props: UpdateProps, state: SvnUpdateState, menu: UpdateMenu
     { id: 'open', label: '打开', disabled: !actions.open, separator: true, onClick: () => props.onOpenFile(rel) },
     { id: 'open-with', label: '打开方式…', disabled: !actions.openWith, onClick: () => props.onOpenWith(rel) },
     { id: 'parent', label: '打开父目录', disabled: !actions.parent, onClick: () => props.onOpenParent(updateParent(rel)) },
+    ...conflictEntries,
     { id: 'copy', label: selected.length > 1 ? '复制选中路径' : '复制路径', disabled: !actions.copy, separator: true,
       onClick: () => { void copyText(names.join('\n'), '已复制路径', props.onNote) } },
   ]
@@ -189,7 +265,7 @@ function menuEntries(props: UpdateProps, state: SvnUpdateState, menu: UpdateMenu
  */
 function rowElement(row: SvnUpdateRow, cwd: string | null | undefined, picked: boolean,
   onPick: (event: React.MouseEvent<HTMLDivElement>) => void,
-  onMenu: (event: React.MouseEvent<HTMLDivElement>) => void): React.ReactElement {
+  onMenu: (event: React.MouseEvent<HTMLDivElement>) => void, resolved: boolean): React.ReactElement {
   // 显示用相对路径（窄窗省略尾部时先保住文件名），悬浮与复制仍用完整绝对路径。
   const full = row.relPath ? absoluteOf(row.relPath, cwd) : (row.path || row.label)
   const path = row.relPath || row.path || row.label
@@ -199,7 +275,7 @@ function rowElement(row: SvnUpdateRow, cwd: string | null | undefined, picked: b
     role: 'row', 'aria-selected': picked, className: 'edrv-update-row' + (picked ? ' is-selected' : ''),
     onClick: onPick, onContextMenu: onMenu, title: row.raw,
   },
-    React.createElement('span', { role: 'cell', className: 'edrv-update-action tone-' + tone }, row.action ? row.label : '信息'),
+    React.createElement('span', { role: 'cell', className: 'edrv-update-action tone-' + tone }, resolved ? row.label + '（已解决）' : row.action ? row.label : '信息'),
     React.createElement('span', { role: 'cell', className: 'edrv-update-path', title: full }, path),
     React.createElement('span', { role: 'cell', className: 'edrv-update-type' }, row.action ? updateType(row.path) : ''))
 }
@@ -210,7 +286,7 @@ function rowElement(row: SvnUpdateRow, cwd: string | null | undefined, picked: b
  * @param count 当前记录数
  * @returns 虚拟列表视口、行高和滚动回调
  */
-function useUpdateView(count: number) {
+function useUpdateView(count: number, sorted: boolean) {
   const [scrollTop, setScrollTop] = React.useState(0)
   const [height, setHeight] = React.useState(350)
   const [compact, setCompact] = React.useState(() => window.innerWidth < 620)
@@ -229,8 +305,8 @@ function useUpdateView(count: number) {
   }, [])
   React.useLayoutEffect(() => {
     const list = listRef.current
-    if (list && followRef.current) { list.scrollTop = list.scrollHeight; setScrollTop(list.scrollTop) }
-  }, [count, rowHeight])
+    if (list && followRef.current && !sorted) { list.scrollTop = list.scrollHeight; setScrollTop(list.scrollTop) }
+  }, [count, rowHeight, sorted])
   /**
    * 用户离开底部后暂停自动滚动，保持当前文件可读。
    * @author ddj 2026年09月24号
@@ -241,7 +317,15 @@ function useUpdateView(count: number) {
     followRef.current = list.scrollHeight - list.scrollTop - list.clientHeight < 40
     setScrollTop(list.scrollTop)
   }
-  return { listRef, rowHeight, range: updateRange(count, scrollTop, height, rowHeight), onScroll }
+  /** @private @author ddj 2026年10月14号 @param index Display index. Scroll without requiring a mounted virtual row. */
+  const locate = (index: number) => {
+    const list = listRef.current
+    if (!list || index < 0) return
+    followRef.current = false
+    list.scrollTop = index * rowHeight
+    setScrollTop(list.scrollTop)
+  }
+  return { listRef, rowHeight, range: updateRange(count, scrollTop, height, rowHeight), onScroll, locate }
 }
 
 /**
@@ -266,14 +350,15 @@ function useUpdateMenu(props: UpdateProps, rows: SvnUpdateRow[], state: SvnUpdat
   const pick = (event: React.MouseEvent<HTMLDivElement>, row: SvnUpdateRow) => {
     const index = rows.findIndex((item) => item.seq === row.seq)
     if (event.shiftKey) {
-      const from = Math.min(index, anchorRef.current)
-      const to = Math.max(index, anchorRef.current)
+      const anchor = rows.findIndex((item) => item.seq === anchorRef.current)
+      const from = Math.min(index, anchor < 0 ? index : anchor)
+      const to = Math.max(index, anchor < 0 ? index : anchor)
       setSelected(rows.slice(from, to + 1).map((item) => item.seq))
     } else if (event.ctrlKey || event.metaKey) {
       setSelected((previous) => previous.includes(row.seq)
         ? previous.filter((seq) => seq !== row.seq) : previous.concat(row.seq))
-      anchorRef.current = index
-    } else { setSelected([row.seq]); anchorRef.current = index }
+      anchorRef.current = row.seq
+    } else { setSelected([row.seq]); anchorRef.current = row.seq }
   }
   /**
    * 先开放父目录/复制，再按真实磁盘类型启用文件级操作。
@@ -293,7 +378,9 @@ function useUpdateMenu(props: UpdateProps, rows: SvnUpdateRow[], state: SvnUpdat
         ? { ...current, kind: outcome.ok ? outcome.kind : 'missing' } : current)
     }).catch(() => {})
   }
-  return { selected, picked, menu, setMenu, pick, openMenu }
+  /** @private @author ddj 2026年10月14号 @param row Navigation target. Select one stable row identity. */
+  const selectRow = (row: SvnUpdateRow) => { setSelected([row.seq]); anchorRef.current = row.seq }
+  return { selected, picked, menu, setMenu, pick, openMenu, selectRow }
 }
 
 /**
@@ -329,13 +416,18 @@ function updateHead(props: UpdateProps, state: SvnUpdateState | null, phase: str
  * @returns 表格元素
  */
 function updateTable(props: UpdateProps, rows: SvnUpdateRow[], view: ReturnType<typeof useUpdateView>,
-  selection: ReturnType<typeof useUpdateMenu>, finished: boolean): React.ReactElement {
+  selection: ReturnType<typeof useUpdateMenu>, finished: boolean, sort: UpdateSort | null,
+  onSort: (column: UpdateColumn) => void, states: ReadonlyMap<string, SvnConflictState>): React.ReactElement {
   const visible = rows.slice(view.range.start, view.range.end)
   return React.createElement('div', { className: 'edrv-update-table', role: 'table', 'aria-label': 'SVN 更新文件明细', 'aria-rowcount': rows.length },
     React.createElement('div', { role: 'row', className: 'edrv-update-cols' },
-      React.createElement('span', { role: 'columnheader' }, '操作'),
-      React.createElement('span', { role: 'columnheader' }, '路径'),
-      React.createElement('span', { role: 'columnheader', title: '仅对已知扩展名推断，非 SVN 属性' }, '类型（推断）')),
+      (['action', 'path', 'type'] as const).map((column) => {
+        const direction = sort?.column === column ? sort.direction : 0
+        const label = column === 'action' ? '操作' : column === 'path' ? '路径' : '类型（推断）'
+        return React.createElement('span', { key: column, role: 'columnheader', 'aria-sort': direction === 1 ? 'ascending' : direction === -1 ? 'descending' : 'none' },
+          React.createElement('button', { type: 'button', className: 'edrv-update-sort', onClick: () => onSort(column),
+            title: '点击切换升序、降序、原始顺序' + (column === 'type' ? '；仅推断类型，非 SVN 属性' : '') }, label + (direction === 1 ? ' ▲' : direction === -1 ? ' ▼' : ' ↕')))
+      })),
     React.createElement('div', { className: 'edrv-update-list', ref: view.listRef, role: 'rowgroup', onScroll: view.onScroll },
       React.createElement('div', { className: 'edrv-update-space', style: { height: rows.length * view.rowHeight } },
         visible.map((row, index) => React.createElement('div', {
@@ -343,7 +435,8 @@ function updateTable(props: UpdateProps, rows: SvnUpdateRow[], view: ReturnType<
           style: { top: (view.range.start + index) * view.rowHeight, height: view.rowHeight },
           'aria-rowindex': view.range.start + index + 1,
         }, rowElement(row, props.cwd, selection.picked.has(row.seq),
-          (event) => selection.pick(event, row), (event) => selection.openMenu(event, row))))),
+          (event) => selection.pick(event, row), (event) => selection.openMenu(event, row),
+          row.action === 'C' && !rowConflict(row, states))))),
       !rows.length ? React.createElement('div', { className: 'edrv-update-empty' },
         finished ? '没有逐文件变更' : '等待 SVN 输出…') : null))
 }
@@ -385,10 +478,12 @@ function updateStatus(state: SvnUpdateState | null, error: string, cleaned: bool
  */
 function updateFoot(props: UpdateProps, state: SvnUpdateState | null, closable: boolean,
   finished: boolean, cancel: () => void, dismiss: () => void, confirmClose: boolean,
-  cleaned: boolean, cleanup: () => void): React.ReactElement {
+  cleaned: boolean, cleanup: () => void, remaining: number, jump: () => void, refresh: () => void): React.ReactElement {
   const locked = updateLocked(state)
   return React.createElement('footer', { className: 'edrv-update-foot' },
     React.createElement('span', { className: 'edrv-update-counts' }, countText(state)),
+    remaining > 0 ? React.createElement('button', { type: 'button', className: 'edrv-svn-act edrv-update-jump', onClick: jump }, '跳转冲突（' + remaining + '）') : null,
+    state?.counts.C ? React.createElement('button', { type: 'button', className: 'edrv-svn-act', disabled: !finished, onClick: refresh }, '刷新冲突状态') : null,
     locked ? React.createElement('button', {
       type: 'button', className: 'edrv-svn-act edrv-update-cleanup', disabled: !finished || cleaned,
       title: locked && !cleaned ? '执行 svn cleanup，清除中断残留的锁（不撤销已完成的更新）' : '已执行过清理',
@@ -410,12 +505,29 @@ function updateFoot(props: UpdateProps, state: SvnUpdateState | null, closable: 
 export function SvnUpdateDialog(props: UpdateProps): React.ReactElement {
   const { state, rows, error, pendingRows, setState } = useUpdateJob(props)
   const [cleaned, setCleaned] = React.useState(false)
-  const view = useUpdateView(rows.length)
-  const selection = useUpdateMenu(props, rows, state)
+  const [sort, setSort] = React.useState<UpdateSort | null>(null)
+  const displayRows = React.useMemo(() => sortUpdateRows(rows, sort), [rows, sort])
+  const view = useUpdateView(displayRows.length, Boolean(sort))
+  const selection = useUpdateMenu(props, displayRows, state)
   const processFinished = updateDone(state?.phase)
   const finished = updateReady(state?.phase, pendingRows)
-  const closeMode = updateCloseMode(finished, error, Boolean(state), Boolean(selection.menu || props.childOverlay))
-  const closable = closeMode.explicit
+  const conflictPaths = React.useMemo(() => [...new Set(rows.filter((row) => row.action === 'C' && row.relPath).map((row) => row.relPath!))], [rows])
+  const evidence = useConflictState(props, conflictPaths, finished)
+  const write = useConflictWrite(props, finished, evidence)
+  const remaining = new Set(rows.filter((row) => rowConflict(row, evidence.states)).map((row) => row.relPath || row.path)).size
+  const outside = rows.some((row) => row.action === 'C' && !row.relPath)
+  const closeMode = updateCloseMode(finished, error, Boolean(state), Boolean(selection.menu || props.childOverlay || write.busy))
+  const closable = closeMode.explicit && !write.busy
+  /** @private @author ddj 2026年10月14号 @param column Header identity. Cycle cached display ordering. */
+  const onSort = (column: UpdateColumn) => setSort((previous) => nextUpdateSort(previous, column))
+  /** @private @author ddj 2026年10月14号 Select and scroll to the next unresolved row in display order. */
+  const jump = () => {
+    const index = nextConflict(displayRows, evidence.states, selection.selected.at(-1))
+    if (index < 0) return
+    selection.selectRow(displayRows[index]); view.locate(index)
+  }
+  /** @private @author ddj 2026年10月14号 Refresh exact targets after an external resolution. */
+  const refresh = () => { if (!write.busy && finished) void evidence.refresh() }
   /**
    * 确认后请求终止任务；已变更文件不会自动回滚。
    * @author ddj 2026年09月24号
@@ -445,7 +557,7 @@ export function SvnUpdateDialog(props: UpdateProps): React.ReactElement {
    * @author ddj 2026年09月24号
    */
   const dismiss = () => {
-    if (!closeMode.explicit) return
+    if (!closable) return
     if (closeMode.confirm && !window.confirm('更新任务连接中断。关闭窗口不会停止可能仍在运行的 SVN 更新，确定暂时关闭？')) return
     props.onClose()
   }
@@ -458,15 +570,17 @@ export function SvnUpdateDialog(props: UpdateProps): React.ReactElement {
     closeOnEsc: closeMode.passive, closeOnMask: closeMode.passive, onClose: dismiss,
   },
     updateHead(props, state, phase, closable, dismiss),
-    updateTable(props, rows, view, selection, finished),
-    updateStatus(state, error, cleaned),
-    updateFoot(props, state, closable, finished, cancel, dismiss, closeMode.confirm, cleaned, cleanup),
+    updateTable(props, displayRows, view, selection, finished, sort, onSort, evidence.states),
+    updateStatus(state, error || evidence.error, cleaned),
+    outside ? React.createElement('div', { className: 'edrv-update-warning' }, '存在工作区外冲突；可定位但不能在此执行解决操作') : null,
+    write.busy ? React.createElement('div', { role: 'status' }, '正在处理冲突并核对 SVN 状态…') : null,
+    updateFoot(props, state, closable, finished && !write.busy, cancel, dismiss, closeMode.confirm, cleaned, cleanup, remaining, jump, refresh),
     state?.rawTail && (state.phase === 'failed' || state.truncated)
       ? React.createElement('details', { className: 'edrv-update-raw' },
           React.createElement('summary', null, '查看原始输出'), React.createElement('pre', null, state.rawTail)) : null,
     selection.menu && state ? React.createElement(ContextMenu, {
       x: selection.menu.x, y: selection.menu.y,
-      entries: menuEntries(props, state, selection.menu, rows, selection.selected), zIndex: 193,
+      entries: menuEntries(props, state, selection.menu, displayRows, selection.selected, finished, evidence, write), zIndex: 193,
       onClose: () => selection.setMenu(null),
     }) : null)
 }

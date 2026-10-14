@@ -19,6 +19,7 @@ import { attrOf, numAttrOf, scanXmlTags, textOf, unescapeXml } from './svnXml.js
 import { TEXT_OUTPUT_CAP, batchResultOf, tailOfText, updateResultOf } from './svnText.js'
 import { LOG_CAP, LOG_DEFAULT_LIMIT, SVN_LOG_SHOW_ALL_CAP, parseLogXml, parseSvnInfoRevision } from './svnLog.js'
 import { SvnUpdateJobs } from './svnUpdateJob.js'
+import { conflictOf, hasConflict, pegTarget, validAccept, validTarget } from './svnResolve.js'
 import { EXPLORER_CAP, explorerViewOf, scopeEntriesOf, statusXmlValid, viewArgsValid } from './svnExplorer.js'
 import { ExplorerScopes, explorerKey } from './svnExplorerCache.js'
 import type { ExplorerScan } from './svnExplorerCache.js'
@@ -503,6 +504,14 @@ export function createSvnRpc(deps: SvnRpcDeps): { handlers: Record<string, unkno
   const now = deps.now ?? (() => Date.now())
   const findRoot = deps.findRoot ?? ((cwd: string) => findSvnRoot(cwd))
   const findTortoise = deps.findTortoise ?? ((dir: string) => findTortoiseProc(dir))
+  const conflictWrites = new Set<string>()
+  /** @private @author ddj 2026年10月14号 @param root WC root. @returns Canonical lock identity across sessions. */
+  const writeKey = (root: string): string => (deps.platform ?? process.platform) === 'win32' ? root.toLowerCase() : root
+  /** @private @author ddj 2026年10月14号 @param root WC root. @returns Whether a live update or conflict write owns the WC. */
+  const writeBusy = (root: string): boolean => {
+    const job = updateJobs.active(root)
+    return conflictWrites.has(writeKey(root)) || Boolean(job && ['starting', 'running', 'cancelling'].includes(job.phase))
+  }
   const statusCache = new Map<string, { at: number; payload: SvnStatusPayload }>()
   /** 运行中更新按会话目录复用工作副本根；TTL 到期才重新扫描 .svn。 */
   const updateRootCache = new Map<string, { at: number; root: string }>()
@@ -622,7 +631,7 @@ export function createSvnRpc(deps: SvnRpcDeps): { handlers: Record<string, unkno
    * @param stdoutCap stdout 收集上限（缺省 1MB；大载荷场景如日志拉取需显式放大）
    * @returns 退出码与输出
    */
-  const runSvn = async (cwd: string, argv: string[], graceMs: number, stdoutCap: number = OUTPUT_CAP): Promise<SvnRunOutcome> => {
+  const runSvn = async (cwd: string, argv: string[], graceMs: number, stdoutCap: number = OUTPUT_CAP, allowFallback = true): Promise<SvnRunOutcome> => {
     const spawn = subprocess()
     if (!spawn) throw new Error('缺少 subprocess 服务')
     const fs = ctx.get('fs') as { resolve?: (p: string, o: object) => Promise<unknown>; processPath?: (t: unknown) => string } | null | undefined
@@ -643,12 +652,22 @@ export function createSvnRpc(deps: SvnRpcDeps): { handlers: Record<string, unkno
       const stdout = handle.collected?.stdout?.readFrom(0).text ?? ''
       const stderr = handle.collected?.stderr?.readFrom(0).text ?? ''
       return { code: outcome?.exitCode ?? outcome?.code ?? null, stdout, stderr }
-    } catch {
+    } catch (error) {
+      if (!allowFallback) throw error
       // 受管环境管道 EPERM：回退 inherit（只拿退出码，输出为空）
       const handle = attempt('inherit')
       const outcome = await handle.done
       return { code: outcome?.exitCode ?? outcome?.code ?? null, stdout: '', stderr: '' }
     }
+  }
+
+  /** @private @author ddj 2026年10月14号 @param cwd Session workspace. @param root WC root. @param path Validated target. @returns Exact conflict evidence without recursive scanning. */
+  const readConflict = async (cwd: string, root: string, path: string) => {
+    const target = svnPathOf(cwd, root, path)
+    if (!target) throw new Error('目标不在 SVN 工作副本内')
+    const result = await runSvn(root, ['status', '--xml', '--verbose', '--depth', 'empty', '--', pegTarget(target)], READ_GRACE_MS, OUTPUT_CAP, false)
+    if (result.code !== 0) throw new Error(result.stderr || result.stdout || 'SVN 状态读取失败')
+    return conflictOf(result.stdout, path)
   }
 
   /** 发射 TortoiseProc（GUI 长驻：不 await done，no-op catch 防未处理 rejection）。 */
@@ -738,7 +757,9 @@ export function createSvnRpc(deps: SvnRpcDeps): { handlers: Record<string, unkno
     if (!status.managed || !status.wcRoot) return { ok: false as const, error: '当前工作区不受 SVN 管理' }
     if (!status.svnCli) return { ok: false as const, error: 'svn 命令不可用（可在设置页配置 svn 路径）' }
     try {
-      const outcome = await runSvn(status.wcRoot, [...verbArgs, '--', ...rels], MUTATE_GRACE_MS)
+      const targets = rels.map((path) => svnPathOf(sc.cwd, status.wcRoot!, path))
+      if (targets.some((path) => path === null)) return { ok: false as const, error: '目标不在 SVN 工作副本内' }
+      const outcome = await runSvn(status.wcRoot, [...verbArgs, '--', ...targets.map((path) => pegTarget(path!))], MUTATE_GRACE_MS, OUTPUT_CAP, !verbArgs.includes('--depth'))
       const result = batchResultOf(outcome.stdout, outcome.stderr, outcome.code, verb)
       // 变更清单已过期（revert/add 改工作副本状态）：主动作废缓存，下次拉取即为最新
       changesCache.delete(status.wcRoot)
@@ -1089,8 +1110,51 @@ export function createSvnRpc(deps: SvnRpcDeps): { handlers: Record<string, unkno
         return { ok: false as const, error: '读取基线失败：' + String(error) }
       }
     },
-    'svn.revert': async (args: { sessionId?: string; paths?: string[] }) => {
-      return mutate('还原', ['revert', '-R'], args.sessionId, args.paths)
+    'svn.conflictStatus': async (args: { sessionId?: string; paths?: string[] }) => {
+      const scope = await updateScope(args.sessionId, true)
+      if ('err' in scope) return { ok: false as const, error: scope.err }
+      if (!scope.cli) return { ok: false as const, error: 'svn 命令不可用' }
+      if (!Array.isArray(args.paths) || args.paths.length > BATCH_PATHS_CAP) return { ok: false as const, error: '冲突路径列表不合法或超限' }
+      if (!args.paths.every(validTarget)) return { ok: false as const, error: '路径不合法' }
+      const paths = [...new Set(args.paths.map(safeRel))]
+      if (paths.some((path) => !path)) return { ok: false as const, error: '路径不合法' }
+      try {
+        const states = []
+        for (const path of paths) states.push(await readConflict(scope.cwd, scope.root, path!))
+        return { ok: true as const, states }
+      } catch (error) { return { ok: false as const, error: String(error) } }
+    },
+    'svn.resolve': async (args: { sessionId?: string; path?: string; accept?: unknown }) => {
+      if (!validAccept(args.accept)) return { ok: false as const, error: '解决策略不合法' }
+      if (!validTarget(args.path)) return { ok: false as const, error: '路径不合法' }
+      const path = safeRel(args.path)
+      if (!path) return { ok: false as const, error: '路径不合法' }
+      const scope = await updateScope(args.sessionId, true)
+      if ('err' in scope) return { ok: false as const, error: scope.err }
+      if (!scope.cli) return { ok: false as const, error: 'svn 命令不可用' }
+      if (writeBusy(scope.root)) return { ok: false as const, error: '工作副本正在更新或解决冲突，请等待完成' }
+      conflictWrites.add(writeKey(scope.root))
+      try {
+        const evidence = await readConflict(scope.cwd, scope.root, path)
+        if (!hasConflict(evidence)) return { ok: false as const, error: '目标已无冲突，请刷新状态' }
+        if (evidence.tree && args.accept !== 'working') return { ok: false as const, error: '树冲突不支持通用完整版本选择，请针对性处理' }
+        const target = svnPathOf(scope.cwd, scope.root, path)!
+        const outcome = await runSvn(scope.root, ['resolve', '--accept', args.accept, '--depth', 'empty', '--', pegTarget(target)], MUTATE_GRACE_MS, OUTPUT_CAP, false)
+        if (outcome.code !== 0) return { ok: false as const, error: outcome.stderr || outcome.stdout || 'SVN 解决冲突失败' }
+        return { ok: true as const, summary: 'SVN 解决命令已执行，请核对剩余冲突', output: outcome.stdout }
+      } catch (error) { return { ok: false as const, error: String(error) } }
+      finally { conflictWrites.delete(writeKey(scope.root)); changesCache.delete(scope.root); explorerCache.clear() }
+    },
+    'svn.revert': async (args: { sessionId?: string; paths?: string[]; depth?: unknown }) => {
+      if (args.depth === undefined) return mutate('还原', ['revert', '-R'], args.sessionId, args.paths)
+      if (args.depth !== 'empty') return { ok: false as const, error: '还原深度不合法' }
+      if (!Array.isArray(args.paths) || !args.paths.length || !args.paths.every(validTarget)) return { ok: false as const, error: '路径不合法' }
+      const scope = await updateScope(args.sessionId, true)
+      if ('err' in scope) return { ok: false as const, error: scope.err }
+      if (writeBusy(scope.root)) return { ok: false as const, error: '工作副本正在更新或解决冲突，请等待完成' }
+      conflictWrites.add(writeKey(scope.root))
+      try { return await mutate('还原', ['revert', '--depth', 'empty'], args.sessionId, args.paths) }
+      finally { conflictWrites.delete(writeKey(scope.root)); changesCache.delete(scope.root); explorerCache.clear() }
     },
     'svn.add': async (args: { sessionId?: string; paths?: string[] }) => {
       return mutate('加入版本控制', ['add'], args.sessionId, args.paths)
@@ -1546,6 +1610,7 @@ export function createSvnRpc(deps: SvnRpcDeps): { handlers: Record<string, unkno
         const fs = ctx.get('fs') as { resolve?: (p: string, o: object) => Promise<unknown>; processPath?: (t: unknown) => string } | undefined
         const cwd = fs?.resolve && fs?.processPath
           ? fs.processPath(await fs.resolve(scope.cwd, {})) : scope.cwd
+        if (conflictWrites.has(writeKey(scope.root))) return { ok: false as const, error: '工作副本正在解决冲突，请等待完成' }
         return { ok: true as const, ...updateJobs.start({ cwd, root: scope.root, path: rel, exe: scope.exe }) }
       } catch (error) {
         return { ok: false as const, error: '启动 SVN 更新失败：' + String(error) }

@@ -4,11 +4,35 @@
  */
 import { describe, expect, it } from 'vitest'
 import type { SvnUpdateRow } from '../src/shared/svn.js'
-import { sameUpdateOwner, updateActs, updateCloseMode, updateDone, updateLocked, updateParent, updateRange, updateReady, updateType } from '../src/client/ui/svnUpdateModel.js'
+import { nextConflict, nextUpdateSort, rowConflict, sortUpdateRows, sameUpdateOwner, updateActs, updateCloseMode, updateDone, updateLocked, updateParent, updateRange, updateReady, updateType } from '../src/client/ui/svnUpdateModel.js'
 
 const row: SvnUpdateRow = { seq: 1, action: 'U', path: 'src/a.cs', relPath: 'src/a.cs', label: '已更新', raw: 'U    src/a.cs' }
 
 describe('SVN 更新窗口数据逻辑', () => {
+  it('三列按显示值稳定排序，数字自然排序，三态恢复原数组', () => {
+    const rows = [{ ...row, seq: 9, path: 'a10.png', relPath: 'a10.png' }, { ...row, seq: 2, path: 'a2.png', relPath: 'a2.png' },
+      { ...row, seq: 3, path: 'a.txt', relPath: 'a.txt', label: '已添加' }]
+    let sort = nextUpdateSort(null, 'path')
+    expect(sortUpdateRows(rows, sort).map((r) => r.seq)).toEqual([3, 2, 9])
+    sort = nextUpdateSort(sort, 'path')
+    expect(sortUpdateRows(rows, sort).map((r) => r.seq)).toEqual([9, 2, 3])
+    sort = nextUpdateSort(sort, 'path')
+    expect(sortUpdateRows(rows, sort)).toBe(rows)
+    expect(sortUpdateRows(rows, { column: 'type', direction: -1 }).map((r) => r.seq)).toEqual([2, 9, 3])
+    expect(sortUpdateRows(rows, { column: 'action', direction: 1 }).map((r) => r.seq)).toEqual([2, 9, 3])
+    expect(rows.map((r) => r.seq)).toEqual([9, 2, 3])
+  })
+  it('导航按当前显示顺序循环，未知状态不误报解决，重复路径共享状态', () => {
+    const rows: SvnUpdateRow[] = [{ ...row, seq: 4, action: 'C' }, { ...row, seq: 8, action: 'C', relPath: 'other' },
+      { ...row, seq: 9, action: 'C' }]
+    const states = new Map([['src/a.cs', { path: 'src/a.cs', text: false, props: false, tree: false, versioned: true }]])
+    expect(rowConflict(rows[0], states)).toBe(false)
+    expect(rowConflict(rows[2], states)).toBe(false)
+    expect(nextConflict(rows, states, 9)).toBe(1)
+    expect(nextConflict(rows, states, 8)).toBe(1)
+    expect(nextConflict([], states)).toBe(-1)
+    expect(rowConflict({ ...rows[0], relPath: null }, states)).toBe(true)
+  })
   it('大列表只渲染视口附近条目，边界不会越界', () => {
     expect(updateRange(4000, 0, 500, 28)).toEqual({ start: 0, end: 26 })
     expect(updateRange(4000, 3000, 500, 28).end - updateRange(4000, 3000, 500, 28).start).toBeLessThan(50)

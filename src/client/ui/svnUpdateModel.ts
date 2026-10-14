@@ -2,7 +2,51 @@
  * dsh-vscode-mode client — SVN 更新窗口的纯视图逻辑。
  * @author ddj 2026年09月24号
  */
-import type { SvnUpdatePhase, SvnUpdateRow } from '../../shared/svn.js'
+import type { SvnConflictState, SvnUpdatePhase, SvnUpdateRow } from '../../shared/svn.js'
+
+export type UpdateColumn = 'action' | 'path' | 'type'
+export interface UpdateSort { column: UpdateColumn; direction: 1 | -1 }
+const collator = new Intl.Collator('zh-CN', { numeric: true, sensitivity: 'base' })
+
+/** @public @author ddj 2026年10月14号 @param sort Current sort. @param column Clicked header. @returns Ascending, descending, then original output order. */
+export function nextUpdateSort(sort: UpdateSort | null, column: UpdateColumn): UpdateSort | null {
+  if (sort?.column !== column) return { column, direction: 1 }
+  return sort.direction === 1 ? { column, direction: -1 } : null
+}
+
+/** @public @author ddj 2026年10月14号 @param row Output row. @param column Display column. @returns Display sort key. */
+function updateKey(row: SvnUpdateRow, column: UpdateColumn): string {
+  if (column === 'action') return row.action ? row.label : '信息'
+  if (column === 'type') return row.action ? updateType(row.path) : ''
+  return row.relPath || row.path || row.label
+}
+
+/** @public @author ddj 2026年10月14号 @param rows Immutable original rows. @param sort Optional sort. @returns Stable derived display order, empty keys last. */
+export function sortUpdateRows(rows: SvnUpdateRow[], sort: UpdateSort | null): SvnUpdateRow[] {
+  if (!sort) return rows
+  return rows.slice().sort((a, b) => {
+    const left = updateKey(a, sort.column), right = updateKey(b, sort.column)
+    if (!left || !right) return left ? -1 : right ? 1 : a.seq - b.seq
+    return collator.compare(left, right) * sort.direction || a.seq - b.seq
+  })
+}
+
+/** @public @author ddj 2026年10月14号 @param row Output row. @param states Confirmed evidence by path. @returns Conservative unresolved status, including unknown/outside paths. */
+export function rowConflict(row: SvnUpdateRow, states: ReadonlyMap<string, SvnConflictState>): boolean {
+  if (row.action !== 'C') return false
+  const state = row.relPath ? states.get(row.relPath) : undefined
+  return state ? state.text || state.props || state.tree : true
+}
+
+/** @public @author ddj 2026年10月14号 @param rows Display order. @param states Confirmed evidence. @param seq Current selection. @returns Next conflict index, wrapping around. */
+export function nextConflict(rows: SvnUpdateRow[], states: ReadonlyMap<string, SvnConflictState>, seq?: number): number {
+  const start = rows.findIndex((row) => row.seq === seq)
+  for (let step = 1; step <= rows.length; step++) {
+    const index = (start + step) % rows.length
+    if (rowConflict(rows[index], states)) return index
+  }
+  return -1
+}
 
 /**
  * 只有真实终态允许直接关闭窗口。

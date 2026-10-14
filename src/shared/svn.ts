@@ -137,6 +137,16 @@ export interface SvnUpdatePoll extends SvnUpdateState {
   totalSeq: number
 }
 
+/** Exact target conflict evidence; null/error is never a clean status. */
+export interface SvnConflictState {
+  path: string
+  text: boolean
+  props: boolean
+  tree: boolean
+  versioned: boolean
+}
+export type SvnResolveAccept = 'mine-full' | 'theirs-full' | 'working'
+
 /** revert/add 等批量动作结果（计数 + 摘要 + 原文）。 */
 export interface SvnActionResult {
   /** 处理条目数（宽松计数）。 */
