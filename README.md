@@ -464,13 +464,13 @@ profile 请替换为实际目标，不要把示例目录当成当前运行 profi
 
 ```bash
 # ① Git 安装（clone + prepare 构建；推荐打固定 tag）
-dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.14.10
+dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.14.11
 
 # ② npm 注册表（发布到 npm 后）
-dsh plugin --profile web add dsh-vscode-mode@0.14.10
+dsh plugin --profile web add dsh-vscode-mode@0.14.11
 
 # ③ GitHub Release tgz 直装（Release asset 可用后）
-dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.14.10/dsh-vscode-mode-0.14.10.tgz
+dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.14.11/dsh-vscode-mode-0.14.11.tgz
 ```
 
 > **DSH 版本政策（0.14.10 起）**：六项 DSH peer 统一声明为 `*`，不再维护逐版
@@ -808,6 +808,7 @@ Keep All / Undo All 却是亮的。修复：单文件 Keep / Undo 覆盖冲突�
 完整变更见 [GitHub Releases](https://github.com/Lenonss/DSH_VsCodeMode/releases)。
 近期关键版本：
 
+- **v0.14.11**：**编辑快捷键文案与动作验证**——注释菜单不再写死默认键位，避免自定义绑定后显示误导；明确编辑器本地 Ctrl+D 向下复制、不使用剪贴板；加强原生动作转发与幂等清理断言。默认键位与编辑算法不变，详见 [0.14.11 发布说明](docs/release-0.14.11.md)。
 - **v0.14.10**：**简化 DSH 版本政策**——六项 DSH peer 统一为 `*`，取消逐版白名单、上界和仅因版本较新的告警，保留实际能力与冲突诊断；开发依赖固定原版本，避免自动解析漂移。npm 默认预发布语义和验收边界见 [0.14.10 发布说明](docs/release-0.14.10.md)。
 - **v0.14.9**：**编辑快捷键与桌面安全刷新**——`Ctrl+/` 保留官方快捷键入口，行注释改为 `Ctrl+Alt+/`（Web Linux 默认不绑定）；编辑器本地 `Ctrl+D` 调用 Monaco 原生向下复制行，块注释不变。桌面 `Ctrl+Shift+R` 刷新当前界面、不重启 Host；未保存代码/PDF、待保存、保存中或外部冲突时拒绝刷新，界面状态镜像失败/超时也不刷新。真实 GUI 按键和状态恢复尚未验收，详见 [0.14.9 发布说明](docs/release-0.14.9.md)。
 - **v0.14.8**：**Unity 打开目标选择与桌面端打开修复**——Unity 外部脚本编辑器 `com.dsh.editor` 0.3.1 新增「打开目标」选择（自动/DSH Web/DSH 桌面端），桌面端按 profile bridge 定位、缺失明确报错；桌面 profile 开机自动准备独立 bridge，无需先注册 OS 菜单。修复桌面端 sessions 服务面缺 `.open`/`.create` 导致的「编辑器打开失败或取消」（改走 `materializeScope → manager.select` 多面切换与 `newDraftSession` 回落）。验证范围与真实 GUI 验收缺口见 [0.14.8 发布说明](docs/release-0.14.8.md)。

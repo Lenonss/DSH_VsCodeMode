@@ -40,7 +40,7 @@ export function bindEditActions(editor: EditTarget, monaco: EditMonaco): () => v
   /** @private @author ddj 2026年10月12号 Runs the native multi-selection line-copy action. */
   const duplicate = (): void => { runEditAction(editor, monaco, 'editor.action.copyLinesDownAction') }
   const actions = [
-    editor.addAction({ id: 'edrv.toggleComment', label: '切换行注释（Ctrl+Alt+/）', precondition: writable, contextMenuGroupId: '1_edrv', run: comment }),
+    editor.addAction({ id: 'edrv.toggleComment', label: '切换行注释', precondition: writable, contextMenuGroupId: '1_edrv', run: comment }),
     editor.addAction({ id: 'edrv.duplicateLine', label: '向下复制行（Ctrl+D，编辑器本地）', precondition: writable, contextMenuGroupId: '1_edrv', run: duplicate }),
   ]
   let disposed = false

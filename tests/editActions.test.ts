@@ -41,11 +41,19 @@ describe('plugin-local native edit actions', () => {
       { keybinding: 2048 | 90, command: '', when: 'edrvLocalEdit && editorTextFocus' },
       { keybinding: 2048 | 34, command: 'editor.action.copyLinesDownAction', when: 'edrvLocalEdit && editorTextFocus && !editorReadonly' },
     ])
-    const actions = editor.addAction.mock.calls as unknown as Array<[{ run(): void }]>
+    const actions = editor.addAction.mock.calls as unknown as Array<[{ id: string; label: string; run(): void }]>
+    expect(actions[0][0]).toMatchObject({ id: 'edrv.toggleComment', label: '切换行注释' })
     actions[0][0].run(); actions[1][0].run()
-    expect(editor.trigger).toHaveBeenCalledTimes(2)
+    expect(editor.trigger.mock.calls).toEqual([
+      ['edrv-edit', 'editor.action.commentLine', null],
+      ['edrv-edit', 'editor.action.copyLinesDownAction', null],
+    ])
+    const handles = editor.addAction.mock.results.map((result) => result.value)
     release(); release()
     expect(dispose).toHaveBeenCalledOnce()
+    for (const handle of handles) expect(handle.dispose).toHaveBeenCalledOnce()
+    expect(editor.createContextKey.mock.results[0].value.reset).toHaveBeenCalledOnce()
+    expect(editor.onDidDispose.mock.results[0].value.dispose).toHaveBeenCalledOnce()
   })
   it('registers native actions in EditorView and reload only at client root', () => {
     const view = readFileSync(new URL('../src/client/ui/EditorView.ts', import.meta.url), 'utf8')

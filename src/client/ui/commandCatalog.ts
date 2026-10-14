@@ -202,7 +202,7 @@ export const EDITOR_COMMANDS: readonly CommandDef[] = [
     run: () => emit('toggleComment'),
   },
   {
-    id: 'edrv.duplicateLine', label: '向下复制行（Ctrl+D，编辑器本地）', category: '编辑', order: 30,
+    id: 'edrv.duplicateLine', label: '向下复制行（Ctrl+D，编辑器本地，不使用剪贴板）', category: '编辑', order: 30,
     available: needsModel,
     run: () => emit('duplicateLine'),
   },
