@@ -24,6 +24,7 @@ import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
 import { emitRefresh } from '../../events.js'
 import { svnOverlayEl, viewOverlayOf } from '../../ui/SvnOverlay.js'
 import { useExplorerSvn } from './useExplorerSvn.js'
+import { useExplorerReveal, treeRevealPath } from './useExplorerReveal.js'
 import type { SidebarCtx } from '../types.js'
 
 const DIR_CAP = 4000
@@ -31,10 +32,6 @@ const SAVE_DEBOUNCE_MS = 300
 const FOLLOW_INTERVAL_MS = 10_000
 const PREFETCH_MAX = 4
 const PREFETCH_EXCLUDED = new Set(['node_modules', '.git', '.hg', '.svn', '.pnpm', '.pnpm-store'])
-/** 「在资源管理器视图中显示」高亮时长与定位重试上限（目录懒加载需等待行渲染）。 */
-const REVEAL_HIGHLIGHT_MS = 2000
-const REVEAL_RETRY_MAX = 6
-const REVEAL_RETRY_MS = 120
 /** 外部文件变化重列去抖：一轮外部批量写入（如 agent 连写多文件）合并为一次重列。 */
 const FILE_CHANGE_DEBOUNCE_MS = 400
 
@@ -98,16 +95,6 @@ function rowView(props) {
 const ExplorerRow = React.memo(rowView)
 
 /**
- * 转义 CSS 属性选择器的值（路径含引号/反斜杠时避免选择器语法错误）。
- * @author ddj 2026年09月11号
- * @param value 原始值
- * @returns 可安全嵌入 `[attr="…"]` 的字符串
- */
-function cssEscape(value) {
-  return String(value ?? '').replace(/\\/g, '\\\\').replace(/"/g, '\\"')
-}
-
-/**
  * 目录树面板主体（SWR：有缓存先渲染，无缓存才显示加载态；加载总在后台）。
  * @param props.ctx 面板共享上下文（sessionId/openFile/activePath/pendingByPath/fileMenuItems/notify）
  */
@@ -127,7 +114,6 @@ export function FileExplorer(props) {
   const [loading, setLoading] = React.useState({})
   const [errors, setErrors] = React.useState({}) // rel → 错误文案（仅无任何数据时展示）
   const [menu, setMenu] = React.useState(null) // 右键菜单 { x, y, target }
-  const [revealPath, setRevealPath] = React.useState(null) // 高亮的相对路径（「在资源管理器视图中显示」）
   // 各状态 ref 镜像：定时器/监听用最新闭包
   const tokensRef = React.useRef({})
   const expandedRef = React.useRef({})
@@ -139,9 +125,6 @@ export function FileExplorer(props) {
   const saveTimerRef = React.useRef(null)
   const loadDirRef = React.useRef(null)
   const refreshRef = React.useRef(null)
-  const revealTimerRef = React.useRef(null) // 高亮清除计时器
-  const revealTryRef = React.useRef(0) // 当前定位的重试计数（行渲染需等目录加载）
-  const revealInTreeRef = React.useRef(null) // 定位动作最新闭包（窗口监听读取）
   const treeRef = React.useRef(null) // 目录树容器（定位时按 data-edrv-path 查行）
   const reloadDirRef = React.useRef(null) // loadDir 最新闭包（文件变化监听读取，防陈旧闭包）
   const changedTimerRef = React.useRef(null) // 文件变化合并去抖计时器
@@ -172,8 +155,10 @@ export function FileExplorer(props) {
     const force = opts?.force === true
     const doPrefetch = opts?.prefetch === true
     if (!force && loadingRef.current[rel]) return
-    const token = (tokensRef.current[rel] || 0) + 1
-    tokensRef.current[rel] = token
+    const tokens = tokensRef.current
+    const token = (tokens[rel] || 0) + 1
+    tokens[rel] = token
+    loadingRef.current = Object.assign({}, loadingRef.current, { [rel]: true })
     setLoading((prev) => Object.assign({}, prev, { [rel]: true }))
     setErrors((prev) => {
       const next = Object.assign({}, prev)
@@ -183,7 +168,7 @@ export function FileExplorer(props) {
     const args = { sessionId, path: rel }
     if (force) args.force = true
     rpc('edrv.listDir', args).then((res) => {
-      if (tokensRef.current[rel] !== token) return
+      if (scopeRef.current !== scope || tokensRef.current !== tokens || tokens[rel] !== token) return
       if (res && res.ok && Array.isArray(res.entries)) {
         setDirs((prev) => Object.assign({}, prev, { [rel]: res.entries }))
         if (res.root) setRoot((prev) => prev || res.root)
@@ -196,12 +181,12 @@ export function FileExplorer(props) {
         }
       }
     }).catch((e) => {
-      if (tokensRef.current[rel] !== token) return
+      if (scopeRef.current !== scope || tokensRef.current !== tokens || tokens[rel] !== token) return
       if (!entriesOf(rel)) {
         setErrors((prev) => Object.assign({}, prev, { [rel]: '读取目录异常:' + String(e) }))
       }
     }).finally(() => {
-      if (tokensRef.current[rel] !== token) return
+      if (scopeRef.current !== scope || tokensRef.current !== tokens || tokens[rel] !== token) return
       setLoading((prev) => {
         const next = Object.assign({}, prev)
         delete next[rel]
@@ -220,55 +205,28 @@ export function FileExplorer(props) {
     void loadDir(rel, { prefetch: true })
   }
 
-  /**
-   * 尝试把目标行滚入可见并高亮；行尚未渲染（祖先目录仍在加载）时按上限重试。
-   * @author ddj 2026年09月11号
-   * @param path 目标相对路径
-   */
-  const tryReveal = (path) => {
-    const host = treeRef.current
-    const row = host?.querySelector?.('[data-edrv-path="' + cssEscape(path) + '"]')
-    if (!row) {
-      revealTryRef.current += 1
-      if (revealTryRef.current < REVEAL_RETRY_MAX) {
-        window.setTimeout(() => tryReveal(path), REVEAL_RETRY_MS)
-      }
-      return
-    }
-    row.scrollIntoView?.({ block: 'center' })
-    setRevealPath(path)
-    if (revealTimerRef.current) clearTimeout(revealTimerRef.current)
-    revealTimerRef.current = window.setTimeout(() => {
-      revealTimerRef.current = null
-      setRevealPath(null)
-    }, REVEAL_HIGHLIGHT_MS)
-  }
-
-  /**
-   * 在资源管理器视图中显示：展开全部祖先目录并定位高亮目标文件。
-   * 目录条目懒加载，故先展开祖先并触发加载，再由 tryReveal 轮询等行渲染。
-   * @author ddj 2026年09月11号
-   * @param path 目标相对路径
-   */
-  const revealInTree = (path) => {
-    if (!path) return
+  /** @private @author ddj 2026年10月14号 @param path Safe relative file path. Expands only the ancestor chain and reuses available directory entries. */
+  function prepareReveal(path) {
     const ancestors = ancestorDirsOf(path)
-    revealTryRef.current = 0
-    setExpanded((prev) => {
+    setExpanded(expandParents)
+    for (const dir of ['', ...ancestors]) {
+      if (entriesOf(dir)) continue
+      void loadDir(dir, { prefetch: false })
+    }
+    /** @private @author ddj 2026年10月14号 @param prev Current expansion map. @returns Expanded ancestor map. */
+    function expandParents(prev) {
       const next = Object.assign({}, prev)
       for (const dir of ancestors) next[dir] = true
       return next
-    })
-    for (const dir of ancestors) void loadDir(dir, { prefetch: false })
-    tryReveal(path)
+    }
   }
-  revealInTreeRef.current = revealInTree
 
   const refresh = (event) => {
     if (event?.detail?.scope && event.detail.scope !== scope) return
     if (event?.detail?.paths?.length) { for (const path of event.detail.paths) onFileChanged(path); return }
     const keep = Object.keys(expandedRef.current).filter((k) => expandedRef.current[k] === true)
     tokensRef.current = {}
+    loadingRef.current = {}
     setMenu(null)
     setErrors({})
     // SWR：保留旧条目不清空，后台强制重列（force 跳过索引）
@@ -334,13 +292,13 @@ export function FileExplorer(props) {
 
   React.useEffect(() => {
     tokensRef.current = {}
+    loadingRef.current = {}
     setDirs({})
     setExpanded({})
     setLoading({})
     setErrors({})
     setMenu(null)
     setRoot(null)
-    setRevealPath(null)
     // 恢复上次展开状态（对齐 VSCode：持久化展开路径，条目缓存即时渲染、后台刷新）
     const cached = scope ? explorerLoad(scope) : null
     const restored = cached?.expanded ?? []
@@ -379,19 +337,9 @@ export function FileExplorer(props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // 在资源管理器视图中显示（页签右键菜单）：展开祖先目录并定位高亮
-  React.useEffect(() => {
-    const onReveal = (event) => {
-      const path = event?.detail?.path
-      if (typeof path === 'string' && path) revealInTreeRef.current?.(path)
-    }
-    window.addEventListener('edrv:reveal-path', onReveal)
-    return () => {
-      window.removeEventListener('edrv:reveal-path', onReveal)
-      if (revealTimerRef.current) { clearTimeout(revealTimerRef.current); revealTimerRef.current = null }
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  // 在恢复工作区展开状态之后跟随活动文件；隐藏期间目标由编辑器保留，重新挂载时兑现。
+  const { revealPath } = useExplorerReveal({ scope, activePath, treeRef, prepare: prepareReveal })
+  const activeTreePath = treeRevealPath(activePath)
 
   // 10s 轻量跟随：已展开目录后台刷新（命中 host 索引，近零成本），树跟随 agent 写入
   React.useEffect(() => {
@@ -446,7 +394,7 @@ export function FileExplorer(props) {
     if (!row.e) return React.createElement('div', { key: row.key, className: 'edrv-tree-loading', style: { paddingLeft: 6 + row.depth * 14 } }, row.text)
     const { e, depth, isDir, isOpen } = row
     return React.createElement(ExplorerRow, { key: e.path, path: e.path, name: e.name, type: e.type, depth, isDir, isOpen,
-      pending: isDir ? 0 : pendingByPath[e.path] ?? 0, active: !isDir && e.path === activePath,
+      pending: isDir ? 0 : pendingByPath[e.path] ?? 0, active: !isDir && e.path === activeTreePath,
       context: Boolean(menu && menuEntries.length && menu.target.path === e.path), reveal: revealPath === e.path,
       mark: svn.local?.get(e.path), remote: svn.remote?.get(e.path) ?? 0, onSelect, onContext })
   }

@@ -464,13 +464,13 @@ profile 请替换为实际目标，不要把示例目录当成当前运行 profi
 
 ```bash
 # ① Git 安装（clone + prepare 构建；推荐打固定 tag）
-dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.14.12
+dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.14.13
 
 # ② npm 注册表（发布到 npm 后）
-dsh plugin --profile web add dsh-vscode-mode@0.14.12
+dsh plugin --profile web add dsh-vscode-mode@0.14.13
 
 # ③ GitHub Release tgz 直装（Release asset 可用后）
-dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.14.12/dsh-vscode-mode-0.14.12.tgz
+dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.14.13/dsh-vscode-mode-0.14.13.tgz
 ```
 
 > **DSH 版本政策（0.14.10 起）**：六项 DSH peer 统一声明为 `*`，不再维护逐版
@@ -807,6 +807,8 @@ Keep All / Undo All 却是亮的。修复：单文件 Keep / Undo 覆盖冲突�
 
 完整变更见 [GitHub Releases](https://github.com/Lenonss/DSH_VsCodeMode/releases)。
 近期关键版本：
+
+- **v0.14.13**：**资源管理器跟随活动文件**——打开或切换编辑文件时自动展开祖先并滚动定位；资源管理器隐藏期间保留最新活动文件，切回后定位。慢目录加载不再受短重试窗口限制，仅滚动资源树、不抢输入焦点，保留手动定位。用户已确认本地功能验收通过，详见 [0.14.13 发布说明](docs/release-0.14.13.md)。
 
 - **v0.14.12**：**搜索框全选与模糊文件搜索**——工作区搜索打开/再次聚焦时在输入更新后全选旧词或编辑器选区种子，便于直接改写；Ctrl+P 支持大小写不敏感的文件名有序非连续匹配（如 `bn` → `BaseNavigationManager.cs`、`ISTSD` → `ISTaskSystemData.lua`），保留带目录的连续路径查询与 DAP 文件定位规则。更新后需重启 DSH Host；真实 GUI 行为、主题/滚动和 Console 尚未验收，发布不代表现场验收完成。
 
