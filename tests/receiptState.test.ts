@@ -171,6 +171,7 @@ describe('actual EditorView receipt adapters', () => {
     const scope = { sessionId: 's', planActive: plan.address, planTabs: [plan], svnDiff: null,
       planHostRef: { current: { getAttribute: () => plan.address } } }
     expect(editorFunction('receiptReady', scope)({ ...request, path: null, plan })).toBe(true)
+    expect(editorFunction('receiptReady', { ...scope, svnDiff: { path: 'other.ts' } })({ ...request, path: null, plan })).toBe(true)
     expect(editorFunction('receiptReady', { ...scope, sessionId: 'other' })({ ...request, path: null, plan })).toBe(false)
     expect(editorFunction('receiptReady', { ...scope, planHostRef: { current: null } })({ ...request, path: null, plan })).toBe(false)
     expect(editorFunction('receiptReady', scope)({ ...request, path: null, plan: { ...plan, markdown: '# Changed' } })).toBe(false)
@@ -183,12 +184,12 @@ describe('actual EditorView receipt adapters', () => {
     expect(scope.loadContent).toHaveBeenCalledWith('plans/a.md', 's', false)
   })
 
-  it('retries failed same-path loads without a forced disk overwrite and exits hidden source modes', () => {
+  it('retries same-path loads without forced overwrite, exits preview and retains independent SVN diff', () => {
     const scope = openState()
     scope.mdPreviewRef.current.add('B.ts')
     editorFunction('openReceiptFile', scope)(request)
     expect(scope.flushSave).toHaveBeenCalledOnce()
-    expect(scope.setSvnDiff).toHaveBeenCalledWith(null)
+    expect(scope.setSvnDiff).not.toHaveBeenCalled()
     expect(scope.toggleMdPreview).toHaveBeenCalledWith('B.ts')
     expect(scope.addTab).toHaveBeenCalledWith('B.ts', true, false)
     expect(scope.stageFileAt).toHaveBeenCalledWith('B.ts', 10, 2)
