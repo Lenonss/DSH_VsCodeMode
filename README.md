@@ -465,13 +465,13 @@ profile 请替换为实际目标，不要把示例目录当成当前运行 profi
 
 ```bash
 # ① Git 安装（clone + prepare 构建；推荐打固定 tag）
-dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.15.4
+dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.15.5
 
 # ② npm 注册表（发布到 npm 后）
-dsh plugin --profile web add dsh-vscode-mode@0.15.4
+dsh plugin --profile web add dsh-vscode-mode@0.15.5
 
 # ③ GitHub Release tgz 直装（Release asset 可用后）
-dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.15.4/dsh-vscode-mode-0.15.4.tgz
+dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.15.5/dsh-vscode-mode-0.15.5.tgz
 ```
 
 > **DSH 版本政策（0.14.10 起）**：六项 DSH peer 统一声明为 `*`，不再维护逐版
@@ -808,6 +808,8 @@ Keep All / Undo All 却是亮的。修复：单文件 Keep / Undo 覆盖冲突�
 
 完整变更见 [GitHub Releases](https://github.com/Lenonss/DSH_VsCodeMode/releases)。
 近期关键版本：
+
+- **v0.15.5**：**浮窗性能与客户端适配**——拖动/缩放改为逐帧直写几何、结束单次提交，多窗口共享视口监听；SVN 日志行表 memo 与选中集优化，冲突状态读取按批 4 并发。LSP 去抖发送前惰性读取全文，隐藏页面心跳目标周期降为 15 秒；兼容性摘要按版本、安装事实与用户选择显示适用诊断，补充搜索刷新回归。保留 0.15.4 全部功能；本次真实 GUI 未重测，用户已接受此发布缺口，未安装/重启当前实例，详见 [0.15.5 发布说明](docs/release-0.15.5.md)。
 
 - **v0.15.4**：**SVN 非模态浮窗与独立文件对比**——更新、日志、统计、补丁、目录对比及智能整理采用与文件编辑相同的页面内浮窗，支持移动、调整尺寸、点击置顶与后台 DSH 交互。文件对比不再占据主编辑区，保留二进制/编码提示和来源任务返回逻辑；确认类弹窗保持模态。真实 GUI 交互尚未验收，用户已接受此发布缺口；资源管理器“目录不存在”原因未定位，本版不宣称修复该提示。
 
