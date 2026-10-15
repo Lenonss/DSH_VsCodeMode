@@ -95,7 +95,9 @@ export function registerLspProviders(monaco) {
     if (!model || model.uri.scheme !== 'edrv') return
     const path = pathOfModel(model)
     if (!path) return
-    const contentDisposer = model.onDidChangeContent(() => syncDoc(path, model.getValue()))
+    // 击键路径传惰性取值：去抖窗口内的中间态会被覆盖丢弃，事先取全文纯属白付（大文件尤甚）。
+    // model 已销毁时 resolveText 返回 null 放弃本次同步，不会拿空内容覆盖 host 侧文档。
+    const contentDisposer = model.onDidChangeContent(() => syncDoc(path, () => model.getValue()))
     const disposeDisposer = model.onWillDispose(() => {
       closeDoc(path)
       contentDisposer.dispose()

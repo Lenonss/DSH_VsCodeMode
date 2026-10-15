@@ -108,23 +108,44 @@ function nextDocVer(path) {
 /**
  * 立即同步某文档到 host（首次打开/查询前保证服务器已认识该文档）。
  * sessionId 缺失时仍发起请求：host 对唯一活跃会话有兜底解析，弃发会白白丢失文档归属。
- * @author ddj 2026年08月27号 / 2026年09月11号
+ * @author ddj 2026年08月27号 / 2026年09月11号 / 2026年10月15号
  * @param path 工作区相对路径
- * @param text 文档全文
+ * @param text 文档全文；传函数表示**发送前才求值**（击键路径用它，避免为被去抖丢弃的中间态取全文）
  * @param immediate true 立即发送，false 去抖
  */
 export async function syncDoc(path, text, immediate = false) {
-  if (!path || typeof text !== 'string') return
+  if (!path || (typeof text !== 'string' && typeof text !== 'function')) return
   if (immediate) {
     clearPending(path)
-    await rpc('edrv.lsp.sync', { sessionId, path, text, version: nextDocVer(path) }).catch(() => {})
+    const value = resolveText(text)
+    if (value === null) return
+    await rpc('edrv.lsp.sync', { sessionId, path, text: value, version: nextDocVer(path) }).catch(() => {})
     return
   }
   clearPending(path)
   syncTimers.set(path, setTimeout(() => {
     syncTimers.delete(path)
-    rpc('edrv.lsp.sync', { sessionId, path, text, version: nextDocVer(path) }).catch(() => {})
+    const value = resolveText(text)
+    if (value === null) return
+    rpc('edrv.lsp.sync', { sessionId, path, text: value, version: nextDocVer(path) }).catch(() => {})
   }, SYNC_DEBOUNCE_MS))
+}
+
+/**
+ * 取本次要同步的文本：字符串原样返回，函数形态在发送前求值。
+ * 取值抛错（model 已销毁）时返回 null 表示**放弃本次同步**——不能退回空串，
+ * 那会把 host 侧文档内容清掉，比漏一次同步严重得多（关闭路径由 closeDoc 负责）。
+ * @author ddj 2026年10月15号
+ * @param text 字符串或惰性取值函数
+ * @returns 待发送文本；无法取值时为 null
+ */
+function resolveText(text) {
+  if (typeof text === 'string') return text
+  try {
+    return String(text())
+  } catch (error) {
+    return null
+  }
 }
 
 function clearPending(path) {

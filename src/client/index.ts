@@ -32,6 +32,7 @@ import { openEditorView } from './events.js'
 import { setupExtOpen } from './externalOpen.js'
 import { SettingsContext } from './settingsContext.js'
 import { SIDEBAR_PLUGIN, registerSlotSafely, settingsBridge } from './compat.js'
+import { clientSummary } from './compatSummary.js'
 import { detectSidebarService, hasSideRoute, installSideEditor, routeSideEditor, setEnsureSideEditor, SIDEBAR_INSTALL_CMD } from './sidebarBridge.js'
 import { detectOfficial, installOfficial, registerOfficialFileClaim, OFFICIAL_TAB_KIND, OFFICIAL_TAB_TITLE, isEditorTabActive, markEditorActive, restoreEditorTab, buildFileAddress, readSavedTab, setEditorTabScope } from './officialSidebar.js'
 import { setNativeCsv, setNativeOpenHandler, resetNativeOpen } from './nativeOpenStore.js'
@@ -264,16 +265,19 @@ export async function apply(ctx: any): Promise<void> {
   /** 「添加到对话」动作集：编辑区/Tab 右键菜单注入文件引用与代码块（conversation 服务缺失时各动作安全降级）。 */
   const addToConversation = createAddToConversation(ctx)
 
-  /** 客户端侧兼容摘要（与 host 报告合并展示；惰性求值保证 HMR 后仍新鲜）。 */
-  const compatSummary = (): CompatAdapter[] => [
-    { name: '设置桥', active: bridge.scope() !== undefined, note: bridge.scope() !== undefined ? '使用 ' + bridge.service() + ' 桥' : '未绑定设置服务（fileOpenTool 持久化不可用，晚到重试窗口内自愈）' },
-    { name: '文件打开路由（workspaces.openPath）', active: Boolean(workspaces?.openPath), note: 'vscode 打开器优先，失败回退系统打开（0.1.2 及更早 DSH 的对话文件链接主路径）' },
-    { name: '会话文件链接路由（remote.session.openWorkspacePath）', active: remoteOpenInstalled, note: '0.1.3+ 对话文件引用/产物打开优先走插件打开器，失败回退系统打开' },
-    { name: '侧边栏打开器（' + SIDEBAR_PLUGIN + '）', active: registry.get(SIDEBAR_PLUGIN) !== undefined, note: registry.get(SIDEBAR_PLUGIN) !== undefined ? '已注册（优先级 80）' : '未检测到侧边栏打开能力' },
-    { name: '侧边栏编辑区（官方 Sidebar）', active: officialService !== undefined, note: officialService !== undefined ? '编辑区=官方右侧 Sidebar Tab（对话+编辑同屏，DSH 0.1.5+）' : '官方侧边栏服务未探测到（DSH < 0.1.5-alpha.1 时属预期）' },
-    { name: '侧边栏编辑区（' + SIDEBAR_PLUGIN + '，归档）', active: sideService !== undefined, note: sideService !== undefined ? '编辑区=侧边栏 Tab（旧版 DSH 回退形态）' : '未检测到；DSH ≥ 0.1.5 优先官方侧边栏，旧版可安装（' + SIDEBAR_INSTALL_CMD + '）' },
-    { name: '文件链接官方认领（dsh-resource://file）', active: claimDisposer !== null, note: claimDisposer !== null ? '聊天文件链接转发进单一编辑器页签（文件分页归编辑器自带页签栏）' : '链接走官方查看器或旧版路由（未认领）' },
-  ]
+  /**
+   * Build applicable client diagnostics from live installation state.
+   * @private @author ddj 2026年10月13号
+   * @param version Running DSH version supplied by the compat RPC.
+   * @returns Applicable adapters; routing behavior is unchanged.
+   */
+  const compatSummary = (version = ''): CompatAdapter[] => clientSummary({
+    settingsService: bridge.service(), settingsReady: bridge.scope() !== undefined,
+    openPathReady: Boolean(workspaces?.openPath), remoteReady: remoteOpenInstalled,
+    sidebarOpener: registry.get(SIDEBAR_PLUGIN) !== undefined,
+    legacySidebar: sideService !== undefined, officialSidebar: officialService !== undefined,
+    fileClaim: claimDisposer !== null, claimWanted: shouldClaimFiles(selected), selected,
+  }, version)
 
   ctx.provide('fileOpeners', registry)
   ctx.effect(() => registry.register(vscodeOpener()), 'vscode-mode: file opener')

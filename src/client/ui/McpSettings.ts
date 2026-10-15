@@ -414,7 +414,7 @@ function CompatSection({ getSummary }) {
     devForm?.enabled && group('开发形态', React.createElement('div', { className: 'vsm-compat-item ok' }, React.createElement('span', { className: 'vsm-compat-name' }, '开发形态开启（工作区链接安装）'), React.createElement('span', { className: 'vsm-compat-note' }, devForm.path))),
     group('版本适配', renderItems(report?.adapters)),
     group('外部插件与服务', renderItems(report?.external)),
-    group('客户端适配', renderItems(getSummary?.() ?? [])),
+    group('客户端适配', renderItems(getSummary?.(report?.dshVersion ?? '') ?? [])),
     group('护栏', renderItems(report?.guards)),
     group('警告', warnings.length ? warnings.map((w, index) => React.createElement('div', { key: index, className: 'vsm-mcp-error vsm-mcp-banner' }, w)) : React.createElement('div', { className: 'vsm-compat-item ok' }, React.createElement('span', { className: 'vsm-compat-name' }, '未检测到兼容性问题'), React.createElement('span', { className: 'vsm-compat-note' }, ''))),
   )

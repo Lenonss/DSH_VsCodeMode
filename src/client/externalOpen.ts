@@ -15,6 +15,12 @@ import { log } from './log.js'
 const TOAST_MS = 5000
 /** 深链移交轮询周期（兼活跃心跳）。 */
 const HANDOFF_POLL_MS = 3000
+/**
+ * 页面隐藏时的降频倍数（3s × 5 = 15s）。
+ * 必须仍短于 host 租约（src/externalHandoff.ts 的 LEASE_MS = 30s）：心跳一旦超期，
+ * host 判定该页面已死，launcher 会重复开新页——比多几次 RPC 更糟。
+ */
+const HIDDEN_POLL_EVERY = 5
 
 /** 深链装配选项（全部可注入便于测试；缺省读浏览器全局）。 */
 export interface ExtOpenOptions {
@@ -52,9 +58,10 @@ export function setupExtOpen(ctx: unknown, options: ExtOpenOptions = {}): () => 
 }
 
 /**
- * 深链移交轮询：每 3s 向 host 领取待打开请求（兼活跃心跳，launcher 据此决定是否开新页）。
+ * 深链移交轮询：可见时每 3s 向 host 领取待打开请求（兼活跃心跳，launcher 据此决定是否开新页）；
+ * 页面隐藏时降到 15s 一次——无人看页面时移交不必保持 3s 精度，但心跳不能停（超期会让 host 判页面已死）。
  * 页面级单例（window 标记防 HMR 重复）；领取到即执行打开规则。
- * @author ddj 2026年09月08号
+ * @author ddj 2026年09月08号 / 2026年10月15号
  * @param ctx 客户端根上下文
  */
 function startPresencePoll(ctx: unknown): () => void {
@@ -65,6 +72,17 @@ function startPresencePoll(ctx: unknown): () => void {
   let disposed = false
   let polling = false
   let executing = false
+  let ticks = 0
+  /**
+   * 页面隐藏时按倍数跳轮；可见时每次都跑并清零计数。
+   * @author ddj 2026年10月15号
+   * @returns 是否跳过本轮
+   */
+  function hiddenSkip(): boolean {
+    if (typeof document === 'undefined' || document.visibilityState !== 'hidden') { ticks = 0; return false }
+    ticks += 1
+    return ticks % HIDDEN_POLL_EVERY !== 0
+  }
   /** @private @author ddj 2026年09月28号 Open all requested paths before acknowledging this exact lease. */
   async function execute(open: { paths: string[]; line?: number; column?: number; token: string; leaseId: string }): Promise<void> {
     executing = true
@@ -82,7 +100,7 @@ function startPresencePoll(ctx: unknown): () => void {
       if (!disposed && result.ok && result.open && !executing) void execute(result.open).catch(() => {})
     } finally { polling = false }
   }
-  const timer = window.setInterval(() => { void tick().catch(() => {}) }, HANDOFF_POLL_MS)
+  const timer = window.setInterval(() => { if (hiddenSkip()) return; void tick().catch(() => {}) }, HANDOFF_POLL_MS)
   /** @private @author ddj 2026年09月28号 Stop heartbeats and fail outstanding editor waits on plugin disposal. */
   function dispose(): void {
     disposed = true

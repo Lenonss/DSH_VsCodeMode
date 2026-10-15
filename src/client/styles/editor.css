@@ -994,7 +994,20 @@
 [data-edrv-view] .edrv-split-handle:hover, [data-edrv-view] .edrv-split-handle:focus-visible { background: var(--dsw-alias-state-info-primary, #4d6bfe); }
 [data-edrv-view].edrv-floating { position: fixed; display: flex; flex-direction: column; overflow: hidden; box-sizing: border-box; border: 1px solid var(--dsw-alias-border-l2, #cdd6da); background: var(--dsw-alias-bg-base, #fff); color: var(--dsw-alias-label-primary, #1f2933); box-shadow: 0 8px 28px rgba(0,0,0,.22); }
 [data-edrv-view] .edrv-floating-title { display: flex; align-items: center; gap: 8px; flex: 0 0 32px; padding: 0 8px; background: var(--dsw-alias-bg-layer-1, #f7f9fa); cursor: move; touch-action: none; user-select: none; }
-[data-edrv-view] .edrv-floating-title > span { flex: 1; }
+[data-edrv-view] .edrv-floating-title > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+[data-edrv-view] .edrv-floating-content { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; overflow: auto; box-sizing: border-box; }
+[data-edrv-view] .edrv-floating-content.edrv-svnlog-dialog { padding: 12px; overflow: auto; }
+[data-edrv-view] .edrv-floating-content.edrv-svn-patch-dialog,
+[data-edrv-view] .edrv-floating-content.edrv-svn-sum-dialog,
+[data-edrv-view] .edrv-floating-content.edrv-svnplan-dialog { padding: 12px; max-width: none; gap: 8px; }
+[data-edrv-view] .edrv-floating-content.edrv-svnlog-stats { max-height: none; }
+[data-edrv-view] .edrv-floating-content .edrv-svn-patch-pre,
+[data-edrv-view] .edrv-floating-content .edrv-svn-sum-list { flex: 1; min-height: 0; max-height: none; }
+[data-edrv-view] .edrv-floating-content .edrv-svnlog-filter,
+[data-edrv-view] .edrv-floating-content .edrv-svn-sum-form { flex-wrap: wrap; }
+[data-edrv-view] .edrv-floating-content > .edrv-svnlog-head,
+[data-edrv-view] .edrv-floating-content > .edrv-svnlog-filter,
+[data-edrv-view] .edrv-floating-content > .edrv-svnlog-foot { flex-shrink: 0; }
 [data-edrv-view] .edrv-floating-title > button { border: 0; background: transparent; color: inherit; cursor: pointer; }
 [data-edrv-view] .edrv-floating-grip { position: absolute; width: 16px; height: 16px; bottom: 0; right: 0; cursor: nwse-resize; touch-action: none; border-right: 3px solid var(--dsw-alias-border-l2, #cdd6da); border-bottom: 3px solid var(--dsw-alias-border-l2, #cdd6da); }
 .edrv-drag-overlay { position: fixed; z-index: 150; pointer-events: none; box-sizing: border-box; border: 0; background: color-mix(in srgb, var(--dsw-alias-state-info-primary, #4d6bfe) 25%, transparent); }

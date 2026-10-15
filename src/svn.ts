@@ -1119,8 +1119,15 @@ export function createSvnRpc(deps: SvnRpcDeps): { handlers: Record<string, unkno
       const paths = [...new Set(args.paths.map(safeRel))]
       if (paths.some((path) => !path)) return { ok: false as const, error: '路径不合法' }
       try {
+        // 分批并发（批 4，计划批准值）：冲突面板一次请求上限 64 条，旧串行版在 64 冲突时要排队 64 次 svn 进程
+        // （每次冷启动约 10~40ms，最坏累计 1~2s 阻塞面板）。readConflict 只跑 `svn status --xml`（只读，无写入竞争）。
+        // 与 svn.fileSizes 的分批并发同型（见下方 BATCH = 16）；分批 push 保持结果顺序不变。
+        // @author ddj 2026年10月14号
         const states = []
-        for (const path of paths) states.push(await readConflict(scope.cwd, scope.root, path!))
+        const BATCH = 4
+        for (let start = 0; start < paths.length; start += BATCH) {
+          states.push(...await Promise.all(paths.slice(start, start + BATCH).map((path) => readConflict(scope.cwd, scope.root, path!))))
+        }
         return { ok: true as const, states }
       } catch (error) { return { ok: false as const, error: String(error) } }
     },

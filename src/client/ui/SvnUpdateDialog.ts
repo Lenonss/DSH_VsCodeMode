@@ -9,7 +9,7 @@ import { rpc } from '../rpc.js'
 import { absoluteOf } from '../tabActions.js'
 import { ContextMenu } from './ContextMenu.js'
 import type { ContextMenuEntry } from './ContextMenu.js'
-import { ModalShell } from './ModalShell.js'
+import { FloatingWindow } from './FloatingWindow.js'
 import { nextConflict, nextUpdateSort, rowConflict, sortUpdateRows, updateActs, updateCloseMode, updateDone, updateLocked, updateParent, updateRange, updateReady, updateType } from './svnUpdateModel.js'
 import type { UpdateColumn, UpdateSort } from './svnUpdateModel.js'
 
@@ -564,10 +564,9 @@ export function SvnUpdateDialog(props: UpdateProps): React.ReactElement {
   const phase = pendingRows && processFinished ? '正在加载更新明细…'
     : state?.phase === 'completed' ? '更新完成' : state?.phase === 'failed' ? '更新失败'
     : state?.phase === 'cancelled' ? '更新已停止' : state?.phase === 'cancelling' ? '正在停止…' : '正在更新…'
-  return React.createElement(ModalShell, {
-    dialogClass: 'edrv-update-dialog', width: 'min(1320px, calc(100vw - 48px))',
-    cardStyle: { height: 'min(680px, calc(100vh - 48px))', boxSizing: 'border-box', maxHeight: 'none' },
-    closeOnEsc: closeMode.passive, closeOnMask: closeMode.passive, onClose: dismiss,
+  return React.createElement(FloatingWindow, {
+    title: 'SVN 更新', dialogClass: 'edrv-update-dialog', width: 1320, height: 680,
+    closeOnEsc: closeMode.passive, onClose: dismiss,
   },
     updateHead(props, state, phase, closable, dismiss),
     updateTable(props, displayRows, view, selection, finished, sort, onSort, evidence.states),

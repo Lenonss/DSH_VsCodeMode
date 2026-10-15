@@ -10,7 +10,7 @@
  * 作者 ddj 2026年09月17号
  */
 import React from 'react'
-import { ModalShell } from './ModalShell.js'
+import { FloatingWindow } from './FloatingWindow.js'
 
 /** stacked 时间线展开的作者上限（其余并入「其他」）。 */
 const STACK_TOP = 5
@@ -205,11 +205,10 @@ export function SvnLogStats(props) {
   const [othersPct, setOthersPct] = React.useState(0)
   const [stacked, setStacked] = React.useState(false)
   const stats = React.useMemo(() => svnLogStatsOf(entries, { caseInsensitive: ci }), [entries, ci])
-  return React.createElement(ModalShell, {
+  return React.createElement(FloatingWindow, {
+    title: 'SVN 日志统计', height: 600,
     dialogClass: 'edrv-svnlog-stats',
-    width: 'min(680px, calc(100vw - 40px))',
-    zIndex: 192,
-    closeOnEsc: false,
+    width: 680,
     onClose,
   },
     React.createElement('div', { className: 'edrv-svnlog-stats-head' },

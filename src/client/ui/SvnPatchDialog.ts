@@ -9,7 +9,7 @@
  * 作者 ddj 2026年09月20号
  */
 import React from 'react'
-import { ModalShell } from './ModalShell.js'
+import { FloatingWindow } from './FloatingWindow.js'
 import { downloadText } from './svnExport.js'
 
 /**
@@ -40,10 +40,11 @@ export function SvnPatchDialog(props) {
     onNote?.(done ? '已保存 ' + fileName : '保存失败：浏览器下载能力不可用')
   }
 
-  return React.createElement(ModalShell, {
+  return React.createElement(FloatingWindow, {
+    title: 'SVN 补丁预览', height: 560,
     key: 'edrv-svn-patch',
     dialogClass: 'edrv-svn-patch-dialog',
-    width: 'min(760px, calc(100vw - 48px))',
+    width: 760,
     onClose,
   },
     React.createElement('div', { className: 'edrv-svn-patch-head' },

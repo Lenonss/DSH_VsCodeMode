@@ -26,6 +26,8 @@ import { SVN_LOG_ACTION_LABEL } from '../../shared/svn.js'
 import { orderLogEntries } from '../../svnLog.js'
 import { SVN_LOG_SHOW_ALL_LIMIT } from '../svnLog.js'
 import { ModalShell } from './ModalShell.js'
+import { FloatingWindow } from './FloatingWindow.js'
+import { inputOwnsKey } from '../state/floatingWindow.js'
 import { ContextMenu } from './ContextMenu.js'
 import type { ContextMenuEntry } from './ContextMenu.js'
 import { SvnLogStats } from './SvnLogStats.js'
@@ -570,10 +572,41 @@ function PathRow(props) {
 }
 
 /**
+ * 单个数据行：浅比较包装（回调身份由父级 ref 转发保持稳定，故 memo 才可能命中）。
+ * @author ddj 2026年10月14号
+ */
+const LogItemRow = React.memo(LogItem)
+
+/**
+ * 数据行容器（P0-14 上段）。独立 memo：只在条目列表/选中集/工作副本版号变化时重建行元素；
+ * 上段高度拖拽与弹窗缩放只改 LogList 的 height，不再逐帧重建整表（原先每帧 logRowsOf + N 个元素）。
+ * @author ddj 2026年10月14号
+ * @param props.list 过滤排序后的条目（非空）
+ * @param props.selectedRevs 可见选中的 revision 集合
+ * @param props.wcRev 工作副本版号（null = 不加粗）
+ * @param props.onPick 选中回调（event, item）
+ * @param props.onMenu 右键回调（event, item）
+ * @returns 行元素
+ */
+const LogRows = React.memo(function LogRows(props) {
+  const { list, selectedRevs, wcRev, onPick, onMenu } = props
+  return React.createElement(React.Fragment, null,
+    logRowsOf(list).map((row) => React.createElement(LogItemRow, {
+      key: row.item.revision + ':' + row.level,
+      item: row.item,
+      on: selectedRevs.has(row.item.revision),
+      wc: wcRev != null && row.item.revision === wcRev,
+      level: row.level,
+      onPick,
+      onMenu,
+    })))
+})
+
+/**
  * 上窗格列表（列头行 + 数据行 + 「加载更多」；P0-13 宽度受拖拽控制）。
  * @author ddj 2026年09月16号 / 2026年09月17号
  * @param props.list 过滤排序后的条目（null = 未加载）
- * @param props.selected 选中条目数组（P1-3 多选；至少一条，由父级保证）
+ * @param props.selectedRevs 可见选中的 revision 集合（P1-3 多选；由父级按 revision 维护）
  * @param props.keyword 过滤词（决定空态文案）
  * @param props.busy 加载中
  * @param props.truncated 是否可能还有更多
@@ -586,22 +619,14 @@ function PathRow(props) {
  * @returns 列表元素
  */
 function LogList(props) {
-  const { list, selected, keyword, busy, truncated, sortKey, sortDir, onSort, onSortReset, onPick, onLoadMore, onItemMenu, height, wcRev } = props
+  const { list, selectedRevs, keyword, busy, truncated, sortKey, sortDir, onSort, onSortReset, onPick, onLoadMore, onItemMenu, height, wcRev } = props
   let inner
   if (list === null) {
     inner = React.createElement('div', { className: 'edrv-tree-loading' }, busy ? '读取日志中…' : '尚未加载')
   } else if (!list.length) {
     inner = React.createElement('div', { className: 'edrv-tree-loading' }, keyword ? '无匹配条目' : '无提交历史')
   } else {
-    inner = logRowsOf(list).map((row) => React.createElement(LogItem, {
-      key: row.item.revision + ':' + row.level,
-      item: row.item,
-      on: selected.some((s) => s.revision === row.item.revision),
-      wc: wcRev != null && row.item.revision === wcRev,
-      level: row.level,
-      onPick,
-      onMenu: onItemMenu,
-    }))
+    inner = React.createElement(LogRows, { list, selectedRevs, wcRev, onPick, onMenu: onItemMenu })
   }
   const more = truncated
     ? React.createElement('div', { className: 'edrv-svnlog-more' },
@@ -886,9 +911,6 @@ export function SvnLogDialog(props) {
   const [sortKey, setSortKey] = React.useState(null)
   const [sortDir, setSortDir] = React.useState('desc')
   const [menu, setMenu] = React.useState(null)
-  const [dlgW, setDlgW] = React.useState(() => Math.min(DIALOG_W_DEFAULT, (typeof window !== 'undefined' ? window.innerWidth : 1280) - 24)) // P0-14：外框宽（拖拽受控）
-  const [dlgH, setDlgH] = React.useState(() => Math.min(DIALOG_H_DEFAULT, (typeof window !== 'undefined' ? window.innerHeight : 800) - 24)) // P0-14：外框高（拖拽受控）
-  const [anchor, setAnchor] = React.useState(null) // 八向拖拽锚点（null=flex 居中；非 null=absolute 定位于该视口坐标） @author ddj 2026年09月24号
   const [listH, setListH] = React.useState(LIST_H_DEFAULT) // P0-14：上段修订列表高（拖拽受控）
   const [msgH, setMsgH] = React.useState(MSG_H_DEFAULT) // P0-14：中段提交信息高（拖拽受控）
   const [statsOpen, setStatsOpen] = React.useState(false) // P1-10：统计窗开关
@@ -922,10 +944,14 @@ export function SvnLogDialog(props) {
     () => (filtered === null ? null : orderLogEntries(filtered, sortKey ?? 'revision', sortKey ? sortDir : 'desc')),
     [filtered, sortKey, sortDir],
   )
-  // P1-3：可见选中 = 选中数组 ∩ 当前显示列表；current = 可见选中首条（详情/菜单主语），空则回落首条
-  const visibleSelected = sorted
-    ? selected.filter((item) => sorted.some((x) => x.revision === item.revision))
-    : selected
+  // P1-3：可见选中 = 选中数组 ∩ 当前显示列表；current = 可见选中首条（详情/菜单主语），空则回落首条。
+  // 交集改用 revision 集合：原实现对每条选中再扫一遍显示列表（O(n×m)）且每次渲染重算（缩放弹窗时每帧都会走到）。
+  const sortedRevs = React.useMemo(() => (sorted ? new Set(sorted.map((x) => x.revision)) : null), [sorted])
+  const visibleSelected = React.useMemo(
+    () => (sortedRevs ? selected.filter((item) => sortedRevs.has(item.revision)) : selected),
+    [sortedRevs, selected],
+  )
+  const selectedRevs = React.useMemo(() => new Set(visibleSelected.map((item) => item.revision)), [visibleSelected])
   const current = visibleSelected.length
     ? visibleSelected[0]
     : (sorted && sorted.length ? sorted[0] : null)
@@ -998,65 +1024,6 @@ export function SvnLogDialog(props) {
     window.addEventListener('pointerup', up)
   }
 
-  // 八向（13-log-ui-polish 增量3）：pointerdown 取卡片视口 rect 起点并立即 absolute 锚定，
-  // 实现「拖哪边哪边动、对边固定」（flex 居中模型无法表达该语义）；clamp = 尺寸下限 680/480
-  // 与视口 12px 边距；每把手柄都以实际 rect 重锚 → CSS 截断/取整漂移自校正。
-  const startResize = (event, mode) => {
-    event.preventDefault()
-    event.stopPropagation()
-    const card = event.currentTarget.parentElement
-    const rect = card ? card.getBoundingClientRect() : null
-    if (!rect) return
-    const r0 = { left: rect.left, top: rect.top, width: rect.width, height: rect.height }
-    const startX = event.clientX
-    const startY = event.clientY
-    const moveL = mode === 'w' || mode === 'nw' || mode === 'sw'
-    const moveR = mode === 'e' || mode === 'ne' || mode === 'se'
-    const moveT = mode === 'n' || mode === 'nw' || mode === 'ne'
-    const moveB = mode === 's' || mode === 'sw' || mode === 'se'
-    const EDGE = 12 // 视口边距
-    const right0 = r0.left + r0.width
-    const bottom0 = r0.top + r0.height
-    // 起手锚定：切 absolute 到当前 rect（视觉零跳变）并同步 state=实际渲染尺寸
-    setAnchor({ left: r0.left, top: r0.top })
-    setDlgW(Math.round(r0.width))
-    setDlgH(Math.round(r0.height))
-    const move = (e) => {
-      const dx = e.clientX - startX
-      const dy = e.clientY - startY
-      let left = r0.left
-      let top = r0.top
-      let width = r0.width
-      let height = r0.height
-      if (moveR) width = Math.min(Math.max(DIALOG_W_MIN, r0.width + dx), window.innerWidth - EDGE - r0.left)
-      if (moveL) { left = Math.min(Math.max(EDGE, r0.left + dx), right0 - DIALOG_W_MIN); width = right0 - left }
-      if (moveB) height = Math.min(Math.max(DIALOG_H_MIN, r0.height + dy), window.innerHeight - EDGE - r0.top)
-      if (moveT) { top = Math.min(Math.max(EDGE, r0.top + dy), bottom0 - DIALOG_H_MIN); height = bottom0 - top }
-      const nextLeft = left
-      const nextTop = top
-      setAnchor((prev) => (prev && prev.left === nextLeft && prev.top === nextTop) ? prev : { left: nextLeft, top: nextTop })
-      setDlgW(Math.round(width))
-      setDlgH(Math.round(height))
-    }
-    const up = () => {
-      window.removeEventListener('pointermove', move)
-      window.removeEventListener('pointerup', up)
-      swallowNextClick()
-    }
-    window.addEventListener('pointermove', move)
-    window.addEventListener('pointerup', up)
-  }
-
-  /**
-   * 双击复位：清锚回 flex 居中 + 默认尺寸（视口 clamp 同初始，防小屏溢出）。
-   * @author ddj 2026年09月24号
-   */
-  const resetDlgSize = () => {
-    setAnchor(null)
-    setDlgW(Math.min(DIALOG_W_DEFAULT, window.innerWidth - 24))
-    setDlgH(Math.min(DIALOG_H_DEFAULT, window.innerHeight - 24))
-  }
-
   /** 上段修订列表高度拖拽（clamp：下限 200，上限 = body 高 - 信息区/路径区/分隔条保留空间）。 */
   const onListHDrag = (event) => startDrag(event, 'y', listH, (next) => {
     const total = bodyRef.current?.clientHeight ?? 0
@@ -1082,33 +1049,45 @@ export function SvnLogDialog(props) {
    * @param wantList 目标上段（修订列表）高度
    * @param wantMsg 目标中段（提交信息）高度
    */
+  /** @private @author ddj 2026年10月14号 @param nextList 目标上段高度 @param nextMsg 目标中段高度 只在值真正变化时提交。 */
+  const applyFit = (nextList, nextMsg) => {
+    if (nextList !== listH) setListH(nextList)
+    if (nextMsg !== msgH) setMsgH(nextMsg)
+  }
+
   const fitHeights = (wantList, wantMsg) => {
     const total = bodyRef.current?.clientHeight ?? 0
-    if (!total) { setListH(wantList); setMsgH(wantMsg); return }
+    if (!total) { applyFit(wantList, wantMsg); return }
     const paneOcc = paneRef.current?.offsetHeight ?? -1
     // 实测导出非本段占用（勘误 2026-09-24：手算公式漏 gap/margin/padding 曾致保底仅114）；测不到回落分隔条
     const chrome = paneOcc >= 0 ? Math.max(0, total - listH - msgH - paneOcc) : HSPLIT_TOTAL_PX
     const budget = total - PANE_KEEP_MIN - chrome
     if (budget < LIST_H_MIN + MSG_H_MIN) {
-      setListH(Math.min(wantList, LIST_H_MIN))
-      setMsgH(Math.min(wantMsg, MSG_H_MIN))
+      applyFit(Math.min(wantList, LIST_H_MIN), Math.min(wantMsg, MSG_H_MIN))
       return
     }
-    if (wantList + wantMsg <= budget) { setListH(wantList); setMsgH(wantMsg); return }
+    if (wantList + wantMsg <= budget) { applyFit(wantList, wantMsg); return }
     const scale = budget / (wantList + wantMsg)
     let nextList = Math.floor(wantList * scale)
     let nextMsg = Math.floor(wantMsg * scale)
     if (nextList < LIST_H_MIN) { nextList = LIST_H_MIN; nextMsg = Math.min(nextMsg, budget - nextList) }
     else if (nextMsg < MSG_H_MIN) { nextMsg = MSG_H_MIN; nextList = Math.min(nextList, budget - nextMsg) }
-    setListH(nextList)
-    setMsgH(nextMsg)
+    applyFit(nextList, nextMsg)
   }
 
   // 初始/弹窗尺寸变化 fit（2026-09-24 用户反馈：固定高中段把下段变更文件区挤到 0）：
-  // 挂载与 dlgH 变化时收敛一次；拖拽期间不介入（拖拽自带 clamp），双击复位经 fitHeights 显式收敛。
+  // 观察的是 body（其高度由弹窗尺寸决定、不含 listH/msgH），故收敛是单步不动点、不会与自身互相激发；
+  // 拖拽期间不介入（拖拽自带 clamp），双击复位经 fitHeights 显式收敛。
+  // 勘误 2026-10-14：ResizeObserver 回调本身已按帧派发，无需再包 rAF —— 推迟到下一帧反而会多出
+  // 一帧「尺寸已变小、height 还是旧值」的中间态，正是要避免的下段被挤扁。改由 applyFit 抑制同值提交。
+  const fitRef = React.useRef(null)
+  fitRef.current = () => fitHeights(listH, msgH)
   React.useEffect(() => {
-    fitHeights(listH, msgH)
-  }, [dlgH])
+    const observer = new ResizeObserver(() => fitRef.current?.())
+    if (bodyRef.current) observer.observe(bodyRef.current)
+    fitRef.current?.()
+    return () => observer.disconnect()
+  }, [])
 
   // 勘误2（2026-09-24）：挂载 fit 量到的是数据到达前布局（终态差 ~4px → 保底 166）。
   // 初次数据到达以终态布局补 fit 一次收敛至 ≥170；单次门闩，之后刷新/加载更多/拖拽不介入。
@@ -1118,24 +1097,20 @@ export function SvnLogDialog(props) {
     fitHeights(listH, msgH)
   }, [list])
 
-  // 键盘：F5 刷新（防浏览器整页刷新）；↑↓ 在显示列表内移动选中（输入框内不劫持）
-  React.useEffect(() => {
-    const onKey = (event) => {
-      if (event.key === 'F5') { event.preventDefault(); onRefresh(); return }
-      if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
-      const tag = String(event.target?.tagName ?? '').toLowerCase()
-      if (tag === 'input' || tag === 'select' || tag === 'textarea') return
-      if (!sorted || !sorted.length) return
-      event.preventDefault()
-      const at = sorted.findIndex((item) => item.revision === selected[0]?.revision)
-      const next = at < 0 ? 0 : Math.min(sorted.length - 1, Math.max(0, at + (event.key === 'ArrowDown' ? 1 : -1)))
-      const hit = sorted[next]
-      setSelected([hit]) // ↑↓ 折叠为单选（官方同款），并重置 Shift 基准
-      setAnchorRev(hit.revision)
-    }
-    window.addEventListener('keydown', onKey, true)
-    return () => window.removeEventListener('keydown', onKey, true)
-  }, [sorted, onRefresh, selected])
+  /** @private @author ddj 2026年10月14号 @param event 日志浮窗内按键。其他窗口及输入控件保留自己的键盘行为。 */
+  function onLogKey(event) {
+    if (rangeOpen || menu || inputOwnsKey(event.target)) return
+    if (event.key === 'F5') { event.preventDefault(); event.stopPropagation(); onRefresh(); return }
+    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
+    if (!sorted || !sorted.length) return
+    event.preventDefault()
+    event.stopPropagation()
+    const at = sorted.findIndex((item) => item.revision === selected[0]?.revision)
+    const next = at < 0 ? 0 : Math.min(sorted.length - 1, Math.max(0, at + (event.key === 'ArrowDown' ? 1 : -1)))
+    const hit = sorted[next]
+    setSelected([hit])
+    setAnchorRev(hit.revision)
+  }
 
   /** 复制当前选中修订（P0-9；剪贴板不可用静默忽略）。 */
   const copyRevision = (entry) => {
@@ -1186,6 +1161,15 @@ export function SvnLogDialog(props) {
     })
   }
 
+  // React.memo 生效的前提是行回调身份稳定：pickWithMods/onItemMenu 的闭包依赖 anchorRev/sorted/visibleSelected，
+  // 每次渲染都是新函数，会把 LogRows/LogItemRow 的 memo 全部打穿。用 ref 存最新闭包、useCallback 空依赖转发。
+  /** @author ddj 2026年10月14号 */
+  const rowCbs = React.useRef<{ pick: ((event: unknown, item: unknown) => void) | null; menu: ((event: unknown, item: unknown) => void) | null }>({ pick: null, menu: null })
+  rowCbs.current.pick = pickWithMods
+  rowCbs.current.menu = onItemMenu
+  const pickStable = React.useCallback((event: unknown, item: unknown) => rowCbs.current.pick?.(event, item), [])
+  const menuStable = React.useCallback((event: unknown, item: unknown) => rowCbs.current.menu?.(event, item), [])
+
   /** 下窗格路径行右键菜单（P0-8；G8 目录不可开差异，G9 仓库外不可打开）。 */
   const onPathMenu = (event, item, revision) => {
     event.preventDefault()
@@ -1208,9 +1192,9 @@ export function SvnLogDialog(props) {
   // P0-14 上中下三段全宽：上=修订列表（高可拖）/ 中=提交信息（高可拖）/ 下=变更路径（占余）
   const body = React.createElement('div', { className: 'edrv-svnlog-body', ref: bodyRef },
     React.createElement(LogList, {
-      list: sorted, selected: visibleSelected, keyword: query.trim(), busy, truncated,
+      list: sorted, selectedRevs, keyword: query.trim(), busy, truncated,
       sortKey, sortDir, onSort, onSortReset,
-      onPick: pickWithMods, onLoadMore, onItemMenu,
+      onPick: pickStable, onLoadMore, onItemMenu: menuStable,
       height: listH, wcRev,
     }),
     React.createElement(Splitter, {
@@ -1224,16 +1208,10 @@ export function SvnLogDialog(props) {
     React.createElement('div', { className: 'edrv-svnlog-pane edrv-svnlog-pathspane', ref: paneRef },
       React.createElement(LogPathsInner, { selected: visibleSelected, target, onlyAffected, onOpenFile, onOpenDiff, onPathMenu })))
 
-  return React.createElement(ModalShell, {
-    dialogClass: 'edrv-svnlog-dialog',
-    width: Math.round(dlgW) + 'px',
-    // 八向锚定（增量3）：anchor 非空时 absolute 定位于视口坐标（脱离 flex 居中，视觉零跳变）；
-    // border-box 令 rect==state（clamp/拖拽零换算）；maxHeight:none 消除 88vh 造成 state≠视觉的漂移。
-    cardStyle: Object.assign(
-      { height: Math.round(dlgH) + 'px', boxSizing: 'border-box', maxHeight: 'none' },
-      anchor ? { position: 'absolute', left: Math.round(anchor.left) + 'px', top: Math.round(anchor.top) + 'px' } : null,
-    ),
-    onClose,
+  return React.createElement(FloatingWindow, {
+    title: 'SVN 日志', dialogClass: 'edrv-svnlog-dialog',
+    width: DIALOG_W_DEFAULT, height: DIALOG_H_DEFAULT,
+    onKeyDown: onLogKey, onClose,
   },
     React.createElement(LogHead, { target, onClose }),
     React.createElement(LogFilterBar, {
@@ -1249,15 +1227,6 @@ export function SvnLogDialog(props) {
       onExportCsv: () => onExport('csv'), onExportHtml: () => onExport('html'),
       rangeActive: rangeActive === true, onOpenRange: () => setRangeOpen(true), onRangeReset: () => onRangeReset?.(),
     }),
-    // 八向手柄（增量3）：四边先渲染、四角后渲染（角盖过相邻边 2px overlap）；双击复位统一走 resetDlgSize
-    React.createElement(Grip, { mode: 'n', onDragStart: startResize, onReset: resetDlgSize }),
-    React.createElement(Grip, { mode: 's', onDragStart: startResize, onReset: resetDlgSize }),
-    React.createElement(Grip, { mode: 'w', onDragStart: startResize, onReset: resetDlgSize }),
-    React.createElement(Grip, { mode: 'e', onDragStart: startResize, onReset: resetDlgSize }),
-    React.createElement(Grip, { mode: 'nw', onDragStart: startResize, onReset: resetDlgSize }),
-    React.createElement(Grip, { mode: 'ne', onDragStart: startResize, onReset: resetDlgSize }),
-    React.createElement(Grip, { mode: 'sw', onDragStart: startResize, onReset: resetDlgSize }),
-    React.createElement(Grip, { mode: 'se', onDragStart: startResize, onReset: resetDlgSize }),
     (menu ? React.createElement(ContextMenu, { x: menu.x, y: menu.y, entries: menu.entries, onClose: () => setMenu(null) }) : null),
     (statsOpen ? React.createElement(SvnLogStats, { key: 'edrv-svnlog-stats', entries: sorted, onClose: () => setStatsOpen(false) }) : null),
     (rangeOpen ? React.createElement(ModalShell, {

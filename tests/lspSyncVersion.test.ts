@@ -39,6 +39,17 @@ function syncVersions(): number[] {
     .map(([, payload]) => (payload as { version: number }).version)
 }
 
+/**
+ * 从 RPC 桩中提取本轮同步载荷（惰性文本路径的断言用）。
+ * @author ddj 2026年10月15号
+ * @returns 按调用顺序排列的 edrv.lsp.sync 载荷
+ */
+function syncPayloads(): Array<{ text?: string }> {
+  return vi.mocked(rpc).mock.calls
+    .filter(([method]) => method === 'edrv.lsp.sync')
+    .map(([, payload]) => payload as { text?: string })
+}
+
 beforeEach(() => {
   vi.useFakeTimers()
   vi.setSystemTime(new Date('2026-09-24T12:00:00Z'))
@@ -75,6 +86,26 @@ describe('client 文档版本', () => {
     closeDoc('a.cs')
     await syncDoc('a.cs', 'reopen', true)
     expect(syncVersions()).toEqual([1, 2, 1, 1])
+  })
+
+  it('惰性文本：去抖窗口内不取值，只在实际发送前求值一次', async () => {
+    let reads = 0
+    const text = () => { reads += 1; return 'lazy-' + reads }
+    await syncDoc('a.cs', text)
+    await syncDoc('a.cs', text)
+    expect(reads).toBe(0)
+    await vi.advanceTimersByTimeAsync(250)
+    expect(reads).toBe(1)
+    const calls = syncPayloads()
+    expect(calls[calls.length - 1].text).toBe('lazy-1')
+  })
+
+  it('惰性文本取值抛错（model 已销毁）→ 放弃本次同步，不退化成空内容上传', async () => {
+    await syncDoc('a.cs', 'baseline', true)
+    const before = syncPayloads().length
+    await syncDoc('a.cs', () => { throw new Error('model disposed') })
+    await vi.advanceTimersByTimeAsync(250)
+    expect(syncPayloads().length).toBe(before)
   })
 })
 

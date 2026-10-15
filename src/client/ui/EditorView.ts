@@ -11,6 +11,7 @@ import React from 'react'
 import { createPortal } from 'react-dom'
 import { EditorPane, EditorSplit, PassiveEditor } from './EditorPane.js'
 import { FloatingEditor } from './FloatingEditor.js'
+import { FloatingWindow } from './FloatingWindow.js'
 import { createLayout, parseLayout, syncTabs, ownerOf, focusGroup, moveTab, returnGroup, GROUP_LIMIT, MAIN_GROUP } from '../state/editorLayout.js'
 import { createTabDrag, hitTarget } from '../tabDrag.js'
 import { createDocStore } from '../state/documentStore.js'
@@ -3505,8 +3506,7 @@ export function EditorView(props) {
     //（focusDiff=true 跳过：差异审查对象必为本插件编辑的文本文件，审查优先）；
     // handler 缺失/失败（旧版无 openResource / seat 未挂）→ 回退现状页签打开，不阻断
     if (!focusDiff && inNativePath(path) && tryNativeOpen(path)) return
-    // 打开文件即离开基线差异审阅态（差异视图是「当前文件」的临时视图）
-    setSvnDiff(null)
+    // 对比浮窗独立保留，允许同时打开并编辑其他文件。
     recordNav()
     // G9：统一归一为页签规范形态（差异栏/启动器/树/命令栏等入口一致）
     const normalized = addTabNorm(path, true)
@@ -3555,7 +3555,6 @@ export function EditorView(props) {
     if (!document) return
     flushSave()
     saveViewState(active)
-    setSvnDiff(null)
     setDiskActive(null)
     setPlanTabs((prev) => [...prev.filter((item) => item.address !== document.address), document].slice(-32))
     setPlanActive(document.address)
@@ -3578,7 +3577,6 @@ export function EditorView(props) {
     flushSave()
     saveViewState(active)
     recordNav()
-    setSvnDiff(null)
     const positioned = request.line != null || request.column != null
     if (positioned && mdPreviewRef.current.has(path)) toggleMdPreview(path)
     setError(null)
@@ -3611,7 +3609,7 @@ export function EditorView(props) {
     const image = imgElRef.current
     return {
       sessionId, cwd, active, sequence: loadSeqRef.current, load: receiptLoad,
-      mounted: Boolean(viewRootRef.current), blocked: Boolean(svnDiff),
+      mounted: Boolean(viewRootRef.current), blocked: false,
       kind: isImageActive ? 'image' : isPdfActive ? 'pdf' : mdPreviewing ? 'markdown' : 'text',
       contentPath, contentReady, modelMatches, positionMatches,
       imageLoaded: Boolean(imageSrc && !imgBroken && image?.getAttribute('src') === imageSrc && image.complete && image.naturalWidth > 0),
@@ -3624,7 +3622,7 @@ export function EditorView(props) {
   function receiptReady(request) {
     if (request.plan) return request.sessionId === sessionId && planActive === request.plan.address
       && planTabs.some((item) => item.address === request.plan.address && item.markdown === request.plan.markdown)
-      && planHostRef.current?.getAttribute('data-plan-address') === request.plan.address && !svnDiff
+      && planHostRef.current?.getAttribute('data-plan-address') === request.plan.address
     return receiptReadyFor(request, receiptView(request))
   }
   /** @private @author ddj 2026年09月28号 @param request Claimed target. @returns Only its current load/render error. */
@@ -4013,27 +4011,6 @@ export function EditorView(props) {
       : React.createElement('pre', { className: 'edrv-mdview-pre' }, text)
     body = React.createElement('div', { className: 'edrv-mdview', ref: planHostRef, 'data-plan-address': activePlan.address },
       React.createElement('div', { className: 'edrv-mdview-stage' }, React.createElement('div', { className: 'edrv-mdview-doc' }, render)))
-  } else if (svnDiff) {
-    // 差异视图优先占位（覆盖编辑器主体）：只读审阅态，关闭后回到原编辑器
-    body = React.createElement(SvnDiffPanel, {
-      key: 'edrv-svndiff:' + svnDiff.scheme + ':' + svnDiff.path,
-      monaco,
-      path: svnDiff.path,
-      base: svnDiff.base,
-      working: svnDiff.working,
-      reason: svnDiff.reason,
-      message: svnDiff.message,
-      leftLabel: svnDiff.leftLabel,
-      rightLabel: svnDiff.rightLabel,
-      onBack: svnDiff.logTarget !== undefined ? backToSvnLog : undefined,
-      onClose: () => {
-        setSvnDiff(null)
-        if (svnUpdateReturn?.from === 'diff') {
-          setSvnUpdateDialog(svnUpdateReturn.dialog)
-          setSvnUpdateReturn(null)
-        }
-      },
-    })
   } else if (!monaco && !monacoErr) {
     body = loadingBody(loadStage.message, loadStage.progress)
   } else if (monacoErr) {
@@ -4329,7 +4306,7 @@ export function EditorView(props) {
   }
 
   // 「添加配置」按钮（VSCode 同款形态，编辑区右下角）：仅插件专属 launch.json 打开且非差异审阅态显示
-  const addCfgBtn = (active && !svnDiff && LAUNCH_JSON_RE.test(String(active).replace(/\\/g, '/')))
+  const addCfgBtn = (active && LAUNCH_JSON_RE.test(String(active).replace(/\\/g, '/')))
     ? React.createElement('button', {
         className: 'edrv-addcfg',
         title: '添加调试配置（插入到 configurations 数组开头）',
@@ -4367,12 +4344,12 @@ export function EditorView(props) {
         React.createElement('button', { className: 'edrv-pill edrv-pill-ghost', title: '复制安装命令', onClick: copyInstallCmd }, '复制命令'),
         React.createElement('button', { className: 'edrv-side-hint-close', title: '关闭提示', 'aria-label': '关闭提示', onClick: dismissHint }, '×'))
     : null
-  const fullView = createPortal(React.createElement('div', { 'data-edrv-view': '1', style: { display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0, minHeight: 0, overflow: 'hidden' } }, pathBar, sideHintEl, diskBanner(), editorArea, statusBar), fullHost, 'edrv-full-editor')
+  const fullView = createPortal(React.createElement(React.Fragment, null, pathBar, sideHintEl, diskBanner(), editorArea, statusBar), fullHost, 'edrv-full-editor')
   const mainCol = React.createElement('div', { className: 'edrv-main-col edrv-workbench', style: { flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' } },
     React.createElement('div', { className: 'edrv-workbench-tools' }, tabRow),
     renderTree(workbench.tree), fullView,
     workbench.floats.map((item, layer) => React.createElement(FloatingEditor, { key: item.group, owner: String(scope), group: item.group, rect: item, layer, focused: item.group === workbench.focused, onBounds: floatBounds, onFocus: selectGroup, onReturn: returnPane }, renderGroup(item.group))),
-    dragPreview ? createPortal(React.createElement('div', { 'data-edrv-view': '1', style: { display: 'contents', pointerEvents: 'none' } },
+    dragPreview ? createPortal(React.createElement(React.Fragment, null,
       dragPreview.rect ? React.createElement('div', { className: 'edrv-drag-overlay', style: dragPreview.rect }, React.createElement('span', { className: 'edrv-drop-label' }, dragPreview.label)) : null,
       React.createElement('div', { className: 'edrv-drag-ghost', style: { left: dragPreview.point.x + 12, top: dragPreview.point.y + 12 } }, baseNameOf(dragPreview.path) + ' · ' + dragPreview.label)), document.body) : null)
   // 编辑器根节点按 composer 顶部边界动态限高，底部对话区域继续由 DSH 原生渲染。
@@ -4517,6 +4494,23 @@ export function EditorView(props) {
         },
       })
     : null
+  /** @private @author ddj 2026年10月14号 关闭对比浮窗，按原 job 恢复来源更新窗口。 */
+  function closeSvnDiff() {
+    setSvnDiff(null)
+    if (svnUpdateReturn?.from === 'diff') {
+      setSvnUpdateDialog(svnUpdateReturn.dialog)
+      setSvnUpdateReturn(null)
+    }
+  }
+  const svnDiffEl = svnDiff ? React.createElement(FloatingWindow, {
+    key: 'edrv-svndiff-window:' + scope,
+    title: '文件对比 · ' + baseNameOf(svnDiff.path), width: 1100, height: 680,
+    owner: String(scope), onClose: closeSvnDiff,
+  }, React.createElement(SvnDiffPanel, {
+    ...svnDiff, key: 'edrv-svndiff:' + svnDiff.scheme + ':' + svnDiff.path, monaco,
+    onBack: svnDiff.logTarget !== undefined ? backToSvnLog : undefined,
+    onClose: closeSvnDiff,
+  })) : null
   // W2-1 补丁对话框 / W2-2 目录对比对话框：portal 到 body，与日志弹窗同一挂载方式
   const patchDialogEl = patchDialog
     ? React.createElement(SvnPatchDialog, {
@@ -4613,6 +4607,7 @@ export function EditorView(props) {
         paletteEl,
         svnLogEl,
         svnUpdateEl,
+        svnDiffEl,
         patchDialogEl,
         sumDialogEl,
         dlogEl,
@@ -4625,6 +4620,7 @@ export function EditorView(props) {
         paletteEl,
         svnLogEl,
         svnUpdateEl,
+        svnDiffEl,
         patchDialogEl,
         sumDialogEl,
         dlogEl,

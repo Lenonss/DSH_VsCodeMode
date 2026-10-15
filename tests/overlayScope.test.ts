@@ -36,7 +36,9 @@ function read(rel: string): string {
 
 describe('portal 根节点作用域（浮层样式失配回归）', () => {
   const files = clientSources(join(ROOT, 'src', 'client'))
-  const portalFiles = files.filter((file) => readFileSync(file, 'utf8').includes('createPortal('))
+  // EditorView 的既有工作台 portal 不属于浮层组件：fullHost 挂回作用域内，
+  // 拖拽 Fragment 则使用全局 .edrv-drag-* 样式；不能把两个 portal 拼成一个根节点。
+  const portalFiles = files.filter((file) => !file.endsWith('EditorView.ts') && readFileSync(file, 'utf8').includes('createPortal('))
 
   it('存在调用 createPortal 的组件（防收集失败导致空断言）', () => {
     expect(portalFiles.length).toBeGreaterThanOrEqual(3)
@@ -62,6 +64,19 @@ describe('portal 根节点作用域（浮层样式失配回归）', () => {
         : raw
       expect(rootArg, rel + ' 的 portal 根节点（' + raw + '）缺少 data-edrv-view（浮层样式将整块失配）')
         .toContain("'data-edrv-view'")
+    }
+  })
+})
+
+describe('工作台 portal 使用独立目标与全局拖拽样式', () => {
+  it('不把 fullHost 和 document.body 两个 portal 合并校验', () => {
+    const source = read('src/client/ui/EditorView.ts')
+    const css = read('src/client/styles/editor.css')
+    expect(source).toContain("fullHost, 'edrv-full-editor'")
+    expect(source).toContain('host.appendChild(fullHost)')
+    for (const name of ['edrv-drag-overlay', 'edrv-drag-ghost']) {
+      expect(source).toContain("className: '" + name + "'")
+      expect(css).toMatch(new RegExp('^(?:\\.[\\w-]+,\\s*)*\\.' + name + ' \\{', 'm'))
     }
   })
 })

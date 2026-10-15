@@ -36,7 +36,7 @@ vi.mock('react', async (original) => {
   React.useMemo = (factory: any) => factory()
   return { ...real, default: React }
 })
-import { SearchPanel } from '../src/client/sidebar/panels/SearchPanel.js'
+import { SearchPanel, noticeInScope, noticeTouchesContent } from '../src/client/sidebar/panels/SearchPanel.js'
 import { CACHE_KEY } from '../src/client/paths.js'
 import { clearSearchSeed, clearSearchScope, setSearchSeed, setSearchScope } from '../src/client/searchSeed.js'
 
@@ -154,5 +154,94 @@ describe('SearchPanel commit-time selection', () => {
     expect(input.select).toHaveBeenCalledTimes(2)
     commit()
     expectSelection('folder word')
+  })
+})
+
+describe('SearchPanel refresh on file change', () => {
+  /** @private @author ddj 2026年10月14号 @param kind 变化类别（可省略） @description 派发本作用域的文件变化通知 */
+  function notify(kind?: string): void {
+    window.dispatchEvent(new CustomEvent('edrv:refresh', { detail: { scope: props.ctx.scope, paths: ['a.lua'], kind } }))
+  }
+
+  /** @private @author ddj 2026年10月14号 @description 输入搜索词并跑完输入防抖 */
+  function search(text: string): void {
+    field.props.onChange({ target: { value: text } })
+    commit()
+    vi.advanceTimersByTime(250)
+    commit()
+  }
+
+  it('classifies notices by scope and change kind', () => {
+    expect(noticeInScope({ scope: 'ws' }, 'ws')).toBe(true)
+    expect(noticeInScope({ scope: 'other' }, 'ws')).toBe(false)
+    expect(noticeInScope({}, 'ws')).toBe(true)
+    expect(noticeTouchesContent({ kind: 'text' })).toBe(true)
+    expect(noticeTouchesContent({ kind: 'structure' })).toBe(true)
+    expect(noticeTouchesContent({})).toBe(true)
+    expect(noticeTouchesContent({ kind: 'svn' })).toBe(false)
+    expect(noticeTouchesContent({ kind: 'unknown' })).toBe(false)
+  })
+
+  it('re-runs the search with force after the target content changes', () => {
+    commit()
+    search('alpha')
+    expect(hooks.rpc).toHaveBeenCalledTimes(1)
+    expect(hooks.rpc).toHaveBeenLastCalledWith('edrv.searchContent', expect.objectContaining({ query: 'alpha' }))
+    expect(hooks.rpc.mock.calls[0][1]).not.toHaveProperty('force')
+    notify('text')
+    vi.advanceTimersByTime(300)
+    commit()
+    expect(hooks.rpc).toHaveBeenCalledTimes(2)
+    expect(hooks.rpc).toHaveBeenLastCalledWith('edrv.searchContent', expect.objectContaining({ query: 'alpha', force: true }))
+  })
+
+  it('merges the duplicate refresh/file-changed notices of one write', () => {
+    commit()
+    search('alpha')
+    notify('text')
+    window.dispatchEvent(new CustomEvent('edrv:file-changed', { detail: { scope: props.ctx.scope, path: 'a.lua', kind: 'text' } }))
+    vi.advanceTimersByTime(300)
+    commit()
+    expect(hooks.rpc).toHaveBeenCalledTimes(2)
+  })
+
+  it('skips svn refreshes and foreign scopes but keeps untyped notices', () => {
+    commit()
+    search('alpha')
+    notify('svn')
+    window.dispatchEvent(new CustomEvent('edrv:refresh', { detail: { scope: 'other', kind: 'text' } }))
+    vi.advanceTimersByTime(300)
+    commit()
+    expect(hooks.rpc).toHaveBeenCalledTimes(1)
+    // 无 kind 的历史通知无法排除内容变化，按保守策略重搜一次。
+    notify()
+    vi.advanceTimersByTime(300)
+    commit()
+    expect(hooks.rpc).toHaveBeenCalledTimes(2)
+    expect(hooks.rpc).toHaveBeenLastCalledWith('edrv.searchContent', expect.objectContaining({ query: 'alpha', force: true }))
+  })
+
+  it('does not search on a notice while the query is too short', () => {
+    commit()
+    field.props.onChange({ target: { value: 'a' } })
+    commit()
+    vi.advanceTimersByTime(250)
+    commit()
+    expect(hooks.rpc).not.toHaveBeenCalled()
+    notify('text')
+    vi.advanceTimersByTime(300)
+    commit()
+    expect(hooks.rpc).not.toHaveBeenCalled()
+  })
+
+  it('stops refreshing after unmount', () => {
+    commit()
+    search('alpha')
+    unmount()
+    expect(hooks.rpc).toHaveBeenCalledTimes(1)
+    notify('text')
+    vi.advanceTimersByTime(300)
+    commit()
+    expect(hooks.rpc).toHaveBeenCalledTimes(1)
   })
 })

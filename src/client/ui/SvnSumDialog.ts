@@ -9,7 +9,7 @@
  */
 import React from 'react'
 import { SVN_SUM_LETTER } from '../../shared/svn.js'
-import { ModalShell } from './ModalShell.js'
+import { FloatingWindow } from './FloatingWindow.js'
 import { svnDiffSum } from '../svnStatus.js'
 
 /**
@@ -53,10 +53,11 @@ export function SvnSumDialog(props) {
       (entry.kind === 'dir' ? React.createElement('span', { className: 'edrv-svnlog-path-kind' }, '目录') : null)))
   }
 
-  return React.createElement(ModalShell, {
+  return React.createElement(FloatingWindow, {
+    title: 'SVN 目录对比', height: 560,
     key: 'edrv-svn-sum',
     dialogClass: 'edrv-svn-sum-dialog',
-    width: 'min(680px, calc(100vw - 48px))',
+    width: 680,
     onClose,
   },
     React.createElement('div', { className: 'edrv-svn-patch-head' },
