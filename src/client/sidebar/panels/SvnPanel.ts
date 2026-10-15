@@ -975,6 +975,9 @@ export function SvnPanel(props) {
       revert: onRevert,
     }),
   })
+  /** @private @author ddj 2026年10月15号 Open the shared update window independently of selection and local changes. */
+  function updateProject() { ctxRef.current?.openSvnUpdate?.('') }
+  const updateHint = !managed ? 'SVN CLI 或工作副本不可用' : !ctx?.openSvnUpdate ? 'SVN 更新窗口不可用' : '更新项目（打开 SVN 更新窗口）'
   const rootName = ctx?.svn?.wcRoot ? String(ctx.svn.wcRoot).split(/[\\/]/).pop() || ctx.svn.wcRoot : ''
 
   // W2-3：远端更新提示条（null = 未检查；failed = 降级文案；否则展示落后数与 against 修订）
@@ -1032,8 +1035,12 @@ export function SvnPanel(props) {
       React.createElement('span', { className: 'edrv-side-title' }, 'SVN 变更'),
       React.createElement('span', { className: 'edrv-side-root', title: ctx?.svn?.wcRoot || '' }, rootName),
       React.createElement('span', { style: { flex: 1 } }),
-      // 图标组（设计定稿：AI 功能迁至独立 dock，头部只留导航/刷新）
+      // 项目更新、只读检查和本地刷新保持独立入口。
       React.createElement('span', { className: 'edrv-svn-head-icons' },
+        React.createElement('button', {
+          className: 'edrv-side-btn', title: updateHint, 'aria-label': '更新项目',
+          disabled: !managed || !ctx?.openSvnUpdate, onClick: updateProject,
+        }, '↓'),
         React.createElement('button', {
           className: 'edrv-side-btn', title: '检查远端更新（svn status -u；约数秒，离线自动降级）',
           onClick: checkRemote,

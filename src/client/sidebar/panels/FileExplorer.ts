@@ -418,6 +418,10 @@ export function FileExplorer(props) {
       }))
     : []
 
+  /** @private @author ddj 2026年10月15号 Open the existing update window for the current project root. */
+  function updateProject() { ctx?.openSvnUpdate?.('') }
+  const updateHint = !ctx?.svn?.svnCli ? 'SVN CLI 不可用' : !ctx?.openSvnUpdate ? 'SVN 更新窗口不可用' : '更新项目（打开 SVN 更新窗口）'
+
   const errorList = Object.entries(errors)
   const errorText = errorList.length ? errorList[0][1] : null
 
@@ -427,10 +431,10 @@ export function FileExplorer(props) {
       React.createElement('span', { className: 'edrv-side-root', title: root || '' }, rootName),
       React.createElement('span', { style: { flex: 1 } }),
       ctx?.svn?.managed ? React.createElement(Button, {
-        variant: 'toolbar', size: 'sm', disabled: !svn.canCheck || svn.busy,
-        title: '检查仓库更新（只读；不会执行 svn update）', onClick: svn.checkRemote,
-        'aria-label': '检查仓库更新',
-      }, svn.busy ? '…' : '↓') : null,
+        variant: 'toolbar', size: 'sm', disabled: !ctx.svn.svnCli || !ctx.openSvnUpdate,
+        title: updateHint, onClick: updateProject,
+        'aria-label': '更新项目',
+      }, '↓') : null,
       React.createElement('button', { className: 'edrv-side-btn', title: '刷新目录树', onClick: () => emitRefresh({ scope, kind: 'unknown' }) }, refreshIconEl())),
     svn.message ? React.createElement('div', { className: 'edrv-tree-status', role: 'status' }, svn.message) : null,
     React.createElement('div', { className: 'edrv-tree', ref: treeRef },

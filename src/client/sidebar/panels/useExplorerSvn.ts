@@ -136,6 +136,6 @@ export function useExplorerSvn(ctx: SidebarCtx | undefined, rows: readonly SvnVi
   /** @public @author ddj 2026年10月10号 Request an explicit offline full scan. */
   function refreshLocal() { owner.current?.refresh() }
   return { ...remote, local: snapshot?.view.marks ?? null, remote: snapshot ? remote.remote : null,
-    message: localMessage(snapshot?.view) + (remote.message ? '；' + remote.message : ''), canCheck: ready && snapshot !== null, refreshLocal }
+    message: ready ? localMessage(snapshot?.view) + (remote.message ? '；' + remote.message : '') : '', canCheck: ready && snapshot !== null, refreshLocal }
 }
 // --endregion

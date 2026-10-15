@@ -59,6 +59,34 @@ beforeEach(() => {
 afterEach(() => { unmount(); vi.unstubAllGlobals(); vi.useRealTimers() })
 
 describe('SVN explorer hook lifecycle', () => {
+  it.each([null, { managed: false, svnCli: true }, { managed: true, svnCli: false }])('has no SVN message or RPC when capability is unavailable: %j', async (svn) => {
+    const ctx = { ...ctxOf(), svn } as SidebarCtx
+    const out = render(ctx)
+    expect(out.message).toBe('')
+    expect(out.local).toBeNull()
+    expect(out.remote).toBeNull()
+    expect(out.canCheck).toBe(false)
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(mock.rpc).not.toHaveBeenCalled()
+  })
+  it('clears same-scope SVN evidence immediately and ignores late remote results after capability loss', async () => {
+    const ctx = ctxOf()
+    render(ctx); await vi.advanceTimersByTimeAsync(300)
+    let resolve!: (value: any) => void
+    mock.rpc.mockImplementationOnce(() => new Promise((done) => { resolve = done }))
+    const work = settle(ctx).checkRemote()
+    const signal = mock.rpc.mock.calls.at(-1)![2]
+    const next = { ...ctx, svn: { managed: false, svnCli: true } } as SidebarCtx
+    const out = render(next)
+    expect(out.message).toBe('')
+    expect(out.local).toBeNull()
+    expect(out.remote).toBeNull()
+    expect(signal.aborted).toBe(true)
+    resolve({ ok: true, outdated: [{ path: 'dir/a', item: 'modified' }], againstRev: 9 })
+    await work
+    expect(settle(next).message).toBe('')
+    expect(settle(next).remote).toBeNull()
+  })
   it('mount and file events only load local status; no automatic repository calls', async () => {
     const ctx = ctxOf()
     render(ctx)
