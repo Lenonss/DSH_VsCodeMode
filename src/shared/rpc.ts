@@ -425,6 +425,8 @@ export interface RpcRequestMap {
   'edrv.external.pendingState': { token: string; take?: boolean }
   'vscode.devFormGet': {}
   'vscode.devFormSet': { enabled: boolean; path?: string }
+  'vscode.updateCheck': {}
+  'vscode.updateSelf': {}
   'compat': {}
   'edrv.lsp.status': { sessionId?: string }
   'edrv.lsp.detect': {}
@@ -589,6 +591,8 @@ export interface RpcOkMap {
   'edrv.external.pendingState': { delivered: boolean; completed?: boolean; error?: string }
   'vscode.devFormGet': { devForm: DevFormInfo }
   'vscode.devFormSet': { devForm: DevFormInfo; restart: boolean }
+  'vscode.updateCheck': { ok: boolean; current?: string; latest?: string; hasUpdate?: boolean; error?: string }
+  'vscode.updateSelf': { ok: boolean; started?: boolean; error?: string }
   'compat': { report: CompatReport }
   'edrv.lsp.status': { servers: LspServerStatus[] }
   'edrv.lsp.detect': { servers: LspServerStatus[] }

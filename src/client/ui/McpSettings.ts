@@ -115,6 +115,9 @@ function GeneralSettings({ registry, getShortcuts }) {
   const [devForm, setDevForm] = React.useState(null)
   const [devBusy, setDevBusy] = React.useState(false)
   const [devMessage, setDevMessage] = React.useState('')
+  const [updateState, setUpdateState] = React.useState(null) // { current, latest, hasUpdate }
+  const [updateBusy, setUpdateBusy] = React.useState(false)
+  const [updateMessage, setUpdateMessage] = React.useState('')
   const [minW, setMinW] = React.useState(SIDEBAR_MIN_DEFAULT)
   const [minDraft, setMinDraft] = React.useState(null) // 输入草稿（null=跟随已保存值；blur/Enter 提交）
   const [limit, setLimit] = React.useState(EDITOR_LIMIT_DEFAULT)
@@ -198,6 +201,27 @@ function GeneralSettings({ registry, getShortcuts }) {
       setDevMessage(result.restart ? '已切换为正式版，重启 DSH 后生效。' : '已关闭开发形态。')
     }).catch((e) => setDevMessage('关闭失败：' + String(e))).finally(() => setDevBusy(false))
   }
+  /** 检查 npm registry 是否有比当前版本更新的发布（结果落 updateState）。 */
+  const runUpdateCheck = () => {
+    setUpdateBusy(true)
+    setUpdateMessage('')
+    rpc('vscode.updateCheck', {}).then((result) => {
+      if (!result.ok) { setUpdateMessage('检查失败：' + String(result.error)); return }
+      setUpdateState({ current: result.current ?? '', latest: result.latest ?? '', hasUpdate: result.hasUpdate === true })
+      setUpdateMessage(result.hasUpdate ? '发现新版本 v' + result.latest : '已是最新版本。')
+    }).catch((e) => setUpdateMessage('检查失败：' + String(e))).finally(() => setUpdateBusy(false))
+  }
+  /** 触发官方 pluginManager「先删后装」自我更新（页面会断开，成功与否均不再回报本页）。 */
+  const runSelfUpdate = () => {
+    const target = updateState?.latest ?? ''
+    if (!window.confirm('更新到 v' + target + '：更新中插件会先卸载再安装，页面将短暂断开，完成后请刷新页面或重启 DSH。\n注意：若安装失败（如断网），插件会保持未安装状态，可在官方插件管理页重新安装恢复。确认更新？')) return
+    setUpdateBusy(true)
+    setUpdateMessage('')
+    rpc('vscode.updateSelf', {}).then((result) => {
+      if (!result.ok) { setUpdateMessage('更新失败：' + String(result.error)); setUpdateBusy(false); return }
+      setUpdateMessage('更新已开始，页面即将断开；完成后请刷新页面或重启 DSH。')
+    }).catch((e) => { setUpdateMessage('更新失败：' + String(e)); setUpdateBusy(false) })
+  }
   /**
    * 唤起官方快捷键弹窗（键位统一归官方机制；入口不可用时展示手动打开方式）。
    * @author ddj 2026年09月28号
@@ -215,6 +239,17 @@ function GeneralSettings({ registry, getShortcuts }) {
       React.createElement('button', { className: 'vsm-devform-close', disabled: devBusy, onClick: closeDevForm }, devBusy ? '切换中…' : '关闭开发形态'),
     ),
   ) : null
+  const updateRow = React.createElement('div', { className: 'vsm-general-row' },
+    React.createElement('span', null, '插件更新',
+      React.createElement('small', { className: 'vsm-devform-note' },
+        '当前版本 v' + (updateState?.current ?? '') + (devForm?.enabled ? '；开发形态下请走工作区同步流程' : ''))),
+    React.createElement('div', { className: 'vsm-devform-actions' },
+      updateMessage && React.createElement('small', { className: 'vsm-devform-msg' }, updateMessage),
+      updateState?.hasUpdate
+        ? React.createElement('button', { disabled: updateBusy || devForm?.enabled === true, onClick: runSelfUpdate, title: devForm?.enabled ? '开发形态下请走工作区同步流程' : undefined }, updateBusy ? '更新中…' : '更新到 v' + (updateState.latest ?? ''))
+        : React.createElement('button', { disabled: updateBusy || devForm?.enabled === true, onClick: runUpdateCheck, title: devForm?.enabled ? '开发形态下请走工作区同步流程' : undefined }, updateBusy ? '检查中…' : '检查更新'),
+    ),
+  )
   return React.createElement('section', { className: 'vsm-general-page' },
     React.createElement('h2', null, '通用'),
     React.createElement('p', null, '配置 DSH 对话中文件链接的打开工具。工具由当前运行时自动扫描。'),
@@ -225,6 +260,7 @@ function GeneralSettings({ registry, getShortcuts }) {
       React.createElement('div', { className: 'vsm-panel-body' },
         React.createElement('label', { className: 'vsm-general-row' }, React.createElement('span', null, '文件链接使用工具'), React.createElement('select', { value: currentOption, disabled: loading || unavailable || notReady || busy || snapshot?.writable === false, onChange: (event) => save(event.target.value) }, options.map((item) => React.createElement('option', { key: item.id, value: item.id }, item.label))), loading && React.createElement('small', null, '读取中…')),
         devFormRow,
+        updateRow,
       ),
     ),
     React.createElement('section', { className: 'vsm-panel' },

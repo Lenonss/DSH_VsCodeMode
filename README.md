@@ -465,13 +465,13 @@ profile 请替换为实际目标，不要把示例目录当成当前运行 profi
 
 ```bash
 # ① Git 安装（clone + prepare 构建；推荐打固定 tag）
-dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.15.8
+dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.15.9
 
 # ② npm 注册表（发布到 npm 后）
-dsh plugin --profile web add dsh-vscode-mode@0.15.7
+dsh plugin --profile web add dsh-vscode-mode@0.15.9
 
 # ③ GitHub Release tgz 直装（Release asset 可用后）
-dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.15.8/dsh-vscode-mode-0.15.8.tgz
+dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.15.9/dsh-vscode-mode-0.15.9.tgz
 ```
 
 > **DSH 版本政策（0.14.10 起）**：六项 DSH peer 统一声明为 `*`，不再维护逐版
@@ -809,6 +809,7 @@ Keep All / Undo All 却是亮的。修复：单文件 Keep / Undo 覆盖冲突�
 完整变更见 [GitHub Releases](https://github.com/Lenonss/DSH_VsCodeMode/releases)。
 近期关键版本：
 
+- **v0.15.9**：**插件自我更新与可用更新提醒**——设置页「文件与安装」新增更新行：显示当前版本，一键检查 npm 上的最新版本，发现新版后可确认执行自我更新（host 端先卸载再安装插件包，安装失败自动恢复 profile package.json/pnpm-lock.yaml，更新期间页面会短暂断开）。客户端启动后延迟探测新版本，发现可用更新时弹 toast 提醒（每个版本只提醒一次），devForm 开发形态不提醒。详见 [0.15.9 发布说明](docs/release-0.15.9.md)。
 - **v0.15.8**：**跨端「会话不存在」兼容**——桌面端与 Web 端各自运行独立 DSH 实例、会话列表互通但会话仅在一端激活时，另一端文件编辑器不再卡在「文件加载失败：会话不存在 0%」：中央区显示「会话在当前端不可用」终态提示（说明成因、保留重试），资源管理器红条同样替换为友好文案。host 三处会话前置错误文案收敛为 shared 常量，client 按常量识别归类。详见 [0.15.8 发布说明](docs/release-0.15.8.md)。
 - **v0.15.7**：**Lua 成员链跳转与枚举引用**——规避 EmmyLua 标识符词边界解析问题，从引用结果推导跨文件声明；Lua 表字面量枚举键 Ctrl+点击打开引用 Peek，使用处仍按原生定义跳转。真实 GUI 点击尚未完成验收，用户接受此缺口；发布不自动安装或重启当前实例，详见 [0.15.7 发布说明](docs/release-0.15.7.md)。
 - **v0.15.6**：**统一 SVN 项目更新入口**——资源管理器顶部 ↓ 与 SVN 变更页全局 ↓ 均打开插件自带 SVN 更新窗口，目标为当前项目根目录；非 SVN、能力未知或 CLI 不可用时不显示虚假的 SVN 读取提示。保留只读远端检查与本地刷新；本次真实 GUI 未验证，用户已接受此发布缺口，不自动安装或重启，详见 [0.15.6 发布说明](docs/release-0.15.6.md)。

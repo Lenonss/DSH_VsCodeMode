@@ -42,6 +42,7 @@ import { unityAdd, unityInstall, unityList, unityRemove } from './unityBridge.js
 import { ackPending, handoffOpen, pendingState, pollPending } from './externalHandoff.js'
 import { buildReport } from './compat.js'
 import { findProfileDir, readDevForm, setDevForm } from './devForm.js'
+import { checkUpdate, startSelfUpdate } from './selfUpdate.js'
 import { normalizeRel } from './tree.js'
 import { baseNameOf, checkNewName, checkRenameName, isSubPath, joinRelPath, parentRelOf } from './shared/fsNames.js'
 import { invalidateIndex, listDirCached } from './treeIndex.js'
@@ -1243,6 +1244,14 @@ export function buildHandlers(
       } catch (error) {
         return { ok: false, error: String(error) }
       }
+    },
+    'vscode.updateCheck': async () => {
+      try { return await checkUpdate(ctx) }
+      catch (error) { return { ok: false, error: String(error) } }
+    },
+    'vscode.updateSelf': async () => {
+      try { return await startSelfUpdate(ctx) }
+      catch (error) { return { ok: false, error: String(error) } }
     },
     'edrv.integration.status': async () => {
       try {

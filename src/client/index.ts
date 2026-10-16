@@ -67,6 +67,7 @@ import { disposeAiInline } from './ai/inlineProvider.js'
 import { readSessionScope, subscribeScope } from './sessionScope.js'
 import { installPlanBridge } from './planBridge.js'
 import { installPageReload } from './pageReload.js'
+import { installUpdateNotice } from './updateNotice.js'
 import { flushPageState, flushUiState, hydrateUiState, installUiStatePersist, onUiStateReady, reportUiStateEvent, uiStateSettled } from './state/uiStatePersist.js'
 import { workspaceScopeOf } from './state/scopeStore.js'
 import { dapStore } from './dap/store.js'
@@ -194,6 +195,9 @@ export async function apply(ctx: any): Promise<void> {
     window.alert(message)
   }
   ctx.effect(() => installPageReload(flushPageState, notifyReload), 'vscode-mode: guarded page reload')
+
+  // 可用更新主动提醒：启动延迟 + 抖动后检查 registry，有新版本且未提醒过时 toast（失败静默）
+  installUpdateNotice(ctx, schedule)
 
   const registry: FileOpenerRegistry = createFileOpenerRegistry()
   const workspaces = ctx.get('workspaces')
