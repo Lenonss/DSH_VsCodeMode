@@ -75,7 +75,7 @@ import { navStateLoad, navStateSave } from '../state/navStateCache.js'
 import { statusOfAdd } from '../addToConversation.js'
 import { setSearchScope, setSearchSeed } from '../searchSeed.js'
 import { CACHE_KEY } from '../paths.js'
-import { runGoToDefinition, runFindReferences, hideReferencesOverlay } from '../monaco/lsp/providers.js'
+import { runGoToDefinition, runFindReferences, hideReferencesOverlay, bindLuaKeyRefs } from '../monaco/lsp/providers.js'
 import { isLuaTypeSlot } from '../monaco/lsp/keywords.js'
 import { bindLspUnderline } from '../monaco/lsp/underline.js'
 import { onLspProgress, refreshStatus, setSession as setLspSession } from '../monaco/lsp/index.js'
@@ -2393,6 +2393,8 @@ export function EditorView(props) {
     // SVN 组按创建时的最新状态注册（此后由 [monaco, svnStatus] effect 随状态增减）
     syncSvnMenuActs(ed)
     bindLspUnderline(ed, m)
+    const unbindLuaKeyRefs = bindLuaKeyRefs(ed, m)
+    ed.onDidDispose(unbindLuaKeyRefs)
     // AI 补全：编辑器实例登记（差异静默判定用）+ Alt+\ 手动触发 ghost text
     trackAiEditor(ed)
     ed.addCommand(m.KeyMod.Alt | m.KeyCode.Backslash, () => {

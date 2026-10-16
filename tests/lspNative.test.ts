@@ -71,6 +71,73 @@ describe('原生导航委托：自研鼠标路径已移除', () => {
   })
 })
 
+describe('Lua 表字段声明 Ctrl+点击', () => {
+  /** 构造只提供字段检测所需 API 的 Lua 文档。@author ddj 2026年10月16号 */
+  function luaModel(lines: string[]) {
+    return {
+      getLanguageId: () => 'lua',
+      getLineContent: (line: number) => lines[line - 1],
+      getWordAtPosition: ({ lineNumber, column }: { lineNumber: number; column: number }) => {
+        const line = lines[lineNumber - 1]
+        const match = /[A-Za-z_][A-Za-z0-9_]*/g
+        let word: RegExpExecArray | null
+        while ((word = match.exec(line))) {
+          if (column > word.index && column <= word.index + word[0].length) {
+            return { word: word[0], startColumn: word.index + 1, endColumn: word.index + word[0].length + 1 }
+          }
+        }
+        return null
+      },
+    }
+  }
+
+  it('只识别 EventId 表内枚举键声明，不把使用点或普通赋值当声明', () => {
+    const model = luaModel([
+      'EventId.ISTaskSystem = {',
+      '    TaskStateChange = 50000,',
+      '    HideISTaskMainView = 50001,',
+      '}',
+      'EventId.ISTaskSystem.TaskStateChange = 42',
+      'local TaskStateChange = 5',
+    ])
+    expect(providers.isLuaTableKey(model, { lineNumber: 2, column: 9 })).toBe(true)
+    expect(providers.isLuaTableKey(model, { lineNumber: 3, column: 9 })).toBe(true)
+    expect(providers.isLuaTableKey(model, { lineNumber: 5, column: 30 })).toBe(false)
+    expect(providers.isLuaTableKey(model, { lineNumber: 6, column: 8 })).toBe(false)
+  })
+
+  it('字段 Ctrl+点击只打开一次引用 Peek；非字段点击不接管', () => {
+    const listeners = new Map<string, (event: any) => void>()
+    const ed = fakeEditor() as ReturnType<typeof fakeEditor> & Record<string, any>
+    const model = luaModel(['EventId.ISTaskSystem = {', '    TaskStateChange = 50000,', '}'])
+    const position = { lineNumber: 2, column: 9 }
+    const setPositions: unknown[] = []
+    ed.getDomNode = () => ({
+      addEventListener: (name: string, listener: (event: any) => void) => listeners.set(name, listener),
+      removeEventListener: (name: string) => listeners.delete(name),
+    })
+    ed.getTargetAtClientPoint = () => ({ type: 6, position })
+    ed.getModel = () => model
+    ed.setPosition = (pos: unknown) => setPositions.push(pos)
+    const unbind = providers.bindLuaKeyRefs(ed, { editor: { MouseTargetType: { CONTENT_TEXT: 6 } } })
+    const intercepted: string[] = []
+    const event = { button: 0, ctrlKey: true, metaKey: false, altKey: false, shiftKey: false,
+      clientX: 1, clientY: 1, preventDefault: () => intercepted.push('default'),
+      stopPropagation: () => intercepted.push('propagation') }
+    listeners.get('mousedown')?.(event)
+    expect(intercepted).toEqual(['default', 'propagation'])
+    expect(setPositions).toEqual([position])
+    expect(ed.triggers).toEqual([{ source: 'edrv-lsp', id: 'editor.action.referenceSearch.trigger' }])
+    listeners.get('mouseup')?.({ ...event, ctrlKey: false })
+    expect(intercepted).toEqual(['default', 'propagation', 'default', 'propagation'])
+    listeners.get('mousedown')?.({ ...event, ctrlKey: false })
+    expect(ed.triggers).toHaveLength(1)
+    unbind()
+    expect(listeners.has('mousedown')).toBe(false)
+    expect(listeners.has('mouseup')).toBe(false)
+  })
+})
+
 describe('原生导航委托：命令通道', () => {
   it('runGoToDefinition 走原生 revealDefinition（多定义由原生弹 Peek）', async () => {
     const ed = fakeEditor()

@@ -3,7 +3,7 @@
  * dsh-vscode-mode client — Monaco LSP provider 注册 + 跳转/引用命令。
  * 数据层：Definition/Reference/DocumentSymbol/Hover provider（同一文件内跳转 Monaco 原生可用）。
  * 交互层：edrv.goToDefinition（F12）/ edrv.findReferences（Shift+F12 / 右键）均走 Monaco 原生命令；
- * Ctrl+点击同样交给原生（多结果弹 Peek 让用户选、无定义时按 alternativeDefinitionCommand 降级），
+ * Ctrl+点击使用处交给原生；Lua 表枚举字段声明处改为打开引用 Peek，
  * 数据经 host 的 LSP RPC 提供（registerEditorOpener 接管 edrv:// 点击跳转）。
  * 作者 ddj 2026-08-27 / 2026-09-11
  */
@@ -321,6 +321,73 @@ function peekSupported(ed) {
     return Boolean(ed.getContribution('editor.contrib.referencesController'))
   } catch (error) {
     return false
+  }
+}
+
+/**
+ * 判定 Ctrl+点击是否落在 Lua 表的字段声明键上（`TaskStateChange = 50000`）。
+ * 仅拦截表字面量内的键，不改动使用处的原生跳转行为。
+ * @author ddj 2026年10月16号
+ * @param model 当前 Monaco 文档
+ * @param position 鼠标命中位置
+ * @returns 是否为表字段声明键
+ */
+export function isLuaTableKey(model, position) {
+  if (model?.getLanguageId?.() !== 'lua' || !position) return false
+  const line = model.getLineContent(position.lineNumber)
+  const key = model.getWordAtPosition(position)
+  if (!key || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(key.word)) return false
+  if (!/^\s*=\s*(?!=)/.test(line.slice(key.endColumn - 1))) return false
+  if (!/^\s*$/.test(line.slice(0, key.startColumn - 1))) return false
+
+  // 仅识别 `Name = {` 后连续的键值行；遇到其它语句或闭合括号即停止回溯。
+  for (let lineNumber = position.lineNumber - 1; lineNumber >= Math.max(1, position.lineNumber - 100); lineNumber--) {
+    const previous = model.getLineContent(lineNumber).trim()
+    if (!previous || previous.startsWith('--')) continue
+    if (/^(?:[A-Za-z_][A-Za-z0-9_]*\s*\.\s*)*[A-Za-z_][A-Za-z0-9_]*\s*=\s*\{\s*(?:--.*)?$/.test(previous)) return true
+    if (!/^[A-Za-z_][A-Za-z0-9_]*\s*=\s*[^{}]*,?\s*(?:--.*)?$/.test(previous)) return false
+  }
+  return false
+}
+
+/**
+ * 仅在 Lua 表字段声明处把 Ctrl+点击交给引用 Peek；其他点击留给 Monaco 原生导航。
+ * 使用 DOM capture 阶段阻止原生 gotoDefinitionAtPosition 同时触发，避免跳转和 Peek 竞态。
+ * @author ddj 2026年10月16号
+ * @param ed Monaco 编辑器
+ * @param monaco Monaco API
+ * @returns 解绑回调
+ */
+export function bindLuaKeyRefs(ed, monaco) {
+  const node = ed?.getDomNode?.()
+  if (!node) return () => {}
+  const keyAt = (event) => {
+    if (event.button !== 0 || (!event.ctrlKey && !event.metaKey) || event.altKey || event.shiftKey) return null
+    const target = ed.getTargetAtClientPoint?.(event.clientX, event.clientY)
+    const content = monaco.editor?.MouseTargetType?.CONTENT_TEXT ?? 6
+    return target?.type === content && isLuaTableKey(ed.getModel(), target.position) ? target.position : null
+  }
+  let suppressUp = false
+  const onDown = (event) => {
+    const position = keyAt(event)
+    if (!position) return
+    suppressUp = true
+    event.preventDefault()
+    event.stopPropagation()
+    ed.setPosition(position)
+    void triggerReferencePeek(ed)
+  }
+  const onUp = (event) => {
+    if (!suppressUp) return
+    suppressUp = false
+    event.preventDefault()
+    event.stopPropagation()
+  }
+  node.addEventListener('mousedown', onDown, true)
+  node.addEventListener('mouseup', onUp, true)
+  return () => {
+    node.removeEventListener('mousedown', onDown, true)
+    node.removeEventListener('mouseup', onUp, true)
   }
 }
 

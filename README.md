@@ -465,13 +465,13 @@ profile 请替换为实际目标，不要把示例目录当成当前运行 profi
 
 ```bash
 # ① Git 安装（clone + prepare 构建；推荐打固定 tag）
-dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.15.6
+dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.15.7
 
 # ② npm 注册表（发布到 npm 后）
-dsh plugin --profile web add dsh-vscode-mode@0.15.6
+dsh plugin --profile web add dsh-vscode-mode@0.15.7
 
 # ③ GitHub Release tgz 直装（Release asset 可用后）
-dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.15.6/dsh-vscode-mode-0.15.6.tgz
+dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.15.7/dsh-vscode-mode-0.15.7.tgz
 ```
 
 > **DSH 版本政策（0.14.10 起）**：六项 DSH peer 统一声明为 `*`，不再维护逐版
@@ -809,6 +809,7 @@ Keep All / Undo All 却是亮的。修复：单文件 Keep / Undo 覆盖冲突�
 完整变更见 [GitHub Releases](https://github.com/Lenonss/DSH_VsCodeMode/releases)。
 近期关键版本：
 
+- **v0.15.7**：**Lua 成员链跳转与枚举引用**——规避 EmmyLua 标识符词边界解析问题，从引用结果推导跨文件声明；Lua 表字面量枚举键 Ctrl+点击打开引用 Peek，使用处仍按原生定义跳转。真实 GUI 点击尚未完成验收，用户接受此缺口；发布不自动安装或重启当前实例，详见 [0.15.7 发布说明](docs/release-0.15.7.md)。
 - **v0.15.6**：**统一 SVN 项目更新入口**——资源管理器顶部 ↓ 与 SVN 变更页全局 ↓ 均打开插件自带 SVN 更新窗口，目标为当前项目根目录；非 SVN、能力未知或 CLI 不可用时不显示虚假的 SVN 读取提示。保留只读远端检查与本地刷新；本次真实 GUI 未验证，用户已接受此发布缺口，不自动安装或重启，详见 [0.15.6 发布说明](docs/release-0.15.6.md)。
 
 - **v0.15.5**：**浮窗性能与客户端适配**——拖动/缩放改为逐帧直写几何、结束单次提交，多窗口共享视口监听；SVN 日志行表 memo 与选中集优化，冲突状态读取按批 4 并发。LSP 去抖发送前惰性读取全文，隐藏页面心跳目标周期降为 15 秒；兼容性摘要按版本、安装事实与用户选择显示适用诊断，补充搜索刷新回归。保留 0.15.4 全部功能；本次真实 GUI 未重测，用户已接受此发布缺口，未安装/重启当前实例，详见 [0.15.5 发布说明](docs/release-0.15.5.md)。

@@ -6,8 +6,9 @@
  */
 import { spawnServer, type Transport } from './transport.js'
 import { createLspClient, type LspClient } from './client.js'
-import { pathToFileUri, toWorkspacePath, isAbsolutePath } from './uri.js'
-import { deriveDefinitionFromLocations } from './derive.js'
+import { pathToFileUri, toWorkspacePath, isAbsolutePath, fileUriToPath } from './uri.js'
+import { deriveDefinitionFromLocations, deriveCrossFileDeclaration, isMisresolvedSameFileUsage } from './derive.js'
+import { readFile } from 'node:fs/promises'
 import type { LspProviderSpec } from './providers.js'
 import { LSP_SEMANTIC_TOKEN_MODIFIERS, LSP_SEMANTIC_TOKEN_TYPES } from '../shared/lsp.js'
 import type {
@@ -16,6 +17,7 @@ import type {
   LspCompletionTextEdit,
   LspLocation,
   LspParameterInformation,
+  LspPosition,
   LspRange,
   LspSemanticTokens,
   LspServerCapabilities,
@@ -72,6 +74,73 @@ export function lspDocVersion(incoming: number, previous?: number): number {
 }
 
 /**
+ * 把查询位置挪到光标所在 Lua 标识符词的末尾字符。
+ *
+ * 背景：EmmyLua 0.9.41 存在词边界怪癖——查询位置落在标识符 token 前半时，definition/hover/references
+ * 一律返回空 / "unknown" / []，落在 token 后半/末尾才正常解析（已对 EventId/ISTaskSystem/
+ * TaskStateChange 逐字符实测确认）。把位置挪到词尾即可让基标识符（如 `EventId`）正常解析。
+ * 仅当位置严格落在标识符词内时才挪；点号/空白/字符串/注释位置原样返回，不影响正常符号。
+ * @author ddj 2026年10月15号
+ * @param text 文档全文
+ * @param pos 查询位置（0-based）
+ * @returns 词末字符位置；不在词内则原样返回
+ */
+export function nudgeToWordEnd(text: string, pos: LspPosition): LspPosition {
+  const lines = text.split(/\r\n|\r|\n/)
+  const line = lines[pos.line]
+  if (line === undefined) return pos
+  const identifier = /[A-Za-z_][A-Za-z0-9_]*/g
+  let match: RegExpExecArray | null
+  while ((match = identifier.exec(line)) !== null) {
+    const start = match.index
+    const end = start + match[0].length
+    if (pos.character >= start && pos.character < end) {
+      return { line: pos.line, character: end - 1 }
+    }
+    if (pos.character < start) break
+  }
+  return pos
+}
+
+/** hover 内容是否"空/unknown"（EmmyLua 对未解析符号、成员链字段 hover 的原生输出）。 */
+function isEmptyHover(contents: string[]): boolean {
+  return contents.every((c) => {
+    const t = c.trim()
+    return !t || t === 'unknown'
+  })
+}
+
+/**
+ * 取光标所在成员链的基标识符范围（`EventId.ISTaskSystem.TaskStateChange` → `EventId`）。
+ * 链中无成员访问（无 '.'）时返回 null——基标识符回查无意义。
+ */
+function chainBaseRange(line: string, character: number): { start: number; end: number } | null {
+  const chain = /[A-Za-z_][A-Za-z0-9_]*(?:\s*\.\s*[A-Za-z_][A-Za-z0-9_]*)*/g
+  let match: RegExpExecArray | null
+  while ((match = chain.exec(line)) !== null) {
+    const start = match.index
+    const end = start + match[0].length
+    if (character >= start && character < end) {
+      const dot = match[0].indexOf('.')
+      if (dot === -1) return null
+      return { start, end: start + dot }
+    }
+    if (character < start) break
+  }
+  return null
+}
+
+/** LSP position 是否落在 range 内（start 包含、end 排除）。 */
+function rangeContains(pos: LspPosition, range: LspRange): boolean {
+  const start = range.start
+  const end = range.end ?? start
+  if (pos.line < start.line || pos.line > end.line) return false
+  if (pos.line === start.line && pos.character < start.character) return false
+  if (pos.line === end.line && pos.character >= end.character) return false
+  return true
+}
+
+/**
  * 创建语言服务器会话。
  * @author ddj 2026年08月27号
  * @param spec provider 规格（argv/cwd）
@@ -97,6 +166,23 @@ export function createLspServer(spec: LspProviderSpec, root: string, languageId:
   const docUriOf = (path: string): string => {
     const rel = toWorkspacePath(root, path)
     return isAbsolutePath(rel) ? pathToFileUri(rel) : pathToFileUri(root + '/' + rel.split('/').join('/'))
+  }
+
+  /**
+   * 按 file:// URI 读取文件文本：已打开文档走内存（与语言服务器索引一致），其余读盘。
+   * @author ddj 2026年10月15号
+   * @param uri 目标文件 file:// URI
+   * @returns 文件文本；读取失败（文件不存在/非 UTF-8 等）返回 null
+   */
+  const readTextByUri = async (uri: string): Promise<string | null> => {
+    for (const doc of docs.values()) {
+      if (doc.uri === uri) return doc.text
+    }
+    try {
+      return await readFile(fileUriToPath(uri), 'utf8')
+    } catch {
+      return null
+    }
   }
   let phase: LspServerPhase = 'idle'
   let transport: Transport | null = null
@@ -283,7 +369,27 @@ export function createLspServer(spec: LspProviderSpec, root: string, languageId:
       const doc = docs.get(path)
       if (!doc || !(await readyWait)) return []
       const client = ensureClient()
-      const position = { line, character }
+      // EmmyLua 词边界怪癖：位置在标识符前半返回空，nudge 到词尾后基标识符可正常解析
+      const position = nudgeToWordEnd(doc.text, { line, character })
+      // 跨文件声明推导（references + 词级校验），两处复用
+      const crossFromRefs = async (): Promise<LspLocation | null> => {
+        try {
+          const refs = normalizeLocations(
+            await client.request<unknown>(
+              'textDocument/references',
+              {
+                textDocument: { uri: doc.uri },
+                position,
+                context: { includeDeclaration: true },
+              },
+            ),
+          )
+          return await deriveCrossFileDeclaration(position, refs, doc.text, doc.uri, { readText: readTextByUri })
+        } catch (error) {
+          log('references fallback failed: ' + String(error))
+          return null
+        }
+      }
       // ① 标准定义（方法/跨文件命名空间等）
       const direct = normalizeLocations(
         await client.request<unknown>(
@@ -291,7 +397,19 @@ export function createLspServer(spec: LspProviderSpec, root: string, languageId:
           { textDocument: { uri: doc.uri }, position },
         ),
       )
-      if (direct.length) return direct
+      if (direct.length) {
+        // EmmyLua 0.9.41 对跨文件全局（EventId = {} 定义在别的文件）的 definition 常错误返回
+        // 当前文件最后一个使用点（同文件非声明形）。识别到误解析时降级走跨文件声明推导。
+        const mis = isMisresolvedSameFileUsage(doc.uri, direct, doc.text, position)
+        if (mis) {
+          const cross = await crossFromRefs()
+          if (cross) {
+            log('definition direct was same-file misresolution → cross-file declaration (' + path + ':' + line + ':' + character + ')')
+            return [cross]
+          }
+        }
+        return direct
+      }
       // ② 声明（服务器能力支持时）：EmmyLua 对局部变量/参数/表字段 definition 常返回空，declaration 更准
       if (capabilities.declaration) {
         try {
@@ -323,8 +441,21 @@ export function createLspServer(spec: LspProviderSpec, root: string, languageId:
           ),
         )
         const derived = deriveDefinitionFromLocations(position, refs, doc.text, doc.uri)
-        if (derived) {
+        // derived 为"点击处自身"（字段定义缺失空转）或"同文件非声明形使用点"（把 EventId 用
+        // 点当定义）时都不直接信任 → 先找跨文件声明；二者皆非才直接用同文件推导结果。
+        const selfDerived = derived ? rangeContains(position, derived.range) : false
+        const misDerived = derived ? isMisresolvedSameFileUsage(doc.uri, [derived], doc.text, position) : false
+        if (derived && !selfDerived && !misDerived) {
           log('definition fallback → references-derived (' + path + ':' + line + ':' + character + ')')
+          return [derived]
+        }
+        const cross = await deriveCrossFileDeclaration(position, refs, doc.text, doc.uri, { readText: readTextByUri })
+        if (cross) {
+          log('definition fallback → cross-file declaration (' + path + ':' + line + ':' + character + ')')
+          return [cross]
+        }
+        if (derived) {
+          // 点中的正是声明自身，或引用里没有可识别的跨文件声明 → 返回自身/同文件结果（无更优目标）
           return [derived]
         }
       } catch (error) {
@@ -336,11 +467,12 @@ export function createLspServer(spec: LspProviderSpec, root: string, languageId:
     async references(path: string, line: number, character: number, includeDeclaration: boolean): Promise<LspLocation[]> {
       const doc = docs.get(path)
       if (!doc || !(await readyWait)) return []
+      const position = nudgeToWordEnd(doc.text, { line, character })
       const result = await ensureClient().request<unknown>(
         'textDocument/references',
         {
           textDocument: { uri: doc.uri },
-          position: { line, character },
+          position,
           context: { includeDeclaration },
         },
       )
@@ -365,12 +497,29 @@ export function createLspServer(spec: LspProviderSpec, root: string, languageId:
     async hover(path: string, line: number, character: number): Promise<{ contents: string[] } | null> {
       const doc = docs.get(path)
       if (!doc || !(await readyWait)) return null
-      const result = await ensureClient().request<{ contents?: unknown; range?: unknown } | null>(
+      const client = ensureClient()
+      // EmmyLua 词边界怪癖：位置在标识符前半 hover 返回 "unknown"，nudge 到词尾可正常解析
+      const position = nudgeToWordEnd(doc.text, { line, character })
+      const result = await client.request<{ contents?: unknown; range?: unknown } | null>(
         'textDocument/hover',
-        { textDocument: { uri: doc.uri }, position: { line, character } },
+        { textDocument: { uri: doc.uri }, position },
       )
-      if (!result || !result.contents) return null
-      return { contents: stringifyHoverContents(result.contents) }
+      const contents = result?.contents ? stringifyHoverContents(result.contents) : []
+      // EmmyLua 对成员链字段（EventId.ISTaskSystem.TaskStateChange）hover 恒 "unknown"：
+      // 退回查询基标识符（EventId），显示其类型而非无信息文本
+      if (isEmptyHover(contents)) {
+        const lines = doc.text.split(/\r\n|\r|\n/)
+        const base = chainBaseRange(lines[position.line] ?? '', position.character)
+        if (base) {
+          const baseResult = await client.request<{ contents?: unknown } | null>(
+            'textDocument/hover',
+            { textDocument: { uri: doc.uri }, position: { line: position.line, character: base.end - 1 } },
+          )
+          const baseContents = baseResult?.contents ? stringifyHoverContents(baseResult.contents) : []
+          if (!isEmptyHover(baseContents)) return { contents: baseContents }
+        }
+      }
+      return contents.length ? { contents } : null
     },
 
     /**
