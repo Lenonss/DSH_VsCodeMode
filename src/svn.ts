@@ -12,6 +12,7 @@ import { tmpdir } from 'node:os'
 import type { Ctx, Session } from './store.js'
 import { cwdOf, sessionOf } from './registry.js'
 import type { SvnAction, SvnAiPlan, SvnChangeEntry, SvnConflictArtifact, SvnFeature, SvnIgnoreItem, SvnItemStatus, SvnLogEntry, SvnRemoteOutdatedEntry, SvnStatusPayload, SvnSumEntry } from './shared/svn.js'
+import { SESSION_MISSING_ERROR, SESSION_NO_WORKSPACE_ERROR } from './shared/rpc.js'
 import { AI_PLAN_DIFF_CAP, AI_PLAN_PATHS_CAP, BATCH_PATHS_CAP, FILE_SIZES_CAP, SVN_CLI_DEFAULT, TORTOISE_EXE, contentGuardOf, normalizeAiPlan, svnChangelistNameErrorOf, tortoiseLaunchArgv } from './shared/svn.js'
 import type { AiConfigView } from './shared/ai.js'
 import { buildAiPrompt, svnAiPlanOf } from './ai/svnTriage.js'
@@ -461,9 +462,9 @@ async function requireSvnSession(
   sessionId?: string,
 ): Promise<{ cwd: string } | { err: string }> {
   const session: Session | undefined = sessionOf(ctx, sessionId)
-  if (!session) return { err: '会话不存在' }
+  if (!session) return { err: SESSION_MISSING_ERROR }
   const cwd = cwdOf(session)
-  if (!cwd) return { err: '会话无工作区' }
+  if (!cwd) return { err: SESSION_NO_WORKSPACE_ERROR }
   return { cwd }
 }
 

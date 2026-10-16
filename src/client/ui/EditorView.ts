@@ -118,6 +118,7 @@ import { buildBpMenu } from '../dap/bpMenu.js'
 import { clampToolbarPosition, loadToolbarPosition, saveToolbarPosition } from '../dap/toolbarDrag.js'
 import { editorModelPathOf } from '../dap/modelPath.js'
 import { dapTrace } from '../dap/trace.js'
+import { isSessionMissingError, sessionMissingDetail, sessionMissingTitle } from '../sessionError.js'
 
 /**
  * 只在 Lua 注解类型槽开启注释自动建议；跨文件/离开类型槽立即恢复默认。
@@ -4024,6 +4025,18 @@ export function EditorView(props) {
     body = React.createElement('div', { className: 'edrv-empty' },
       React.createElement('div', null, '暂无打开的文件'),
       React.createElement('div', { style: { fontSize: 12 } }, '使用右上搜索框 (' + (chordOf('edrv.quickOpen') ?? 'Ctrl+P') + ') 打开工作区文件；' + (chordOf('edrv.showCommands') ?? 'Ctrl+Shift+P') + ' 打开命令栏；agent 修改文件后顶部会出现差异角标'))
+  } else if (content === null && loadError && isSessionMissingError(loadError)) {
+    // 跨端会话缺失：终态提示而非加载失败卡死（会话仅在一端激活，本端 RPC 均被拒）
+    body = React.createElement('div', { className: 'edrv-empty edrv-loading', 'aria-live': 'polite' },
+      React.createElement('div', { className: 'edrv-loading-title' }, sessionMissingTitle()),
+      React.createElement('div', { style: { fontSize: 12, maxWidth: 420, lineHeight: 1.6 } }, sessionMissingDetail()),
+      React.createElement('button', { className: 'edrv-pill edrv-pill-ghost', onClick: () => {
+        setLoadError(null)
+        setContent(null)
+        setContentPath(null)
+        setLoadStage({ progress: 10, message: '重新读取文件…' })
+        loadContent(active, sessionId)
+      } }, '重试'))
   } else if (content === null && loadError) {
     body = loadingBody('文件加载失败：' + loadError, 0, () => {
       setLoadError(null)

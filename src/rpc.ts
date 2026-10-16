@@ -5,7 +5,7 @@
  * 作者 ddj 2026-08-20
  */
 import type { DecideItem, DecideResult, RpcHandlerMap, RpcMethod, RpcRequestMap, RpcResult, RpcScope } from './shared/rpc.js'
-import { binaryMimeOf } from './shared/rpc.js'
+import { binaryMimeOf, SESSION_MISSING_ERROR, SESSION_NO_WORKSPACE_ERROR } from './shared/rpc.js'
 import type { DiffRecord, RecordView } from './shared/types.js'
 import type { Ctx, Session } from './store.js'
 import {
@@ -98,9 +98,9 @@ async function requireSession(ctx: Ctx, sessionId: string | undefined): Promise<
   { session: Session; cwd: string } | { err: string }
 > {
   const session = sessionOf(ctx, sessionId)
-  if (!session) return { err: '会话不存在' }
+  if (!session) return { err: SESSION_MISSING_ERROR }
   const cwd = cwdOf(session)
-  if (!cwd) return { err: '会话无工作区' }
+  if (!cwd) return { err: SESSION_NO_WORKSPACE_ERROR }
   return { session, cwd }
 }
 

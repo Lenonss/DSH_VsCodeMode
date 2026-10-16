@@ -15,6 +15,7 @@ import { onRuntimeProvisioned, envInstallStates } from './dotnetProvision.js'
 import { envRequirementsFor, installRequirement } from './envRequirements.js'
 import type { LspManager } from './manager.js'
 import type { RpcHandlerMap } from '../shared/rpc.js'
+import { SESSION_MISSING_ERROR, SESSION_NO_WORKSPACE_ERROR } from '../shared/rpc.js'
 import type { LspLocation, LspServerStatus } from '../shared/lsp.js'
 import { installFromMarket, installVsixFile, listInstalled, marketGet, marketSearch, uninstall, updateExtension, type ExtInfo } from './extmgr.js'
 import { toWorkspacePath } from './uri.js'
@@ -152,9 +153,9 @@ export function createLspRpc(deps: LspRpcDeps): { handlers: Partial<RpcHandlerMa
   /** 解析会话与工作区根（失败 → null + error）。 */
   const rootOf = async (sessionId: string | undefined): Promise<{ root: string; sessionId: string } | { err: string }> => {
     const session = sessionOf(ctx, sessionId)
-    if (!session) return { err: '会话不存在' }
+    if (!session) return { err: SESSION_MISSING_ERROR }
     const cwd = cwdOf(session)
-    if (!cwd) return { err: '会话无工作区' }
+    if (!cwd) return { err: SESSION_NO_WORKSPACE_ERROR }
     try {
       const root = await searchRoot(ctx, session)
       const sid = typeof session.id === 'string' && session.id ? session.id : sessionId ?? ''

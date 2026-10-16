@@ -13,6 +13,7 @@
 import React from 'react'
 import { IconFolderClose16, IconFolderOpen16, IconRefreshOutline16, fileIconEl } from '../../ui/icons.js'
 import { rpc } from '../../rpc.js'
+import { isSessionMissingError, sessionMissingDetail, sessionMissingTitle } from '../../sessionError.js'
 import { ContextMenu } from '../../ui/ContextMenu.js'
 import { buildTreeMenu } from '../contextMenu.js'
 import { explorerLoad, explorerSave } from '../../state/explorerCache.js'
@@ -423,7 +424,12 @@ export function FileExplorer(props) {
   const updateHint = !ctx?.svn?.svnCli ? 'SVN CLI 不可用' : !ctx?.openSvnUpdate ? 'SVN 更新窗口不可用' : '更新项目（打开 SVN 更新窗口）'
 
   const errorList = Object.entries(errors)
-  const errorText = errorList.length ? errorList[0][1] : null
+  // 跨端会话缺失：裸错误替换为友好标题 + 详情（重试仍保留，会话在本端可用后即恢复）
+  const rawErrorText = errorList.length ? errorList[0][1] : null
+  const sessionMissing = isSessionMissingError(rawErrorText)
+  const errorText = rawErrorText === null
+    ? null
+    : sessionMissing ? sessionMissingTitle() + '：' + sessionMissingDetail() : rawErrorText
 
   return React.createElement('div', { className: 'edrv-side-panel', onContextMenu: onPanelContext },
     React.createElement('div', { className: 'edrv-side-head' },

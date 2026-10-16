@@ -63,6 +63,17 @@ export function imageMimeOf(path: string): string {
 export const PDF_MIME = 'application/pdf'
 
 /**
+ * 会话级前置错误的规范文案：host requireSession 系与 client 错误识别共用同一常量，
+ * 避免文案漂移导致 client 端分类失效。跨端场景（桌面端/Web 端各自运行独立 DSH 实例、
+ * 会话列表互通但会话仅在一端激活）下，本端 host 取不到会话即返回「会话不存在」。
+ * @author ddj 2026年10月16号
+ */
+export const SESSION_MISSING_ERROR = '会话不存在'
+
+/** 会话存在但无工作区 cwd 时的规范文案（与 SESSION_MISSING_ERROR 同源共用）。 */
+export const SESSION_NO_WORKSPACE_ERROR = '会话无工作区'
+
+/**
  * 路径 → 二进制预览 MIME：PDF 特判 {@link PDF_MIME}，其余走图片表回退 octet-stream。
  * @author ddj 2026年09月22号
  * @param path 文件路径（`/` 或 `\` 分隔均可）
