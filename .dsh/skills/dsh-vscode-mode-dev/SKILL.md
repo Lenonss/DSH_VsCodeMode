@@ -5,8 +5,18 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
 
 # dsh-vscode-mode 开发/发布经验集（自我更新型技能）
 
-> updated: 2026-10-12 · 维护者：ddj（AI 会话按文末协议更新，保持精炼、去重）
+> updated: 2026-10-16 · 维护者：ddj（AI 会话按文末协议更新，保持精炼、去重）
 > **发布时先读「发布流程」与「失败恢复」**；下方实录是历史证据，不授权当前重跑发布、改 tag 或部署。冲突旧口径以更新后的规则为准。
+- 2026-10-16 实录（v0.15.9 发布：插件自我更新按钮 + 可用更新提醒；基线 v0.15.8 @ `800eb32`）：
+  三门本地全绿（typecheck 0 / **2958 passed + 15 skipped · 220 文件** / node --test 9/9 /
+  tsdown 双面：host 843914 B、client 1707844 B）；`release` 全绿直到 Publish to npm，仅
+  `Verify published tarball` 报 not retrievable（第三次第三结局），registry 侧 200/gitHead/
+  latest 三字段即时对齐，npm 实包与 GitHub asset SHA256 同为
+  `45ffd4c3996cfeecde73ccad3d6622b3fbb836f87c81d4029507947948cbd12d`。**新坑（RPC 响应类型）**：
+  RPC handler 返回类型被框架要求满足 `{ ok: true }` 交集，宽类型 `ok: boolean` 过不了
+  typecheck——自 updateCheck/updateSelf 起统一用可辨识联合 `{ ok: true; ... } | { ok: false; error }`。
+  **坑（PowerShell 管道覆写险毁文件）**：用 `Get-Content | -replace | Set-Content` 原地改大文件时
+  管道在读未完成前就开写会截断只剩 3 行——技能/文档类文件一律用 edit 工具改，不用 PowerShell 管道覆写。
 - 2026-10-09 实证（v0.14.5）：三门绿（2583通过/14跳过）；未改的 `tests/dapFakeAdapter.test.ts:26:9/:236:5` 报 `Error: waitFor 超时`，同提交Release与本地绿，仅CI失败任务重跑1次成功。npm响应 `Your package is being processed and may take a few minutes to become available.` 后约**25分23秒**才公开（01:32:53Z接受 / registry time 01:58:16.247Z）；15×30s Verify先超时，但main/tag/registry gitHead最终同为 `7833fac5c8b94ea940be34689e20d2345a5baea5`。npm实包与GitHub asset SHA256同为 `351280c1a7c19502a3212b8f6f20bf87defbd3524892e1b3b4516fc7c97719f7`，SRI与双入口通过。**未重跑Release、未重打tag、未部署DSH；真实GUI缺口经用户明确接受**。只确认异步处理中超过回读窗口，不猜测底层队列/CDN/stage原因。
 - 2026-10-08 MCP 审计：`mcp__${serverName}__${rawName}` 非单射，不能凭最长前缀反解归属；跨全局/项目双向拒绝 `__` 命名交叠，并对历史歧义工具 fail-closed。`ACTIVE`/工具数不是健康证据，`unverified` 应中性色；右侧绿色开关仅启用。状态轮询用只读 `mcp.snapshot`，不复用带文件/reconcile 的列表；初读并发用 `Promise.allSettled` 等所有传输结束，避免半失败导致重叠请求。配置读取—修改—写入需串行，避免并发丢服务；模块加载的 rejected Promise 不能永久缓存，否则刷新无法恢复。官方回归设置 `DSH_MCP_HOST_ROOT` 后才算真实模块测试，资源-only 零工具合法。
 - 当前桌面 profile 路径必须依据实际进程核验，不能套用下方旧版本 home 经验；2026-10-08 本机为 `C:\Users\1\.dsh\profiles\desktop`，Electron userData 与 Host profile 不是同一目录。
