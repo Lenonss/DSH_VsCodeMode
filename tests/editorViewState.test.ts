@@ -168,4 +168,30 @@ describe('editor view lifecycle', () => {
     createViewKeeper(final.editor).bind('ws', 'a.md', model)
     expect(final.current()).toEqual(viewOf(3500))
   })
+
+  it('bind findKey switch saves old group query and restores the new group query (ddj 2026年10月16号)', () => {
+    // 单编辑器交替持有两组：keeper 搬家时应「存旧组、取新组」
+    const fake = makeEditor()
+    const controller = {
+      state: { searchString: '', isRevealed: false, matchCase: false, wholeWord: false, isRegex: false,
+        change: (value: Record<string, unknown>) => Object.assign(controller.state, value),
+        onFindReplaceStateChange: () => ({ dispose: () => {} }) },
+      getState: () => controller.state,
+      start: (_options: unknown, value: Record<string, unknown>) => { Object.assign(controller.state, value) },
+    }
+    const editor = { ...fake.editor, getContribution: () => controller }
+    const keeper = createViewKeeper(editor)
+    const modelA = {}; const modelB = {}
+    // 组 A：输入查询并揭示
+    keeper.bind('ws', 'a.ts', modelA, 'ws\x00group-a')
+    controller.state.change({ searchString: 'alpha', isRevealed: true }, true)
+    // 切到组 B：组 A 查询已捕获，B 恢复为空白默认
+    keeper.bind('ws', 'b.ts', modelB, 'ws\x00group-b')
+    expect(controller.state.searchString).toBe('')
+    expect(controller.state.isRevealed).toBe(false)
+    // 切回组 A：alpha 查询随组恢复
+    keeper.bind('ws', 'a.ts', modelA, 'ws\x00group-a')
+    expect(controller.state).toMatchObject({ searchString: 'alpha', isRevealed: true })
+    keeper.dispose()
+  })
 })

@@ -1,6 +1,6 @@
 import React from 'react'
 import { describe, expect, it, vi } from 'vitest'
-import { EditorPane, bindPaneView } from '../src/client/ui/EditorPane.js'
+import { EditorPane, GroupPathbar, bindPaneView } from '../src/client/ui/EditorPane.js'
 import { buildTabMenu } from '../src/client/tabMenu.js'
 import { readFileSync } from 'node:fs'
 import ts from 'typescript'
@@ -85,7 +85,7 @@ describe('actual workbench adapters', () => {
   it('moves a dirty file without closing or forcing a save', () => {
     const layout = createLayout([{ path: 'a' }, { path: 'b' }], 'a')
     const setWorkbench = vi.fn(), setDiskActive = vi.fn(), saveViewState = vi.fn()
-    const acceptLayout = adapter('acceptLayout', { saveViewState, setWorkbench, setPlanActive: vi.fn(), setDiskActive })
+    const acceptLayout = adapter('acceptLayout', { saveViewState, setWorkbench, setPlanActive: vi.fn(), setDiskActive, activeRef: { current: 'b' }, resetContentForSwitch: () => {} })
     const reference = vi.fn()
     const drop = adapter('dropTab', { ownerOf: (current: any, path: string) => current.groups.find((group: any) => group.tabs.some((tab: any) => tab.path === path)), benchRef: { current: layout }, addRefToChat: reference, acceptLayout, moveTab })
     drop('a', { kind: 'split', group: 'main', edge: 'right' })
@@ -130,6 +130,21 @@ describe('actual workbench adapters', () => {
 })
 
 describe('actual editor pane interaction', () => {
+  it('renders a static pathbar per group with a stable height and focus click (ddj 2026年10月16号)', () => {
+    const onFocus = vi.fn()
+    const withFile = GroupPathbar({ path: 'Assets/GameData/Scheme/ItemScheme.lua', onFocus })
+    const nodes = descendants(withFile)
+    expect(withFile.props.className).toBe('edrv-pathbar')
+    expect(withFile.props['data-edrv-pb-static']).toBe('1')
+    expect(nodes.find((node) => node.props.className === 'edrv-pb-name')?.props.children).toBe('ItemScheme.lua')
+    expect(nodes.find((node) => node.props.className === 'edrv-pb-full')?.props.children).toBe('Assets/GameData/Scheme/ItemScheme.lua')
+    withFile.props.onClick()
+    expect(onFocus).toHaveBeenCalledOnce()
+    // 空分组占位：恒定高度、无空文件名
+    const empty = GroupPathbar({ path: null })
+    expect(descendants(empty).find((node) => node.props.className === 'edrv-pb-name')?.props.children).toBe('未打开文件')
+    expect(empty.props.title).toBe('此分页未打开文件')
+  })
   it('renders group geometry, accessible tabs and dirty markers', () => {
     const { tree, nodes } = pane()
     expect(tree.props['data-edrv-group']).toBe('main')

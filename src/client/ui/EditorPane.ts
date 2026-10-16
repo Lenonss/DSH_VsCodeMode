@@ -61,14 +61,34 @@ export function bindPaneView(editor: ViewEditor, scope: string, path: string, mo
 
 export interface PassiveProps {
   path: string | null
-  mount(host: HTMLDivElement, path: string): (() => void) | undefined
+  groupId?: string
+  mount(host: HTMLDivElement, path: string, groupId?: string): (() => void) | undefined
 }
 
-/** @public @author ddj 2026年10月14号 @param props Workbench-owned mounting contract. @returns Independent visible file view without global command listeners. */
+/**
+ * 非焦点分组的静态路径条：让路径条在每个编辑分组常驻（分组高度不随焦点切换变化）。
+ * 只读展示文件名 + 完整路径，点击聚焦所属组（与 passive 编辑器 pointerdown 同语义）。
+ * @public @author ddj 2026年10月16号
+ * @param props path 当前组活动文件（null 显示占位）；onFocus 点击回调。
+ * @returns 恒定 26px 高的路径条元素。
+ */
+export function GroupPathbar(props: { path: string | null; onFocus?(): void }): React.ReactElement {
+  const name = props.path ? props.path.split(/[\\/]/).pop() : '未打开文件'
+  return React.createElement('div', {
+    className: 'edrv-pathbar', 'data-edrv-pb-static': '1',
+    title: props.path || '此分页未打开文件', onClick: props.onFocus,
+  },
+  React.createElement('span', { className: 'edrv-pb-name' }, name),
+  React.createElement('span', { className: 'edrv-pb-full' }, props.path || ''))
+}
+
+/** @public @author ddj 2026年10月16号 @param props Workbench-owned mounting contract. @returns Independent visible file view without global command listeners. */
 export function PassiveEditor(props: PassiveProps): React.ReactElement {
   const host = React.useRef<HTMLDivElement>(null)
+  const groupRef = React.useRef(props.groupId)
+  groupRef.current = props.groupId
   React.useLayoutEffect(() => {
-    if (host.current && props.path) return props.mount(host.current, props.path)
+    if (host.current && props.path) return props.mount(host.current, props.path, groupRef.current)
   }, [props.path, props.mount])
   return React.createElement('div', { ref: host, className: 'edrv-passive-view' })
 }

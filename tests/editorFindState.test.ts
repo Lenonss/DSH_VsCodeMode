@@ -135,6 +135,28 @@ describe('workspace Ctrl+F sharing', () => {
     bridge.dispose()
   })
 
+  it('composite group keys isolate find widgets per editor group (ddj 2026年10月16号)', () => {
+    const fake = makeFind()
+    const bridge = createFindBridge(fake.editor)
+    // A 组打开搜索框并输入查询；B 组先保持关闭
+    bridge.resume('ws\x00group-a')
+    fake.state.change(queryOf('alpha'), true)
+    bridge.pause()
+    bridge.resume('ws\x00group-b')
+    expect(fake.state).toMatchObject({ searchString: '', isRevealed: false })
+    expect(fake.controller.start).not.toHaveBeenCalled()
+    // B 组自己的查询独立保存
+    fake.state.change(queryOf('beta'), true)
+    bridge.pause()
+    // 来回切换互不覆盖：A 恢复 alpha，B 恢复 beta
+    bridge.resume('ws\x00group-a')
+    expect(fake.state).toMatchObject(queryOf('alpha'))
+    bridge.pause()
+    bridge.resume('ws\x00group-b')
+    expect(fake.state).toMatchObject(queryOf('beta'))
+    bridge.dispose()
+  })
+
   it('dispose unregisters listener exactly once and later events cannot rewrite cache', () => {
     const fake = makeFind()
     const bridge = createFindBridge(fake.editor)

@@ -23,6 +23,9 @@
 [data-edrv-view] .edrv-pathbar .edrv-pb-full { flex: 1; min-width: 0; color: var(--dsw-alias-label-tertiary, #9aa5b1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; direction: rtl; text-align: left; }
 [data-edrv-view] .edrv-pathbar .edrv-pb-meta { flex-shrink: 0; font-size: 11px; color: var(--dsw-alias-label-tertiary, #9aa5b1); font-variant-numeric: tabular-nums; }
 [data-edrv-view] .edrv-pathbar .edrv-pb-status { color: var(--dsw-alias-label-secondary, #52606d); }
+/* 非焦点分组的静态路径条（GroupPathbar）：可点击聚焦所属组，悬停给反馈 @author ddj 2026-10-16 */
+[data-edrv-view] .edrv-pathbar[data-edrv-pb-static] { cursor: pointer; }
+[data-edrv-view] .edrv-pathbar[data-edrv-pb-static]:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(15,157,88,.06)); }
 [data-edrv-view] .edrv-pb-update { display: inline-flex; align-items: center; gap: 4px; height: 20px; flex: none; padding: 0 6px; border: 1px solid var(--dsw-alias-border-l1, #d9e0e4); border-radius: 4px; background: var(--dsw-alias-bg-layer-2, #f1f4f5); color: var(--dsw-alias-label-secondary, #485762); font-size: 11px; cursor: pointer; }
 [data-edrv-view] .edrv-pb-update:hover { background: var(--dsw-alias-interactive-bg-hover, #e7edf0); }
 [data-edrv-view] .edrv-pb-update:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary, #2869b4); outline-offset: 1px; }

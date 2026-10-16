@@ -1,4 +1,9 @@
-/** Workspace-local Ctrl+F state bridge; ddj 2026年10月09号. */
+/**
+ * Workspace-local Ctrl+F state bridge; ddj 2026年10月09号.
+ *
+ * 快照键语义（ddj 2026年10月16号）：键由调用方传入（findKey），不再限定为工作区 scope——
+ * 编辑器按分组隔离搜索框时传「scope + 分组 id」组合键；旧调用传 scope 时行为完全不变。
+ */
 export interface FindSnapshot {
   searchString: string
   isRevealed: boolean
@@ -58,17 +63,17 @@ function applyFind(controller: FindController, saved: FindSnapshot): Promise<unk
 /** @public @author ddj 2026年10月09号 @param editor Monaco editor. @returns Model-switch bridge; dispose releases the native listener. */
 export function createFindBridge(editor: FindEditor) {
   const controller = controllerOf(editor)
-  let scope: string | null = null
+  let findKey: string | null = null
   let paused = true
   let disposed = false
 
-  /** @private @author ddj 2026年10月09号 Capture only user changes, not model-reset or restoration events. */
+  /** @private @author ddj 2026年10月16号 Capture only user changes into the current findKey bucket, not model-reset or restoration events. */
   function capture(): void {
-    if (disposed || paused || !scope || !controller) return
+    if (disposed || paused || !findKey || !controller) return
     try {
       const saved = snapshotOf(controller.getState())
-      snapshots.delete(scope)
-      snapshots.set(scope, saved)
+      snapshots.delete(findKey)
+      snapshots.set(findKey, saved)
       if (snapshots.size > 20) snapshots.delete(snapshots.keys().next().value!)
     } catch { /* A disposed contribution must not interrupt view capture. */ }
   }
@@ -77,11 +82,11 @@ export function createFindBridge(editor: FindEditor) {
   /** @public @author ddj 2026年10月09号 Save before setModel; suppress Monaco's per-model option resets. */
   function pause(): void { capture(); paused = true }
 
-  /** @public @author ddj 2026年10月09号 @param nextScope Workspace owning the bound model. Restore with moveCursor=false; no per-file range or match index. */
-  function resume(nextScope: string): void {
+  /** @public @author ddj 2026年10月16号 @param nextKey Bucket owning the bound view（scope 或 scope+分组 id 组合键）. Restore with moveCursor=false; no per-file range or match index. */
+  function resume(nextKey: string): void {
     if (disposed || !controller) return
-    scope = nextScope
-    const saved = snapshots.get(scope) ?? {
+    findKey = nextKey
+    const saved = snapshots.get(findKey) ?? {
       searchString: '', isRevealed: false, matchCase: false, wholeWord: false, isRegex: false,
     }
     try {

@@ -9,7 +9,7 @@
  */
 import React from 'react'
 import { createPortal } from 'react-dom'
-import { EditorPane, EditorSplit, PassiveEditor } from './EditorPane.js'
+import { EditorPane, EditorSplit, PassiveEditor, GroupPathbar } from './EditorPane.js'
 import { FloatingEditor } from './FloatingEditor.js'
 import { FloatingWindow } from './FloatingWindow.js'
 import { createLayout, parseLayout, syncTabs, ownerOf, focusGroup, moveTab, returnGroup, GROUP_LIMIT, MAIN_GROUP } from '../state/editorLayout.js'
@@ -1898,6 +1898,37 @@ export function EditorView(props) {
     loadContent(active, sessionId)
   }, [active, sessionId])
 
+  /**
+   * 切换焦点分组时同步重置内容状态（与 setWorkbench 同批渲染）。
+   *
+   * 为什么不能只靠上面的 active effect：它在本轮 commit **之后**才执行——而 mountFull 在 commit 阶段
+   * 就把 fullHost 搬进新焦点组，导致新组先 paint 一帧旧组文件内容（用户所见「内容串组」闪烁）。
+   *
+   * 两个分支（ddj 2026年10月16号）：
+   * - 新组文件 model 已缓存 → 直接用缓存内容 seed（同批渲染即最终内容，无 loading 帧 → 切组零空白）；
+   * - 未缓存 → setContent(null)（loading 帧），避免旧内容串组。
+   * 之后 active effect 的 loadContent 照常校验/接管（缓存分支 value 相同，React 不会多渲染）。
+   */
+  const resetContentForSwitch = (nextPath) => {
+    const cached = nextPath ? modelsRef.current.get(nextPath) : null
+    if (cached) {
+      setContent(cached.getValue())
+      setContentPath(nextPath)
+      setLoadStage((prev) => ({ progress: Math.max(prev.progress, 84), message: '文件已读取，准备创建编辑器…' }))
+      setStatus('已加载')
+      return
+    }
+    setContent(null)
+    setContentPath(null)
+    setLoadStage({ progress: 10, message: '准备读取文件…' })
+    setStatus('加载中…')
+    setImageSrc(null)
+    setImgSize(null)
+    setImgBroken(false)
+    setPdfBytes(null)
+    setLoadError(null)
+  }
+
   // 页签右键菜单的 Esc 关闭由 ContextMenu 组件自己处理（capture 监听），此处不再重复挂监听
 
   React.useEffect(() => {
@@ -2191,7 +2222,7 @@ export function EditorView(props) {
     if (!monaco || !editorRef.current || !active || !contentReady) return
     const ed = editorRef.current
     const model = getModel(active, content)
-    viewKeeperRef.current?.bind(String(scope), active, model)
+    viewKeeperRef.current?.bind(String(scope), active, model, findKeyOf(scope, focusedGroupOf(active)))
     syncTypeSuggest(ed, monaco)
     setLoadStage((prev) => ({ progress: Math.max(96, prev.progress), message: '创建编辑器视图…' }))
   }, [monaco, scope, active, content, contentReady, mdPreviewing, svnDiff])
@@ -2291,8 +2322,9 @@ export function EditorView(props) {
       language: 'plaintext',
       theme: themeNameOf(),
       fontFamily: 'var(--ds-font-family-code, ui-monospace, monospace)',
-      fontSize: 13,
-      lineHeight: 20,
+      // 16px/21px：与 md 预览渲染态同字号，切分页/切组时观感不再跳变（ddj 2026-10-16）
+      fontSize: 16,
+      lineHeight: 21,
       minimap: { enabled: !side, scale: 1 },
       glyphMargin: true,
       lineDecorationsWidth: 16,
@@ -3704,16 +3736,21 @@ export function EditorView(props) {
     saveViewState()
     recordNav()
     const next = focusGroup(benchRef.current, group, path)
+    const nextActive = next.groups.find((item) => item.id === group)?.active ?? null
+    // 新焦点组文件与当前 contentPath 不同才重置：同文件聚焦无内容切换；缓存命中同步 seed（零空白），未命中清空防串组
+    if (nextActive && nextActive !== activeRef.current) resetContentForSwitch(nextActive)
     setWorkbench(next)
     setPlanActive(null)
-    setDiskActive(next.groups.find((item) => item.id === group)?.active ?? null)
+    setDiskActive(nextActive)
   }
   /** @private @author ddj 2026年10月14号 @param next Atomic layout. Accept ownership without close/save side effects. */
   function acceptLayout(next) {
     saveViewState()
+    const nextActive = next.groups.find((group) => group.id === next.focused)?.active ?? null
+    if (nextActive && nextActive !== activeRef.current) resetContentForSwitch(nextActive)
     setWorkbench(next)
     setPlanActive(null)
-    setDiskActive(next.groups.find((group) => group.id === next.focused)?.active ?? null)
+    setDiskActive(nextActive)
   }
   /** @private @author ddj 2026年10月14号 @param path File. @param edge Split direction. Move the file into a new group. */
   function splitTab(path, edge) {
@@ -3765,9 +3802,62 @@ export function EditorView(props) {
   }
   /** @private @author ddj 2026年10月14号 @param host Group body. Keep the full editor subtree stable while changing group/window ownership. */
   function mountFull(host) { if (host && fullHost.parentElement !== host) { host.appendChild(fullHost); editorRef.current?.layout() } }
-  /** @private @author ddj 2026年10月14号 @param host Passive body. @param path Canonical file. @returns View-only cleanup, models remain workbench-owned. */
-  function mountPassive(host, path) {
-    let disposed = false, keeper = null, subscription = null, observer = null
+  /** @private @author ddj 2026年10月16号 @param editor Passive editor instance. @param host Passive view container. @param path Canonical file of this group. @returns Gutter cleanup（断点装饰订阅 + 右键捕获解除）. 断点 glyph 列每分页可用：装饰/左键切换/hover 预览/右键菜单与焦点编辑器同语义。 */
+  function bindBpGutter(editor, host, path) {
+    const m = window.monaco
+    const GUTTER = m.editor?.MouseTargetType?.GUTTER_GLYPH_MARGIN ?? 2
+    const bpListOf = () => (dapStore.bpMapOf(dapScopeRef.current)[path] ?? [])
+
+    const applyBp = () => {
+      const map = dapStore.bpMapOf(dapScopeRef.current)
+      const unverified = bpLinesOf(map, path).filter((line) => dapStore.ackOf(path, line)?.verified === false)
+      applyBpDecorations(editor, bpLinesOf(map, path), bpDisabledLinesOf(map, path), unverified)
+    }
+    applyBp()
+    const unsubscribeBp = dapStore.subscribe(applyBp)
+
+    editor.onMouseDown((e) => {
+      if (!e?.event?.leftButton) return
+      const target = e?.target
+      if (!target || target.type !== GUTTER) return
+      const line = target.position?.lineNumber
+      if (line) dapToggleRef.current?.(path, line)
+    })
+    editor.onMouseMove((e) => {
+      const target = e?.target
+      const line = hintLineFor(target?.type, target?.position?.lineNumber, bpListOf().map((it) => it.line))
+      setHintLine(editor, line || null)
+    })
+    editor.onMouseLeave(() => setHintLine(editor, null))
+
+    const glyphHit = (ev) => {
+      if (!editor.getTargetAtClientPoint) return null
+      const rect = editor.getDomNode?.()?.getBoundingClientRect?.()
+      const layout = editor.getLayoutInfo?.()
+      if (!rect || !layout) return null
+      const relX = ev.clientX - rect.left
+      if (relX < layout.glyphMarginLeft || relX > layout.glyphMarginLeft + layout.glyphMarginWidth) return null
+      const target = editor.getTargetAtClientPoint(ev.clientX, ev.clientY)
+      if (!target || target.type !== GUTTER) return null
+      return target.position?.lineNumber ?? null
+    }
+    const onCtx = (ev) => {
+      const line = glyphHit(ev)
+      if (!line) return
+      const entry = bpListOf().find((it) => it.line === line)
+      ev.preventDefault()
+      ev.stopPropagation()
+      setDapBpMenu({
+        x: ev.clientX, y: ev.clientY, path, line,
+        hasBp: !!entry, enabled: entry ? entry.enabled !== false : true, isLogpoint: !!(entry && entry.logMessage),
+      })
+    }
+    host.addEventListener('contextmenu', onCtx, true)
+    return () => { unsubscribeBp?.(); host.removeEventListener('contextmenu', onCtx) }
+  }
+  /** @private @author ddj 2026年10月16号 @param host Passive body. @param path Canonical file. @param groupId Owning group id（find 快照按组隔离）. @returns View-only cleanup, models remain workbench-owned. */
+  function mountPassive(host, path, groupId) {
+    let disposed = false, keeper = null, subscription = null, observer = null, unbindGutter = null
     const focus = () => { const owner = ownerOf(benchRef.current, path); if (owner) selectGroup(owner.id, path) }
     host.addEventListener('pointerdown', focus)
     if (isPdfPath(path) && pdfNodes.current.has(path)) {
@@ -3792,9 +3882,13 @@ export function EditorView(props) {
       if (!window.monaco) { host.textContent = '编辑器正在加载'; return }
       const model = cached || getModel(path, result.content)
       if (result.version) { revRef.current[path] = result.version; recordBaseline(scope, path, result.version) }
-      const editor = window.monaco.editor.create(host, { model, automaticLayout: true, minimap: { enabled: false }, scrollBeyondLastLine: false })
+      const editor = window.monaco.editor.create(host, { model, automaticLayout: true, minimap: { enabled: false }, scrollBeyondLastLine: false, glyphMargin: true,
+        // 与焦点编辑器（ensureEditor）同观感参数：字号/行高/顶部留白（side 形态 6，tab 形态 8）/装饰宽度，切分页行号位置不跳变（ddj 2026-10-16）
+        fontFamily: 'var(--ds-font-family-code, ui-monospace, monospace)', fontSize: 16, lineHeight: 21,
+        lineDecorationsWidth: 16, padding: { top: layoutRef.current === 'side' ? 6 : 8 } })
+      const unbindGutter = bindBpGutter(editor, host, path)
       keeper = createViewKeeper(editor)
-      keeper.bind(scope, path, model)
+      keeper.bind(scope, path, model, groupId ? findKeyOf(scope, groupId) : undefined)
       paneEditors.current.set(path, editor)
       const store = documents()
       store.bind(path, model, revRef.current[path])
@@ -3802,11 +3896,15 @@ export function EditorView(props) {
       observer = new ResizeObserver(() => editor.layout())
       observer.observe(host)
     }).catch((failure) => { if (!disposed) host.textContent = '文件加载失败：' + String(failure) })
-    return () => { disposed = true; host.removeEventListener('pointerdown', focus); observer?.disconnect(); subscription?.dispose(); keeper?.dispose(); paneEditors.current.delete(path) }
+    return () => { disposed = true; host.removeEventListener('pointerdown', focus); unbindGutter?.(); observer?.disconnect(); subscription?.dispose(); keeper?.dispose(); paneEditors.current.delete(path) }
   }
   const passiveOps = React.useRef(mountPassive)
   passiveOps.current = mountPassive
-  const passiveMount = React.useCallback((host, path) => passiveOps.current(host, path), [])
+  const passiveMount = React.useCallback((host, path, groupId) => passiveOps.current(host, path, groupId), [])
+  /** @private @author ddj 2026年10月16号 @param scope Workspace scope. @param groupId Editor group id. @returns Ctrl+F snapshot bucket key isolating find state per group. */
+  function findKeyOf(scope, groupId) { return String(scope) + '\u0000' + String(groupId) }
+  /** @private @author ddj 2026年10月16号 @param active Active file path. @returns Owning group id, falling back to the focused group. */
+  function focusedGroupOf(active) { return ownerOf(benchRef.current, active)?.id ?? benchRef.current.focused }
   /** @private @author ddj 2026年10月14号 @param node Split branch. @param ratio Updated branch ratio. */
   function changeRatio(node, ratio) {
     const replace = (current) => current === node ? { ...current, ratio } : 'group' in current ? current : { ...current, first: replace(current.first), second: replace(current.second) }
@@ -3818,7 +3916,9 @@ export function EditorView(props) {
     if (!group) return null
     const focused = id === workbench.focused
     return React.createElement(EditorPane, { key: id, group, focused, dirty: dirtyMap, onSelect: selectGroup, onClose: closeTab, onMenu: paneMenu, onDrag: dragTab, consumeClick: consumeDrag },
-      focused ? React.createElement('div', { className: 'edrv-full-slot', ref: mountFull }) : React.createElement(PassiveEditor, { key: String(scope) + ':' + group.active, path: group.active, mount: passiveMount }))
+      focused ? React.createElement('div', { className: 'edrv-full-slot', ref: mountFull }) : React.createElement(React.Fragment, null,
+        React.createElement(GroupPathbar, { path: group.active, onFocus: () => selectGroup(id) }),
+        React.createElement(PassiveEditor, { key: String(scope) + ':' + group.active, path: group.active, groupId: id, mount: passiveMount })))
   }
   /** @private @author ddj 2026年10月14号 @param node Layout subtree. @returns Recursive resizable panes. */
   function renderTree(node) {
@@ -4359,10 +4459,12 @@ export function EditorView(props) {
         React.createElement('button', { className: 'edrv-pill edrv-pill-ghost', title: '复制安装命令', onClick: copyInstallCmd }, '复制命令'),
         React.createElement('button', { className: 'edrv-side-hint-close', title: '关闭提示', 'aria-label': '关闭提示', onClick: dismissHint }, '×'))
     : null
-  const fullView = createPortal(React.createElement(React.Fragment, null, pathBar, sideHintEl, diskBanner(), editorArea, statusBar), fullHost, 'edrv-full-editor')
+  // 底部状态栏共用一整条：挂在 mainCol 层级（所有分组之下），不随焦点分组搬家（ddj 2026-10-16）
+  const fullView = createPortal(React.createElement(React.Fragment, null, pathBar, sideHintEl, diskBanner(), editorArea), fullHost, 'edrv-full-editor')
   const mainCol = React.createElement('div', { className: 'edrv-main-col edrv-workbench', style: { flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' } },
     React.createElement('div', { className: 'edrv-workbench-tools' }, tabRow),
     renderTree(workbench.tree), fullView,
+    statusBar,
     workbench.floats.map((item, layer) => React.createElement(FloatingEditor, { key: item.group, owner: String(scope), group: item.group, rect: item, layer, focused: item.group === workbench.focused, onBounds: floatBounds, onFocus: selectGroup, onReturn: returnPane }, renderGroup(item.group))),
     dragPreview ? createPortal(React.createElement(React.Fragment, null,
       dragPreview.rect ? React.createElement('div', { className: 'edrv-drag-overlay', style: dragPreview.rect }, React.createElement('span', { className: 'edrv-drop-label' }, dragPreview.label)) : null,
