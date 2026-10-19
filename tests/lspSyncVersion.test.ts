@@ -3,6 +3,9 @@
  * 作者 ddj 2026年09月24号
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { rpc } from '../src/client/rpc.js'
 import { closeDoc, setLspSession, syncDoc } from '../src/client/monaco/lsp/lspClient.js'
 import { createLspServer, lspDocVersion } from '../src/lsp/server.js'
@@ -132,6 +135,43 @@ describe('host LSP 出口', () => {
       expect(versions).toEqual([1, 2, 1])
     } finally {
       await server.dispose()
+    }
+  })
+
+  it('csharp 启动后发 solution/open（根有 sln），lua 不发', async () => {
+    // 根目录无 sln（C:/ws 非真实目录，readdir 失败按无 sln 跳过）→ 不发
+    const noSln = createLspServer({ languageId: 'csharp', kind: 'discover', argv: ['dotnet'], ready: true }, 'C:/ws', 'csharp')
+    try {
+      await noSln.start()
+      expect(serverMocks.notifications.some(({ method }) => method === 'solution/open')).toBe(false)
+    } finally {
+      await noSln.dispose()
+    }
+    // 根目录恰有 sln → 发 solution/open（file:// URI），加载元数据上下文
+    const dir = mkdtempSync(join(tmpdir(), 'edrv-lsp-sln-'))
+    writeFileSync(join(dir, 'Proj.sln'), '')
+    try {
+      const server = createLspServer({ languageId: 'csharp', kind: 'discover', argv: ['dotnet'], ready: true }, dir, 'csharp')
+      try {
+        await server.start()
+        const opens = serverMocks.notifications.filter(({ method }) => method === 'solution/open')
+        expect(opens).toHaveLength(1)
+        expect(opens[0].payload.solution).toMatch(/^file:\/\/\//)
+        expect(opens[0].payload.solution.endsWith('Proj.sln')).toBe(true)
+      } finally {
+        await server.dispose()
+      }
+      // lua 即使根有 sln 也不发（Roslyn 专有通知）
+      serverMocks.notifications.length = 0
+      const lua = createLspServer({ languageId: 'lua', kind: 'discover', argv: ['lua'], ready: true }, dir, 'lua')
+      try {
+        await lua.start()
+        expect(serverMocks.notifications.some(({ method }) => method === 'solution/open')).toBe(false)
+      } finally {
+        await lua.dispose()
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
     }
   })
 })

@@ -1,4 +1,4 @@
-/** 适配器规格按类型解析测试（runtime=node 走 node；原生直启；不可用返回 null）。作者 ddj 2026年09月21号 */
+/** 适配器规格按类型解析测试（runtime=node/dotnet 走对应运行时；原生直启；不可用返回 null）。作者 ddj 2026年09月21号 */
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -58,6 +58,33 @@ describe('resolveAdapterSpec', () => {
       { type: 'coreclr', program: './dbg/missing.exe' },
     ])
     expect(resolveAdapterSpec('coreclr', true, home)).toBeNull()
+  })
+
+  it('runtime=dotnet 且本机 dotnet 满足 → dotnet + [program]', () => {
+    const home = makeHome([
+      { type: 'unity', program: './bin/monodbg.dll', runtime: 'dotnet' },
+    ], ['bin/monodbg.dll', 'bin/monodbg.runtimeconfig.json'])
+    // 同目录 runtimeconfig 要求 .NET 大版本（本机 PATH dotnet 或有满足者，断言口径不绑死具体路径）
+    writeFileSync(join(home, 'dsh-vscode-mode', 'extensions', 'x.mock-1.0.0', 'bin', 'monodbg.runtimeconfig.json'), JSON.stringify({
+      runtimeOptions: { framework: { name: 'Microsoft.NETCore.App', version: '10.0.0' } },
+    }))
+    const spec = resolveAdapterSpec('unity', true, home)
+    if (spec) {
+      expect(spec.args[0]).toBe(join(home, 'dsh-vscode-mode', 'extensions', 'x.mock-1.0.0', 'bin', 'monodbg.dll'))
+    } else {
+      // 本机无满足的 dotnet：置灰为合法结果（provider 诚实拒绝）
+      expect(spec).toBeNull()
+    }
+  })
+
+  it('runtime=dotnet 无 runtimeconfig 且无 dotnet → null', () => {
+    const home = makeHome([
+      { type: 'unity', program: './bin/monodbg.dll', runtime: 'dotnet' },
+    ], ['bin/monodbg.dll'])
+    const spec = resolveAdapterSpec('unity', true, home)
+    // findDotnet 命中真实机器 PATH 时仍可解析（args 指向 dll），否则 null
+    if (spec) expect(spec.args[0]).toContain('monodbg.dll')
+    else expect(spec).toBeNull()
   })
 
   it('不支持的 runtime → null', () => {

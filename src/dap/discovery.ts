@@ -4,7 +4,8 @@
  * ~/.vscode-server/extensions、插件扩展目录），读各扩展 package.json 的
  * contributes.debuggers[] 声明，解析为 DapAdapterDecl：
  * - program 按平台取 windows/linux/osx 覆盖，相对扩展根解析；
- * - runtime='node' → 由 node 跑 js 入口；无 runtime → program 即可执行（args 为清单声明）；
+ * - runtime='node' → 由 node 跑 js 入口；runtime='dotnet' → 由 dotnet 跑 dll 入口；
+ *   无 runtime → program 即可执行（args 为清单声明）；
  * - 同 type 多扩展并存 → 按「清单版本降序(numeric) → 路径升序」取唯一（与 LSP 候选口径一致）；
  * - 入口不存在 / runtime 不支持 → available=false + reason（如 DotRush 按需下载的 clrdbg，
  *   诚实标注不假成功，调用方据此在下拉置灰并提示原因）。
@@ -128,12 +129,13 @@ function declOf(extDir: string, entry: DebuggerEntry): DapAdapterDecl | null {
   const languages = stringsOf(entry.languages)
   const resolved = resolveProgram(extDir, entry)
   const runtime = typeof entry.runtime === 'string' && entry.runtime ? entry.runtime : undefined
-  const runtimeBad = runtime !== undefined && runtime !== 'node'
+  // node = 扩展 js 入口；dotnet = dotnet 承载的 dll（如 DotRush monodbg），provider 层解析 dotnet 路径
+  const runtimeBad = runtime !== undefined && runtime !== 'node' && runtime !== 'dotnet'
   const available = resolved.available && !runtimeBad
   const reason = !resolved.available
     ? resolved.reason
     : runtimeBad
-      ? '暂不支持运行时 "' + runtime + '"（仅支持 node 与原生可执行）'
+      ? '暂不支持运行时 "' + runtime + '"（仅支持 node、dotnet 与原生可执行）'
       : undefined
   return {
     type,

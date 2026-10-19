@@ -398,8 +398,8 @@ export function resolveLuaProvider(manual?: { command?: string; path?: string },
 }
 
 /**
- * 解析 C# provider（优先级：手动 > 扩展源 > 自动发现；Roslyn dll 需 dotnet；
- * DotRush 需满足其运行时的 dotnet；或 OmniSharp）。
+ * 解析 C# provider（优先级：手动 > 扩展源 > 自动发现；DotRush 优先——自带 sln 加载与
+ * 反编译跳转；Roslyn dll 需 dotnet，但无 C# Dev Kit 时不加载项目；或 OmniSharp）。
  * @author ddj 2026年08月27号
  * @param manual 手动配置
  * @param home DSH home（缺省真实；测试可注入临时目录）
@@ -416,9 +416,10 @@ export function resolveCSharpProvider(manual?: { command?: string; path?: string
     // SDK 环境注入：runtime-only 的 dotnet 会导致 MSBuild 求值/restore 退化
     const sdkRoot = findSdkRoot()
     const msbuildEnv = sdkRoot ? sdkEnvOf(sdkRoot) : undefined
-    if (discovered.roslynDll && discovered.dotnet) {
-      return { ...base, kind: 'discover', argv: [discovered.dotnet, discovered.roslynDll, '--stdio'], env: msbuildEnv, ready: true }
-    }
+    // DotRush 优先：其服务器从 cwd 自动发现 sln 并自行加载（restore/compile/索引），
+    // 元数据符号可跳转反编译源码（实测 GameObject.Find → _decompiled_/UnityEngine.GameObject.cs）。
+    // Roslyn（ms-dotnettools.csharp）依赖 C# Dev Kit 的 serviceBroker 加载 sln；
+    // 无 Dev Kit 时即使发 solution/open 也不加载项目，references 不跨文件、元数据 definition 全空（实测 2026-10-19）。
     let dotrushReason: string | null = null
     let provisionMajor: number | undefined
     if (discovered.dotrushDll) {
@@ -429,6 +430,9 @@ export function resolveCSharpProvider(manual?: { command?: string; path?: string
       }
       dotrushReason = launch.reason
       provisionMajor = major ?? undefined
+    }
+    if (discovered.roslynDll && discovered.dotnet) {
+      return { ...base, kind: 'discover', argv: [discovered.dotnet, discovered.roslynDll, '--stdio'], env: msbuildEnv, ready: true }
     }
     if (discovered.omnisharpExe) {
       return { ...base, kind: 'discover', argv: [discovered.omnisharpExe, '--stdio'], ready: true }

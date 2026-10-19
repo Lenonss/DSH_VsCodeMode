@@ -95,6 +95,20 @@ describe('debuggerDecls', () => {
     expect(decls.find((d) => d.type === 'emmylua_attach')!.program.endsWith('new.js')).toBe(true)
   })
 
+  it('runtime=dotnet → available=true（DotRush monodbg dll 形态）', () => {
+    const { extRoot } = makeHome()
+    installExt(extRoot, 'nromanov.dotrush-26.10.277', [
+      { type: 'unity', label: 'Unity Debugger', program: 'extension/bin/DebuggerMono/monodbg.dll', runtime: 'dotnet', languages: ['csharp'] },
+    ], ['extension/bin/DebuggerMono/monodbg.dll'])
+    const decls = debuggerDecls(true, extRoot)
+    const unity = decls.find((d) => d.type === 'unity')
+    expect(unity).toBeTruthy()
+    expect(unity!.available).toBe(true)
+    expect(unity!.runtime).toBe('dotnet')
+    expect(unity!.reason).toBeUndefined()
+    expect(unity!.exts).toEqual(['.cs', '.csx'])
+  })
+
   it('不支持的 runtime → available=false 带原因', () => {
     const { extRoot } = makeHome()
     installExt(extRoot, 'x.some-jvm-1.0.0', [

@@ -8,7 +8,8 @@ import { spawnServer, type Transport } from './transport.js'
 import { createLspClient, type LspClient } from './client.js'
 import { pathToFileUri, toWorkspacePath, isAbsolutePath, fileUriToPath } from './uri.js'
 import { deriveDefinitionFromLocations, deriveCrossFileDeclaration, isMisresolvedSameFileUsage } from './derive.js'
-import { readFile } from 'node:fs/promises'
+import { readFile, readdir } from 'node:fs/promises'
+import { join } from 'node:path'
 import type { LspProviderSpec } from './providers.js'
 import { LSP_SEMANTIC_TOKEN_MODIFIERS, LSP_SEMANTIC_TOKEN_TYPES } from '../shared/lsp.js'
 import type {
@@ -60,6 +61,26 @@ interface OpenDoc {
 
 const RESTARTABLE = true
 const MAX_DOC_VERSION = 2147483647
+
+/**
+ * 找工作区根目录下的第一个 .sln（字典序）。
+ *
+ * 背景：Roslyn LSP 启动后若收不到 solution/project 通知，会停留在「杂项文件」模式——
+ * 工作区内自有符号可解析，但 Unity 引擎程序集 / NuGet 包等元数据符号的
+ * definition/hover 一律返回空（实测 2026-10-16，GameObject.Find 全空）。
+ * 需在握手后发 Roslyn 专有 `solution/open` 通知加载项目上下文。
+ * @author ddj 2026年10月19号
+ * @param root 工作区根（绝对路径）
+ * @returns sln 绝对路径；根目录无 sln 返回 null
+ */
+async function findSolutionFile(root: string): Promise<string | null> {
+  try {
+    const names = (await readdir(root)).filter((name) => name.toLowerCase().endsWith('.sln')).sort()
+    return names[0] ? join(root, names[0]) : null
+  } catch {
+    return null
+  }
+}
 
 /**
  * 使用合法、递增的 Int32 文档版本；旧客户端的毫秒时间戳不能直发给 Roslyn。
@@ -320,6 +341,10 @@ export function createLspServer(spec: LspProviderSpec, root: string, languageId:
         // 对不认识的配置段按协议忽略，均安全
         if (languageId === 'csharp') {
           client.notify('workspace/didChangeConfiguration', { settings: { dotrush: { roslyn: {} } } })
+          // Roslyn 专有：加载解决方案后元数据符号（引擎/NuGet 程序集）才可跳转；
+          // 未知通知对其它 C# 服务器按协议安全忽略。无 sln 的纯脚本项目静默跳过。
+          const slnPath = await findSolutionFile(root)
+          if (slnPath) client.notify('solution/open', { solution: pathToFileUri(slnPath) })
         }
         capabilities = caps
         return true

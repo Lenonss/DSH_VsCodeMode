@@ -1,6 +1,6 @@
 /**
  * lsp/providers.ts 发现纯函数测试（临时目录伪造扩展布局，不启动真实服务器）。
- * 覆盖：DotRush 发现与启动参数、ms-Roslyn 优先级、皆未发现时的 reason、
+ * 覆盖：DotRush 发现与启动参数、DotRush 优先于 ms-Roslyn、皆未发现时的 reason、
  * LuaLS/Roslyn/OmniSharp 多版本并存取清单最高、candidatesFor 候选汇总、
  * dotnetWithRuntime 的运行时版本探测（注入候选目录）。
  * 作者 ddj 2026-09-03
@@ -156,8 +156,13 @@ describe('candidatesFor', () => {
     expect(names.some((n) => n.includes('Roslyn'))).toBe(true)
     expect(names.some((n) => n.includes('DotRush'))).toBe(true)
     const chosen = candidates.filter((c) => c.chosen)
-    if (dotnetCandidates().length) {
-      // 有 dotnet：Roslyn 优先被选用，DotRush 在候选中不标记
+    if (dotnetWithRuntime(10)) {
+      // 有满足 .NET 10 的 dotnet：DotRush 优先被选用（自带 sln 加载与反编译跳转），Roslyn 不标记
+      expect(chosen).toHaveLength(1)
+      expect(chosen[0]?.name).toContain('DotRush')
+      expect(spec.argv).toContain(chosen[0]?.path)
+    } else if (dotnetCandidates().length) {
+      // 有 dotnet 但无 .NET 10：Roslyn 被选用
       expect(chosen).toHaveLength(1)
       expect(chosen[0]?.name).toContain('Roslyn')
       expect(spec.argv).toContain(chosen[0]?.path)
@@ -199,12 +204,16 @@ describe('resolveCSharpProvider', () => {
     }
   })
 
-  it('ms-Roslyn 优先于 DotRush（本机有 dotnet 时）', () => {
+  it('DotRush 优先于 ms-Roslyn（本机有满足 .NET 10 的 dotnet 时）；否则回落 Roslyn', () => {
     const home = makeHome()
     installDotRush(home)
     installMsCSharp(home)
     const spec = resolveCSharpProvider(undefined, home)
-    if (dotnetCandidates().length) {
+    if (dotnetWithRuntime(10)) {
+      expect(spec.kind).toBe('discover')
+      expect(spec.argv[1]).toContain('DotRush.dll')
+      expect(spec.providerName).toBe('DotRush')
+    } else if (dotnetCandidates().length) {
       expect(spec.kind).toBe('discover')
       expect(spec.argv[1]).toContain('Microsoft.CodeAnalysis.LanguageServer.dll')
       expect(spec.argv[2]).toBe('--stdio')
