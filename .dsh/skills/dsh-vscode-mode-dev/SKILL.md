@@ -5,8 +5,17 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
 
 # dsh-vscode-mode 开发/发布经验集（自我更新型技能）
 
-> updated: 2026-10-16 · 维护者：ddj（AI 会话按文末协议更新，保持精炼、去重）
+> updated: 2026-10-19 · 维护者：ddj（AI 会话按文末协议更新，保持精炼、去重）
 > **发布时先读「发布流程」与「失败恢复」**；下方实录是历史证据，不授权当前重跑发布、改 tag 或部署。冲突旧口径以更新后的规则为准。
+- 2026-10-19 实录（v0.16.0 发布：C# provider DotRush 优先 + Roslyn solution/open + DAP dotnet runtime；基线 v0.15.9 @ `89af5e0`）：
+  三门本地绿（typecheck 0 / 2961 passed + 15 skipped，负载敏感计时用例
+  `tests/dapFakeAdapter.test.ts` 与 `tests/archiveDb.test.ts`（定向计时）首轮全量各挂 1 例，
+  隔离重跑 20/20 全绿 → 判抖动非回归）/ tsdown 双面绿；Release 首跑同挂
+  `dapFakeAdapter` waitFor 超时（publish 未执行），`gh run rerun --failed` 一次绿（5m）。
+  四向闭环一次对齐：registry 0.16.0 `gitHead==8b79f8f`、`dist-tags.latest=0.16.0`、tag 同 commit、
+  GitHub Release tgz（7,610,061 B）与 npm 实包 SHA256 同为 `509ac88f…`，SRI/shasum 双验一致。
+  **已知抖动锚点新增**：`tests/archiveDb.test.ts` 定向计时用例（全量跑负载下易超时，隔离跑稳定）
+  ——「本地全量绿」判据放宽为「失败用例隔离重跑绿 + 不在本次 diff」。
 - 2026-10-16 实录（v0.15.9 发布：插件自我更新按钮 + 可用更新提醒；基线 v0.15.8 @ `800eb32`）：
   三门本地全绿（typecheck 0 / **2958 passed + 15 skipped · 220 文件** / node --test 9/9 /
   tsdown 双面：host 843914 B、client 1707844 B）；`release` 全绿直到 Publish to npm，仅
