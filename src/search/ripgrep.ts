@@ -7,7 +7,7 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { createRequire } from 'node:module'
 import type { Ctx, Session } from '../store.js'
-import { policyOf } from '../store.js'
+import { cwdOfSession, policyOf } from '../store.js'
 import { prepareQuery, pathText } from './query.js'
 import type { WorkspaceSearchInput, WorkspaceSearchProvider, WorkspaceSearchResult } from './types.js'
 
@@ -127,7 +127,7 @@ export async function searchRoot(ctx: Ctx, session: Session): Promise<string> {
   const fs = ctx.get('fs')
   if (!fs) throw new Error('缺少 fs')
   const policy = policyOf(ctx, session)
-  const cwd = session?.header?.cwd
+  const cwd = cwdOfSession(ctx, session)
   const rootTarget = await fs.resolve(policy?.workspaceRoot ?? '.', cwd ? { cwd } : {})
   return fs.processPath(rootTarget)
 }

@@ -25,7 +25,7 @@ import { archiveEntryFor, markDecision, recordResolved, reconstructOriginal } fr
 import { clearRevertState, listArchives, pageArchives, readArchives, revertState, setRevertState, startReverts } from './archiveDb.js'
 import { log } from './log.js'
 import type { Registry } from './registry.js'
-import { bucketOf, cwdOf, sessionOf } from './registry.js'
+import { bucketOf, cwdOfSession, sessionOf } from './registry.js'
 import type { SearchOrchestrator } from './search/orchestrator.js'
 import { newSearcher } from './search/orchestrator.js'
 import type { ContentSearcher } from './search/content.js'
@@ -100,7 +100,7 @@ async function requireSession(ctx: Ctx, sessionId: string | undefined): Promise<
 > {
   const session = sessionOf(ctx, sessionId)
   if (!session) return { err: SESSION_MISSING_ERROR }
-  const cwd = cwdOf(session)
+  const cwd = cwdOfSession(ctx, session)
   if (!cwd) return { err: SESSION_NO_WORKSPACE_ERROR }
   return { session, cwd }
 }

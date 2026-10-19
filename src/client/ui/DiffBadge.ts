@@ -1,39 +1,32 @@
 // @ts-nocheck
 /**
  * dsh-vscode-mode client — DiffBadge：header 差异角标（仅工作区有差异时显示）。
- * 迁移自原 src/client/index.ts 的 DiffBadge，语义不改。
+ * 轮询已收敛到 state/recordsFeed.ts 的会话级共享订阅，本组件不再自建定时器。
  * 作者 ddj 2026-08-20
  */
 import React from 'react'
 import { appUrl } from '../../shared/appUrl.js'
-import { rpc } from '../rpc.js'
 import { openEditorView, emitShowLauncher } from '../events.js'
 import { summarize } from '../state/records.js'
+import { subscribeRecords } from '../state/recordsFeed.js'
 
 /**
- * 会话 header 差异角标：5s 轮询 edrv.list，有差异时显示数字徽章，点击打开编辑区并拉起 DiffLauncher。
+ * 会话 header 差异角标：订阅会话差异记录，有差异时显示数字徽章，点击打开编辑区并拉起 DiffLauncher。
  */
 export function DiffBadge(props) {
   const sessionId = props?.sessionId
   const [summary, setSummary] = React.useState(null)
-  const seq = React.useRef(0)
-
-  const load = React.useCallback(() => {
-    if (!sessionId) return
-    const s = ++seq.current
-    rpc('edrv.list', { sessionId }).then((res) => {
-      if (s !== seq.current || !res || !res.ok || !Array.isArray(res.records)) return
-      setSummary(summarize(res.records))
-    }).catch(() => {})
-  }, [sessionId])
 
   React.useEffect(() => {
-    load()
-    const t = setInterval(load, 5000)
-    const onRefresh = () => load()
-    window.addEventListener('edrv:refresh', onRefresh)
-    return () => { clearInterval(t); window.removeEventListener('edrv:refresh', onRefresh) }
-  }, [load])
+    if (!sessionId) {
+      setSummary(null)
+      return undefined
+    }
+
+    return subscribeRecords(sessionId, (records) => {
+      setSummary(summarize(records))
+    })
+  }, [sessionId])
 
   const n = summary?.totalFiles ?? 0
   if (!n) return null

@@ -5,7 +5,7 @@
  */
 import type { DiffRecord } from './shared/types.js'
 import type { Ctx, Session } from './store.js'
-import { loadBucket } from './store.js'
+import { cwdOfSession, loadBucket } from './store.js'
 
 /** cwd → 记录桶（内存缓存；随会话销毁清理）。 */
 export type Registry = Map<string, Map<string, DiffRecord>>
@@ -19,7 +19,20 @@ export function sessionOf(ctx: Ctx, sessionId?: string): Session | undefined {
   return live.length === 1 ? live[0] : undefined
 }
 
-/** 会话工作区 cwd。 */
+/**
+ * 会话工作区 cwd（跟随会话内 cd；服务缺失时回落 header.cwd）。
+ * 定义在 store.ts 以避免 registry ↔ store 循环依赖，此处仅转出为会话助手入口。
+ * @author ddj 2026年10月19号
+ */
+export { cwdOfSession }
+
+/**
+ * 会话头部的原始 cwd（不跟随 cd）。仅用于会话销毁等无上下文场景：
+ * 此时投影可能已随会话卸载，读 header 才能保证拿到建会话时的目录。
+ * @author ddj 2026年10月19号
+ * @param session 目标会话
+ * @returns 绝对路径或 null
+ */
 export function cwdOf(session: Session | undefined): string | null {
   return session?.header?.cwd ?? null
 }

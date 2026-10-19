@@ -19,6 +19,7 @@ import { useOpenReceipt } from '../useOpenReceipt.js'
 import { acceptsLoad, receiptErrorFor, receiptPath, receiptReadyFor, receiptTabPath } from '../receiptState.js'
 import { bindPanelCommand } from '../panelCommands.js'
 import { dbg, isDebug, rpc } from '../rpc.js'
+import { refreshFeed, subscribeErrors, subscribeRecords } from '../state/recordsFeed.js'
 import { emitFileChanged, emitRefresh } from '../events.js'
 import { langOf, loadMonaco, snippetLanguageOf } from '../monaco/loader.js'
 import { bindEditActions, runEditAction } from '../monaco/editActions.js'
@@ -870,38 +871,43 @@ export function EditorView(props) {
     return true
   }
 
-  const refreshRecords = (skipStale) => {
-    if (!sessionId) return
+  /**
+   * 把共享订阅拿到的记录落进组件状态（内容一致时保持引用不变，避免整树重渲染）。
+   * @private @author ddj 2026年10月19号
+   * @param list 差异记录数组
+   */
+  const applyRecords = (list) => {
     // #region debug log
     const trace = isDebug()
-    const start = trace ? performance.now() : 0
+    const compareStart = trace ? performance.now() : 0
     // #endregion
-    rpc('edrv.list', { sessionId, ...(skipStale ? { skipStale: true } : {}) }).then((res) => {
+    const map = {}
+    for (const r of list) {
+      if (r.archived === true) continue
+      map[r.callId] = r
+    }
+    setRecords((prev) => {
+      const equal = sameRecords(prev, map)
       // #region debug log
-      const received = trace ? performance.now() : 0
-      // #endregion
-      if (!res || !res.ok || !Array.isArray(res.records)) return
-      const map = {}
-      for (const r of res.records) {
-        if (r.archived === true) continue
-        map[r.callId] = r
+      if (trace) {
+        try {
+          const compareMs = performance.now() - compareStart
+          if (compareMs > 20) dbg(sessionId, `[DEBUG diffList] count=${list.length} compareMs=${compareMs.toFixed(1)} changed=${!equal}`)
+        } catch (e) { /* 诊断不可影响轮询 */ }
       }
-      setRecords((prev) => {
-        // #region debug log
-        const compareStart = trace ? performance.now() : 0
-        // #endregion
-        const equal = sameRecords(prev, map)
-        // #region debug log
-        if (trace) {
-          try {
-            const compareMs = performance.now() - compareStart
-            if (compareMs > 20 || received - start > 100) dbg(sessionId, `[DEBUG diffList] count=${res.records.length} skipStale=${skipStale === true} rpcMs=${(received - start).toFixed(1)} compareMs=${compareMs.toFixed(1)} changed=${!equal}`)
-          } catch (e) { /* 诊断不可影响轮询 */ }
-        }
-        // #endregion
-        return equal ? prev : map
-      })
-    }).catch((e) => setError('list异常:' + String(e)))
+      // #endregion
+      return equal ? prev : map
+    })
+  }
+
+  /**
+   * 主动刷新一次差异记录（走会话级共享通道，同会话多消费方共享一次 RPC）。
+   * @private @author ddj 2026年10月19号
+   * @param skipStale 是否跳过过期判定
+   */
+  const refreshRecords = (skipStale) => {
+    if (!sessionId) return
+    void refreshFeed(sessionId, skipStale === true)
   }
 
   /**
@@ -1185,14 +1191,13 @@ export function EditorView(props) {
     })
   }
 
-  // 挂载轮询 + 事件订阅
+  // 挂载：接入会话级共享订阅（单定时器由 recordsFeed 持有，本组件不再自建 interval）
   React.useEffect(() => {
-    if (!sessionId) return
+    if (!sessionId) return undefined
+    const offRecords = subscribeRecords(sessionId, applyRecords)
+    const offErrors = subscribeErrors(sessionId, (message) => setError('list异常:' + message))
     refreshRecords()
-    const t = setInterval(refreshRecords, 5000)
-    const onRefresh = () => refreshRecords()
-    window.addEventListener('edrv:refresh', onRefresh)
-    return () => { clearInterval(t); window.removeEventListener('edrv:refresh', onRefresh) }
+    return () => { offRecords(); offErrors() }
   }, [sessionId])
 
   /**

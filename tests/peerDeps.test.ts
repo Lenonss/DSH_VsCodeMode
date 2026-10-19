@@ -14,6 +14,7 @@ const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as {
   peerDependencies?: Record<string, string>
   dependencies?: Record<string, string>
   devDependencies?: Record<string, string>
+  engines?: Record<string, string>
 }
 
 /** 跨版本样本用于验证宽松策略，不构成安装白名单。 */
@@ -97,5 +98,38 @@ describe('peerDependencies', () => {
       expect(range.trim(), name).not.toBe('')
       expect(range, name).not.toContain('workspace:')
     }
+  })
+})
+
+/**
+ * engines.dsh 显式声明：DSH 的兼容闸门用 includePrerelease=true 求值，
+ * 且一旦声明 engines.dsh，peerDependencies 就不参与判定（dsh-app-boot unmetRequirements）。
+ * 因此该区间必须同时覆盖全部已适配版本线，又拦住未适配的 0.3+。
+ * @author ddj 2026年10月19号
+ */
+describe('engines.dsh', () => {
+  const range = pkg.engines?.dsh
+
+  /** 已适配且必须放行的版本（含预发布与正式版）。 */
+  const ACCEPTED = [
+    '0.1.0-rc.1', '0.1.5-rc.3', '0.1.6-alpha.2', '0.1.7-alpha.2', '0.1.7-rc.2', '0.1.7',
+    '0.2.0-rc.1', '0.2.0-rc.2', '0.2.0-rc.3', '0.2.0', '0.2.1-rc.2', '0.2.1',
+  ]
+
+  /** 低于适配下限或超出适配上限，必须拦住。 */
+  const REJECTED = ['0.0.1', '0.0.1-rc.1', '0.3.0-alpha.1', '0.3.0', '1.0.0-rc.1', '9.0.0-alpha.1']
+
+  it('声明为字符串区间，不是空串或通配', () => {
+    expect(typeof range).toBe('string')
+    expect(range?.trim()).not.toBe('')
+    expect(range).not.toBe('*')
+  })
+
+  it.each(ACCEPTED)('放行已适配版本 %s（DSH 闸门口径）', (version) => {
+    expect(satisfies(version, range as string, { includePrerelease: true })).toBe(true)
+  })
+
+  it.each(REJECTED)('拦住未适配版本 %s（DSH 闸门口径）', (version) => {
+    expect(satisfies(version, range as string, { includePrerelease: true })).toBe(false)
   })
 })

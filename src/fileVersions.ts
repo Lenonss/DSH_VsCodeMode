@@ -20,7 +20,7 @@
  */
 import type { FileVersionItem } from './shared/rpc.js'
 import type { Ctx } from './store.js'
-import { cwdOf, sessionOf } from './registry.js'
+import { cwdOfSession, sessionOf } from './registry.js'
 import { invalidateIndex } from './treeIndex.js'
 import { log } from './log.js'
 
@@ -150,7 +150,7 @@ export function createFileVersions(ctx: Ctx): FileVersions {
       .slice(0, MAX_PATHS)
     if (!fs || !paths.length) return { ok: true, items: [] }
     const session = sessionOf(ctx, args.sessionId)
-    const cwd = cwdOf(session)
+    const cwd = cwdOfSession(ctx, session)
     const items: FileVersionItem[] = []
     for (const path of paths) items.push(await observe(fs, cwd, path))
     return { ok: true, items }

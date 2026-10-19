@@ -460,25 +460,28 @@ DSH 每次启动监听随机端口，`http://127.0.0.1:<port>` 就是浏览器 o
 
 官方 `dsh plugin` 方式，三选一。下面以 `web` profile 为例；Desktop 或其他命名
 profile 请替换为实际目标，不要把示例目录当成当前运行 profile。升级前可阅读
-[0.16.0 发布说明](docs/release-0.16.0.md)；从 0.14.2 或更旧版本升级还须阅读
+[0.17.0 发布说明](docs/release-0.17.0.md)；从 0.14.2 或更旧版本升级还须阅读
 [0.14.3 数据迁移与回退说明](docs/release-0.14.3.md)。
 
 ```bash
 # ① Git 安装（clone + prepare 构建；推荐打固定 tag）
-dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.16.0
+dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.17.0
 
 # ② npm 注册表（发布到 npm 后）
-dsh plugin --profile web add dsh-vscode-mode@0.16.0
+dsh plugin --profile web add dsh-vscode-mode@0.17.0
 
 # ③ GitHub Release tgz 直装（Release asset 可用后）
-dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.16.0/dsh-vscode-mode-0.16.0.tgz
+dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.17.0/dsh-vscode-mode-0.17.0.tgz
 ```
 
-> **DSH 版本政策（0.14.10 起）**：六项 DSH peer 统一声明为 `*`，不再维护逐版
-> 白名单或版本上界。DSH 的 `includePrerelease` 检查接受 alpha、rc 与正式版；
-> npm 默认 semver 的 `*` 仍排除预发布版本，可能产生 peer 不匹配提示。
-> 运行时按实际能力检查，不再仅因版本较新告警；允许安装不代表未来版本已通过
-> 全功能验收。已发布包仍以其实际声明为准；npm 安装前应确认注册表中版本可查询。
+> **DSH 版本政策（0.17.0 起）**：六项 DSH peer 仍统一声明为 `*`，另以
+> `engines.dsh: ">=0.1.0-rc.1 <0.3.0-0"` 显式声明支持的 DSH 运行时区间——
+> `engines.dsh` 一旦声明就**单独决定**兼容性（官方实现：`An own engines.dsh range
+> decides alone and peerDependencies are ignored`），不满足时安装会被直接拒绝。
+> 该区间接受 0.1.0-rc.1 起的全部 0.1.x / 0.2.x，拒绝 0.3.0 及以后的主版本；
+> DSH 自身以 `includePrerelease` 求值，故 alpha、rc 与正式版同等对待。
+> 运行时仍按实际能力检查；允许安装不代表该版本已通过全功能验收。
+> 已发布包仍以其实际声明为准；npm 安装前应确认注册表中版本可查询。
 > 替换已有包后需重启目标 DSH Host 并强制刷新原页面；仅刷新不会更新 Host。
 > 从 0.14.2 或更旧版本升级时，首次访问工作区会执行 0.14.3 引入的 SQLite 活跃记录迁移。
 >
@@ -809,6 +812,7 @@ Keep All / Undo All 却是亮的。修复：单文件 Keep / Undo 覆盖冲突�
 完整变更见 [GitHub Releases](https://github.com/Lenonss/DSH_VsCodeMode/releases)。
 近期关键版本：
 
+- **v0.17.0**：**DSH 0.2.1 吸收与运行期优化**——① 修复插件元数据一直失效：`locale/*.json` 改 `{"meta":{...}}` 结构并导出 `./locale/*.json`，插件管理器标题与描述不再回退 `package.json.name`；② 新增 `engines.dsh: ">=0.1.0-rc.1 <0.3.0-0"` 显式声明支持区间（此前仅靠官方 `includePrerelease` 宽容）；③ 跟随会话内 `cd`：13 处 `header.cwd` 直读改走 `workingDirectory` 投影，服务缺失/抛错时回落原始目录；④ 轮询收敛：差异角标 / 输入区 dock / 编辑器 / 体积角标原本各自 5s 拉一次 `edrv.list`，改为会话级共享订阅（单轮询 + 退订到 0 才释放）；⑤ 界面壳层接入 `ctx.locale` 中英双语（slot 名与官方页签标题随语言切换）；⑥ 新增插件管理器详情页「VSCodeMode」状态段。详见 [0.17.0 发布说明](docs/release-0.17.0.md)。
 - **v0.16.0**：**C# 智能体体验增强**——C# provider DotRush 优先于 ms-Roslyn（自带 sln 加载与反编译跳转；Roslyn 无 C# Dev Kit 时不加载项目）；csharp 握手后自动找工作区根 `.sln` 发 Roslyn 专有 `solution/open`，元数据符号（Unity 引擎/NuGet 程序集）可跳转与 hover；DAP 调试支持 `runtime='dotnet'` 适配器（DotRush monodbg 形态），按 dll runtimeconfig 要求的运行时大版本选择 dotnet。
 - **v0.15.9**：**插件自我更新与可用更新提醒**——设置页「文件与安装」新增更新行：显示当前版本，一键检查 npm 上的最新版本，发现新版后可确认执行自我更新（host 端先卸载再安装插件包，安装失败自动恢复 profile package.json/pnpm-lock.yaml，更新期间页面会短暂断开）。客户端启动后延迟探测新版本，发现可用更新时弹 toast 提醒（每个版本只提醒一次），devForm 开发形态不提醒。详见 [0.15.9 发布说明](docs/release-0.15.9.md)。
 - **v0.15.8**：**跨端「会话不存在」兼容**——桌面端与 Web 端各自运行独立 DSH 实例、会话列表互通但会话仅在一端激活时，另一端文件编辑器不再卡在「文件加载失败：会话不存在 0%」：中央区显示「会话在当前端不可用」终态提示（说明成因、保留重试），资源管理器红条同样替换为友好文案。host 三处会话前置错误文案收敛为 shared 常量，client 按常量识别归类。详见 [0.15.8 发布说明](docs/release-0.15.8.md)。

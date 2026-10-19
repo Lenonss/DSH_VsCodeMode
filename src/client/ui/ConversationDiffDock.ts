@@ -2,12 +2,13 @@
 /**
  * dsh-vscode-mode client — 会话级差异 dock。
  * conversation.input.dock 是唯一实例：普通对话显示摘要，文件编辑页显示完整操作条。
+ * 轮询已收敛到 state/recordsFeed.ts 的会话级共享订阅，本组件不再自建定时器。
  * 作者 ddj 2026-08-26
  */
 import React from 'react'
-import { rpc } from '../rpc.js'
 import { openDiffView } from '../events.js'
 import { summarize } from '../state/records.js'
+import { subscribeRecords } from '../state/recordsFeed.js'
 import { nextDiffPath } from '../diffDock.js'
 import { dockInLayout, readDiffDock, subscribeDiffDock } from '../diffDockStore.js'
 import { DiffBox } from './DiffBox.js'
@@ -25,27 +26,17 @@ export function ConversationDiffDock(props) {
   const sessionId = props?.sessionId
   const [summary, setSummary] = React.useState(null)
   const [, setStoreRevision] = React.useState(0)
-  const seq = React.useRef(0)
-
-  const load = React.useCallback(() => {
-    if (!sessionId) return
-    const current = ++seq.current
-    rpc('edrv.list', { sessionId }).then((res) => {
-      if (current !== seq.current || !res || !res.ok || !Array.isArray(res.records)) return
-      setSummary(summarize(res.records))
-    }).catch(() => {})
-  }, [sessionId])
 
   React.useEffect(() => {
-    load()
-    const timer = setInterval(load, 5000)
-    const onRefresh = () => load()
-    window.addEventListener('edrv:refresh', onRefresh)
-    return () => {
-      clearInterval(timer)
-      window.removeEventListener('edrv:refresh', onRefresh)
+    if (!sessionId) {
+      setSummary(null)
+      return undefined
     }
-  }, [load])
+
+    return subscribeRecords(sessionId, (records) => {
+      setSummary(summarize(records))
+    })
+  }, [sessionId])
 
   React.useEffect(() => {
     if (!sessionId) return undefined

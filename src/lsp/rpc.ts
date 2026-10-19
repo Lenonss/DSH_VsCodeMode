@@ -7,7 +7,7 @@
  */
 import type { Ctx } from '../store.js'
 import { searchRoot } from '../search/ripgrep.js'
-import { sessionOf, cwdOf } from '../registry.js'
+import { cwdOfSession, sessionOf } from '../registry.js'
 import { resolveProviderSpec, langOfPath, configFromPlugin, mergeConfig, sanitizeLang, LSP_LANGUAGES, type LspConfig, type LspLangConfig } from './config.js'
 import { clearProviderCache, candidatesFor } from './providers.js'
 import { capCompletions } from './completionCap.js'
@@ -154,7 +154,7 @@ export function createLspRpc(deps: LspRpcDeps): { handlers: Partial<RpcHandlerMa
   const rootOf = async (sessionId: string | undefined): Promise<{ root: string; sessionId: string } | { err: string }> => {
     const session = sessionOf(ctx, sessionId)
     if (!session) return { err: SESSION_MISSING_ERROR }
-    const cwd = cwdOf(session)
+    const cwd = cwdOfSession(ctx, session)
     if (!cwd) return { err: SESSION_NO_WORKSPACE_ERROR }
     try {
       const root = await searchRoot(ctx, session)

@@ -16,6 +16,7 @@ import { join, resolve } from 'node:path'
 import { dshHome } from './paths.js'
 import type { RuleInfo, RuleProject, RuleRefInput, RuleScope, RuleSaveInput, UserRuleOrigin } from './shared/rules.js'
 import type { Ctx } from './store.js'
+import { cwdOfSession } from './store.js'
 
 // --region 常量与目录定位
 /** 规则文件名白名单：字母数字开头，仅字母数字点横下划线，.mdc 后缀（天然拒绝路径分隔符）。 */
@@ -550,13 +551,17 @@ export function readUserRulesSync(dirs = userRuleDirs()): LoadedRule[] {
   return mergeUserRules(current, legacy, (rule) => rule.info.file)
 }
 
-/** 从装配上下文解析会话工作区 cwd（agent.id → sessions → header.cwd；缺链返回 null）。 */
+/**
+ * 从装配上下文解析会话工作区 cwd（agent.id → sessions → 当前目录；缺链返回 null）。
+ * @author ddj 2026年10月19号
+ * @param ctx DSH 上下文
+ * @param asm 装配上下文（含 agent.id）
+ * @returns 项目规则根的绝对路径或 null
+ */
 function cwdFromAssemble(ctx: Ctx, asm: { agent?: { id?: unknown } } | undefined): string | null {
   const id = asm?.agent?.id
   if (typeof id !== 'string' || !id) return null
-  const session = ctx.get('sessions')?.get?.(id)
-  const cwd = session?.header?.cwd
-  return typeof cwd === 'string' && cwd ? cwd : null
+  return cwdOfSession(ctx, ctx.get('sessions')?.get?.(id))
 }
 
 /**

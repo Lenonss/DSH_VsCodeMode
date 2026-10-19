@@ -7,6 +7,34 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
 
 > updated: 2026-10-19 · 维护者：ddj（AI 会话按文末协议更新，保持精炼、去重）
 > **发布时先读「发布流程」与「失败恢复」**；下方实录是历史证据，不授权当前重跑发布、改 tag 或部署。冲突旧口径以更新后的规则为准。
+- 2026-10-19 实录（v0.17.0 发布：DSH 0.2.1 吸收——locale 元数据 meta 化、engines.dsh、workingDirectory 投影跟随 cd、
+  会话级 recordsFeed 轮询收敛、ctx.locale 接入、plugins.detail.section；基线 v0.16.0 @ `8b79f8f`）：
+  三门本地全绿（typecheck 0 / **3029 passed + 15 skipped · 225 文件通过 + 2 跳过** / `node --test` 9 passed /
+  tsdown 双面 client 1718766 B、host 847975 B），本轮**无 dapFakeAdapter / archiveDb 抖动**。
+  **新坑（locale 元数据两处都要改，只改一处等于没改）**：`dsh-app-boot` 的 `dictionariesOf` 只读
+  `<specifier>/locale/<lang>.json` 里的 **`meta.title` / `meta.description`**（顶层 `title/description` 一律读不到），
+  **且**该资源必须能从包 `exports` 解析——`ERR_PACKAGE_PATH_NOT_EXPORTED` 被 `missingResource` 当「不存在」静默吞掉，
+  于是插件管理器常年显示 `package.json.name` 而**没有任何报错**。修法两件套：locale 文件包进 `{"meta":{...}}`
+  **且** `exports` 补 `"./locale/*.json": "./locale/*.json"`；`files` 要含 `locale`。`icon` 走 manifest 相对路径，不受 exports 影响。
+  **新坑（engines.dsh 一旦声明就独占兼容判定）**：官方 `unmetRequirements` 里 `engines.dsh` 存在时
+  **peerDependencies 被完全忽略**，且不满足会 `throw` 直接**阻断安装**（不是告警）。所以绝不能写窄区间；
+  官方以 `semver.satisfies(rt, range, { includePrerelease: true })` 求值，`>=0.1.0-rc.1 <0.3.0-0` 可一次放行
+  0.1.x / 0.2.x 全线并拒绝 0.3 起。声明前全树扫描确认**官方包自己都不声明 engines.dsh**（本机 0 个），
+  本插件会成为唯一声明者——这是有意的显式化，不是抄官方。
+  **新坑（workingDirectory 只能可选探测，且客户端拿不到）**：0.2.1 起 `header.cwd` 是**原始**目录，`cd` 后当前目录在
+  `sessionProjections` 的 `workingDirectory` 投影里；服务名 `workingDirectory`，`get(session)` 无 IO。
+  必须 `ctx.get(...)` 探测 + try/catch + 回落 `header.cwd`，**绝不写进模块 `inject`**（旧版 DSH 会停等不存在的服务）。
+  该投影**未声明 wire view**，客户端 `sessions` 快照的 `byId[id].cwd` 仍是 `header.cwd` → 跟随 cd 只能在 host 侧做。
+  若函数签名收 `string | null` 而下游要 `string | undefined`，记得 `?? undefined`（TS2345）。
+  **事实（多组件 5s 轮询同一 RPC 是常见浪费）**：差异角标 / 输入区 dock / 编辑器 / 体积角标各自
+  `setInterval(load, 5000)` 拉同一个 `edrv.list`，同会话 5 秒 4 次。收敛方式 = 会话级共享订阅（按 sessionId 分桶、
+  订阅者集合 + 引用计数、退订到 0 才清定时器与事件监听、`seq` 防陈旧、失败保留旧快照只分发错误）。
+  **坑（locale 服务 register 与 bind 必须各自独立 try）**：写在一个 try 里时 `register` 抛错会把 `bind` 也拉黑，
+  症状是「词典注册失败 → 文案直接退化成 key 本身」；拆开后能各自降级。
+  **坑（slot label 改 thunk 才随语言热切换）**：官方 `SlotLabel = string | (() => string)`，thunk 每次读取重算；
+  传死字符串则切语言后必须重注册 slot。
+  **事实（plugins.detail.section 有两种 subject 形状）**：内置项 `{kind:'item', id}`、安装包 `{kind:'bundle', pkg:{name}}`；
+  只判一种会在另一条路径静默不渲染。入口必须做形状校验，未知形状 return null。
 - 2026-10-19 实录（v0.16.0 发布：C# provider DotRush 优先 + Roslyn solution/open + DAP dotnet runtime；基线 v0.15.9 @ `89af5e0`）：
   三门本地绿（typecheck 0 / 2961 passed + 15 skipped，负载敏感计时用例
   `tests/dapFakeAdapter.test.ts` 与 `tests/archiveDb.test.ts`（定向计时）首轮全量各挂 1 例，

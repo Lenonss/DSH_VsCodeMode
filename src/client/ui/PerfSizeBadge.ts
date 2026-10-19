@@ -1,12 +1,14 @@
 // @ts-nocheck
 /**
  * dsh-vscode-mode client — PerfSizeBadge：对话 header 会话体积指示器。
- * 5s 轮询当前会话持久化体积（host 仅 stat，近零成本），≥1MB 显示、超阈值变色，
+ * 定时器复用 state/recordsFeed.ts 的会话级心跳（单会话只保留 1 个定时器），
+ * 轮询当前会话持久化体积（host 仅 stat，近零成本），≥1MB 显示、超阈值变色，
  * 引导"一次任务一个短会话"：会话过大时建议 /compact 或新开会话。
  * 作者 ddj 2026-09-02
  */
 import React from 'react'
 import { rpc } from '../rpc.js'
+import { subscribeTick } from '../state/recordsFeed.js'
 
 /** 软阈值：≥ 此值琥珀色（默认 2MB）。 */
 const SOFT = 2 * 1024 * 1024
@@ -38,10 +40,11 @@ export function PerfSizeBadge(props) {
   }, [sessionId, sessions])
 
   React.useEffect(() => {
+    if (!sessionId) return undefined
     load()
-    const t = setInterval(load, 5000)
-    return () => { clearInterval(t) }
-  }, [load])
+    // 共享心跳：recordsFeed 每周期回调一次，避免本组件再自建 setInterval。
+    return subscribeTick(sessionId, load)
+  }, [load, sessionId])
 
   if (!size || size < SHOW_MIN) return null
   const label = size >= 1024 * 1024 ? (size / (1024 * 1024)).toFixed(1) + 'MB' : Math.round(size / 1024) + 'KB'

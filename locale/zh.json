@@ -1,4 +1,6 @@
 {
-  "title": "VSCodeMode",
-  "description": "DSH 上的类 VSCode 编码体验：Monaco 编辑器（页签/QuickOpen/状态栏）、命令栏、Agent 编辑差异审查、SVN 集成与 LSP 智能。"
+  "meta": {
+    "title": "VSCodeMode",
+    "description": "DSH 上的类 VSCode 编码体验：Monaco 编辑器（页签/QuickOpen/状态栏）、命令栏、Agent 编辑差异审查、SVN 集成与 LSP 智能。"
+  }
 }

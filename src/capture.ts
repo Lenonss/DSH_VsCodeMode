@@ -16,7 +16,7 @@ import type { Ctx, Session } from './store.js'
 import { READ_CAP, archiveCanceled, loadBucket, saveBucket } from './store.js'
 import { fileMaxBatch, prune } from './model.js'
 import type { Registry } from './registry.js'
-import { cwdOf } from './registry.js'
+import { cwdOfSession } from './registry.js'
 import { findRemoteWs, mirrorTargetOf } from './remoteWorkspace.js'
 import { invalidateIndex } from './treeIndex.js'
 import { log } from './log.js'
@@ -275,7 +275,7 @@ export async function captureToolResult(ctx: Ctx, registry: Registry, exec: any,
   // remote_ssh_write 只依赖参数与 isError（其 result.value 形状不受本插件约束）
   if (exec.name !== 'remote_ssh_write' && !result?.value) return
   try {
-    const cwd = cwdOf(session)
+    const cwd = cwdOfSession(ctx, session)
     if (!cwd) return
     const args = ((exec.arguments || {}) as Record<string, unknown>)
     const record = exec.name === 'remote_ssh_write'

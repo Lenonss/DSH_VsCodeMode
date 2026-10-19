@@ -286,8 +286,11 @@ export function installOfficial(options: {
   slots: SlotsLike
   renderTab: unknown
   guide: { title: () => string; description: () => string }
+  /** Tab 标题 thunk（缺省用内置中文常量；传入后由调用方按当前语言解析）。 */
+  title?: () => string
 }): (() => void) | null {
   const { tabs, service, slots, renderTab, guide } = options
+  const titleOf = typeof options.title === 'function' ? options.title : () => OFFICIAL_TAB_TITLE
   const open = (path: string | null, focusDiff: boolean): boolean => {
     try {
       // 官方语义：打开即展开侧栏；seat 未挂载（无会话画面）时抛错，降级其他打开器
@@ -305,7 +308,7 @@ export function installOfficial(options: {
       id: OFFICIAL_TAB_ID,
       kind: OFFICIAL_TAB_KIND,
       priority: 'extension',
-      title: () => OFFICIAL_TAB_TITLE,
+      title: () => titleOf(),
       guide: [{ order: 20, title: guide.title, description: guide.description }],
     })
   } catch (error) {

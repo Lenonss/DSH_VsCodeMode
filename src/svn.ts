@@ -10,7 +10,7 @@ import { readdir, stat } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import type { Ctx, Session } from './store.js'
-import { cwdOf, sessionOf } from './registry.js'
+import { cwdOfSession, sessionOf } from './registry.js'
 import type { SvnAction, SvnAiPlan, SvnChangeEntry, SvnConflictArtifact, SvnFeature, SvnIgnoreItem, SvnItemStatus, SvnLogEntry, SvnRemoteOutdatedEntry, SvnStatusPayload, SvnSumEntry } from './shared/svn.js'
 import { SESSION_MISSING_ERROR, SESSION_NO_WORKSPACE_ERROR } from './shared/rpc.js'
 import { AI_PLAN_DIFF_CAP, AI_PLAN_PATHS_CAP, BATCH_PATHS_CAP, FILE_SIZES_CAP, SVN_CLI_DEFAULT, TORTOISE_EXE, contentGuardOf, normalizeAiPlan, svnChangelistNameErrorOf, tortoiseLaunchArgv } from './shared/svn.js'
@@ -463,7 +463,7 @@ async function requireSvnSession(
 ): Promise<{ cwd: string } | { err: string }> {
   const session: Session | undefined = sessionOf(ctx, sessionId)
   if (!session) return { err: SESSION_MISSING_ERROR }
-  const cwd = cwdOf(session)
+  const cwd = cwdOfSession(ctx, session)
   if (!cwd) return { err: SESSION_NO_WORKSPACE_ERROR }
   return { cwd }
 }

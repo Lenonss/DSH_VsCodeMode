@@ -77,8 +77,10 @@
 
 - **版本探测**：优先从运行 Host 入口解析 `dsh-settings` 元数据，再按
   `dsh-web-app → dsh-base → dsh` 候选回退；全部失败报告未知并使用能力探测。
-- **运行时告警**：`TESTED_DSH_MAX` 是兼容报告的验证上界，不是 npm peer 区间。
-  发布前需将它与最终验收记录一起核对；有限现场通过不意味着所有功能或平台都通过。
+- **运行时告警**：`TESTED_DSH_MAX` 已于 `0.14.10` 移除（见第 10 节），不再有「高于已实测
+  版本」告警。自 `0.17.0` 起改由 `engines.dsh` 显式声明支持区间
+  `>=0.1.0-rc.1 <0.3.0-0`，配合逐项能力探测；声明区间只表达「允许安装」，
+  不表达「已逐功能验收」。有限现场通过不意味着所有功能或平台都通过。
 - **npm SemVer**：默认排除未明确纳入对应版本元组的预发布版本。
   例如单独的 `>=0.1.0-rc.1 <0.2.0-0` 不自动覆盖 `0.1.7-rc.2`，需要相应
   `>=0.1.7-0` 分支。历史 `0.13.0` 的上界 `<0.2.0-0` 排除 0.2.0 预发布和正式版；
@@ -171,3 +173,37 @@
 - 六项 DSH 开发依赖显式固定原有版本，与发布 peer 分离：primitives 为 `0.1.6-alpha.1`，ui-settings / settings 为 `0.1.0-rc.8`，slots / llm / tools 为 `0.0.1-rc.1`。避免 `*` 自动解析造成依赖漂移及 frozen-lockfile 失败；锁文件仅移动 importer 项，不升级解析版本。
 - 移除 `TESTED_DSH_MAX` 及「高于已实测版本」告警，保留版本探测、实际能力检查、设置依赖/volatile 标记不完整和路由/重复装配诊断。
 - 允许安装不等于已验证未来 DSH 的所有 API；此为源码政策调整，不是发布、部署或跨版本全功能验收。此前章节保留当时的适配证据，不代表当前源码仍有精确放行限制。
+
+## 11. 0.17.0 对 DSH 0.2.1 的吸纳（2026-10-19）
+
+本轮基线为 Web profile 运行的 `@deepseek-ai/dsh@0.2.1-rc.2`（`0.2.1` 线最新预发布）。
+调研覆盖 `0.2.1-alpha.1` → `alpha.5` → `rc.1` → `rc.2` 全部 7 个预发布版本，逐条比对
+`D:\Application\Tools\DeepSeekHarness\node_modules` 内的实际产物，而非只读 release notes。
+
+| 吸纳项 | 官方来源 | 本插件落点 | 边界 |
+| --- | --- | --- | --- |
+| 显式兼容区间 | `dsh-app-boot` 兼容闸门支持 `engines.dsh` | `package.json` 的 `engines.dsh = >=0.1.0-rc.1 <0.3.0-0` | 声明后 peer 分支被忽略（官方注释：`An own engines.dsh range decides alone and peerDependencies are ignored`），区间写错会**阻断安装**，故一次性放行 0.1/0.2 全线、拒绝 0.3 起 |
+| 插件元数据可读 | `dsh-app-boot` 的 `dictionariesOf` 只读 `meta.title` / `meta.description` | `locale/{en,zh}.json` 改 `{"meta":{...}}`；`exports` 补 `./locale/*.json` | 结构性修复：修改前两个文件是顶层字段、且未导出，插件管理器一直回退到 `package.json.name`。`icon` 走 manifest 相对路径，不受 `exports` 影响 |
+| 跟随会话当前目录 | `dsh-working-directory` 的 `workingDirectory` 服务 + `sessionProjections` 的 `workingDirectory` 投影 | 新增 `cwdOfSession(ctx, session)`（`src/store.ts`），13 处 `header.cwd` 直读改为走投影 | **服务一律可选探测**：不得写入模块 `inject`，否则旧版 DSH 会停等一个不存在的服务；服务缺失/抛错/返回非绝对路径时回落 `header.cwd`。`header.cwd` 是会话原始目录，`cd` 之后只有投影是当前目录 |
+| 轮询收敛 | 官方无此能力，属自身演进 | 新增 `src/client/state/recordsFeed.ts`，`edrv.list` 由 3 个组件各 5s 轮询收敛为会话级单轮询 | 同一会话原本被差异角标 / 输入区 dock / 编辑器各自 5s 拉一次，现共享一份快照；退订到 0 才释放定时器与 `edrv:refresh` 监听 |
+| 界面文案 locale 化 | `dsh-client-locale` 的 `ctx.locale.register` / `bind`，`SlotLabel` 支持 thunk | 新增 `src/client/localeClient.ts`；5 处 slot label 与官方页签标题、引导改为 `() => t(key)` | 与官方一致地走 `common` 回退与键名回退；`register` 与 `bind` 各自独立降级，避免一侧失败拉黑另一侧。界面壳层（slot 名/页签标题）双语，面板内部正文仍为中文 |
+| 插件详情页扩展位 | `dsh-client-ui-plugin-manager` 的 `plugins.detail.section`（list/root） | 新增 `src/client/ui/PluginDetailSection.ts`，仅在本插件详情页渲染兼容报告摘要 | subject 有两种形状：内置项 `{kind:'item', id}`、安装包 `{kind:'bundle', pkg:{name}}`；两种都判，未知形状安全返回 null |
+
+**未吸纳并记录理由**：
+
+- `dsh.client.inject` / `external`：官方 60+ 包声明是因为自身有服务就绪需求；本插件的
+  React / primitives 走 bundle 内 `CLIENT_EXTERNALS`，加载器对未 materialize 的依赖会递归
+  materialize，无需 `external` 排序。误声明会触发 `module graph cycle ... factory-form CJS
+  cannot deliver partial exports` 或 `a row must not declare its own package` 直接加载失败，
+  故**不盲加**。
+- Session 插件记录接口（`appendPluginRecord` / `pluginRecordOf`）：仍是 experimental，
+  且需 Host 侧持有 session 对象；现有 `workspace/<hash>/ui.v1.json` 镜像已满足需求，
+  迁移收益不足以承担实验 API 的变动风险。
+- `DSH_AGENTS_HOME` 共享 agents 目录：本项目规则实际走 `.dsh/rules` 机制，接入会形成
+  两套并存的指令来源，留待有明确共享需求时再评估。
+
+**验证范围**：`npx tsc -p tsconfig.json --noEmit` 0 error；`npx vitest run` 3029 passed /
+15 skipped（225 个文件通过、2 个跳过）；`node --test tests/nativeOpen.test.mjs` 9 passed；
+`npm run build` 成功。构建中 `src/client/monaco/lsp/providers.ts` 的
+`INVALID_ANNOTATION` 是本轮之前就存在的 Rolldown 告警，非本次引入。
+以上为源码与自动化验证，**不等于** 0.2.1 全功能现场验收。

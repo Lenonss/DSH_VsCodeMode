@@ -172,7 +172,8 @@ export interface SlotSpec {
   name: string
   id: string
   order?: number
-  label?: string
+  /** 文案：字符串或 thunk；thunk 在每次读取时重算，语言切换后无需重注册。 */
+  label?: string | (() => string)
   inject?: (sessionId: string) => object
 }
 

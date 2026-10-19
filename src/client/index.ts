@@ -20,6 +20,7 @@ import { DiffBadge } from './ui/DiffBadge.js'
 import { PerfSizeBadge } from './ui/PerfSizeBadge.js'
 import { ConversationDiffDock } from './ui/ConversationDiffDock.js'
 import { McpSettings } from './ui/McpSettings.js'
+import { PluginDetailSection } from './ui/PluginDetailSection.js'
 import { rpc } from './rpc.js'
 import { loadMonaco } from './monaco/loader.js'
 import { observeScheme, schemeOfSnapshot } from './monaco/theme.js'
@@ -60,6 +61,7 @@ import { SHORTCUT_PROFILES, defaultKeybindings, normalizeKeybindings } from '../
 import { sidebarMinApply } from './sidebarMin.js'
 import { editorLimitApply } from './editorLimit.js'
 import { log } from './log.js'
+import { installLocale } from './localeClient.js'
 import { setupLsp, setSession, disposeLsp } from './monaco/lsp/index.js'
 import { disposeSnippets } from './snippets/provider.js'
 import { disposeLaunchJson } from './dap/launchSnippetProvider.js'
@@ -122,6 +124,10 @@ function setupCommands(ctx: any): CommandBridge {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export async function apply(ctx: any): Promise<void> {
   const schedule = (fn: () => void, ms: number) => ctx.timeout(fn, ms)
+
+  // UI 壳层文案：注册本插件词典到官方 locale 服务（旧版无该服务时直读中文词典）。
+  // slot label / 编辑 Tab 标题一律写成 thunk，让语言切换后无需重注册即可刷新。
+  const t = installLocale(ctx)
 
   /**
    * 无门控上报界面状态镜像事件（绕过客户端 edrv.debug 开关，直接落 host 诊断日志）。
@@ -506,7 +512,7 @@ export async function apply(ctx: any): Promise<void> {
       name: 'conversation.view',
       id: 'edrv-editor',
       order: 5,
-      label: '文件编辑',
+      label: () => t('slot.fileEditor'),
       inject: (sessionId: string) => ({ sessionId }),
     }, (props: unknown) => React.createElement(EditorView, Object.assign({}, props, { layout: 'tab', sideHint: SIDEBAR_INSTALL_CMD, schedule, addToConversation, sidebarPanels, outlineSources, fileMenuItems, fileOpeners: registry, sessions })))
   }
@@ -530,9 +536,10 @@ export async function apply(ctx: any): Promise<void> {
       service: official.service,
       slots: ctx.slots,
       renderTab: officialRenderTab,
+      title: () => t('slot.fileEditor'),
       guide: {
-        title: () => OFFICIAL_TAB_TITLE,
-        description: () => 'Monaco 文件编辑器：对话与编辑同屏（差异审查/跳转/大纲）',
+        title: () => t('guide.title'),
+        description: () => t('guide.description'),
       },
     })
     if (outcome === null) {
@@ -632,16 +639,16 @@ export async function apply(ctx: any): Promise<void> {
     name: 'conversation.input.dock',
     id: 'edrv-diff-dock',
     order: 30,
-    label: '差异',
+    label: () => t('slot.diff'),
     inject: (sessionId: string) => ({ sessionId }),
   }, (props: unknown) => React.createElement(ConversationDiffDock, Object.assign({}, props)))
 
   // header 差异角标：仅当前工作区存在差异时渲染
-  registerSlotSafely(ctx, { name: 'conversation.session.header.utilities', id: 'edrv-diff-badge', order: 90, label: '差异' },
+  registerSlotSafely(ctx, { name: 'conversation.session.header.utilities', id: 'edrv-diff-badge', order: 90, label: () => t('slot.diff') },
     (props: unknown) => React.createElement(DiffBadge, Object.assign({}, props)))
 
   // header 会话体积指示器：当前会话持久化体积，超阈值提示新开会话（性能优化）
-  registerSlotSafely(ctx, { name: 'conversation.session.header.utilities', id: 'edrv-perf-size', order: 89, label: '会话体积' },
+  registerSlotSafely(ctx, { name: 'conversation.session.header.utilities', id: 'edrv-perf-size', order: 89, label: () => t('slot.sessionSize') },
     (props: unknown) => React.createElement(PerfSizeBadge, Object.assign({}, props, { sessions })))
 
   // 设置页中的 VSCodeMode 专属页签，MCP 管理作为该页签的内部子 Tab。
@@ -649,7 +656,7 @@ export async function apply(ctx: any): Promise<void> {
     name: 'settings.section',
     id: 'vscode-mode',
     order: 30,
-    label: 'VSCodeMode',
+    label: () => t('slot.settings'),
   }, () => React.createElement(SettingsContext.Provider, { value: bridge.scope() }, React.createElement(McpSettings, {
     openerRegistry: registry,
     compatSummary,
@@ -657,6 +664,14 @@ export async function apply(ctx: any): Promise<void> {
     // 服务运行时探测（自愈）：旧版 DSH 无该服务时按钮给出手动打开方式。
     getShortcuts: () => detectShortcuts(ctx),
   })))
+
+  // 官方插件管理器详情页的只读状态段（DSH 0.2.1 新增扩展位）：非本插件页返回 null。
+  // 该 slot 在旧版 DSH 不存在，slots.inject 会一直等待（不报错），故无需版本判断。
+  registerSlotSafely(ctx, {
+    name: 'plugins.detail.section',
+    id: 'edrv-plugin-status',
+    order: 40,
+  }, (props: unknown) => React.createElement(PluginDetailSection, Object.assign({}, props)))
 
   // 卸载收尾（G4，DSH 0.1.6-alpha.2 起支持运行时卸载/重载）：
   // 注销挂在存活的 window.monaco 上的全部 Monaco provider 并复位模块状态。

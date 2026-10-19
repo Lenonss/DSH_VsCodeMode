@@ -6,6 +6,7 @@ import { matchWorkspace } from './mcpIsolation.js'
 import { listProjects, projectEntryId, reconcileProject } from './mcpProject.js'
 import type { MpcConfig, MpcServer } from './shared/mcp.js'
 import type { Ctx } from './store.js'
+import { cwdOfSession } from './store.js'
 
 export type ProjectDef = { config: MpcConfig; enabled: boolean }
 type Instance = { fiber?: any; key: string; path: string; error?: string; stopping?: Promise<void> }
@@ -76,7 +77,7 @@ export class McpRuntime {
    */
   workspace(agent: any): string | undefined {
     const paths = (this.ctx.get('workspaceRegistry')?.list?.() ?? []).map((ws: { path: string }) => ws.path)
-    return matchWorkspace(agent?.session?.header?.cwd, paths)
+    return matchWorkspace(cwdOfSession(this.ctx, agent?.session) ?? undefined, paths)
   }
 
   /**

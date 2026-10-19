@@ -4,7 +4,7 @@
  * 作者 ddj 2026年08月24号
  */
 import type { Ctx, Session } from '../store.js'
-import { policyOf } from '../store.js'
+import { cwdOfSession, policyOf } from '../store.js'
 import { pathText, pathMatch, prepareQuery } from './query.js'
 import type { PreparedQuery, WorkspaceSearchInput, WorkspaceSearchProvider, WorkspaceSearchResult } from './types.js'
 
@@ -61,7 +61,7 @@ export async function searchFallback(input: WorkspaceSearchInput): Promise<Works
   const fs = input.ctx.get('fs') as SearchFs | undefined
   if (!fs) throw new Error('缺少 fs')
   const policy = policyOf(input.ctx, input.session)
-  const cwd = input.session?.header?.cwd
+  const cwd = cwdOfSession(input.ctx, input.session)
   const rootTarget = await fs.resolve(policy?.workspaceRoot ?? '.', cwd ? { cwd, signal: input.signal } : { signal: input.signal })
   const signal = input.signal ?? new AbortController().signal
   const files: string[] = []

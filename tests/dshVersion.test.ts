@@ -109,6 +109,22 @@ describe('familyLabel', () => {
     expect(familyLabel('0.1.7-rc.2')).toContain('0.1.7')
   })
 
+  it('0.2.1-rc.2 单独标记（已逐版适配），0.2.1 其余版本归本线', () => {
+    expect(familyLabel('0.2.1-rc.2')).toContain('0.2.1-rc.2')
+    expect(familyLabel('0.2.1-rc.2')).toContain('按能力探测')
+    expect(familyLabel('0.2.1-rc.2')).toContain('workingDirectory')
+
+    // 同线其他预发布/正式版不冒充已适配的 rc.2
+    for (const version of ['0.2.1-alpha.1', '0.2.1-rc.1', '0.2.1']) {
+      expect(familyLabel(version)).toContain('0.2.1')
+      expect(familyLabel(version)).not.toContain('0.2.1-rc.2')
+    }
+
+    // 0.2.1 线不被 0.2.0 的「未经逐版适配」吞掉，也不回落到 0.1.7 线
+    expect(familyLabel('0.2.1-rc.1')).not.toContain('0.1.7')
+    expect(familyLabel('0.2.1-rc.1')).not.toContain('0.2.0 及更新')
+  })
+
   it('中间线仍归 0.1.3 版本线', () => {
     expect(familyLabel('0.1.4-rc.1')).toContain('0.1.3-alpha')
     expect(familyLabel('0.1.3-alpha.2')).toContain('0.1.3-alpha')

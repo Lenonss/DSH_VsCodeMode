@@ -33,10 +33,35 @@ export function policyOf(ctx: Ctx, session: Session | undefined): any {
   return session ? svc.resolve({ session }) : svc.resolve()
 }
 
+/**
+ * 读取会话当前工作目录：优先 workingDirectory 投影（DSH 0.2.1 起支持会话内 cd），
+ * 服务缺失或投影未就绪时回落到 header.cwd（会话创建时的原始目录）。
+ * 服务一律可选探测：不得写入模块 inject，否则旧版 DSH 会停等一个不存在的服务。
+ * @author ddj 2026年10月19号
+ * @param ctx DSH 上下文（用于可选探测 workingDirectory 服务）
+ * @param session 目标会话
+ * @returns 绝对路径；无法确定时 null
+ */
+export function cwdOfSession(ctx: Ctx, session: Session | undefined): string | null {
+  const headerCwd = session?.header?.cwd
+  const fallback = typeof headerCwd === 'string' && headerCwd ? headerCwd : null
+  if (!session) return null
+
+  const service = ctx?.get?.('workingDirectory')
+  if (!service || typeof service.get !== 'function') return fallback
+  try {
+    const current = service.get(session)
+    return typeof current === 'string' && current ? current : fallback
+  } catch {
+    // 会话已销毁或投影缺失：回落原始目录，不让新能力变成新的故障点
+    return fallback
+  }
+}
+
 /** 按会话 cwd 解析目标路径。 */
 export async function resolveTarget(ctx: Ctx, session: Session | undefined, path: string): Promise<string> {
   const fs = ctx.get('fs')
-  const cwd = session?.header?.cwd
+  const cwd = cwdOfSession(ctx, session)
   return fs.resolve(path, cwd ? { cwd } : {})
 }
 
