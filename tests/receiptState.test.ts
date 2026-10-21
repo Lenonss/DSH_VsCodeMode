@@ -154,7 +154,8 @@ describe('actual EditorView receipt adapters', () => {
   it('opens virtual plans without any disk load, save target, LSP model or SVN path', () => {
     let plans: any[] = []
     const scope = { active: 'dirty.ts', flushSave: vi.fn(), saveViewState: vi.fn(), setSvnDiff: vi.fn(), setDiskActive: vi.fn(),
-      setPlanTabs: (update: (prev: any[]) => any[]) => { plans = update(plans) }, setPlanActive: vi.fn(), setError: vi.fn(), setStatus: vi.fn(), planDocument }
+      setPlanTabs: (update: (prev: any[]) => any[]) => { plans = update(plans) }, setPlanActive: vi.fn(), setError: vi.fn(), setStatus: vi.fn(), planDocument,
+      planActiveRef: { current: null }, planReturnRef: { current: null } }
     const open = editorFunction('openPlanDoc', scope)
     const plan = { address: 'dsh-resource://plan/s/c', markdown: '# Plan\nbody', title: 'Plan' }
     open(plan)
@@ -164,6 +165,24 @@ describe('actual EditorView receipt adapters', () => {
     expect(scope.saveViewState).toHaveBeenCalledWith('dirty.ts')
     expect(scope.setDiskActive).toHaveBeenCalledWith(null)
     expect(scope.setPlanActive).toHaveBeenCalledWith(plan.address)
+  })
+
+  it('records the pre-plan return path once and keeps it across later previews', () => {
+    let plans: any[] = []
+    const planActiveRef: { current: string | null } = { current: null }
+    const planReturnRef: { current: string | null } = { current: null }
+    const scope = { active: 'a.ts', flushSave: vi.fn(), saveViewState: vi.fn(), setSvnDiff: vi.fn(), setDiskActive: vi.fn(),
+      setPlanTabs: (update: (prev: any[]) => any[]) => { plans = update(plans) }, setError: vi.fn(), setStatus: vi.fn(), planDocument,
+      planActiveRef, planReturnRef, setPlanActive: (address: string) => { planActiveRef.current = address } }
+    const open = editorFunction('openPlanDoc', scope)
+    const first = { address: 'dsh-resource://plan/s/1', markdown: '# Plan\none', title: 'One' }
+    const second = { address: 'dsh-resource://plan/s/2', markdown: '# Plan\ntwo', title: 'Two' }
+    open(first)
+    expect(planReturnRef.current).toBe('a.ts')
+    open(second)
+    // 计划态内再次打开另一份计划，不得把返回目标改成中间态
+    expect(planReturnRef.current).toBe('a.ts')
+    expect(plans.map((item) => item.address)).toEqual([first.address, second.address])
   })
 
   it('requires the actual virtual plan DOM and matching content/session before acknowledgement', () => {

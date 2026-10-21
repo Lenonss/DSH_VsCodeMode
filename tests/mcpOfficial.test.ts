@@ -4,12 +4,14 @@ import { createServer } from 'node:http'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { installIsolation } from '../src/mcpIsolation.js'
+import { McpBridge } from '../src/mcpBridge.js'
 import { installMcpRuntime, runtimeOf } from '../src/mcpRuntime.js'
 import { projectToggle, projectRefresh, mcpSnapshot, projectSave } from '../src/mcpProject.js'
 
 const hostRoot = process.env.DSH_MCP_HOST_ROOT
+afterEach(() => vi.restoreAllMocks())
 
 /**
  * Import the exact installed host module without using the plugin's old dev dependency tree.
@@ -27,6 +29,7 @@ class HttpPeer {
   calls: Array<{ server: string; method: string }> = []
   failing = new Set<string>()
   rawNames = new Map<string, string>()
+  handshakes = new Map<string, Promise<void>>()
 
   /**
    * Serve an MCP JSON-RPC request without files, processes, or remote network access.
@@ -44,6 +47,7 @@ class HttpPeer {
     this.calls.push({ server, method: message.method })
     if (this.failing.has(server)) { response.writeHead(503).end(); return }
     if (message.id === undefined) { response.writeHead(202).end(); return }
+    if (message.method === 'initialize') await this.handshakes.get(server)
     const result = this.result(server, message)
     response.writeHead(200, { 'content-type': 'application/json' })
     response.end(JSON.stringify({ jsonrpc: '2.0', id: message.id, result }))
@@ -78,6 +82,9 @@ class HttpPeer {
  * @returns Completion after official tool/resource services become active.
  */
 async function setupHost(ctx: any, files: Map<string, string>, agents: any[]): Promise<void> {
+  const { createScope } = await hostModule('dsh-scope')
+  const createBridge = McpBridge.create.bind(McpBridge)
+  vi.spyOn(McpBridge, 'create').mockImplementation((owner) => createBridge(owner, createScope))
   const prompt = await hostModule('dsh-system-prompt')
   const tools = await hostModule('dsh-tools')
   const resources = await hostModule('dsh-mcp-resources')
@@ -108,6 +115,148 @@ function listResources(ctx: any, agent: any, server: string): Promise<any> {
 }
 
 describe.skipIf(!hostRoot)('installed official scoped MCP integration', () => {
+  it('completes B while A is blocked in a real official MCP handshake', async () => {
+    const peer = new HttpPeer()
+    let release!: () => void
+    peer.handshakes.set('alpha', new Promise<void>((resolve) => { release = resolve }))
+    /** @author ddj 2026年10月20号 @param request Loopback input. @param response Loopback output. Starts controlled peer work. */
+    const handler = (request: IncomingMessage, response: ServerResponse) => { void peer.serve(request, response) }
+    const server = createServer(handler)
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const base = 'http://127.0.0.1:' + (server.address() as { port: number }).port
+    const { Context } = await hostModule('cordis')
+    const { createScope } = await hostModule('dsh-scope')
+    const official = await hostModule('dsh-mcp-client')
+    const ctx = new Context()
+    const scopes: any[] = []
+    const files = new Map(['/alpha', '/beta'].map((path) => [path + '/.mcp.json', JSON.stringify({ mcpServers: {
+      [path.slice(1)]: { url: base + path, reconnect: { enabled: false } },
+    } })]))
+    let creating: Promise<unknown> | undefined
+    try {
+      await setupHost(ctx, files, [])
+      vi.spyOn(runtimeOf(ctx) as any, 'load').mockResolvedValue(official)
+      await installMcpRuntime(ctx)
+      const first: any = { session: { id: 'A', header: { cwd: '/alpha' } } }
+      const second: any = { session: { id: 'B', header: { cwd: '/beta' } } }
+      for (const agent of [first, second]) {
+        const scope = createScope(ctx, agent)
+        scopes.push(scope)
+        agent.ctx = scope.ctx
+      }
+      await ctx.serial('agent/created', { agent: first })
+      expect(peer.calls).toHaveLength(0)
+      creating = runtimeOf(ctx).connect(first, 'alpha')
+      await vi.waitFor(() => expect(peer.calls).toContainEqual({ server: 'alpha', method: 'initialize' }))
+      let ready = false
+      const other = ctx.serial('agent/created', { agent: second }).then(() => { ready = true })
+      await vi.waitFor(() => expect(ready).toBe(true))
+      await other
+      expect(runtimeOf(ctx).sessionSnapshot().sessions.map((entry) => [entry.sessionId, entry.phase])).toEqual([['A', 'starting'], ['B', 'idle']])
+      release()
+      await creating
+      expect(ctx.get('tools').view(first).visible.has('mcp__alpha__search')).toBe(true)
+    } finally {
+      release()
+      await creating
+      await runtimeOf(ctx).dispose()
+      for (const scope of scopes.reverse()) await scope.dispose()
+      await ctx.fiber.dispose()
+      server.closeAllConnections()
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
+    }
+  }, 20000)
+
+  it('shares one opt-in workspace transport and publishes discovery schemas only after connection', async () => {
+    const peer = new HttpPeer()
+    const handler = (request: IncomingMessage, response: ServerResponse) => { void peer.serve(request, response) }
+    const server = createServer(handler)
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const base = 'http://127.0.0.1:' + (server.address() as { port: number }).port
+    const { Context } = await hostModule('cordis')
+    const { createScope } = await hostModule('dsh-scope')
+    const official = await hostModule('dsh-mcp-client')
+    const ctx = new Context()
+    const agents: any[] = []
+    const scopes: any[] = []
+    const files = new Map([['/alpha/.mcp.json', JSON.stringify({ mcpServers: { alpha: {
+      url: base + '/alpha', reconnect: { enabled: false }, vscodeMode: { sharing: 'workspace' },
+    } } })]])
+    try {
+      await setupHost(ctx, files, agents)
+      vi.spyOn(runtimeOf(ctx) as any, 'load').mockResolvedValue(official)
+      for (const id of ['A', 'B']) {
+        const agent: any = { session: { id, header: { cwd: '/alpha' } } }
+        const scope = createScope(ctx, agent)
+        agent.ctx = scope.ctx
+        scopes.push(scope); agents.push(agent)
+      }
+      installIsolation(ctx)
+      await installMcpRuntime(ctx)
+      const tools = ctx.get('tools')
+      const { renderToolsSdk } = await hostModule('dsh-tools')
+      const sdkBefore = renderToolsSdk([...tools.view(agents[0]).visible.values()].map((tool: any) => ({ name: tool.name, description: tool.description, parameters: tool.parameters, output: tool.output.schema })))
+      expect(sdkBefore).not.toContain('mcp__alpha__search')
+      expect(peer.calls).toHaveLength(0)
+      const execution = { callId: 'discover', signal: new AbortController().signal, agent: agents[0] }
+      const programs: string[][] = []
+      ctx.provide('workingDirectory', { ensure: async () => '/alpha' })
+      agents[0].session.append = async () => undefined
+      ctx.provide('ptcRuntime', {
+        language: 'typescript', programFormat: 'function-body', release: async () => undefined,
+        resolve: (request: any) => ({ ...request, cwd: '/alpha', timeoutMs: 1000 }),
+        run: async (request: any) => {
+          const functions = request.bindings[0].functions
+          programs.push(Object.keys(functions))
+          const result = request.program === 'discover'
+            ? await functions.discover_project_mcp({ action: 'connect', serverName: 'alpha' })
+            : await functions.mcp__alpha__search({})
+          return { value: result, logs: [] }
+        },
+      })
+      const ptc = agents[0].ctx.get('tools').presentAs('ptc')
+      const discovered = await tools.execute({ ...execution, name: 'run_code', arguments: { code: 'discover', description: 'Controlled PTC discovery fixture' } })
+      expect(programs[0]).not.toContain('mcp__alpha__search')
+      const ptcResult = await tools.execute({ ...execution, callId: 'next-program', name: 'run_code', arguments: { code: 'call', description: 'Controlled PTC next-program fixture' } })
+      expect(ptcResult.isError).toBe(false)
+      expect(programs[1]).toContain('mcp__alpha__search')
+      ptc()
+      expect(discovered.isError).toBe(false)
+      expect(JSON.stringify(discovered)).toContain('mcp__alpha__search')
+      await runtimeOf(ctx).connect(agents[1], 'alpha')
+      expect(peer.calls.filter((call) => call.method === 'initialize')).toHaveLength(1)
+      expect(runtimeOf(ctx).views('/alpha')[0]).toMatchObject({ instanceCount: 1, sessionCount: 2 })
+      expect(tools.schemas(agents[0]).some((tool: any) => tool.name === 'mcp__alpha__search')).toBe(true)
+      const sdkAfter = renderToolsSdk([...tools.view(agents[0]).visible.values()].map((tool: any) => ({ name: tool.name, description: tool.description, parameters: tool.parameters, output: tool.output.schema })))
+      expect(sdkAfter).toContain('mcp__alpha__search')
+      expect(sdkBefore).not.toContain('mcp__alpha__search')
+      const restrict = agents[0].ctx.get('tools').restrict({ deny: ['discover_project_mcp'] })
+      const denied = await tools.execute({ ...execution, callId: 'denied', name: 'discover_project_mcp', arguments: { action: 'list' } })
+      expect(denied.isError).toBe(true)
+      restrict()
+      const guard = tools.guard((exec: any) => exec.name === 'mcp__alpha__search' ? 'test approval denied' : undefined)
+      const beforeDenied = peer.calls.length
+      expect((await tools.execute({ ...execution, callId: 'guarded', name: 'mcp__alpha__search', arguments: {} })).isError).toBe(true)
+      expect(peer.calls).toHaveLength(beforeDenied)
+      guard()
+      const result = await tools.execute({ ...execution, callId: 'call', name: 'mcp__alpha__search', arguments: {} })
+      expect(result.isError).toBe(false)
+      expect(JSON.stringify(result)).toContain('alpha')
+      await runtimeOf(ctx).detach(agents[0])
+      expect(JSON.stringify(await listResources(ctx, agents[1], 'alpha'))).toContain('test://alpha')
+      expect(tools.get('mcp__alpha__search')).toBeUndefined()
+      await projectToggle(ctx, '/alpha', 'alpha', false)
+      expect(tools.get('mcp__alpha__search', agents[1])).toBeUndefined()
+      expect(runtimeOf(ctx).pool.entries.size).toBe(0)
+    } finally {
+      await runtimeOf(ctx).dispose()
+      for (const scope of scopes.reverse()) await scope.dispose()
+      await ctx.fiber.dispose()
+      server.closeAllConnections()
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
+    }
+  }, 20000)
+
   it('confirms official public-name collisions across separate legal scopes', async () => {
     const peer = new HttpPeer()
     peer.rawNames.set('short', 'nested__search')
@@ -158,13 +307,15 @@ describe.skipIf(!hostRoot)('installed official scoped MCP integration', () => {
       agent.ctx = scope.ctx
       vi.spyOn(runtimeOf(ctx) as any, 'load').mockResolvedValue(official)
       await installMcpRuntime(ctx)
+      await expect(runtimeOf(ctx).connect(agent, 'alpha')).rejects.toThrow()
       expect(runtimeOf(ctx).views('/alpha')[0]).toMatchObject({ status: 'error', toolCount: 0, instanceCount: 0 })
-      expect(runtimeOf(ctx).views('/alpha')[0].error).toContain('initial connection or tool synchronization failed')
+      expect(runtimeOf(ctx).views('/alpha')[0].error).toContain('请查看 Host 日志')
       const before = peer.calls.length
       mcpSnapshot(ctx)
       expect(peer.calls).toHaveLength(before)
       peer.failing.clear()
       await projectRefresh(ctx, '/alpha', 'alpha')
+      await runtimeOf(ctx).connect(agent, 'alpha')
       expect(runtimeOf(ctx).views('/alpha')[0]).toMatchObject({ status: 'unverified', toolCount: 1, instanceCount: 1, error: undefined })
     } finally {
       await runtimeOf(ctx).dispose()
@@ -210,6 +361,8 @@ describe.skipIf(!hostRoot)('installed official scoped MCP integration', () => {
       vi.spyOn(runtimeOf(ctx) as any, 'load').mockResolvedValue(official)
       installIsolation(ctx)
       await installMcpRuntime(ctx)
+      expect(peer.calls.filter((call) => call.server !== 'global')).toHaveLength(0)
+      await Promise.all([runtimeOf(ctx).connect(parent, 'alpha'), runtimeOf(ctx).connect(child, 'beta'), runtimeOf(ctx).connect(sibling, 'alpha')])
       expect(peer.calls.filter((call) => call.server === 'alpha' && call.method === 'initialize')).toHaveLength(2)
       expect(peer.calls.filter((call) => call.server === 'beta' && call.method === 'initialize')).toHaveLength(1)
       expect(runtimeOf(ctx).views('/beta')[0]).toMatchObject({ instanceCount: 1, toolCount: 0, status: 'unverified' })
@@ -241,6 +394,7 @@ describe.skipIf(!hostRoot)('installed official scoped MCP integration', () => {
       expect(mcpSnapshot(ctx).projects.find((project) => project.workspacePath === '/beta')?.servers[0].toolCount).toBe(0)
       expect(peer.calls.filter((call) => call.method === 'initialize')).toHaveLength(handshakes)
       await projectRefresh(ctx, '/alpha', 'alpha')
+      await Promise.all([runtimeOf(ctx).connect(parent, 'alpha'), runtimeOf(ctx).connect(sibling, 'alpha')])
       expect(peer.calls.filter((call) => call.server === 'alpha' && call.method === 'initialize')).toHaveLength(4)
       expect(peer.calls.filter((call) => call.server === 'beta' && call.method === 'initialize')).toHaveLength(1)
       const config = { serverName: 'alpha__nested', transport: 'streamable-http' as const, url: base + '/alpha' }

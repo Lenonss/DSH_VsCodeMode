@@ -1,6 +1,6 @@
 import React from 'react'
 import { describe, expect, it, vi } from 'vitest'
-import { EditorPane, GroupPathbar, bindPaneView } from '../src/client/ui/EditorPane.js'
+import { EditorPane, GroupPathbar, bindPaneView, type PaneProps } from '../src/client/ui/EditorPane.js'
 import { buildTabMenu } from '../src/client/tabMenu.js'
 import { readFileSync } from 'node:fs'
 import ts from 'typescript'
@@ -14,10 +14,10 @@ function descendants(node: any): any[] {
   return [node, ...React.Children.toArray(node.props?.children).flatMap(descendants)]
 }
 
-/** @private @author ddj 2026年10月14号 @returns Testable pane with real tab component callbacks. */
-function pane() {
+/** @private @author ddj 2026年10月14号 @param overrides Pane props replacing defaults. @returns Testable pane with real tab component callbacks. */
+function pane(overrides: Partial<PaneProps> = {}) {
   const callbacks = { onSelect: vi.fn(), onClose: vi.fn(), onDrag: vi.fn(), onMenu: vi.fn(), consumeClick: vi.fn(() => false) }
-  const tree = EditorPane({ group: { id: 'main', active: 'a.ts', tabs: [{ path: 'a.ts' }, { path: 'pin.ts', pinned: true }] }, focused: true, dirty: { 'a.ts': true }, ...callbacks })
+  const tree = EditorPane({ group: { id: 'main', active: 'a.ts', tabs: [{ path: 'a.ts' }, { path: 'pin.ts', pinned: true }] }, focused: true, dirty: { 'a.ts': true }, ...callbacks, ...overrides })
   return { tree, callbacks, nodes: descendants(tree) }
 }
 
@@ -127,6 +127,43 @@ describe('actual workbench adapters', () => {
     expect(pdfNode('a.pdf')).toBe(pdfNode('a.pdf'))
     expect(createElement).toHaveBeenCalledOnce()
   })
+  it('suppresses disk tab selection and keeps one tab row while a plan preview is active', () => {
+    let layout = createLayout([{ path: 'a' }, { path: 'b' }], 'a')
+    layout = moveTab(layout, 'b', { kind: 'split', group: 'main', edge: 'right' })
+    const renderWith = (planActive: string | null) => adapter('renderGroup', {
+      workbench: layout, dirtyMap: {}, planActive, React, EditorPane, GroupPathbar: () => null, PassiveEditor: () => null,
+      mountFull: () => {}, passiveMount: () => {}, scope: 'w', selectGroup: vi.fn(), closeTab: vi.fn(), paneMenu: vi.fn(), dragTab: vi.fn(), consumeDrag: () => false,
+      // 页签行归属在组件体里算好（浮窗聚焦时回落到主组），renderGroup 只按 id 认领这一行。
+      rowOwner: layout.focused, tabsHostRef: { current: null }, planTabExtras: [{}], rowTools: {},
+    })
+    const preview = layout.groups.map((group) => renderWith('dsh-resource://plan/s/c')(group.id))
+    for (const [index, group] of layout.groups.entries()) {
+      // 计划预览接管焦点组正文：只有它收起磁盘选中态（其余分组仍保留自己的选中页签）
+      expect(preview[index].props.suppressActive).toBe(group.id === layout.focused)
+      // 同一时刻只有焦点分组承载页签行：计划页签与行尾工具列只出现在这一组，其余分组不再有第二行
+      expect(preview[index].props.extras !== undefined).toBe(group.id === layout.focused)
+      expect(preview[index].props.tools !== undefined).toBe(group.id === layout.focused)
+    }
+    const idle = layout.groups.map((group) => renderWith(null)(group.id))
+    expect(idle.every((paneNode) => paneNode.props.suppressActive === false)).toBe(true)
+    // 浮窗里的组不承载页面页签行（浮窗自带标题栏），但仍收起磁盘选中态
+    const floatingPane = renderWith('dsh-resource://plan/s/c')(layout.focused, true)
+    expect(floatingPane.props.extras).toBeUndefined()
+    expect(floatingPane.props.tools).toBeUndefined()
+    expect(floatingPane.props.suppressActive).toBe(true)
+  })
+  it('returns to the pre-plan file when the active preview closes', () => {
+    const address = 'dsh-resource://plan/s/c'
+    const closeWith = (planActive: string, planReturn: string | null) => {
+      const scope = { setPlanTabs: vi.fn(), planActiveRef: { current: planActive }, planReturnRef: { current: planReturn }, setActive: vi.fn(), tabsRef: { current: [{ path: 'a.ts' }, { path: 'b.ts' }] } }
+      adapter('closePlan', scope)(address, undefined)
+      return scope
+    }
+    expect(closeWith(address, 'b.ts').setActive).toHaveBeenCalledWith('b.ts')
+    expect(closeWith(address, 'gone.ts').setActive).toHaveBeenCalledWith('a.ts')
+    expect(closeWith(address, null).setActive).toHaveBeenCalledWith('a.ts')
+    expect(closeWith('dsh-resource://plan/s/other', 'b.ts').setActive).not.toHaveBeenCalled()
+  })
 })
 
 describe('actual editor pane interaction', () => {
@@ -151,6 +188,35 @@ describe('actual editor pane interaction', () => {
     expect(nodes.filter((node) => node.props.role === 'tab')).toHaveLength(2)
     expect(nodes.some((node) => node.props.title === '未保存修改')).toBe(true)
     expect(nodes.filter((node) => node.props['aria-label']?.startsWith('关闭 '))).toHaveLength(1)
+  })
+  it('paints exactly one selected tab and none while a plan preview owns the pane', () => {
+    const tabsOf = (nodes: any[]) => nodes.filter((node) => node.props.role === 'tab')
+    const selectedOf = (nodes: any[]) => tabsOf(nodes).filter((node) => String(node.props.className).includes('edrv-tab-active'))
+    expect(selectedOf(pane().nodes)).toHaveLength(1)
+    expect(tabsOf(pane().nodes).filter((node) => node.props['aria-selected'] === true)).toHaveLength(1)
+    // 双下划线根因：计划预览接管正文后，磁盘页签既不能画 active 也不能宣告 aria-selected。
+    const suppressed = pane({ suppressActive: true }).nodes
+    expect(selectedOf(suppressed)).toHaveLength(0)
+    expect(tabsOf(suppressed).every((node) => node.props['aria-selected'] === false)).toBe(true)
+    expect(pane({ suppressActive: false }).nodes.some((node) => String(node.props.className).includes('edrv-tab-active'))).toBe(true)
+  })
+  it('keeps the plan preview tabs and row tools on the single tab row of the focused pane', () => {
+    const planTab = React.createElement('div', { className: 'edrv-tab edrv-tab-plan', key: 'plan' }, '计划预览')
+    const tools = React.createElement('div', { className: 'edrv-tabs-tools', key: 'tools' }, '←')
+    const { tree } = pane({ extras: planTab, tools })
+    const row = tree.props.children[0]
+    expect(row.props.className).toBe('edrv-tabs-row')
+    const [strip, rowTools] = React.Children.toArray(row.props.children) as any[]
+    expect(strip.props.className).toBe('edrv-tabs')
+    expect(strip.props.role).toBe('tablist')
+    // 计划预览页签与磁盘页签同处一条滚动区（extras 是页签区的尾部内容），工具列在滚动区之外
+    const stripChildren = React.Children.toArray(strip.props.children) as any[]
+    expect(stripChildren.some((node) => node.props.className === 'edrv-tab edrv-tab-plan')).toBe(true)
+    expect(rowTools.props.className).toBe('edrv-tabs-tools')
+    expect(cssRule('[data-edrv-view] .edrv-tabs-row')).toContain('display: flex')
+    // 页签区吃掉行走宽（特异性要压过分组内 .edrv-tabs 的 flex: 0 0 auto），工具列固定行尾
+    expect(cssRule('[data-edrv-view] .edrv-group .edrv-tabs-row > .edrv-tabs')).toContain('flex: 1 1 auto')
+    expect(cssRule('[data-edrv-view] .edrv-tabs-tools')).toContain('flex: 0 0 auto')
   })
   it('starts trusted internal drag and consumes the post-drag click', () => {
     const { nodes, callbacks } = pane()

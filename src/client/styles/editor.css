@@ -16,6 +16,11 @@
 /* 固定页签：📌 标记 + 免关闭按钮（固定页签不渲染 ×，仅可经右键菜单取消固定） */
 [data-edrv-view] .edrv-tab .edrv-tab-pin { flex-shrink: 0; font-size: 10px; line-height: 1; opacity: .85; }
 [data-edrv-view] .edrv-tab.edrv-tab-pinned { background: var(--dsw-alias-bg-layer-2, rgba(255,255,255,.04)); }
+/* 页签行 = 可横滚的页签区 + 行尾固定工具列（计划预览页签与磁盘页签同处这一行的滚动区）@author ddj 2026年10月20号 */
+[data-edrv-view] .edrv-tabs-row { display: flex; align-items: center; min-width: 0; flex: 0 0 auto; background: var(--dsw-alias-bg-layer-1, transparent); }
+/* 特异性需盖过下面 .edrv-group .edrv-tabs 的 flex: 0 0 auto，页签区才能吃掉行走宽、把工具列压到行尾 */
+[data-edrv-view] .edrv-group .edrv-tabs-row > .edrv-tabs { flex: 1 1 auto; min-width: 0; background: transparent; }
+[data-edrv-view] .edrv-tabs-tools { display: flex; align-items: center; gap: 2px; flex: 0 0 auto; padding: 0 6px 0 2px; }
 [data-edrv-view] .edrv-tab-add { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; margin-left: 2px; border: none; border-radius: 6px; background: transparent; color: var(--dsw-alias-label-secondary, #aaa); font-size: 14px; cursor: pointer; flex-shrink: 0; }
 [data-edrv-view] .edrv-tab-add:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(255,255,255,.06)); }
 [data-edrv-view] .edrv-pathbar { display: flex; align-items: center; gap: 8px; height: 26px; padding: 0 10px; background: var(--dsw-alias-bg-layer-1, #ffffff); border-bottom: 1px solid var(--dsw-alias-border-l1, #e0e6e8); font-size: 12px; flex-shrink: 0; overflow: hidden; }
@@ -988,7 +993,6 @@
 [data-edrv-view] .edrv-group { border: 0; }
 [data-edrv-view] .edrv-group .edrv-tabs { flex: 0 0 auto; touch-action: none; }
 [data-edrv-view] .edrv-group-tab-name { overflow: hidden; text-overflow: ellipsis; max-width: 180px; }
-[data-edrv-view] .edrv-workbench-tools { flex: 0 0 auto; }
 [data-edrv-view] .edrv-split { display: flex; flex: 1 1 auto; min-width: 0; min-height: 0; overflow: hidden; }
 [data-edrv-view] .edrv-split-vertical { flex-direction: column; }
 [data-edrv-view] .edrv-split-child { display: flex; min-width: 0; min-height: 0; overflow: hidden; }

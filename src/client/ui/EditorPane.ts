@@ -14,14 +14,24 @@ export interface PaneProps {
   onDrag(path: string, event: React.PointerEvent): void
   consumeClick(): boolean
   children?: React.ReactNode
+  /** @public @author ddj 2026年10月20号 Virtual preview tabs of this group's own strip: plans and files share one row. */
   extras?: React.ReactNode
+  /** @public @author ddj 2026年10月20号 Row controls pinned after the strip of the same row (never inside the scroller). */
+  tools?: React.ReactNode
+  /** @public @author ddj 2026年10月20号 Strip ref owned by the workbench (scroll-into-view and horizontal wheel). */
+  tabsRef?: React.Ref<HTMLDivElement>
+  /** @public @author ddj 2026年10月20号 Read-only plan preview owns this pane body, so no disk tab paints as active. */
+  suppressActive?: boolean
 }
 
 /** @public @author ddj 2026年10月14号 @param props Group callbacks and file view. @returns Accessible tab strip and drop target. */
 export function EditorPane(props: PaneProps): React.ReactElement {
   const { group } = props
-  /** @private @author ddj 2026年10月14号 @param tab File record. @returns Draggable tab with isolated close control. */
+  // 计划预览接管本组正文时，磁盘页签只保留可点击性，不再画选中态，避免同一可见区域出现两条下划线。
+  const suppressActive = props.suppressActive === true
+  /** @private @author ddj 2026年10月20号 @param tab File record. @returns Draggable tab with isolated close control. */
   function renderTab(tab: TabLike): React.ReactElement {
+    const selected = !suppressActive && tab.path === group.active
     /** @private @author ddj 2026年10月14号 @param event Primary press. Start trusted file drag. */
     function press(event: React.PointerEvent): void { props.onDrag(tab.path, event) }
     /** @private @author ddj 2026年10月14号 Select unless release completed a drag. */
@@ -35,8 +45,8 @@ export function EditorPane(props: PaneProps): React.ReactElement {
     /** @private @author ddj 2026年10月14号 @param event Keyboard activation. */
     function key(event: React.KeyboardEvent): void { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); props.onSelect(group.id, tab.path) } }
     return React.createElement('div', {
-      key: tab.path, 'data-edrv-tab-path': tab.path, role: 'tab', tabIndex: 0, 'aria-selected': tab.path === group.active,
-      className: 'edrv-tab' + (tab.path === group.active ? ' edrv-tab-active' : '') + (tab.pinned ? ' edrv-tab-pinned' : ''),
+      key: tab.path, 'data-edrv-tab-path': tab.path, role: 'tab', tabIndex: 0, 'aria-selected': selected,
+      className: 'edrv-tab' + (selected ? ' edrv-tab-active' : '') + (tab.pinned ? ' edrv-tab-pinned' : ''),
       title: tab.path + (tab.pinned ? '（已固定）' : ''), onPointerDown: press, onClick: select, onContextMenu: menu, onKeyDown: key,
     }, tab.pinned ? React.createElement('span', { className: 'edrv-tab-pin' }, '📌') : null,
     React.createElement('span', { className: 'edrv-group-tab-name' }, tab.path.split(/[\\/]/).pop()),
@@ -48,7 +58,9 @@ export function EditorPane(props: PaneProps): React.ReactElement {
     if (!group.active && !props.focused && event.button === 0) props.onSelect(group.id)
   }
   return React.createElement('section', { className: 'edrv-group' + (props.focused ? ' edrv-group-focused' : ''), 'data-edrv-group': group.id, onPointerDown: focusEmpty },
-    React.createElement('div', { className: 'edrv-tabs', role: 'tablist', 'data-edrv-group-tabs': group.id }, group.tabs.map(renderTab), props.extras),
+    React.createElement('div', { className: 'edrv-tabs-row' },
+      React.createElement('div', { className: 'edrv-tabs', role: 'tablist', 'data-edrv-group-tabs': group.id, ref: props.tabsRef }, group.tabs.map(renderTab), props.extras),
+      props.tools),
     React.createElement('div', { className: 'edrv-group-body', role: 'tabpanel' }, props.children))
 }
 

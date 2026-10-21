@@ -33,6 +33,7 @@ import { newContentSearcher } from './search/content.js'
 import { restoreFile, revertCall, revertHunk, revertHunks, type Result } from './revert.js'
 import { rulesList, rulesRead, rulesRemove, rulesSave, rulesToggle } from './rules.js'
 import { isSnippetFilePath, snippetsEntries, snippetsList, snippetsRead, snippetsRemove, snippetsSave } from './snippets.js'
+import { runtimeOf } from './mcpRuntime.js'
 import { listMcp, refreshMcp, removeMcp, saveMcp, toggleMcp } from './mcp.js'
 import { listProjects, projectRefresh, projectRemove, projectSave, projectToggle, mcpSnapshot } from './mcpProject.js'
 import { normalizeFileOpenTool, FILE_OPEN_DEFAULT, FILE_OPEN_SETTINGS_NS, sectionOf, updateSection } from './fileOpenSettings.js'
@@ -1170,6 +1171,7 @@ export function buildHandlers(
     },
     'mcp.list': async () => ({ ok: true, ...listMcp(ctx) }),
     'mcp.snapshot': async () => ({ ok: true, ...mcpSnapshot(ctx) }),
+    'mcp.sessionSnapshot': async () => ({ ok: true, ...runtimeOf(ctx).sessionSnapshot() }),
     'mcp.save': async (args) => {
       try { return { ok: true, server: await saveMcp(ctx, args.config) } }
       catch (error) { return { ok: false, error: String(error) } }
@@ -1190,8 +1192,18 @@ export function buildHandlers(
       try { return { ok: true, ...await listProjects(ctx) } }
       catch (error) { return { ok: false, error: String(error) } }
     },
+    'mcp.projectConnect': async (args) => {
+      const runtime = runtimeOf(ctx)
+      const agent = [...runtime.agents.keys()].find((owner) => owner.session?.id === args.sessionId)
+      if (!agent || runtime.workspace(agent) !== args.workspacePath) return { ok: false, error: '请先打开此项目的活跃会话；不会激活历史会话' }
+      try {
+        await runtime.connect(agent, args.serverName)
+        const project = mcpSnapshot(ctx).projects.find((item) => item.workspacePath === args.workspacePath)!
+        return { ok: true, project }
+      } catch { return { ok: false, error: '项目 MCP 连接失败，请查看会话状态和 Host 日志' } }
+    },
     'mcp.projectSave': async (args) => {
-      try { return { ok: true, project: await projectSave(ctx, args.workspacePath, args.serverName, args.config) } }
+      try { return { ok: true, project: await projectSave(ctx, args.workspacePath, args.serverName, args.config, args.policy) } }
       catch (error) { return { ok: false, error: String(error) } }
     },
     'mcp.projectRemove': async (args) => {

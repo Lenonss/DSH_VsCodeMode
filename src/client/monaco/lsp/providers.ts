@@ -5,7 +5,8 @@
  * 交互层：edrv.goToDefinition（F12）/ edrv.findReferences（Shift+F12 / 右键）均走 Monaco 原生命令；
  * Ctrl+点击使用处交给原生；Lua 表枚举字段声明处改为打开引用 Peek，
  * 数据经 host 的 LSP RPC 提供（registerEditorOpener 接管 edrv:// 点击跳转）。
- * 作者 ddj 2026-08-27 / 2026-09-11
+ * 定义结果返回前预热目标 model，避免 hover 定义链接预览抛 "Model not found"。
+ * 作者 ddj 2026-08-27 / 2026-09-11 / 2026-10-20
  */
 import {
   pathOfModel, syncDoc, closeDoc, findDefinition, findReferences,
@@ -19,6 +20,7 @@ import {
   LSP_COMPLETION_KIND_NAMES, LSP_INSERT_TEXT_FORMAT_SNIPPET,
 } from '../../../shared/lsp.js'
 import { luaKeywordsAt, luaTypesAt, mergeKeywords } from './keywords.js'
+import { warmModelFor } from '../../state/modelWarmer.js'
 
 const LSP_LANGS = ['lua', 'csharp']
 
@@ -77,6 +79,31 @@ export function navTargetOf(selectionOrPosition) {
   const endLine = Math.max(line, rawEndLine != null ? Math.max(1, rawEndLine) : line)
   const endColumn = rawEndColumn != null ? Math.max(1, rawEndColumn) : undefined
   return endColumn === undefined ? { line, column, endLine } : { line, column, endLine, endColumn }
+}
+
+/**
+ * 预热定义目标文件的 Monaco model（供 Ctrl+hover 定义链接预览使用）。
+ *
+ * 为什么需要：Monaco 的 GotoDefinitionAtPositionEditorContribution 在渲染定义链接预览时，
+ * 对目标 uri 调 `createModelReference` 后**只挂 then、没有 catch**；本插件的定义目标是
+ * 自造的 `edrv://` uri，目标文件若从未打开过就没有已注册 model，`createModelReference`
+ * 会 reject("Model not found") 变成未捕获的 promise 异常（弹到 Console）。
+ * 本 vendored Monaco 也没有 `registerTextModelContentProvider` 可惰性喂内容，故只能提前建模型。
+ *
+ * 只预热单一定义：多定义分支（`locations.length > 1`）Monaco 走列表、不调
+ * `createModelReference`，没必要读盘。预热纯属增强，任何异常都在此吞掉，
+ * 不得让跳转查询失败（F12 与 Ctrl+点击不依赖模型是否已建）。
+ * @author ddj 2026年10月20号
+ * @param locations findDefinition 的客户端结果（含 edrv uri）
+ */
+async function prewarmDefinitionTarget(locations) {
+  if (!Array.isArray(locations) || locations.length !== 1) return
+  try {
+    const target = lspUriToAbs(locations[0]?.uri)
+    if (target) await warmModelFor(target)
+  } catch (error) {
+    /* 预热失败静默降级：等价于本次 hover 不显示预览 */
+  }
 }
 
 /** 注册全部 Monaco LSP provider 与文档跟踪（幂等）。 */
@@ -151,10 +178,12 @@ export function registerLspProviders(monaco) {
       },
     }),
     monaco.languages.registerDefinitionProvider(LSP_LANGS, {
-      provideDefinition: (model, position, token) => {
+      provideDefinition: async (model, position, token) => {
         const path = pathOfModel(model)
         if (!path) return []
-        return findDefinition(path, model.getValue(), position)
+        const locations = await findDefinition(path, model.getValue(), position)
+        await prewarmDefinitionTarget(locations)
+        return locations
       },
     }),
     monaco.languages.registerReferenceProvider(LSP_LANGS, {

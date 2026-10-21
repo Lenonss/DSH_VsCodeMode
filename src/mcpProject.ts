@@ -5,7 +5,7 @@ import { PROJECT_ENTRY_PREFIX, entriesOf, mergeMcp, validateConfig, nameOverlap,
 import { isProjectEntryId } from './compat.js'
 import { clearLegacy, runtimeOf } from './mcpRuntime.js'
 import type { ProjectDef } from './mcpRuntime.js'
-import type { MpcConfig, MpcProject, MpcServer } from './shared/mcp.js'
+import { parseMcpPolicy, type McpPolicy, type MpcConfig, type MpcProject, type MpcServer } from './shared/mcp.js'
 import type { Ctx } from './store.js'
 
 const FILE_NAME = '.mcp.json'
@@ -192,19 +192,20 @@ export async function checkMcpName(ctx: Ctx, serverName: string, workspacePath?:
  * @param ctx Host services.
  * @param workspacePath Registered workspace.
  * @param refresh Optional unchanged server to reconnect.
- * @returns Completion after scoped fibers match the file, including disabled flags.
+ * @param wait Await connection synchronization for management, or only publication/scheduling for creation.
+ * @returns Configuration publication, optionally including scoped fiber synchronization.
  */
-export async function reconcileProject(ctx: Ctx, workspacePath: string, refresh?: string): Promise<void> {
+export async function reconcileProject(ctx: Ctx, workspacePath: string, refresh?: string, wait = true): Promise<void> {
   const data = await readProjectJson(ctx, workspacePath)
   const defs = new Map<string, ProjectDef>()
   for (const [name, def] of Object.entries(serversOf(data))) {
     const config = configFromDef(def, name)!
     validateConfig(config)
     await checkMcpName(ctx, name, workspacePath)
-    defs.set(name, { config, enabled: def.disabled !== true })
+    defs.set(name, { config, enabled: def.disabled !== true, policy: parseMcpPolicy(def.vscodeMode) })
   }
   await clearLegacy(ctx)
-  await runtimeOf(ctx).replace(workspacePath, defs, refresh)
+  await runtimeOf(ctx).replace(workspacePath, defs, refresh, wait)
 }
 
 /**
@@ -245,7 +246,7 @@ export async function deactivateMcp(ctx: Ctx, entryId: string): Promise<void> {
  * @param title Workspace title.
  * @returns Configuration and honest runtime status with any read error attached.
  */
-async function projectOf(ctx: Ctx, workspacePath: string, title: string): Promise<MpcProject> {
+async function projectOf(ctx: Ctx, workspacePath: string, title: string, wait = true): Promise<MpcProject> {
   let fileError: string | undefined
   let missingDir: boolean | undefined
   try {
@@ -253,7 +254,7 @@ async function projectOf(ctx: Ctx, workspacePath: string, title: string): Promis
     if (!fs) throw new Error('缺少 fs 服务')
     const info = await fs.stat(await fs.resolve(workspacePath))
     missingDir = !info || info.type !== 'directory'
-    if (!missingDir) await reconcileProject(ctx, workspacePath)
+    if (!missingDir) await reconcileProject(ctx, workspacePath, undefined, wait)
   } catch (error) {
     missingDir = isMissingFile(error) || undefined
     fileError = String(error)
@@ -271,9 +272,9 @@ async function projectOf(ctx: Ctx, workspacePath: string, title: string): Promis
  * @param ctx Host services.
  * @returns Project list; individual malformed files are reported on their project.
  */
-export async function listProjects(ctx: Ctx): Promise<{ projects: MpcProject[] }> {
+export async function listProjects(ctx: Ctx, wait = true): Promise<{ projects: MpcProject[] }> {
   const projects: MpcProject[] = []
-  for (const ws of ctx.get('workspaceRegistry')?.list?.() ?? []) projects.push(await projectOf(ctx, ws.path, ws.title ?? ''))
+  for (const ws of ctx.get('workspaceRegistry')?.list?.() ?? []) projects.push(await projectOf(ctx, ws.path, ws.title ?? '', wait))
   return { projects }
 }
 
@@ -316,18 +317,20 @@ function mergeDefinition(previous: Record<string, unknown>, config: MpcConfig): 
  * @param config Submitted configuration.
  * @returns Updated project view; invalid sources or conflicts reject before writing.
  */
-export async function projectSave(ctx: Ctx, workspacePath: string, serverName: string, config: MpcConfig): Promise<MpcProject> {
-  return mcpEdit(ctx, () => saveProject(ctx, workspacePath, serverName, config))
+export async function projectSave(ctx: Ctx, workspacePath: string, serverName: string, config: MpcConfig, policy?: McpPolicy): Promise<MpcProject> {
+  if (policy !== undefined) parseMcpPolicy(policy)
+  return mcpEdit(ctx, () => saveProject(ctx, workspacePath, serverName, config, policy))
 }
 
 /** @private @author ddj 2026年10月08号 @param ctx Host services. @param workspacePath Owner. @param serverName Namespace. @param config Editable fields. @returns Persisted project status. */
-async function saveProject(ctx: Ctx, workspacePath: string, serverName: string, config: MpcConfig): Promise<MpcProject> {
+async function saveProject(ctx: Ctx, workspacePath: string, serverName: string, config: MpcConfig, policy?: McpPolicy): Promise<MpcProject> {
   const workspace = requireWorkspace(ctx, workspacePath)
   validateConfig({ ...config, serverName })
   await checkMcpName(ctx, serverName, workspacePath)
   const data = await readProjectJson(ctx, workspacePath)
   const servers = serversOf(data)
   servers[serverName] = mergeDefinition(servers[serverName] ?? {}, { ...config, serverName })
+  if (policy !== undefined) servers[serverName].vscodeMode = { ...parseMcpPolicy(policy) }
   await writeProjectJson(ctx, workspacePath, { ...data, mcpServers: servers })
   await reconcileProject(ctx, workspacePath)
   return projectOf(ctx, workspacePath, workspace.title ?? '')

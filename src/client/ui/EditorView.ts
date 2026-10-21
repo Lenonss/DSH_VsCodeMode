@@ -68,6 +68,7 @@ import { mdPreviewLoad, mdPreviewSave } from '../state/mdPreviewCache.js'
 import { onUiStateReady, reportUiStateEvent, uiStateSettled } from '../state/uiStatePersist.js'
 import { migrateScopedKeys, workspaceScopeOf } from '../state/scopeStore.js'
 import { modelsForScope, rememberModel, retainModels } from '../state/modelCache.js'
+import { clearModelWarmer, setModelWarmer } from '../state/modelWarmer.js'
 import { navFlashRangeOf } from '../navHighlight.js'
 import { chordOf, useKeybindingsVersion } from '../keybindings.js'
 import { getSidebarMinWidth } from '../sidebarMin.js'
@@ -260,6 +261,8 @@ export function EditorView(props) {
   const planActiveRef = React.useRef(null)
   planActiveRef.current = planActive
   const planHostRef = React.useRef(null)
+  // 进入只读计划预览前的磁盘选中页签，关闭该计划页签时恢复，避免跳到第一个页签。
+  const planReturnRef = React.useRef(null)
   React.useEffect(() => { setPlanTabs([]); setPlanActive(null) }, [sessionId, cwd])
   /** @private @author ddj 2026年10月08号 @param path Disk tab selection. Leave read-only plan mode before any disk navigation. */
   function setActive(path) {
@@ -271,6 +274,10 @@ export function EditorView(props) {
   const [layoutScope, setLayoutScope] = React.useState(null)
   const benchRef = React.useRef(workbench)
   benchRef.current = workbench
+  // 页签行归属的分组：焦点落在浮窗时行仍留在页面主组上（浮窗自带标题栏），与 renderGroup 同一判据。
+  // 行节点会随焦点在分组间迁移，绑定滚轮/滚入视野的 effect 必须跟着这个归属重跑。
+  const rowOnFloat = workbench.floats.some((item) => item.group === workbench.focused)
+  const rowOwner = rowOnFloat ? MAIN_GROUP : workbench.focused
   const [dragPreview, setDragPreview] = React.useState(null)
   const dragRef = React.useRef(null)
   const benchOps = React.useRef(null)
@@ -1853,11 +1860,11 @@ export function EditorView(props) {
     const right = left + el.offsetWidth
     if (left < host.scrollLeft) host.scrollLeft = left
     else if (right > host.scrollLeft + host.clientWidth) host.scrollLeft = right - host.clientWidth
-  }, [active, tabs.length])
+  }, [active, planActive, planTabs.length, tabs.length, rowOwner])
 
   // 页签栏滚轮横向滚动（需求 3）：页签栏溢出时，鼠标滚轮（含触控板纵向手势）横滚页签栏，
   // 不溢出时不接管（保持页面垂直滚动）；Shift+滚轮交由浏览器原生横滚。详见 horizontalWheel.ts。
-  React.useEffect(() => attachHorizontalWheel(tabsHostRef.current), [])
+  React.useEffect(() => attachHorizontalWheel(tabsHostRef.current), [rowOwner])
 
   // 鼠标侧键后退/前进：Logitech 官方默认「后退/前进」= XButton 鼠标事件（button 3/4），不产生键盘事件。
   // pointerdown 触发导航（preventDefault 后兼容 mousedown 可能不再触发，避免双触发）；
@@ -2064,6 +2071,42 @@ export function EditorView(props) {
     }
     return model
   }
+
+  const warmRef = React.useRef(null)
+  /**
+   * 让目标文件的 Monaco model 存在（预热入口，供 Ctrl+hover 定义链接预览）。
+   *
+   * 为什么需要：Monaco 在渲染定义链接的源码预览时对目标 uri 调 `createModelReference`
+   * 后只挂 then、没有 catch；本插件的定义目标是自造 `edrv://` uri，目标文件若从未打开过
+   * 就没有已注册 model，会 reject("Model not found") 成为未捕获异常（见 state/modelWarmer.ts）。
+   * 已缓存的路径直接返回成功：模型已在 Monaco 注册表里，无需再读盘。
+   * 预热出的 model 走 modelsRef 常规 LRU（40 条、未附着超限被 dispose）；正式打开该文件时
+   * 由 loadContent 的 cached-model 分支 + checkCached 后台校验接管，不会显示陈旧内容。
+   * @private
+   * @author ddj 2026年10月20号
+   * @param path 工作区相对路径
+   * @returns 模型是否已存在/成功建出（失败一律 false，绝不抛）
+   */
+  warmRef.current = (path) => {
+    if (!path) return Promise.resolve(false)
+    if (modelsRef.current.get(path)) return Promise.resolve(true)
+    // 图片/PDF 不建文本 model（各自走预览控件），预热对它们没有意义
+    if (isImagePath(path) || isPdfPath(path)) return Promise.resolve(false)
+    const sid = sessionId
+    if (!sid) return Promise.resolve(false)
+
+    return rpc('edrv.read', { sessionId: sid, path }).then((res) => {
+      if (!res?.ok || typeof res.content !== 'string') return false
+      getModel(path, res.content)
+      return true
+    }).catch(() => false)
+  }
+  // 预热实现随挂载安装、卸载移除：编辑器未挂载时 warmModelFor 直接返回 false（退化为修复前行为）
+  React.useEffect(() => {
+    const warmImpl = (path) => warmRef.current?.(path) ?? Promise.resolve(false)
+    setModelWarmer(warmImpl)
+    return () => clearModelWarmer(warmImpl)
+  }, [])
 
   /**
    * 提交待执行的防抖保存（**真正执行保存**，不是取消）。
@@ -3595,6 +3638,7 @@ export function EditorView(props) {
     if (!document) return
     flushSave()
     saveViewState(active)
+    if (!planActiveRef.current) planReturnRef.current = active
     setDiskActive(null)
     setPlanTabs((prev) => [...prev.filter((item) => item.address !== document.address), document].slice(-32))
     setPlanActive(document.address)
@@ -3605,7 +3649,10 @@ export function EditorView(props) {
   function closePlan(address, event) {
     event?.stopPropagation()
     setPlanTabs((prev) => prev.filter((item) => item.address !== address))
-    if (planActiveRef.current === address) setActive(tabsRef.current[0]?.path ?? null)
+    if (planActiveRef.current !== address) return
+    const previous = planReturnRef.current
+    planReturnRef.current = null
+    setActive(tabsRef.current.some((tab) => tab.path === previous) ? previous : (tabsRef.current[0]?.path ?? null))
   }
   /** @private @author ddj 2026年10月08号 @param request Claimed disk or virtual open. Flushes saves without replacing dirty models. */
   function openReceiptFile(request) {
@@ -3916,11 +3963,17 @@ export function EditorView(props) {
     setWorkbench((current) => ({ ...current, tree: replace(current.tree) }))
   }
   /** @private @author ddj 2026年10月14号 @param id Leaf id. @returns Tabs and either focused full-feature editor or independent passive view. */
-  function renderGroup(id) {
+  function renderGroup(id, floating) {
     const group = workbench.groups.find((item) => item.id === id)
     if (!group) return null
     const focused = id === workbench.focused
-    return React.createElement(EditorPane, { key: id, group, focused, dirty: dirtyMap, onSelect: selectGroup, onClose: closeTab, onMenu: paneMenu, onDrag: dragTab, consumeClick: consumeDrag },
+    // 同一行：计划预览页签并入该组自己的页签行（extras），与磁盘页签共用一条滚动区，
+    // 页面工具列固定在行尾（滚动区之外，横滚不带走）。焦点落在浮窗时，这一行仍留在页面分组上，
+    // 避免整条工具栏跟着搬进浮窗；页签缓存 ref 只认页面上的这条行。
+    const chrome = !floating && id === rowOwner
+    // 计划预览占用的正文只会在焦点组里；承载页签行的组同时收起磁盘选中态，保证整屏只有计划页签一条下划线。
+    const hideDiskActive = Boolean(planActive) && (chrome || focused)
+    return React.createElement(EditorPane, { key: id, group, focused, dirty: dirtyMap, suppressActive: hideDiskActive, tabsRef: chrome ? tabsHostRef : undefined, extras: chrome ? planTabExtras : undefined, tools: chrome ? rowTools : undefined, onSelect: selectGroup, onClose: closeTab, onMenu: paneMenu, onDrag: dragTab, consumeClick: consumeDrag },
       focused ? React.createElement('div', { className: 'edrv-full-slot', ref: mountFull }) : React.createElement(React.Fragment, null,
         React.createElement(GroupPathbar, { path: group.active, onFocus: () => selectGroup(id) }),
         React.createElement(PassiveEditor, { key: String(scope) + ':' + group.active, path: group.active, groupId: id, mount: passiveMount })))
@@ -3932,15 +3985,18 @@ export function EditorView(props) {
   }
   // --endregion
 
-  const tabsEl = React.createElement('div', { className: 'edrv-tabs', ref: tabsHostRef, style: { flex: '1 1 auto', minWidth: 0 } },
-    planTabs.map((plan) => React.createElement('div', {
-      key: plan.address, className: 'edrv-tab' + (plan.address === planActive ? ' edrv-tab-active' : ''),
+  // 计划预览页签不再是独立一行的工具条：它作为焦点分组页签行的尾部内容（EditorPane 的 extras）渲染，
+  // 与磁盘页签同处一条滚动区，因此整块工作台只有一行页签。
+  const planTabExtras = planTabs.length
+    ? planTabs.map((plan) => React.createElement('div', {
+      key: plan.address, className: 'edrv-tab edrv-tab-plan' + (plan.address === planActive ? ' edrv-tab-active' : ''),
       title: plan.title + '（计划预览 · 只读）', onClick: () => openPlanDoc(plan),
-    }, React.createElement('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 180 } }, plan.title),
-    React.createElement('span', { className: 'edrv-tab-x', title: '关闭', onClick: (event) => closePlan(plan.address, event) }, '×'))),
-    (openInput
-      ? React.createElement('input', { className: 'edrv-path-input', autoFocus: true, placeholder: '输入工作区相对/绝对路径，回车打开', value: pathDraft, onChange: (e) => setPathDraft(e.target.value), onKeyDown: (e) => { if (e.key === 'Enter') openPath(); if (e.key === 'Escape') setOpenInput(false) } })
-      : React.createElement('button', { className: 'edrv-tab-add', title: '打开文件（输入路径）', onClick: () => setOpenInput(true) }, '+')))
+    }, React.createElement('span', { className: 'edrv-group-tab-name' }, plan.title),
+    React.createElement('span', { className: 'edrv-tab-x', title: '关闭', onClick: (event) => closePlan(plan.address, event) }, '×')))
+    : null
+  const openControl = openInput
+    ? React.createElement('input', { className: 'edrv-path-input', autoFocus: true, placeholder: '输入工作区相对/绝对路径，回车打开', value: pathDraft, onChange: (e) => setPathDraft(e.target.value), onKeyDown: (e) => { if (e.key === 'Enter') openPath(); if (e.key === 'Escape') setOpenInput(false) } })
+    : React.createElement('button', { className: 'edrv-tab-add', title: '打开文件（输入路径）', onClick: () => setOpenInput(true) }, '+')
 
   const activePlan = planTabs.find((plan) => plan.address === planActive)
   const pathBar = activePlan ? React.createElement('div', { className: 'edrv-pathbar', title: activePlan.address },
@@ -4022,8 +4078,9 @@ export function EditorView(props) {
   const navBackTarget = navRef.current.peekBack()
   const navForwardTarget = navRef.current.peekForward()
   const navNameOf = (entry) => (entry && entry.path ? String(entry.path).split(/[\\/]/).pop() : '')
-  const tabRow = React.createElement('div', { style: { display: 'flex', alignItems: 'center', background: 'var(--dsw-alias-bg-layer-1,transparent)', flexShrink: 0 } },
-    tabsEl,
+  // 行尾固定工具列：位于焦点分组页签行的滚动区右侧，横滚页签时不跟着滚走。
+  const rowTools = React.createElement('div', { className: 'edrv-tabs-tools' },
+    openControl,
     (sum.totalFiles > 0
       ? React.createElement('button', { className: 'edrv-diffchip', title: '打开差异总览/归档', onClick: () => setLauncherOpen((o) => !o) }, '⚠ 差异 ' + sum.totalFiles + ' 文件')
       : null),
@@ -4441,7 +4498,8 @@ export function EditorView(props) {
         'data-edrv-diff-dock-shell': '1',
       }, React.createElement(DiffBox, { ...dockSnapshot, dock: true }))
     : null
-  // 主编辑列（侧边栏右侧）：pathBar + tabRow + 编辑/差异区。
+  // 编辑区容器：pathBar 和页签行现在都由焦点分组自己渲染，这里只放编辑正文与各种浮层。
+
   const editorArea = React.createElement('div', { className: 'edrv-editor-area' },
     dapBar,
     addCfgBtn,
@@ -4466,11 +4524,11 @@ export function EditorView(props) {
     : null
   // 底部状态栏共用一整条：挂在 mainCol 层级（所有分组之下），不随焦点分组搬家（ddj 2026-10-16）
   const fullView = createPortal(React.createElement(React.Fragment, null, pathBar, sideHintEl, diskBanner(), editorArea), fullHost, 'edrv-full-editor')
+  // 页签行已并入焦点分组自身（EditorPane 内一行），不再有独立的顶部工具条。
   const mainCol = React.createElement('div', { className: 'edrv-main-col edrv-workbench', style: { flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' } },
-    React.createElement('div', { className: 'edrv-workbench-tools' }, tabRow),
     renderTree(workbench.tree), fullView,
     statusBar,
-    workbench.floats.map((item, layer) => React.createElement(FloatingEditor, { key: item.group, owner: String(scope), group: item.group, rect: item, layer, focused: item.group === workbench.focused, onBounds: floatBounds, onFocus: selectGroup, onReturn: returnPane }, renderGroup(item.group))),
+    workbench.floats.map((item, layer) => React.createElement(FloatingEditor, { key: item.group, owner: String(scope), group: item.group, rect: item, layer, focused: item.group === workbench.focused, onBounds: floatBounds, onFocus: selectGroup, onReturn: returnPane }, renderGroup(item.group, true))),
     dragPreview ? createPortal(React.createElement(React.Fragment, null,
       dragPreview.rect ? React.createElement('div', { className: 'edrv-drag-overlay', style: dragPreview.rect }, React.createElement('span', { className: 'edrv-drop-label' }, dragPreview.label)) : null,
       React.createElement('div', { className: 'edrv-drag-ghost', style: { left: dragPreview.point.x + 12, top: dragPreview.point.y + 12 } }, baseNameOf(dragPreview.path) + ' · ' + dragPreview.label)), document.body) : null)

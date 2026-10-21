@@ -10,6 +10,7 @@ import React from 'react'
 import { rpc } from '../rpc.js'
 import type { MpcProject, MpcServer } from '../../shared/mcp.js'
 import { configOf } from '../mcpForm.js'
+import { parseMcpPolicy } from '../../shared/mcp.js'
 import { McpState } from '../mcpState.js'
 import { statusOf, statusTone } from '../../shared/mcpStatus.js'
 import '../styles/mcp.css'
@@ -25,10 +26,10 @@ import { PerfSettings } from './PerfSettings.js'
 import { IntegrationSettings } from './IntegrationSettings.js'
 import { AiSettings } from './AiSettings.js'
 
-const EMPTY = { serverName: '', transport: 'stdio', command: '', args: '', cwd: '', url: '', headers: '' }
+const EMPTY = { serverName: '', transport: 'stdio', command: '', args: '', cwd: '', url: '', headers: '', startup: 'on-demand', sharing: 'agent', startupTimeoutMs: 60000 }
 
 /** @private @author ddj 2026年10月08号 @param props Server snapshot, page-wide busy state and actions. @returns Lifecycle-evidence card; enabled does not imply online. */
-function ServerCard({ server, busy, onRefresh, onToggle, onRemove }) {
+function ServerCard({ server, busy, onRefresh, onToggle, onRemove, onConnect, onPolicy }) {
   return React.createElement('article', { className: 'vsm-mcp-card' },
     React.createElement('div', { className: 'vsm-mcp-card-head' },
       React.createElement('div', { className: 'vsm-mcp-title' }, React.createElement('span', { className: 'vsm-mcp-dot ' + statusTone(server) }), server.serverName),
@@ -39,10 +40,31 @@ function ServerCard({ server, busy, onRefresh, onToggle, onRemove }) {
       ),
     ),
     React.createElement('div', { className: 'vsm-mcp-meta' }, statusOf(server), ' · ', server.toolCount, ' 个工具 · ', server.transport,
-      server.instanceCount !== undefined ? ' · ' + server.instanceCount + ' 个会话实例（各自连接）' : ''),
+      server.instanceCount !== undefined ? ' · ' + server.instanceCount + ' 个连接实例' : '',
+      server.sessionCount !== undefined ? ' · ' + server.sessionCount + ' 个会话使用' : ''),
+    server.policy && React.createElement(ProjectPolicy, { server, busy, onConnect, onPolicy }),
     server.error && React.createElement('div', { className: 'vsm-mcp-error' }, server.error),
     React.createElement('div', { className: 'vsm-mcp-tools' }, server.tools.map((tool) => React.createElement('span', { key: tool.name, className: 'vsm-mcp-chip', title: tool.description || tool.name }, tool.name))),
   )
+}
+
+/** @private @author ddj 2026年10月20号 @param props Project policy and locked actions. @returns Explicit strategy controls and sharing risk notice. */
+function ProjectPolicy({ server, busy, onConnect, onPolicy }) {
+  /** @author ddj 2026年10月20号 @param event Strategy selection. Saves only an explicit user change. */
+  const startup = (event) => onPolicy?.(server, { ...server.policy, startup: event.target.value })
+  /** @author ddj 2026年10月20号 @param event Sharing selection. Requires acknowledgement before state sharing. */
+  const sharing = (event) => {
+    const mode = event.target.value
+    if (mode === 'workspace' && !window.confirm('同一工作区的会话将共享此 MCP 的连接和内部状态；工具串行不等于业务状态隔离。确认服务适合共享？')) return
+    onPolicy?.(server, { ...server.policy, sharing: mode })
+  }
+  return React.createElement('div', { className: 'vsm-mcp-meta' },
+    React.createElement('label', null, '启动 ', React.createElement('select', { disabled: !!busy, value: server.policy.startup, onChange: startup },
+      React.createElement('option', { value: 'on-demand' }, '按需启动'), React.createElement('option', { value: 'background' }, '后台预热'))),
+    React.createElement('label', null, ' 连接 ', React.createElement('select', { disabled: !!busy, value: server.policy.sharing, onChange: sharing },
+      React.createElement('option', { value: 'agent' }, '逐会话隔离'), React.createElement('option', { value: 'workspace' }, '工作区共享（共享状态）'))),
+    React.createElement('button', { disabled: !!busy || !server.enabled, onClick: onConnect }, '连接当前活跃会话'),
+    React.createElement('small', null, '默认按需启动，不阻塞新对话；首次使用仍需等待。共享仅显式启用。'))
 }
 
 /** 按项目标题或路径过滤，大小写不敏感。 */
@@ -94,7 +116,7 @@ function ProjectPicker({ projects, value, onChange }) {
 }
 
 /** @private @author ddj 2026年10月08号 @param props Project view, shared busy lock and actions. @returns Project cards with actions disabled for any active mutation. */
-function ProjectGroup({ project, busy, onAdd, onRefresh, onToggle, onRemove }) {
+function ProjectGroup({ project, busy, onAdd, onRefresh, onToggle, onRemove, onConnect, onPolicy }) {
   const head = React.createElement('div', { className: 'vsm-project-head' },
     React.createElement('div', { className: 'vsm-project-title' }, React.createElement('span', { className: 'vsm-project-icon' }, '▣'), React.createElement('div', null, React.createElement('span', { className: 'vsm-project-name' }, project.title), React.createElement('span', { className: 'vsm-project-path' }, project.workspacePath))),
     React.createElement('button', { className: 'vsm-primary vsm-small', disabled: !!busy, onClick: () => onAdd(project) }, '+ 添加 MCP'),
@@ -103,7 +125,7 @@ function ProjectGroup({ project, busy, onAdd, onRefresh, onToggle, onRemove }) {
   if (project.missingDir) body = React.createElement('div', { className: 'vsm-project-empty' }, '项目目录已不存在，无法管理 MCP')
   else if (project.fileError) body = React.createElement('div', { className: 'vsm-mcp-error vsm-mcp-banner' }, project.fileError)
   else if (!project.servers.length) body = React.createElement('div', { className: 'vsm-project-empty' }, '此项目未配置 MCP')
-  else body = project.servers.map((server) => React.createElement(ServerCard, { key: server.serverName, server, busy, onRefresh: (id) => onRefresh(project, server, id), onToggle: () => onToggle(project, server), onRemove: (id) => onRemove(project, server, id) }))
+  else body = project.servers.map((server) => React.createElement(ServerCard, { key: server.serverName, server, busy, onConnect: () => onConnect(project, server), onPolicy: (server, policy) => onPolicy(project, server, policy), onRefresh: (id) => onRefresh(project, server, id), onToggle: () => onToggle(project, server), onRemove: (id) => onRemove(project, server, id) }))
   return React.createElement('section', { className: 'vsm-project' }, head, body)
 }
 
@@ -513,7 +535,7 @@ function McpManagePanel(props) {
   const form = showForm
     ? React.createElement(McpForm, { title: '添加全局 MCP', draft, busy, edit, save: () => saveGlobal(closeGlobalForm), close: closeGlobalForm })
     : projectForm
-      ? React.createElement(McpForm, { title: '添加项目 MCP · ' + projectForm.title, draft, busy, edit, save: () => saveProject(projectForm.workspacePath, closeProjectForm), close: closeProjectForm })
+      ? React.createElement(McpForm, { project: true, title: '添加项目 MCP · ' + projectForm.title, draft, busy, edit, save: () => saveProject(projectForm.workspacePath, closeProjectForm), close: closeProjectForm })
       : null
   return React.createElement(React.Fragment, null,
     React.createElement('div', { className: 'vsm-mcp-subhead' },
@@ -538,7 +560,7 @@ function manageBody(props, tab, path, select, add) {
   const project = projects.find((item) => item.workspacePath === path)
   return React.createElement(React.Fragment, null,
     React.createElement(ProjectPicker, { projects, value: path, onChange: select }),
-    project ? React.createElement(ProjectGroup, { project, busy, onAdd: add, onRefresh: refreshProject, onToggle: toggleProject, onRemove: removeProject }) : React.createElement('div', { className: 'vsm-mcp-empty' }, '请选择项目'),
+    project ? React.createElement(ProjectGroup, { project, busy, onAdd: add, onRefresh: refreshProject, onToggle: toggleProject, onRemove: removeProject, onConnect: props.connectProject, onPolicy: props.policyProject }) : React.createElement('div', { className: 'vsm-mcp-empty' }, '请选择项目'),
   )
 }
 
@@ -593,7 +615,7 @@ function projectAction(state, path, name, method, extra = {}) {
 }
 
 /** @private @author ddj 2026年10月08号 @param ref Mounted controller reference. @returns Global/project card actions sharing a synchronous lock. */
-function cardActions(ref) {
+function cardActions(ref, getSession) {
   /** @author ddj 2026年10月08号 @param id Global identity. @returns Locked refresh. */
   const refreshGlobal = (id) => globalAction(ref.current, id, 'mcp.refresh', { id })
   /** @author ddj 2026年10月08号 @param server Current configuration. @returns Locked enable change. */
@@ -606,7 +628,15 @@ function cardActions(ref) {
   const toggleProject = (project, server) => projectAction(ref.current, project.workspacePath, server.serverName, 'mcp.projectToggle', { enabled: !server.enabled })
   /** @author ddj 2026年10月08号 @param project Project. @param server Configuration. @returns Confirmed locked deletion. */
   const removeProject = (project, server) => !ref.current?.view.busy && window.confirm('确认删除此项目的 MCP「' + server.serverName + '」？') && projectAction(ref.current, project.workspacePath, server.serverName, 'mcp.projectRemove')
-  return { refreshGlobal, toggleGlobal, removeGlobal, refreshProject, toggleProject, removeProject }
+  /** @author ddj 2026年10月20号 @param project Owner workspace. @param server Enabled service. @returns Explicit connection for an already-active current session. */
+  const connectProject = (project, server) => {
+    const sessionId = getSession?.()
+    if (!sessionId) return ref.current?.mutate('connect', async () => ({ ok: false, error: '请先打开此项目的活跃会话' }), () => undefined)
+    return projectAction(ref.current, project.workspacePath, server.serverName, 'mcp.projectConnect', { sessionId })
+  }
+  /** @author ddj 2026年10月20号 @param project Owner. @param server Masked editable config. @param policy Explicit user strategy. @returns Serialized strategy persistence. */
+  const policyProject = (project, server, policy) => projectAction(ref.current, project.workspacePath, server.serverName, 'mcp.projectSave', { config: server.config, policy })
+  return { refreshGlobal, toggleGlobal, removeGlobal, refreshProject, toggleProject, removeProject, connectProject, policyProject }
 }
 
 /** @private @author ddj 2026年10月08号 @param state Controller. @param draft Editable fields. @param setDraft Draft setter. @param path Optional project target. @param close Success-only close callback. @returns Locked save, validation included. */
@@ -614,7 +644,7 @@ function saveDraft(state, draft, setDraft, path, close) {
   /** @author ddj 2026年10月08号 @returns Validated save result. @throws Malformed arguments/headers. */
   const request = () => {
     const config = configOf(draft)
-    return path === null ? rpc('mcp.save', { config }) : rpc('mcp.projectSave', { workspacePath: path, serverName: config.serverName, config })
+    return path === null ? rpc('mcp.save', { config }) : rpc('mcp.projectSave', { workspacePath: path, serverName: config.serverName, config, policy: parseMcpPolicy({ startup: draft.startup, sharing: draft.sharing, startupTimeoutMs: Number(draft.startupTimeoutMs) }) })
   }
   /** @author ddj 2026年10月08号 @param result Save result. @description Update current view and only then reset/close the form. */
   const commit = (result) => {
@@ -649,7 +679,7 @@ export function McpSettings(props) {
     return cleanup
   }
   React.useEffect(selectTab, [tab])
-  const { refreshGlobal, toggleGlobal, removeGlobal, refreshProject, toggleProject, removeProject } = cardActions(ref)
+  const { refreshGlobal, toggleGlobal, removeGlobal, refreshProject, toggleProject, removeProject, connectProject, policyProject } = cardActions(ref, props?.getMcpSession)
   /** @author ddj 2026年10月08号 @param close Success-only close callback. @returns Global save completion. */
   const saveGlobal = (close) => saveDraft(ref.current, draft, setDraft, null, close)
   /** @author ddj 2026年10月08号 @param path Target project. @param close Success-only close callback. @returns Project save completion. */
@@ -662,7 +692,7 @@ export function McpSettings(props) {
   if (loading) body = React.createElement('div', { className: 'vsm-mcp-empty' }, '正在读取 MCP 服务…')
   else if (tab === 'general') body = React.createElement(GeneralSettings, { registry: openerRegistry, getShortcuts })
   else if (tab === 'mcp') body = React.createElement(McpManagePanel, { servers, projects, busy, draft, edit, resetDraft,
-    saveGlobal, saveProject,
+    saveGlobal, saveProject, connectProject, policyProject,
     refreshGlobal, toggleGlobal, removeGlobal, refreshProject, toggleProject, removeProject })
   else if (tab === 'compat') body = React.createElement(CompatSection, { getSummary: compatSummary })
   else if (tab === 'lsp') body = React.createElement(LspSettings, null)
@@ -677,7 +707,7 @@ export function McpSettings(props) {
 }
 
 /** @private @author ddj 2026年10月08号 @param props Draft, shared busy lock, edit/save/close callbacks. @returns Lossless argument/header form; failed save stays open. */
-function McpForm({ title, draft, busy, edit, save, close }) {
+function McpForm({ title, draft, busy, edit, save, close, project }) {
   /** @author ddj 2026年10月08号 @param key Draft field. @returns Short input change callback. */
   const change = (key) => (event) => edit(key, event.target.value)
   /** @author ddj 2026年10月08号 @param key Draft field. @param placeholder Input hint. @returns Disabled-while-busy input. */
@@ -697,6 +727,10 @@ function McpForm({ title, draft, busy, edit, save, close }) {
     React.createElement('label', null, '名称', input('serverName', '例如 codegraph')),
     React.createElement('label', null, '传输方式', React.createElement('select', { disabled: !!busy, value: draft.transport, onChange: change('transport') }, React.createElement('option', { value: 'stdio' }, 'stdio'), React.createElement('option', { value: 'streamable-http' }, 'streamable-http'))),
     fields,
+    project && React.createElement('label', null, '启动策略', React.createElement('select', { disabled: !!busy, value: draft.startup, onChange: change('startup') }, React.createElement('option', { value: 'on-demand' }, '按需启动（默认）'), React.createElement('option', { value: 'background' }, '后台预热'))),
+    project && React.createElement('label', null, '连接模式', React.createElement('select', { disabled: !!busy, value: draft.sharing, onChange: change('sharing') }, React.createElement('option', { value: 'agent' }, '逐会话隔离（默认）'), React.createElement('option', { value: 'workspace' }, '工作区共享（共享服务内部状态）'))),
+    project && React.createElement('label', null, '初始化预算（毫秒，1000–300000）', input('startupTimeoutMs', '60000')),
+    project && React.createElement('small', null, '新对话不等待连接。共享必须确认服务适合共享状态；不为 CodeGraph 自动启用。'),
     React.createElement('div', { className: 'vsm-mcp-dialog-actions' }, React.createElement('button', { disabled: !!busy, onClick: close }, '取消'), React.createElement('button', { className: 'vsm-primary', disabled: !!busy, onClick: save }, '保存配置')),
   ))
 }

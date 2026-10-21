@@ -60,10 +60,10 @@ function find(tree: any, test: (node: any) => boolean): any {
   }
 }
 /** @author ddj 2026年10月08号 @returns MCP panel element after choosing the tab. */
-function panel() {
-  const tree = render(McpSettings)
+function panel(props = {}) {
+  const tree = render(McpSettings, props)
   find(tree, (node) => node.type === 'button' && node.props.children === 'MCP 管理').props.onClick()
-  return find(render(McpSettings), (node) => node.type?.name === 'McpManagePanel')
+  return find(render(McpSettings, props), (node) => node.type?.name === 'McpManagePanel')
 }
 /** @author ddj 2026年10月08号 @returns Settled immediate promise reactions. */
 async function settle() { await vi.advanceTimersByTimeAsync(0) }
@@ -188,12 +188,29 @@ describe('MCP settings integration', () => {
     harness.request.mockResolvedValueOnce({ ok: true, project: { ...project, servers: [{ ...server, id: 'http' }] } })
     await form.props.save()
     expect(harness.request.mock.calls.at(-1)?.slice(0, 2)).toEqual(['mcp.projectSave', {
+      policy: { startup: 'on-demand', sharing: 'agent', startupTimeoutMs: 60000 },
       workspacePath: project.workspacePath, serverName: 'http', config: { serverName: 'http', transport: 'streamable-http', url: 'https://example.test/mcp', headers: { Token: 'a=b' } },
     }])
     manage = panel()
     expect(manage.props.projects[0].servers).toHaveLength(1)
     expect(find(render(manage.type, manage.props), (node) => node.type?.name === 'McpForm')).toBeUndefined()
   })
+  it('connects only the current active session and preserves explicit project policy separately from config', async () => {
+    let manage = panel({ getMcpSession: () => 'active-session' })
+    harness.request.mockResolvedValueOnce({ ok: true, project })
+    await manage.props.connectProject(project, server)
+    expect(harness.request.mock.calls.at(-1)?.slice(0, 2)).toEqual(['mcp.projectConnect', {
+      workspacePath: project.workspacePath, serverName: server.serverName, sessionId: 'active-session',
+    }])
+    manage = panel()
+    harness.request.mockResolvedValueOnce({ ok: true, project })
+    const policy = { startup: 'background', sharing: 'workspace', startupTimeoutMs: 60000 }
+    await manage.props.policyProject(project, { ...server, config: { command: 'ok' } }, policy)
+    expect(harness.request.mock.calls.at(-1)?.slice(0, 2)).toEqual(['mcp.projectSave', {
+      workspacePath: project.workspacePath, serverName: server.serverName, config: { command: 'ok' }, policy,
+    }])
+  })
+
   it('serializes project refresh/toggle/remove with global operations', async () => {
     const manage = panel()
     let finish!: (result: any) => void

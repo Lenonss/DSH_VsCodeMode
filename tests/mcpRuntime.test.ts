@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { filterResources, guardMcp, installIsolation } from '../src/mcpIsolation.js'
 import { installMcpRuntime, runtimeOf } from '../src/mcpRuntime.js'
+import { McpBridge } from '../src/mcpBridge.js'
 import { listProjects, projectRefresh, projectRemove, projectSave, projectToggle, reconcileProject, mcpSnapshot } from '../src/mcpProject.js'
 import { listMcp, MCP_PACKAGE, saveMcp, serverOf, toolsOf, validateConfig, removeMcp, toggleMcp, refreshMcp } from '../src/mcp.js'
 
@@ -30,7 +31,7 @@ class TestHost {
       workspaceRegistry: { list: () => [{ path: '/alpha' }, { path: '/beta' }] },
       agents: { list: () => this.agents },
       fs: this.makeFs(), loader: this.makeLoader(),
-      tools: { view: (agent: any) => this.view(agent), guard: (guard: any) => { this.guards.push(guard); return () => this.guards.splice(this.guards.indexOf(guard), 1) } },
+      tools: { register: (definition: any) => { this.globalTools.set(definition.name, definition); return () => this.globalTools.delete(definition.name) }, view: (agent: any) => this.view(agent), guard: (guard: any) => { this.guards.push(guard); return () => this.guards.splice(this.guards.indexOf(guard), 1) } },
     }
     this.ctx = {
       get: (name: string) => this.services[name],
@@ -39,7 +40,34 @@ class TestHost {
       effect: (factory: any) => { const dispose = factory(); this.effects.push(dispose); return dispose },
     }
     vi.spyOn(runtimeOf(this.ctx) as any, 'load').mockResolvedValue(this.official)
+    const make = async (): Promise<McpBridge> => {
+      const ctx: any = { isolate: () => ctx, provide: (name: string, provider: any) => { ctx[name] = provider },
+        plugin: (official: any, config: any) => this.privateMount(ctx, official, config) }
+      const fibers: any[] = []
+      const plugin = ctx.plugin
+      ctx.plugin = (official: any, config: any) => { const fiber = plugin(official, config); fibers.push(fiber); return fiber }
+      return McpBridge.create(this.ctx, () => ({ ctx, dispose: async () => { await Promise.all(fibers.map((fiber) => fiber.dispose())) } }))
+    }
+    ;(runtimeOf(this.ctx).pool as any).make = make
     hosts.push(this)
+  }
+
+  /** @private @author ddj 2026年10月20号 @param ctx Private registration sink. @param official Module identity. @param config Effective config. @returns Cancellable fake fiber without publishing to any agent. */
+  private privateMount(ctx: any, official: any, config: any): any {
+    expect(official).toBe(this.official)
+    const name = config.serverName
+    this.events.push('mount:' + name)
+    const removals: Array<() => void> = []
+    if (config.command !== 'resource-only') removals.push(ctx.tools.register({ name: 'mcp__' + name + '__search', parameters: { type: 'object' }, execute: async () => ({ ok: true }) }))
+    removals.push(ctx.mcpResources.register(name, { request: async () => ({ resources: [] }) }))
+    removals.push(ctx.systemPrompt.section({ name: 'mcp:' + name, text: 'instructions:' + name }))
+    let cancel!: () => void
+    const canceled = new Promise<void>((resolve) => { cancel = resolve })
+    const fiber: any = Object.assign(Promise.race([this.starts.get(name) ?? Promise.resolve(), canceled]).then(() => { fiber.state = 2 }), {
+      state: 1, dispose: vi.fn(async () => { cancel(); for (const remove of removals.splice(0)) remove(); this.events.push('dispose:' + name) }),
+    })
+    this.mounts.push({ config, fiber })
+    return fiber
   }
 
   /** @private @author ddj 2026年09月28号 @returns Memory filesystem with distinct missing, denied and parse-error cases. */
@@ -101,10 +129,20 @@ class TestHost {
 
   /** @public @author ddj 2026年09月28号 @param cwd Agent directory. @param parent Inherited scope. @returns Registered fake agent with scoped plugin API. */
   agent(cwd: string, parent?: any): any {
-    const agent: any = { session: { header: { cwd } }, parent, tools: new Map(), prompts: new Map(), resources: new Map(), denies: new Map() }
-    const tools = { view: (scope: any) => this.view(scope), restrict: (filter: any) => this.restrict(agent, filter) }
+    const agent: any = { session: { id: 'session-' + this.agents.length, header: { cwd } }, parent, tools: new Map(), prompts: new Map(), resources: new Map(), denies: new Map() }
+    const tools = { view: (scope: any) => this.view(scope), restrict: (filter: any) => this.restrict(agent, filter), register: (definition: any) => {
+      if (agent.tools.has(definition.name)) throw new Error('duplicate tool')
+      agent.tools.set(definition.name, definition)
+      this.ctx.emit('tools/change')
+      return () => { agent.tools.delete(definition.name); this.ctx.emit('tools/change') }
+    } }
+    const resources = { register: (name: string, provider: any) => {
+      if (agent.resources.has(name)) throw new Error('duplicate resources')
+      agent.resources.set(name, provider)
+      return () => agent.resources.delete(name)
+    } }
     const prompt = { getSectionOrder: () => 3100, section: (section: any) => this.section(agent, section) }
-    agent.ctx = { get: (name: string) => name === 'tools' ? tools : name === 'systemPrompt' ? prompt : this.services[name],
+    agent.ctx = { get: (name: string) => name === 'tools' ? tools : name === 'systemPrompt' ? prompt : name === 'mcpResources' ? resources : this.services[name],
       plugin: vi.fn((official: any, config: any) => this.mount(agent, official, config)) }
     this.agents.push(agent)
     return agent
@@ -169,15 +207,195 @@ class TestHost {
   }
 }
 
+/** @private @author ddj 2026年10月20号 @param host Memory host. @returns Explicit connections for legacy lifecycle assertions; creation itself no longer connects. */
+async function installReady(host: TestHost): Promise<void> {
+  await installMcpRuntime(host.ctx)
+  const runtime = runtimeOf(host.ctx)
+  await Promise.all(host.agents.flatMap((agent) => runtime.catalogue(agent).map((server) => runtime.connect(agent, server.serverName).catch(() => undefined))))
+}
+
 afterEach(async () => {
   for (const host of hosts.splice(0)) await host.cleanup()
+})
+
+describe('independent session startup', () => {
+  it('does not block other, empty, or same-project agents behind one slow startup', async () => {
+    const host = new TestHost()
+    host.source('/alpha', { slow: { command: 'ok' } })
+    host.source('/beta', { fast: { command: 'ok' } })
+    await installReady(host)
+    let release!: () => void
+    host.starts.set('slow', new Promise<void>((resolve) => { release = resolve }))
+    const first = host.agent('/alpha')
+    await host.serial('agent/created', { agent: first })
+    const creating = runtimeOf(host.ctx).connect(first, 'slow')
+    try {
+      await vi.waitFor(() => expect(host.mounts).toHaveLength(1))
+      host.starts.delete('slow') // Only A's already-created fiber keeps the gate.
+      for (const cwd of ['/beta', '/outside', '/alpha']) {
+        const second = host.agent(cwd)
+        let ready = false
+        const own = host.serial('agent/created', { agent: second }).then(() => { ready = true })
+        await vi.waitFor(() => expect(ready).toBe(true))
+        await own
+      }
+      const status = runtimeOf(host.ctx).sessionSnapshot()
+      expect(status.sessions.find((entry) => entry.sessionId === first.session.id)?.phase).toBe('starting')
+      expect(status.sessions.filter((entry) => entry.phase === 'idle')).toHaveLength(2)
+      expect(status.sessions.filter((entry) => entry.phase === 'none')).toHaveLength(1)
+    } finally { release(); await creating }
+  })
+
+  it('keeps the installation gate independent of existing-agent handshakes', async () => {
+    const host = new TestHost()
+    host.source('/alpha', { slow: { command: 'ok' } })
+    let release!: () => void
+    host.starts.set('slow', new Promise<void>((resolve) => { release = resolve }))
+    host.source('/alpha', { slow: { command: 'ok', vscodeMode: { startup: 'background' } } })
+    host.agent('/alpha')
+    const installing = installMcpRuntime(host.ctx)
+    try {
+      await vi.waitFor(() => expect(host.mounts).toHaveLength(1))
+      let ready = false
+      const own = host.serial('agent/created', { agent: host.agent('/outside') }).then(() => { ready = true })
+      await vi.waitFor(() => expect(ready).toBe(true))
+      await own
+    } finally { release(); await installing }
+  })
+
+  it('does not block a new same-project agent behind a refresh', async () => {
+    const host = new TestHost()
+    host.source('/alpha', { slow: { command: 'ok' } })
+    host.agent('/alpha')
+    await installReady(host)
+    let release!: () => void
+    host.starts.set('slow', new Promise<void>((resolve) => { release = resolve }))
+    const refreshing = projectRefresh(host.ctx, '/alpha', 'slow')
+    try {
+      await vi.waitFor(() => expect(host.mounts).toHaveLength(2))
+      host.starts.delete('slow')
+      let ready = false
+      const own = host.serial('agent/created', { agent: host.agent('/alpha') }).then(() => { ready = true })
+      await vi.waitFor(() => expect(ready).toBe(true))
+      await own
+    } finally { release(); await refreshing }
+  })
+
+  it('keeps queue timing separate and resets startup timing on refresh', async () => {
+    const host = new TestHost()
+    host.source('/alpha', { alpha: { command: 'ok' } })
+    await installReady(host)
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(100)
+    const agent = host.agent('/alpha')
+    const creating = host.serial('agent/created', { agent })
+    await creating
+    await runtimeOf(host.ctx).connect(agent, 'alpha')
+    expect(runtimeOf(host.ctx).sessionSnapshot().sessions[0]).toMatchObject({ startedAt: 100, finishedAt: 100 })
+    clock.mockReturnValue(200)
+    let release!: () => void
+    host.starts.set('alpha', new Promise<void>((resolve) => { release = resolve }))
+    const refreshing = projectRefresh(host.ctx, '/alpha', 'alpha')
+    try {
+      await vi.waitFor(() => expect(host.mounts).toHaveLength(2))
+      clock.mockReturnValue(300)
+      const waiting = runtimeOf(host.ctx).attach(agent)
+      const status = runtimeOf(host.ctx).sessionSnapshot().sessions[0]
+      expect(status).toMatchObject({ startedAt: 200, phase: 'starting' })
+      expect(status.servers[0]).toMatchObject({ startedAt: 200, phaseAt: 200 })
+      release()
+      await Promise.all([refreshing, waiting])
+      await runtimeOf(host.ctx).connect(agent, 'alpha')
+      expect(host.mounts).toHaveLength(2)
+      expect(runtimeOf(host.ctx).sessionSnapshot().sessions[0].finishedAt).toBe(300)
+    } finally { release(); await refreshing; clock.mockRestore() }
+  })
+
+  it('detaches during module loading without waiting for or resurrecting that owner', async () => {
+    const host = new TestHost()
+    host.source('/alpha', { alpha: { command: 'ok' } })
+    await installReady(host)
+    let release!: (module: unknown) => void
+    vi.mocked((runtimeOf(host.ctx) as any).load).mockReturnValue(new Promise((resolve) => { release = resolve }))
+    const agent = host.agent('/alpha')
+    await host.serial('agent/created', { agent })
+    const creating = runtimeOf(host.ctx).connect(agent, 'alpha').catch(() => undefined)
+    try {
+      await vi.waitFor(() => expect(runtimeOf(host.ctx).sessionSnapshot().sessions[0]?.phase).toBe('loading'))
+      await runtimeOf(host.ctx).detach(agent)
+      expect(runtimeOf(host.ctx).sessionSnapshot().sessions).toEqual([])
+      expect(host.mounts).toEqual([])
+    } finally { release(host.official); await creating }
+    await runtimeOf(host.ctx).attach(agent)
+    expect(host.mounts).toEqual([])
+  })
+
+  it('supersedes definitions during module loading and never mounts a stale command', async () => {
+    const host = new TestHost()
+    host.source('/alpha', { alpha: { command: 'old' } })
+    await installReady(host)
+    let release!: (module: unknown) => void
+    vi.mocked((runtimeOf(host.ctx) as any).load).mockReturnValue(new Promise((resolve) => { release = resolve }))
+    const agent = host.agent('/alpha')
+    await host.serial('agent/created', { agent })
+    const creating = runtimeOf(host.ctx).connect(agent, 'alpha').catch(() => undefined)
+    let updating: Promise<void> | undefined
+    try {
+      await vi.waitFor(() => expect(runtimeOf(host.ctx).sessionSnapshot().sessions[0]?.phase).toBe('loading'))
+      host.source('/alpha', { alpha: { command: 'new' } })
+      updating = reconcileProject(host.ctx, '/alpha')
+      await vi.waitFor(() => expect(runtimeOf(host.ctx).projects.get('/alpha')?.get('alpha')?.config.command).toBe('new'))
+      release(host.official)
+      await Promise.all([creating, updating])
+      await runtimeOf(host.ctx).connect(agent, 'alpha')
+      expect(host.mounts.map((mount) => mount.config.command)).toEqual(['new'])
+    } finally { release(host.official); await Promise.all([creating, updating]) }
+  })
+
+  it('disposes a pending startup without releasing its synthetic handshake', async () => {
+    const host = new TestHost()
+    host.source('/alpha', { alpha: { command: 'ok' } })
+    await installReady(host)
+    let release!: () => void
+    host.starts.set('alpha', new Promise<void>((resolve) => { release = resolve }))
+    const agent = host.agent('/alpha')
+    await host.serial('agent/created', { agent })
+    const creating = runtimeOf(host.ctx).connect(agent, 'alpha').catch(() => undefined)
+    try {
+      await vi.waitFor(() => expect(host.mounts).toHaveLength(1))
+      let disposed = false
+      const closing = runtimeOf(host.ctx).dispose().then(() => { disposed = true })
+      await vi.waitFor(() => expect(disposed).toBe(true))
+      await Promise.all([closing, creating])
+      expect(host.mounts[0].fiber.dispose).toHaveBeenCalledOnce()
+      expect(runtimeOf(host.ctx).sessionSnapshot().sessions).toEqual([])
+    } finally { release(); await creating }
+  })
+
+  it('returns detached, IO-free and credential-free per-session errors', async () => {
+    const host = new TestHost()
+    host.source('/alpha', { alpha: { command: 'ok', env: { TOKEN: 'secret-value' } } })
+    const agent = host.agent('/alpha')
+    vi.mocked((runtimeOf(host.ctx) as any).load).mockRejectedValue(new Error('https://user:secret-value@host TOKEN=secret-value'))
+    await installReady(host)
+    const read = vi.spyOn(host.services.fs, 'readText')
+    const snapshot = runtimeOf(host.ctx).sessionSnapshot()
+    expect(snapshot.sessions[0]).toMatchObject({ sessionId: agent.session.id, phase: 'error' })
+    expect(JSON.stringify(snapshot)).not.toContain('secret-value')
+    snapshot.sessions[0].servers[0].phase = 'ready'
+    expect(runtimeOf(host.ctx).sessionSnapshot().sessions[0].servers[0].phase).toBe('error')
+    expect(read).not.toHaveBeenCalled()
+    host.files.set('/alpha/.mcp.json', '{broken')
+    const second = host.agent('/alpha')
+    await host.serial('agent/created', { agent: second })
+    expect(runtimeOf(host.ctx).sessionSnapshot().sessions.find((entry) => entry.sessionId === second.session.id)).toMatchObject({ phase: 'error', error: expect.stringContaining('配置读取或校验失败') })
+  })
 })
 
 describe('agent-owned project runtime', () => {
   it('keeps idle projects configured-only and honors disabled definitions', async () => {
     const host = new TestHost()
     host.source('/alpha', { enabled: { command: 'ok' }, stopped: { command: 'ok', disabled: true } })
-    await installMcpRuntime(host.ctx)
+    await installReady(host)
     const servers = runtimeOf(host.ctx).views('/alpha')
     expect(servers.map((server) => [server.serverName, server.status, server.instanceCount])).toEqual([
       ['enabled', 'configured', 0], ['stopped', 'disabled', 0],
@@ -193,9 +411,10 @@ describe('agent-owned project runtime', () => {
     const first = host.agent('/alpha')
     const second = host.agent('/alpha/src')
     host.agent('/beta')
-    await installMcpRuntime(host.ctx)
+    await installReady(host)
     expect(host.events.slice(0, 2)).toEqual(['remove:vsm-mcp.hash.alpha', 'remove:vsm-mcp:hash:old'])
-    expect(host.mounts.map((mount) => mount.agent)).toEqual([first, second])
+    expect(host.mounts).toHaveLength(2)
+    expect(first.tools.has('mcp__alpha__search') && second.tools.has('mcp__alpha__search')).toBe(true)
     expect(host.mounts[0].config.cwd).toBe('/alpha')
     expect(runtimeOf(host.ctx).views('/alpha')[0]).toMatchObject({ instanceCount: 2, status: 'unverified', toolCount: 1 })
     expect(listMcp(host.ctx).servers).toEqual([])
@@ -204,12 +423,13 @@ describe('agent-owned project runtime', () => {
   it('awaits serial agent creation startup and supports resource-only servers', async () => {
     const host = new TestHost()
     host.source('/alpha', { files: { command: 'resource-only' } })
-    await installMcpRuntime(host.ctx)
+    await installReady(host)
     let finish!: () => void
     host.starts.set('files', new Promise<void>((resolve) => { finish = resolve }))
     const agent = host.agent('/alpha')
     let ready = false
-    const creating = host.serial('agent/created', { agent }).then(() => { ready = true })
+    await host.serial('agent/created', { agent })
+    const creating = runtimeOf(host.ctx).connect(agent, 'files').then(() => { ready = true })
     await vi.waitFor(() => expect(host.mounts).toHaveLength(1))
     expect(ready).toBe(false)
     expect(runtimeOf(host.ctx).views('/alpha')[0].status).toBe('connecting')
@@ -222,11 +442,12 @@ describe('agent-owned project runtime', () => {
     const host = new TestHost()
     host.source('/alpha', { alpha: { command: 'ok' } })
     const agent = host.agent('/alpha')
-    await installMcpRuntime(host.ctx)
+    await installReady(host)
     await reconcileProject(host.ctx, '/alpha')
     expect(host.mounts).toHaveLength(1)
     host.source('/alpha', { alpha: { command: 'changed' } })
     await reconcileProject(host.ctx, '/alpha')
+    await runtimeOf(host.ctx).connect(agent, 'alpha')
     expect(host.mounts).toHaveLength(2)
     expect(host.events.indexOf('dispose:alpha')).toBeLessThan(host.events.lastIndexOf('mount:alpha'))
     await projectToggle(host.ctx, '/alpha', 'alpha', false)
@@ -234,7 +455,9 @@ describe('agent-owned project runtime', () => {
     await projectRefresh(host.ctx, '/alpha', 'alpha')
     expect(host.mounts).toHaveLength(2)
     await projectToggle(host.ctx, '/alpha', 'alpha', true)
+    await runtimeOf(host.ctx).connect(agent, 'alpha')
     await projectRefresh(host.ctx, '/alpha', 'alpha')
+    await runtimeOf(host.ctx).connect(agent, 'alpha')
     expect(host.mounts).toHaveLength(4)
     await projectRemove(host.ctx, '/alpha', 'alpha')
     expect(runtimeOf(host.ctx).views('/alpha')).toEqual([])
@@ -248,7 +471,7 @@ describe('agent-owned project runtime', () => {
     const host = new TestHost()
     host.source('/alpha', { alpha: { command: 'ok' } })
     host.agent('/alpha')
-    await installMcpRuntime(host.ctx)
+    await installReady(host)
     host.failures.set('/alpha/.mcp.json', Object.assign(new Error('denied'), { code: 'EACCES' }))
     let result = await listProjects(host.ctx)
     expect(result.projects[0].fileError).toContain('读取失败')
@@ -270,7 +493,7 @@ describe('agent-owned project runtime', () => {
     host.source('/alpha', { alpha: { command: 'ok' } })
     host.failures.set('/beta/.mcp.json', Object.assign(new Error('cannot read beta: not found'), { code }))
     host.agent('/alpha')
-    await installMcpRuntime(host.ctx)
+    await installReady(host)
     const result = await listProjects(host.ctx)
     expect(result.projects[0].fileError).toBeUndefined()
     expect(result.projects[0].servers[0]).toMatchObject({ serverName: 'alpha', instanceCount: 1 })
@@ -306,7 +529,7 @@ describe('agent-owned project runtime', () => {
     const host = new TestHost()
     host.source('/alpha', { alpha: { command: 'ok' } })
     host.agent('/alpha')
-    await installMcpRuntime(host.ctx)
+    await installReady(host)
     const source = host.files.get('/alpha/.mcp.json')
     host.failures.set('/alpha/.mcp.json', Object.assign(new Error('cannot read: not found in error context'), { code }))
     const result = await listProjects(host.ctx)
@@ -322,7 +545,7 @@ describe('agent-owned project runtime', () => {
     const host = new TestHost()
     host.source('/alpha', { alpha: { command: 'ok' } })
     host.agent('/alpha')
-    await installMcpRuntime(host.ctx)
+    await installReady(host)
     host.files.set('/alpha/.mcp.json', '{broken')
     await expect(projectSave(host.ctx, '/alpha', 'alpha', { serverName: 'alpha', transport: 'stdio', command: 'changed' })).rejects.toThrow('解析失败')
     expect(host.files.get('/alpha/.mcp.json')).toBe('{broken')
@@ -333,11 +556,12 @@ describe('agent-owned project runtime', () => {
   it('cancels pending startup and never resurrects a disposed agent', async () => {
     const host = new TestHost()
     host.source('/alpha', { first: { command: 'ok' }, later: { command: 'ok' } })
-    await installMcpRuntime(host.ctx)
+    await installReady(host)
     let finish!: () => void
     host.starts.set('first', new Promise<void>((resolve) => { finish = resolve }))
     const agent = host.agent('/alpha')
-    const creating = host.serial('agent/created', { agent })
+    await host.serial('agent/created', { agent })
+    const creating = runtimeOf(host.ctx).connect(agent, 'first').catch(() => undefined)
     await vi.waitFor(() => expect(host.mounts).toHaveLength(1))
     await runtimeOf(host.ctx).detach(agent)
     finish()
@@ -352,10 +576,12 @@ describe('agent-owned project runtime', () => {
   it('reads externally edited configuration before a new agent becomes ready', async () => {
     const host = new TestHost()
     host.source('/alpha', { alpha: { command: 'old' } })
-    await installMcpRuntime(host.ctx)
+    await installReady(host)
     host.source('/alpha', { alpha: { command: 'new' } })
     const agent = host.agent('/alpha')
     await host.serial('agent/created', { agent })
+    expect(host.mounts).toHaveLength(0)
+    await runtimeOf(host.ctx).connect(agent, 'alpha')
     expect(host.mounts[0].config.command).toBe('new')
   })
 
@@ -363,13 +589,31 @@ describe('agent-owned project runtime', () => {
     const host = new TestHost()
     host.source('/alpha', { alpha: { command: 'ok' } })
     const agent = host.agent('/alpha')
-    agent.ctx.plugin.mockImplementation(() => { throw new Error('startup failed') })
-    await installMcpRuntime(host.ctx)
-    expect(runtimeOf(host.ctx).views('/alpha')[0]).toMatchObject({ status: 'error', instanceCount: 0, error: 'Error: startup failed' })
+    vi.mocked((runtimeOf(host.ctx) as any).load).mockRejectedValue(new Error('startup failed'))
+    await installReady(host)
+    expect(runtimeOf(host.ctx).views('/alpha')[0]).toMatchObject({ status: 'error', instanceCount: 0, error: expect.stringContaining('请查看 Host 日志') })
   })
 })
 
 describe('source preservation and name reservations', () => {
+  it('persists separate project strategies without forwarding them or changing unknown configuration fields', async () => {
+    const host = new TestHost()
+    host.source('/alpha', { alpha: { command: 'ok', custom: { keep: true }, env: { TOKEN: 'real' } } })
+    const policy = { startup: 'on-demand' as const, sharing: 'workspace' as const, startupTimeoutMs: 1000 }
+    const config = { serverName: 'alpha', transport: 'stdio' as const, command: 'ok', env: { TOKEN: '••••••' } }
+    const view = await projectSave(host.ctx, '/alpha', 'alpha', config, policy)
+    const persisted = JSON.parse(host.files.get('/alpha/.mcp.json')!).mcpServers.alpha
+    expect(persisted).toMatchObject({ custom: { keep: true }, env: { TOKEN: 'real' }, vscodeMode: policy })
+    expect(view.servers[0].policy).toEqual(policy)
+    const agent = host.agent('/alpha')
+    await runtimeOf(host.ctx).attach(agent)
+    expect(host.mounts).toHaveLength(0)
+    await runtimeOf(host.ctx).connect(agent, 'alpha')
+    expect(host.mounts[0].config).not.toHaveProperty('vscodeMode')
+    await expect(projectSave(host.ctx, '/alpha', 'alpha', config, { ...policy, startupTimeoutMs: 0 })).rejects.toThrow('startupTimeoutMs')
+    await expect(saveMcp(host.ctx, { ...config, vscodeMode: policy } as any)).rejects.toThrow('仅适用于项目')
+  })
+
   it('preserves unknown fields, advanced options and unchanged masked secrets', async () => {
     const host = new TestHost()
     host.source('/alpha', { alpha: { command: 'ok', env: { TOKEN: 'real' }, custom: { keep: 1 }, reconnect: { enabled: false }, maxInstructionBytes: 1000 } }, { schemaVersion: 2 })
@@ -452,7 +696,7 @@ describe('MCP audit regressions', () => {
     host.agent('/alpha')
     const load = vi.mocked((runtimeOf(host.ctx) as any).load)
     load.mockRejectedValueOnce(new Error('transient module load failure')).mockResolvedValue(host.official)
-    await installMcpRuntime(host.ctx)
+    await installReady(host)
     expect(runtimeOf(host.ctx).views('/alpha')[0].status).toBe('error')
     await projectRefresh(host.ctx, '/alpha', 'alpha')
     expect(load).toHaveBeenCalledTimes(2)
@@ -468,9 +712,11 @@ describe('MCP audit regressions', () => {
     await runtime.replace('/alpha', defs)
     await runtime.replace('/beta', defs)
     await runtime.attach(agent)
+    await runtime.connect(agent, 'alpha')
     expect(host.mounts[0].config.cwd).toBe('/alpha')
     agent.session.header.cwd = '/beta'
     await runtime.attach(agent)
+    await runtime.connect(agent, 'alpha')
     expect(host.mounts).toHaveLength(2)
     expect(host.mounts[0].fiber.dispose).toHaveBeenCalledOnce()
     expect(host.mounts[1].config.cwd).toBe('/beta')
@@ -486,7 +732,9 @@ describe('MCP audit regressions', () => {
     await runtime.replace('/beta', defs)
     await runtime.attach(first)
     await runtime.attach(second)
+    await Promise.all([runtime.connect(first, 'alpha'), runtime.connect(second, 'alpha')])
     await runtime.replace('/alpha', defs, 'alpha')
+    await runtime.connect(first, 'alpha')
     expect(host.mounts).toHaveLength(3)
     expect(host.mounts[0].fiber.dispose).toHaveBeenCalledOnce()
     expect(host.mounts[1].fiber.dispose).not.toHaveBeenCalled()
@@ -496,7 +744,7 @@ describe('MCP audit regressions', () => {
     const host = new TestHost()
     host.source('/alpha', { alpha: { command: 'ok' } })
     const agent = host.agent('/alpha')
-    await installMcpRuntime(host.ctx)
+    await installReady(host)
     host.source('/alpha', { alpha: { command: 'external-change' } })
     const read = vi.spyOn(host.services.fs, 'readText')
     const before = host.mounts.length
@@ -587,7 +835,7 @@ describe('inherited workspace isolation', () => {
     const child = host.agent('/beta', parent)
     const outside = host.agent('/outside', parent)
     installIsolation(host.ctx)
-    await installMcpRuntime(host.ctx)
+    await installReady(host)
     expect(host.view(parent).visible.has('mcp__alpha__search')).toBe(true)
     expect(host.view(child).visible.has('mcp__alpha__search')).toBe(false)
     expect(host.view(child).visible.has('mcp__global__search')).toBe(true)
@@ -612,7 +860,7 @@ describe('inherited workspace isolation', () => {
     const parent = host.agent('/alpha')
     const child = host.agent('/beta', parent)
     installIsolation(host.ctx)
-    await installMcpRuntime(host.ctx)
+    await installReady(host)
     expect(host.view(child).visible.has('mcp__alpha__nested__search')).toBe(false)
     expect(guardMcp(host.ctx, { name: 'mcp__alpha__nested__search', agent: child })).toContain('不能使用其他项目')
   })

@@ -460,18 +460,18 @@ DSH 每次启动监听随机端口，`http://127.0.0.1:<port>` 就是浏览器 o
 
 官方 `dsh plugin` 方式，三选一。下面以 `web` profile 为例；Desktop 或其他命名
 profile 请替换为实际目标，不要把示例目录当成当前运行 profile。升级前可阅读
-[0.17.0 发布说明](docs/release-0.17.0.md)；从 0.14.2 或更旧版本升级还须阅读
+[0.18.0 更新摘要](#更新日志)（项目 MCP 默认改为按需启动，首次使用仍需等待；升级后须重启 Host）；从 0.14.2 或更旧版本升级还须阅读
 [0.14.3 数据迁移与回退说明](docs/release-0.14.3.md)。
 
 ```bash
 # ① Git 安装（clone + prepare 构建；推荐打固定 tag）
-dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.17.0
+dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.18.0
 
 # ② npm 注册表（发布到 npm 后）
-dsh plugin --profile web add dsh-vscode-mode@0.17.0
+dsh plugin --profile web add dsh-vscode-mode@0.18.0
 
 # ③ GitHub Release tgz 直装（Release asset 可用后）
-dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.17.0/dsh-vscode-mode-0.17.0.tgz
+dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.18.0/dsh-vscode-mode-0.18.0.tgz
 ```
 
 > **DSH 版本政策（0.17.0 起）**：六项 DSH peer 仍统一声明为 `*`，另以
@@ -811,6 +811,8 @@ Keep All / Undo All 却是亮的。修复：单文件 Keep / Undo 覆盖冲突�
 
 完整变更见 [GitHub Releases](https://github.com/Lenonss/DSH_VsCodeMode/releases)。
 近期关键版本：
+
+- **v0.18.0**：**项目 MCP 按需启动与会话状态**——默认按需连接，不再等待服务握手才完成新会话创建；通过 `discover_project_mcp` 获取目录并连接后使用真实工具 schema，保留原工具执行及作用域隔离。支持显式后台预热、逐会话隔离或工作区共享连接（共享服务内部状态须自行确认），冷启动并发上限为 2，共享调用串行、最后租约释放后保温 60 秒。会话列表新增项目 MCP 初始化阶段与耗时详情，状态轮询只读内存，不激活历史会话；初始化完成不代表连接健康已验证。**编辑器**：计划预览页签并入分组页签行，工具固定在行尾，关闭计划恢复先前磁盘页签；单一定义返回前尝试预热目标 Monaco model，减少 Ctrl+hover 定义预览的 `Model not found` 异常。升级须重启 DSH Host 并强制刷新页面；发布本身不更新运行实例。
 
 - **v0.17.0**：**DSH 0.2.1 吸收与运行期优化**——① 修复插件元数据一直失效：`locale/*.json` 改 `{"meta":{...}}` 结构并导出 `./locale/*.json`，插件管理器标题与描述不再回退 `package.json.name`；② 新增 `engines.dsh: ">=0.1.0-rc.1 <0.3.0-0"` 显式声明支持区间（此前仅靠官方 `includePrerelease` 宽容）；③ 跟随会话内 `cd`：13 处 `header.cwd` 直读改走 `workingDirectory` 投影，服务缺失/抛错时回落原始目录；④ 轮询收敛：差异角标 / 输入区 dock / 编辑器 / 体积角标原本各自 5s 拉一次 `edrv.list`，改为会话级共享订阅（单轮询 + 退订到 0 才释放）；⑤ 界面壳层接入 `ctx.locale` 中英双语（slot 名与官方页签标题随语言切换）；⑥ 新增插件管理器详情页「VSCodeMode」状态段。详见 [0.17.0 发布说明](docs/release-0.17.0.md)。
 - **v0.16.0**：**C# 智能体体验增强**——C# provider DotRush 优先于 ms-Roslyn（自带 sln 加载与反编译跳转；Roslyn 无 C# Dev Kit 时不加载项目）；csharp 握手后自动找工作区根 `.sln` 发 Roslyn 专有 `solution/open`，元数据符号（Unity 引擎/NuGet 程序集）可跳转与 hover；DAP 调试支持 `runtime='dotnet'` 适配器（DotRush monodbg 形态），按 dll runtimeconfig 要求的运行时大版本选择 dotnet。

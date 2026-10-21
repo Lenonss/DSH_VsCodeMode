@@ -20,6 +20,8 @@ import { DiffBadge } from './ui/DiffBadge.js'
 import { PerfSizeBadge } from './ui/PerfSizeBadge.js'
 import { ConversationDiffDock } from './ui/ConversationDiffDock.js'
 import { McpSettings } from './ui/McpSettings.js'
+import { mcpSessionState } from './mcpSessionState.js'
+import { McpSessionIcon, McpSessionDetail, type McpRowProps } from './ui/McpSessionStatus.js'
 import { PluginDetailSection } from './ui/PluginDetailSection.js'
 import { rpc } from './rpc.js'
 import { loadMonaco } from './monaco/loader.js'
@@ -634,6 +636,18 @@ export async function apply(ctx: any): Promise<void> {
   }
   retrySideService()
 
+  // Root row slots receive only sessionId: no sessions.scope()/activation for historical rows.
+  ctx.effect(() => {
+    const store = mcpSessionState()
+    /** @author ddj 2026年10月20号 @param props Official root row identity. @returns Leading marker with shared polling. */
+    const renderIcon = (props: unknown) => React.createElement(McpSessionIcon, { ...(props as McpRowProps), store })
+    /** @author ddj 2026年10月20号 @param props Official hover identity. @returns Project-only initialization details. */
+    const renderDetail = (props: unknown) => React.createElement(McpSessionDetail, { ...(props as McpRowProps), store })
+    const leading = registerSlotSafely(ctx, { name: 'sidebar.session.row.leading', id: 'edrv-mcp-status', order: 20 }, renderIcon)
+    const hover = registerSlotSafely(ctx, { name: 'sidebar.session.row.hover', id: 'edrv-mcp-detail', order: 20 }, renderDetail)
+    return () => { leading?.(); hover?.(); store.dispose() }
+  }, 'vscode-mode: session MCP status')
+
   // 对话输入框上方差异 dock：普通对话显示单文案按钮，文件编辑页由 EditorView 隐藏
   registerSlotSafely(ctx, {
     name: 'conversation.input.dock',
@@ -659,6 +673,7 @@ export async function apply(ctx: any): Promise<void> {
     label: () => t('slot.settings'),
   }, () => React.createElement(SettingsContext.Provider, { value: bridge.scope() }, React.createElement(McpSettings, {
     openerRegistry: registry,
+    getMcpSession: () => readSessionScope(ctx).sessionId,
     compatSummary,
     // 快捷键统一走 DSH 官方配置：通用页只提供「打开官方快捷键配置」入口。
     // 服务运行时探测（自愈）：旧版 DSH 无该服务时按钮给出手动打开方式。

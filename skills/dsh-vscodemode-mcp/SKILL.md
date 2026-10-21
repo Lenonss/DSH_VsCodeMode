@@ -14,8 +14,8 @@ whenToUse: 用户要求新增、修改、启停或排查 VSCodeMode MCP 配置�
 |---|---|---|
 | 持久配置 | profile loader 树 | 已注册 workspace 根目录的 `.mcp.json` |
 | 生效范围 | profile 内所有工作区 | cwd 匹配该 workspace 的 agent |
-| 运行方式 | 原有全局 loader entry | `agent.ctx.plugin(officialMcp, config)` |
-| 连接实例 | 每个启用的全局 entry 一份 | 每个活动 agent、每个启用服务一份 |
+| 运行方式 | 原有全局 loader entry | 私有连接 scope + 会话授权代理，复用官方 MCP 插件 |
+| 连接实例 | 每个启用的全局 entry 一份 | 默认逐 agent 隔离；显式选择 workspace 后工作区复用 |
 | 没有活动 agent | 仍可运行 | 仅保存配置，`configured`、`instanceCount: 0` |
 | 团队共享 | 否 | `.mcp.json` 可以随仓库共享 |
 
@@ -25,13 +25,23 @@ whenToUse: 用户要求新增、修改、启停或排查 VSCodeMode MCP 配置�
 
 设置 → VSCodeMode → MCP 管理，包含「我的 MCP」「项目 MCP」「MCP 市场」（占位）。项目服务在所选项目内管理。
 
-保存项目服务会写入 `.mcp.json` 并更新匹配的活动 agent；没有活动 agent 时保存为待挂载配置。启用不会凭空创建会话。每个新 agent 的串行 `agent/created` 监听会读取最新配置并等待其官方插件启动；插件装配时也会接入已经存在的 agent。
+保存项目服务会写入 `.mcp.json` 并更新匹配 agent 的能力目录与惰性资源入口。新建会话只等待配置准备和轻量入口，不等待任何项目 MCP 握手；默认 `on-demand`，未使用不启动。显式 `background` 后台预热也不阻塞创建。同一 Host 最多两个冷启动；同代次初始化 single-flight。配置写操作仍串行保护，但连接准备不占有跨会话全局锁。
+
+AI 先调用全局发现入口 `discover_project_mcp {action:"list"}`，仅返回执行 agent 工作区内的安全目录；需要时 `{action:"connect",serverName:"..."}` 连接并返回真实 schema。入口从工具执行上下文取 agent，不接受 sessionId、路径、命令、URL 或凭据。真实工具依然走官方审批、guard 和结果投影；Native 在下一次请求获得工具，PTC 必须结束当前程序后新建程序刷新 SDK，禁止 eval 或通用透传绕过权限。资源工具可通过所属工作区的惰性 provider 按需连接。
 
 禁用、删除、配置变更、刷新重连及 agent/插件卸载都会释放相应 fiber 和连接。仅刷新未变化的项目列表不会重复连接。主机代码更新需要重启 DSH 才能加载新实现。
 
 管理页首次加载配置，之后仅在 MCP 页签可见且文档可见时每 2.5 秒读取 `mcp.snapshot`；单次读取 10 秒截止，不重叠、不在卸载后回写。快照只读运行台账，不读项目文件、不 reconcile、不额外建连。外部文件变更通过显式刷新/重新打开设置或新 agent 加载；快照不是文件监听器。配置写操作串行保护读取—修改—写入与跨作用域命名保留。
 
 表单 stdio 参数采用 JSON `string[]` 或每行一个完整参数，不按空格/引号做 shell 拆分；含空参数或内嵌换行使用 JSON。HTTP 请求头每行 `key=value`，保留值内的等号，拒绝非法/重复（忽略大小写）键。失败保存保持表单，忙时禁止重复动作。
+
+### 会话列表状态
+
+官方 `sidebar.session.row.leading` 插槽在会话标题前显示 16px 加载或异常图标；平稳完成不常驻绿色成功标。官方运行中、待审批、新消息状态优先覆盖 leading，归档行不展示 leading；`sidebar.session.row.hover` 悬浮详情仍可查看。
+
+详情只描述 VSCodeMode 管理的**项目 MCP**：待使用（不转圈）、读取配置、等待启动名额、加载插件模块、等待服务插件启动、复用已有连接、释放旧实例、完成或异常，展示完成数、耗时与安全错误摘要。共享显示会话本次等待，不将连接年龄冒充本次等待。超过 10 秒仅提示耗时较长，不判定失败。完成文案为「初始化完成，连接健康未验证」。无活跃 agent 文案为「当前无活跃 MCP 实例」，不是成功；不包含全局或 preset MCP。
+
+所有可见行共用一份 `mcp.sessionSnapshot` 订阅，在文档可见且有消费者时按 2.5 秒间隔查询；请求 10 秒截止、不重叠，隐藏/退订/卸载取消，过期响应丢弃。错误保留上次快照并标过期。查询只读内存，**不读配置、不 reconcile、不激活/保留历史会话、不建立连接**；旧 Host 或缺少插槽时安全降级。错误详情不返回 env、headers、完整配置或凭据 URL，仅返回安全类别提示，原始诊断看 Host 日志。
 
 ## 3. 项目配置
 
@@ -58,6 +68,8 @@ whenToUse: 用户要求新增、修改、启停或排查 VSCodeMode MCP 配置�
 - stdio：`command` 必填；可填 `args`、`cwd`、`env`。未指定 `cwd` 时，以项目根作为进程工作目录。
 - HTTP：`url` 必须以 `http://` 或 `https://` 开头，可填 `headers`。
 - 高级参数：`toolCallTimeoutMs`、`failOnStartupError`、`maxInstructionBytes`、`reconnect`。
+- 项目扩展 `vscodeMode: { startup: "on-demand" | "background", sharing: "agent" | "workspace", startupTimeoutMs: 60000 }` 与官方传输配置分离，不透传；默认 on-demand + agent，旧文件不批量改写。初始化预算接受 1000–300000 整数，不是业务调用超时。全局配置不接受项目扩展。
+- workspace 共享必须显式确认服务适合共享内部状态；不会自动给 CodeGraph 开启。池键含工作区、有效配置和策略，凭据只做内存摘要身份。共享调用默认串行，最后租约释放保温 60 秒；agent 模式立即释放。禁用/删除/刷新/配置变化先失效与撤销再关闭，关闭未确认则阻止替代。超时显示释放阶段，失败冷却 5 秒后允许显式重试，不无限自动重试。
 - `disabled: true` 保持配置但不创建连接；保存表单会恢复启用。重启和 reconcile 都尊重 `disabled`。
 - 保存保留文档顶层、其他服务器及当前服务器的未知字段和未编辑高级参数；切换传输方式会移除旧传输专属字段。
 - `env` / `headers` 在返回值中使用 `••••••` 脱敏。原键的未修改掩码保存时恢复真实值；新键只有掩码而没有原值时会拒绝保存，需填写凭据。
@@ -85,12 +97,14 @@ whenToUse: 用户要求新增、修改、启停或排查 VSCodeMode MCP 配置�
 |---|---|---|
 | `mcp.list` | `{}` | `servers` |
 | `mcp.snapshot` | `{}` | `servers`, `projects`（只读运行快照） |
+| `mcp.sessionSnapshot` | `{}` | `sessions`, `sampledAt`（按 sessionId 区分的活跃初始化状态，只读内存） |
 | `mcp.save` | `{ config }` | `server` |
 | `mcp.remove` | `{ id }` | 无 |
 | `mcp.toggle` | `{ id, enabled }` | `server` |
 | `mcp.refresh` | `{ id }` | `server` |
 | `mcp.projects` | `{}` | `projects` |
-| `mcp.projectSave` | `{ workspacePath, serverName, config }` | `project` |
+| `mcp.projectSave` | `{ workspacePath, serverName, config, policy? }` | `project` |
+| `mcp.projectConnect` | `{ sessionId, workspacePath, serverName }` | `project`（仅已活跃匹配会话，不激活历史会话） |
 | `mcp.projectRemove` | `{ workspacePath, serverName }` | `project` |
 | `mcp.projectToggle` | `{ workspacePath, serverName, enabled }` | `project` |
 | `mcp.projectRefresh` | `{ workspacePath, serverName }` | `project` |
@@ -109,7 +123,7 @@ whenToUse: 用户要求新增、修改、启停或排查 VSCodeMode MCP 配置�
 
 ## 6. 工具、资源和指令隔离
 
-官方 0.1.7-rc.2 的 MCP Config 没有关闭资源/指令的开关；官方注册随 `scopeOf(ctx)` 归属。因此项目连接必须直接在 `agent.ctx` 挂载，不能全局连接后只隐藏工具。
+官方 0.1.7-rc.2 的 MCP Config 没有关闭资源/指令的开关；官方注册随 `scopeOf(ctx)` 归属。因此连接在独立 scope 中隔离 tools、mcpResources、systemPrompt，捕获注册后再给合法 agent 提供代理，绝不将原始项目注册暴露全局。创建私有 scope 后先等待 backing fiber 初始激活完成再 provide，防止依赖服务丢失；真实官方模块测试覆盖此边界。
 
 子 agent 会继承父 scope；跨 cwd 子会话还有三层处理：
 
@@ -126,7 +140,7 @@ whenToUse: 用户要求新增、修改、启停或排查 VSCodeMode MCP 配置�
 
 | 状态/现象 | 含义与处理 |
 |---|---|
-| `configured` | 中性色；配置已保存，没有已挂载实例，打开匹配工作区会话后挂载 |
+| `configured` | 中性色；配置已保存，尚无连接实例，首次发现/资源访问或显式手动连接才启动（background 策略除外） |
 | `disabled` | 配置已停用，不建立项目连接 |
 | `connecting` | 官方插件还在等待启动完成；检查命令、cwd、URL 和握手 |
 | `unverified` | 中性色；fiber 已激活，但官方没有公开连接状态证据，不能宣称已连接；右侧绿色开关只表示启用 |
@@ -140,7 +154,10 @@ whenToUse: 用户要求新增、修改、启停或排查 VSCodeMode MCP 配置�
 
 ## 8. 维护位置与验证
 
-- `src/mcpRuntime.ts`：agent → fibers 台账、官方插件加载、串行创建、迁移与卸载。
+- `src/mcpRuntime.ts`：会话租约/能力台账、官方模块加载、非阻塞接入、迁移与卸载。
+- `src/mcpPool.ts`：独立连接、single-flight、并发名额、取消/超时/保温和代次围栏。
+- `src/mcpBridge.ts`：私有服务隔离、真实工具代理、动态列表和撤销。
+- `src/mcpDiscover.ts`：统一发现入口与按 scope 输出的能力目录。
 - `src/mcpProject.ts`：源配置读取、保留字段、命名检查及 reconcile。
 - `src/mcpIsolation.ts`：继承工具限制、资源执行 guard、指令和资源列表覆盖。
 - `src/mcp.ts`：全局 loader CRUD、脱敏与诚实状态。

@@ -12,7 +12,7 @@ import type {
   RecordView,
   StaleHunk,
 } from './types.js'
-import type { MpcConfig, MpcProject, MpcProjectSaveInput, MpcServer } from './mcp.js'
+import type { McpSessionStatus, MpcConfig, MpcProject, MpcProjectSaveInput, MpcServer } from './mcp.js'
 import type { CompatReport, DevFormInfo } from './compat.js'
 import type { ShellIntegrationStatus, UnityListPayload, UnityProjectEntry } from './integration.js'
 import type { RuleInfo, RuleProject, RuleRefInput, RuleSaveInput } from './rules.js'
@@ -399,11 +399,13 @@ export interface RpcRequestMap {
   'edrv.fsMove': { sessionId?: string; from: string; toDir: string }
   'mcp.list': {}
   'mcp.snapshot': {}
+  'mcp.sessionSnapshot': {}
   'mcp.save': { config: MpcConfig }
   'mcp.remove': { id: string }
   'mcp.toggle': { id: string; enabled: boolean }
   'mcp.refresh': { id: string }
   'mcp.projects': {}
+  'mcp.projectConnect': { sessionId: string; serverName: string; workspacePath: string }
   'mcp.projectSave': MpcProjectSaveInput
   'mcp.projectRemove': { workspacePath: string; serverName: string }
   'mcp.projectToggle': { workspacePath: string; serverName: string; enabled: boolean }
@@ -565,11 +567,13 @@ export interface RpcOkMap {
   'edrv.fsMove': { from: string; to: string }
   'mcp.list': { servers: MpcServer[] }
   'mcp.snapshot': { servers: MpcServer[]; projects: MpcProject[] }
+  'mcp.sessionSnapshot': { sessions: McpSessionStatus[]; sampledAt: number }
   'mcp.save': { server: MpcServer }
   'mcp.remove': object
   'mcp.toggle': { server: MpcServer }
   'mcp.refresh': { server: MpcServer }
   'mcp.projects': { projects: MpcProject[] }
+  'mcp.projectConnect': { project: MpcProject }
   'mcp.projectSave': { project: MpcProject }
   'mcp.projectRemove': { project: MpcProject }
   'mcp.projectToggle': { project: MpcProject }

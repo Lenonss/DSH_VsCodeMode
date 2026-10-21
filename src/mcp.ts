@@ -218,6 +218,7 @@ export async function saveMcp(ctx: Ctx, config: MpcConfig): Promise<MpcServer> {
 
 /** @private @author ddj 2026年10月08号 @param ctx Host services. @param config Configuration. @returns Saved status; validation failures do not write. */
 async function saveGlobal(ctx: Ctx, config: MpcConfig): Promise<MpcServer> {
+  if (config && 'vscodeMode' in config) throw new Error('vscodeMode 启动和共享策略仅适用于项目 MCP')
   validateConfig(config)
   await checkMcpName(ctx, config.serverName)
   const loader = ctx.get('loader')
