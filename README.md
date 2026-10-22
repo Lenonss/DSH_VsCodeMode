@@ -460,18 +460,18 @@ DSH 每次启动监听随机端口，`http://127.0.0.1:<port>` 就是浏览器 o
 
 官方 `dsh plugin` 方式，三选一。下面以 `web` profile 为例；Desktop 或其他命名
 profile 请替换为实际目标，不要把示例目录当成当前运行 profile。升级前可阅读
-[0.18.0 更新摘要](#更新日志)（项目 MCP 默认改为按需启动，首次使用仍需等待；升级后须重启 Host）；从 0.14.2 或更旧版本升级还须阅读
+[0.19.0 更新摘要](#更新日志)（侧栏隔离、树虚拟化及只读大文本分页；按需面板与分页依赖宿主对应能力，真实 GUI 尚未验收；升级后须重启 Host 并强制刷新页面）；从 0.14.2 或更旧版本升级还须阅读
 [0.14.3 数据迁移与回退说明](docs/release-0.14.3.md)。
 
 ```bash
 # ① Git 安装（clone + prepare 构建；推荐打固定 tag）
-dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.18.0
+dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.19.0
 
 # ② npm 注册表（发布到 npm 后）
-dsh plugin --profile web add dsh-vscode-mode@0.18.0
+dsh plugin --profile web add dsh-vscode-mode@0.19.0
 
 # ③ GitHub Release tgz 直装（Release asset 可用后）
-dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.18.0/dsh-vscode-mode-0.18.0.tgz
+dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.19.0/dsh-vscode-mode-0.19.0.tgz
 ```
 
 > **DSH 版本政策（0.17.0 起）**：六项 DSH peer 仍统一声明为 `*`，另以
@@ -811,6 +811,8 @@ Keep All / Undo All 却是亮的。修复：单文件 Keep / Undo 覆盖冲突�
 
 完整变更见 [GitHub Releases](https://github.com/Lenonss/DSH_VsCodeMode/releases)。
 近期关键版本：
+
+- **v0.19.0**：**侧栏可靠性与大工作区读取**——扩展面板渲染、图标、可见性及徽标异常隔离；规则与调试面板按需加载并复用根模块单例。目录树采用完整逻辑索引与窗口化 DOM，缓存采用独立 LRU 和不续期的 60 秒硬 TTL，修正不完整持久化快照的命中；修复侧栏拖动清理及 SVN 配对请求过期结果。超出整读限制的文本可显式进入只读 UTF-8 分页，通过官方 `readByteRange/stat` 能力读取，不创建可保存的部分文档；旧宿主能力缺失时明确提示不支持。按需加载要求宿主提供 `require.async`。真实 GUI、HTTP 资源及浏览器滚动验收尚未完成，用户接受该发布缺口；发布不自动安装或重启当前实例。详见 [扩展与读取契约](docs/sidebar-extension-contract.md)。
 
 - **v0.18.0**：**项目 MCP 按需启动与会话状态**——默认按需连接，不再等待服务握手才完成新会话创建；通过 `discover_project_mcp` 获取目录并连接后使用真实工具 schema，保留原工具执行及作用域隔离。支持显式后台预热、逐会话隔离或工作区共享连接（共享服务内部状态须自行确认），冷启动并发上限为 2，共享调用串行、最后租约释放后保温 60 秒。会话列表新增项目 MCP 初始化阶段与耗时详情，状态轮询只读内存，不激活历史会话；初始化完成不代表连接健康已验证。**编辑器**：计划预览页签并入分组页签行，工具固定在行尾，关闭计划恢复先前磁盘页签；单一定义返回前尝试预热目标 Monaco model，减少 Ctrl+hover 定义预览的 `Model not found` 异常。升级须重启 DSH Host 并强制刷新页面；发布本身不更新运行实例。
 

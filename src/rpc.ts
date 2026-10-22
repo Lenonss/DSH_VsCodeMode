@@ -56,6 +56,10 @@ import { markActiveSessions, markOfficialFlags, moveOutSessions, planMoveOut, pu
 import { patchHasPerfConfig, patchInsertPerfConfig, patchRemovePerfConfig, perfConfigBlock } from './perfPatch.js'
 import type { FileVersions } from './fileVersions.js'
 import { settingsDocPath } from './settingsDocPath.js'
+import { createTextPages } from './textPages.js'
+
+/** Process-local cursor signer; reads must stay on the Host filesystem capability. */
+const readTextPage = createTextPages()
 
 /** cwd → 上次 stale 自动清理时间：全量轮询（EditorView/DiffBadge/Dock 各自 5s）节流，避免每轮都读文件算指纹。 */
 const staleCheckedAt = new Map<string, number>()
@@ -162,7 +166,7 @@ async function readTargetOf(
   ctx: Ctx,
   sc: { session: Session; cwd: string },
   path: string,
-): Promise<ReadTargetOk | { err: string; resolvedPath?: string }> {
+): Promise<ReadTargetOk | { err: string; resolvedPath?: string; code?: 'file-too-large' }> {
   const fs = ctx.get('fs')
   if (!fs) return { err: '缺少 fs' }
   try {
@@ -173,7 +177,7 @@ async function readTargetOf(
       // 带上解析后的真实路径：跳转失败时可直接看出是路径解析错还是目标本身不存在
       return { err: '文件不存在', resolvedPath: fs.processPath(target) }
     }
-    if ((info.size ?? 0) > BINARY_READ_CAP) return { err: '文件过大（>32MB），不支持整文件预览' }
+    if ((info.size ?? 0) > BINARY_READ_CAP) return { err: '文件过大（>32MB），不支持整文件预览', code: 'file-too-large' }
     return { target, fs, info }
   } catch (error) {
     return { err: '读取失败：' + String(error) }
@@ -186,10 +190,10 @@ async function readTargetOf(
  * @param prep readTargetOf 的失败分支
  * @returns { ok:false } 形态载荷
  */
-function targetErrOf(prep: { err: string; resolvedPath?: string }): { ok: false; error: string; resolvedPath?: string } {
-  return prep.resolvedPath !== undefined
-    ? { ok: false, error: prep.err, resolvedPath: prep.resolvedPath }
-    : { ok: false, error: prep.err }
+function targetErrOf(prep: { err: string; resolvedPath?: string; code?: 'file-too-large' }): { ok: false; error: string; resolvedPath?: string; code?: 'file-too-large' } {
+  return { ok: false, error: prep.err,
+    ...(prep.resolvedPath !== undefined ? { resolvedPath: prep.resolvedPath } : {}),
+    ...(prep.code ? { code: prep.code } : {}) }
 }
 
 /**
@@ -699,6 +703,24 @@ export function buildHandlers(
       const results = await applyDecisions(ctx, sc.session, sc.cwd, bucket, Array.isArray(args.items) ? args.items : [])
       return { ok: true, results }
     },
+    /** @author ddj 2026年10月22号 @param args Read-only request. @returns Bounded official range read, or unsupported on older providers; never bypasses Host IO. */
+    'edrv.textPage': async (args) => {
+      const sc = await requireSession(ctx, args.sessionId)
+      if ('err' in sc) return { ok: false, error: sc.err, reason: 'read-failed' }
+      try {
+        const target = await resolveTarget(ctx, sc.session, args.path)
+        const fs = ctx.get('fs')
+        if (typeof fs?.readByteRange !== 'function' || typeof fs.stat !== 'function') return readTextPage(undefined, args)
+        // Keys are opaque identities, never decoded into physical paths. Both legacy string and official FsTarget are supported.
+        const targetKey = typeof target === 'string' ? target : (target as { targetKey?: unknown }).targetKey
+        if (typeof targetKey !== 'string') return readTextPage(undefined, args)
+        /** @author ddj 2026年10月22号 @returns Provider metadata used for before/after freshness checks. */
+        function statPage() { return fs.stat(target) }
+        /** @author ddj 2026年10月22号 @param offset Verified cursor position. @param length Bounded byte count. @returns Bytes through the official provider only. */
+        function readRange(offset: number, length: number) { return fs.readByteRange(target, { offset, length }) }
+        return readTextPage({ identity: JSON.stringify([sc.cwd, targetKey]), stat: statPage, readRange }, args)
+      } catch (error) { return { ok: false, error: '读取失败：' + String(error), reason: 'read-failed' } }
+    },
     'edrv.read': async (args) => {
       const settingsTarget = settingsTargetOf(ctx, args.path)
       if (settingsTarget && args.encoding !== 'base64') {
@@ -735,7 +757,7 @@ export function buildHandlers(
           const content = Buffer.from(bytes).toString('base64')
           return { ok: true, content, size: bytes.byteLength, encoding: 'base64', mime: binaryMimeOf(args.path), version: String(prep.info.version ?? '') }
         }
-        if ((prep.info.size ?? 0) > READ_CAP) return { ok: false, error: '文件过大（>8MB），不支持整文件预览' }
+        if ((prep.info.size ?? 0) > READ_CAP) return { ok: false, error: '文件过大（>8MB），不支持整文件预览', code: 'file-too-large' }
         const content = await prep.fs.readText(prep.target)
         return { ok: true, content, size: content.length, version: String(prep.info.version ?? '') }
       } catch (error) {

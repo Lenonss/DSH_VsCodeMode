@@ -28,8 +28,11 @@ function panelRegister(entries: Map<string, SidebarPanelDef>, notify: () => void
 export function createSidebarPanelRegistry(): SidebarPanelRegistry {
   const entries = new Map<string, SidebarPanelDef>()
   const listeners = new Set<() => void>()
+  /** @private @author ddj 2026年10月22号 @description Isolate subscribers and snapshot notification membership against reentrant changes. */
   const notify = (): void => {
-    for (const listener of listeners) listener()
+    for (const listener of [...listeners]) {
+      try { listener() } catch { /* One extension must not block other subscribers or registration teardown. */ }
+    }
   }
   const list = (): readonly SidebarPanelDef[] =>
     [...entries.values()].sort((a, b) => (a.order ?? 100) - (b.order ?? 100))

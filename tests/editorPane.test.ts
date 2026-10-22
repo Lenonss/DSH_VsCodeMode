@@ -131,7 +131,7 @@ describe('actual workbench adapters', () => {
     let layout = createLayout([{ path: 'a' }, { path: 'b' }], 'a')
     layout = moveTab(layout, 'b', { kind: 'split', group: 'main', edge: 'right' })
     const renderWith = (planActive: string | null) => adapter('renderGroup', {
-      workbench: layout, dirtyMap: {}, planActive, React, EditorPane, GroupPathbar: () => null, PassiveEditor: () => null,
+      workbench: layout, dirtyMap: {}, planActive, sessionId: 'test-session', React, EditorPane, GroupPathbar: () => null, PassiveEditor: () => null,
       mountFull: () => {}, passiveMount: () => {}, scope: 'w', selectGroup: vi.fn(), closeTab: vi.fn(), paneMenu: vi.fn(), dragTab: vi.fn(), consumeDrag: () => false,
       // 页签行归属在组件体里算好（浮窗聚焦时回落到主组），renderGroup 只按 id 认领这一行。
       rowOwner: layout.focused, tabsHostRef: { current: null }, planTabExtras: [{}], rowTools: {},

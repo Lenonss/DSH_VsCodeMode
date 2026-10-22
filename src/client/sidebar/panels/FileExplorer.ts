@@ -28,7 +28,7 @@ import { useExplorerSvn } from './useExplorerSvn.js'
 import { useExplorerReveal, treeRevealPath } from './useExplorerReveal.js'
 import type { SidebarCtx } from '../types.js'
 
-const DIR_CAP = 4000
+import { flattenTree, treeAnchorTop, treeRevealTop, treeWindow, TREE_ROW_HEIGHT } from './treeWindow.js'
 const SAVE_DEBOUNCE_MS = 300
 const FOLLOW_INTERVAL_MS = 10_000
 const PREFETCH_MAX = 4
@@ -126,7 +126,8 @@ export function FileExplorer(props) {
   const saveTimerRef = React.useRef(null)
   const loadDirRef = React.useRef(null)
   const refreshRef = React.useRef(null)
-  const treeRef = React.useRef(null) // 目录树容器（定位时按 data-edrv-path 查行）
+  const treeRef = React.useRef(null) // 唯一目录树滚动容器
+  const [viewport, setViewport] = React.useState({ scope, top: 0, height: 0 })
   const reloadDirRef = React.useRef(null) // loadDir 最新闭包（文件变化监听读取，防陈旧闭包）
   const changedTimerRef = React.useRef(null) // 文件变化合并去抖计时器
   const changedRelRef = React.useRef(new Set()) // 待重列的相对目录集合（去抖窗口内合并）
@@ -338,8 +339,6 @@ export function FileExplorer(props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // 在恢复工作区展开状态之后跟随活动文件；隐藏期间目标由编辑器保留，重新挂载时兑现。
-  const { revealPath } = useExplorerReveal({ scope, activePath, treeRef, prepare: prepareReveal })
   const activeTreePath = treeRevealPath(activePath)
 
   // 10s 轻量跟随：已展开目录后台刷新（命中 host 索引，近零成本），树跟随 agent 写入
@@ -355,24 +354,71 @@ export function FileExplorer(props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scope])
 
-  /** @private @author ddj 2026年10月10号 @returns Expanded tree descriptors; icon refreshes never re-walk the tree. */
-  function flatten() {
-    const result = []
-    /** @private @author ddj 2026年10月10号 @param rel Directory. @param depth Indent level. Appends only expanded rows and placeholders. */
-    function visit(rel, depth) {
-      const entries = dirs[rel] ?? entriesCacheGet(scope, rel)
-      if (!entries) { result.push({ key: rel + ':loading', depth, text: loading[rel] ? '加载中…' : '无法加载' }); return }
-      for (const e of entries) {
-        const isDir = e.type === 'directory', isOpen = expanded[e.path] === true
-        result.push({ key: e.path, e, depth, isDir, isOpen })
-        if (isDir && isOpen) visit(e.path, depth + 1)
-      }
-      if (entries.length >= DIR_CAP) result.push({ key: rel + ':cap', depth, text: '目录条目过多，仅显示前 ' + DIR_CAP + ' 项' })
-    }
-    visit('', 0)
-    return result
-  }
+  /** @private @author ddj 2026年10月22号 @returns Complete expanded model; icon-only updates do not flatten again. */
+  function flatten() { return flattenTree(entriesOf, expanded, loading) }
   const treeRows = React.useMemo(flatten, [dirs, expanded, loading, scope])
+  const previousRows = React.useRef({ scope, rows: treeRows })
+  let anchoredTop = 0
+  if (viewport.scope === scope) {
+    anchoredTop = viewport.top
+    if (previousRows.current.scope === scope && previousRows.current.rows !== treeRows) {
+      anchoredTop = treeAnchorTop(previousRows.current.rows, treeRows, viewport.top)
+    }
+  }
+  const currentViewport = { top: anchoredTop, height: viewport.height }
+  const windowRows = treeWindow(treeRows.length, currentViewport)
+
+  /** @private @author ddj 2026年10月22号 Read current geometry after scroll, resize or scope restoration. */
+  function measureTree() {
+    const host = treeRef.current
+    if (!host || host.clientHeight <= 0) return
+    setViewport({ scope, top: host.scrollTop, height: host.clientHeight })
+  }
+  const scrollFrame = React.useRef(null)
+  /** @private @author ddj 2026年10月22号 Coalesce high-frequency scrolling into one measured render per frame. */
+  function scrollTree() {
+    if (scrollFrame.current !== null) return
+    scrollFrame.current = requestAnimationFrame(readScroll)
+  }
+  /** @private @author ddj 2026年10月22号 Read only after the pending animation frame fires. */
+  function readScroll() { scrollFrame.current = null; measureTree() }
+  /** @private @author ddj 2026年10月22号 @returns Resize observer and pending frame cleanup. Keep hidden trees measurable when shown. */
+  function watchTree() {
+    const observer = typeof ResizeObserver === 'function' ? new ResizeObserver(measureTree) : null
+    if (treeRef.current) observer?.observe(treeRef.current)
+    measureTree()
+    /** @private @author ddj 2026年10月22号 Stop all viewport callbacks owned by this scope. */
+    function cleanup() {
+      observer?.disconnect()
+      if (scrollFrame.current !== null) cancelAnimationFrame(scrollFrame.current)
+      scrollFrame.current = null
+    }
+    return cleanup
+  }
+  React.useLayoutEffect(watchTree, [scope])
+  /** @private @author ddj 2026年10月22号 Clamp actual scroll after collapse, filtering, or workspace switch. */
+  function clampTree() {
+    const host = treeRef.current
+    previousRows.current = { scope, rows: treeRows }
+    if (!host || host.clientHeight <= 0) return
+    if (host.scrollTop !== windowRows.top) host.scrollTop = windowRows.top
+    if (viewport.scope !== scope || viewport.top !== windowRows.top) {
+      setViewport({ scope, top: windowRows.top, height: host.clientHeight })
+    }
+  }
+  React.useLayoutEffect(clampTree, [scope, windowRows.top, treeRows])
+  /** @private @author ddj 2026年10月22号 @param path Requested file. @returns Whether its complete model row is available. */
+  function locateTree(path) {
+    const host = treeRef.current
+    if (!host) return false
+    const top = treeRevealTop(treeRows, path, { top: host.scrollTop, height: host.clientHeight })
+    if (top === null) return false
+    host.scrollTop = top
+    setViewport({ scope, top, height: host.clientHeight })
+    return true
+  }
+  // 定位由完整数据索引兑现，目标无需预先挂载 DOM；异步祖先加载后 hook 会重试。
+  const { revealPath } = useExplorerReveal({ scope, activePath, treeRef, prepare: prepareReveal, locate: locateTree })
   /** @private @author ddj 2026年10月10号 @returns Stable RPC row projection, independent of icon-only renders. */
   function projectRows() { return treeRows.filter((row) => row.e).map((row) => ({ path: row.e.path, isDir: row.isDir })) }
   const svnRows = React.useMemo(projectRows, [treeRows])
@@ -384,10 +430,10 @@ export function FileExplorer(props) {
   /** @private @author ddj 2026年10月10号 @param path Row path. @param type Entry type. @param event Context trigger. */
   function contextRow(path, type, event) {
     event.preventDefault(); event.stopPropagation()
-    setMenu({ x: event.clientX, y: event.clientY, target: { path, type } })
+    setMenu({ scope, x: event.clientX, y: event.clientY, target: { path, type } })
   }
   const onSelect = React.useCallback((path, isDir) => selectRef.current(path, isDir), [])
-  const onContext = React.useCallback(contextRow, [])
+  const onContext = React.useCallback(contextRow, [scope])
   const rootName = root ? String(root).split(/[\\/]/).pop() || root : ''
 
   /** @private @author ddj 2026年10月10号 @param row Flat descriptor. @returns Memo row; unaffected status objects retain identity. */
@@ -405,10 +451,14 @@ export function FileExplorer(props) {
     ev.preventDefault()
     ev.stopPropagation()
     if (!ev.currentTarget.contains(ev.target)) return
-    setMenu({ x: ev.clientX, y: ev.clientY, target: { path: '', type: 'directory' } })
+    setMenu({ scope, x: ev.clientX, y: ev.clientY, target: { path: '', type: 'directory' } })
   }
+  const menuValid = menu?.scope === scope && (menu.target.path === '' || treeRows.some((row) => row.e?.path === menu.target.path))
+  /** @private @author ddj 2026年10月22号 Close stale path menus instead of rebinding recycled rows. */
+  function closeLostMenu() { if (menu && !menuValid) setMenu(null) }
+  React.useEffect(closeLostMenu, [menu, menuValid])
   // 当前右键目标的可视菜单项（构建时过滤/排序，registry 变化下次打开生效）。
-  const menuEntries = menu
+  const menuEntries = menuValid
     ? buildTreeMenu(ctx?.fileMenuItems, menu.target, ctx).map((item) => ({
         id: item.id,
         label: item.label,
@@ -443,13 +493,16 @@ export function FileExplorer(props) {
       }, '↓') : null,
       React.createElement('button', { className: 'edrv-side-btn', title: '刷新目录树', onClick: () => emitRefresh({ scope, kind: 'unknown' }) }, refreshIconEl())),
     svn.message ? React.createElement('div', { className: 'edrv-tree-status', role: 'status' }, svn.message) : null,
-    React.createElement('div', { className: 'edrv-tree', ref: treeRef },
-      (errorText
+    (errorText
         ? React.createElement('div', { className: 'edrv-tree-error' },
             React.createElement('span', null, String(errorText)),
             React.createElement('button', { className: 'edrv-side-btn', onClick: () => emitRefresh({ scope, kind: 'unknown' }) }, '重试'))
         : null),
-      treeRows.map(renderRow)),
+    React.createElement('div', { className: 'edrv-tree edrv-tree-virtual', ref: treeRef, onScroll: scrollTree },
+      React.createElement('div', { 'aria-hidden': true, style: { height: windowRows.start * TREE_ROW_HEIGHT } }),
+      treeRows.slice(windowRows.start, windowRows.end).map(renderRow),
+      React.createElement('div', { 'aria-hidden': true, style: { height: (treeRows.length - windowRows.end) * TREE_ROW_HEIGHT } })),
+
     (menu && menuEntries.length
       ? React.createElement(ContextMenu, { x: menu.x, y: menu.y, entries: menuEntries, onClose: () => setMenu(null) })
       : null))

@@ -71,11 +71,18 @@ function hostConfig(): UserConfig {
   }
 }
 
-/** Client bundle config (format cjs + browser + ModuleLoader wrapper). */
-function clientConfig(): UserConfig {
+/** @private @author ddj 2026年10月22号 @param panel Optional independent built-in panel entry. @returns Browser CJS config using the documented ModuleLoader chunk handoff. */
+function clientConfig(panel?: 'rules' | 'debug'): UserConfig {
+  const chunk = panel ? `client.${panel}.js` : undefined
+  const shared = new Map([
+    [resolvePath('src/client/rpc.ts'), ['rpc', 'dbg']],
+    [resolvePath('src/client/dap/store.ts'), ['dapStore']],
+    [resolvePath('src/client/dap/BpWidget.ts'), ['BP_MODE', 'MODES', 'fieldOfMode']],
+    [resolvePath('src/client/ui/ContextMenu.ts'), ['ContextMenu']],
+  ])
   return {
-    name: `${ID}/client`,
-    entry: { client: 'src/client/index.ts' },
+    name: `${ID}/${panel ?? 'client'}`,
+    entry: panel ? { [panel]: `src/client/sidebar/panels/${panel === 'rules' ? 'RulesPanel' : 'DebugPanel'}.ts` } : { client: 'src/client/index.ts' },
     outDir: 'lib',
     format: 'cjs',
     platform: 'browser',
@@ -83,8 +90,24 @@ function clientConfig(): UserConfig {
     clean: false,
     sourcemap: true,
     // Inline everything not in the loader module table (our own code).
-    noExternal: (source: string) => (CLIENT_EXTERNALS.includes(source) ? undefined : true),
+    external: panel ? [ID, ...CLIENT_EXTERNALS] : CLIENT_EXTERNALS,
+    noExternal: (source: string) => (CLIENT_EXTERNALS.includes(source) || (panel && source === ID) ? undefined : true),
     plugins: [
+      {
+        name: 'dsh-shared-panel-state',
+        /** @author ddj 2026年10月22号 @param source Import request. @param importer Requesting module. @returns Virtual bridge only for shared live root objects. */
+        resolveId(source: string, importer: string | undefined) {
+          if (!panel || !importer || !source.startsWith('.')) return null
+          const target = resolvePath(dirname(importer), source).replace(/\.js$/, '.ts')
+          return shared.has(target) ? '\0panel-shared:' + target : null
+        },
+        /** @author ddj 2026年10月22号 @param id Resolved bridge. @returns Named exports from the already materialized root plugin; never duplicate stores. */
+        load(id: string) {
+          if (!id.startsWith('\0panel-shared:')) return null
+          const names = shared.get(id.slice('\0panel-shared:'.length))!
+          return `import { __lazyShared } from '${ID}';\n` + names.map((name) => `export const ${name} = __lazyShared.${name};`).join('\n')
+        },
+      },
       {
         // Inline plain .css as an injected <style data-plugin-css> tag.
         name: 'dsh-css-inline',
@@ -116,13 +139,13 @@ function clientConfig(): UserConfig {
       },
     ],
     outputOptions: {
-      entryFileNames: 'client.js',
-      banner: `window.__ModuleLoader__.load({ id: ${JSON.stringify(ID)}, factory: (require) => {`,
-      footer: 'return module.exports; } });',
+      entryFileNames: chunk ?? 'client.js',
+      banner: `window.__ModuleLoader__.load({ id: ${JSON.stringify(ID)}, ${chunk ? `chunk: ${JSON.stringify(chunk)}, ` : ''}factory: (require) => {`,
+      footer: panel ? 'return module.exports; } });' : 'module.exports.__setPanelImport(require.async?.bind(require)); return module.exports; } });',
       intro: 'var module = { exports: {} }; var exports = module.exports;',
       codeSplitting: false,
     },
   }
 }
 
-export default [hostConfig(), clientConfig()] satisfies UserConfig[]
+export default [hostConfig(), clientConfig(), clientConfig('rules'), clientConfig('debug')] satisfies UserConfig[]

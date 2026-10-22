@@ -27,6 +27,8 @@ interface RevealOptions {
   activePath: string | null
   treeRef: React.RefObject<HTMLElement>
   prepare: (path: string) => void
+  /** Optional virtual-list locator; success does not depend on mounted row DOM. */
+  locate?: (path: string) => boolean
 }
 interface RevealTarget {
   scope: string
@@ -60,12 +62,13 @@ export function useExplorerReveal(options: RevealOptions) {
     setTarget(next)
     if (next) current.prepare(next.path)
   }
-  /** @private @author ddj 2026年10月14号 Attempts the latest target after row commit or container resize. Consumes only a successful, current request. */
+  /** @private @author ddj 2026年10月22号 Attempts virtual data-index location or the original mounted-row fallback after commit/resize; consumes only a successful current request. */
   function tryReveal(): void {
     const next = pending.current
     const current = latest.current
     if (!next || next.scope !== current.scope || next.active !== current.activePath) return
-    if (!revealTreeRow(current.treeRef.current, next.path)) return
+    const located = current.locate ? current.locate(next.path) : revealTreeRow(current.treeRef.current, next.path)
+    if (!located) return
     pending.current = null
     setRevealPath(next.path)
     clearHighlight()

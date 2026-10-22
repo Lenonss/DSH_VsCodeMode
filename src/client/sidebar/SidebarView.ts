@@ -10,6 +10,7 @@
  */
 import React from 'react'
 import type { SidebarCtx } from './types.js'
+import { inspectPanel, PanelBoundary, PanelContent } from './PanelBoundary.js'
 
 const W_MAX = 560
 /** 面板区隐藏时容器的宽度（= 图标列宽，与 editor.css .edrv-rail 对齐）。 */
@@ -50,9 +51,8 @@ function railIconEl(icon) {
 export function SidebarView(props) {
   const ctx = props.ctx
   // 按 visible(ctx) 过滤活动栏图标与面板（能力相关面板：SVN 变更仅在受 SVN 管理时出现）
-  const panels = (props.registry?.list?.() ?? []).filter((panel) => (
-    typeof panel.visible !== 'function' || panel.visible(ctx) === true
-  ))
+  const checked = (props.registry?.list?.() ?? []).map((panel) => inspectPanel(panel, ctx)).filter(Boolean)
+  const panels = checked.map((entry) => entry.panel)
   const activePanel = props.activePanel
   const onActive = props.onActive
   const visible = props.visible !== false
@@ -64,27 +64,66 @@ export function SidebarView(props) {
 
   const active = panels.find((p) => p.id === activePanel) || panels[0]
 
+  const dragCleanup = React.useRef(null)
+  /** @private @author ddj 2026年10月22号 @description End the active drag; safe on repeated teardown. */
+  function stopDrag() { dragCleanup.current?.() }
+  const seamOpening = React.useRef(false)
+  const lastVisible = React.useRef(visible)
+  /** @private @author ddj 2026年10月22号 @description Always release listeners on unmount, including a pending seam expansion. */
+  function dragEffect() { return stopDrag }
+  React.useEffect(dragEffect, [])
+  /** @private @author ddj 2026年10月22号 @description Preserve only the seam's own expansion; external visibility changes cancel ownership. */
+  function visibilityEffect() {
+    if (lastVisible.current !== visible) {
+      if (!(visible && seamOpening.current)) stopDrag()
+      seamOpening.current = false
+      lastVisible.current = visible
+    }
+  }
+  React.useEffect(visibilityEffect, [visible])
+
+  /** @private @author ddj 2026年10月22号 @param pointerId Owning pointer. @param move Pointer movement callback. @description Replace the previous drag and own every exit path. */
+  function bindDrag(pointerId, move) {
+    stopDrag()
+    /** @author ddj 2026年10月22号 @param event Pointer event. @description Ignore another pointer's movement. */
+    function onMove(event) { if (event.pointerId === pointerId) move(event) }
+    /** @author ddj 2026年10月22号 @param event Pointer completion. @description Only the owning pointer ends the drag. */
+    function onEnd(event) { if (event.pointerId === pointerId) cleanup() }
+    /** @author ddj 2026年10月22号 @description Remove all drag listeners and release ownership. */
+    function cleanup() {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onEnd)
+      window.removeEventListener('pointercancel', onEnd)
+      window.removeEventListener('blur', cleanup)
+      if (dragCleanup.current === cleanup) {
+        dragCleanup.current = null
+        seamOpening.current = false
+      }
+    }
+    dragCleanup.current = cleanup
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onEnd)
+    window.addEventListener('pointercancel', onEnd)
+    window.addEventListener('blur', cleanup)
+  }
+
+  /** @private @author ddj 2026年10月22号 @param e Starting pointer. @description Resize the visible panel until completion or collapse. */
   const onPointerDown = (e) => {
     e.preventDefault()
     const startX = e.clientX
     const startW = width
-    const cleanup = () => {
-      window.removeEventListener('pointermove', onMove)
-      window.removeEventListener('pointerup', onUp)
-    }
-    const onUp = () => cleanup()
+    /** @author ddj 2026年10月22号 @param ev Owning pointer movement. @description Apply this drag's width calculation. */
     const onMove = (ev) => {
       const raw = startW + (ev.clientX - startX)
       // 低于最小宽度：清理监听并直接收起面板区（不夹住）
       if (raw < wMin) {
-        cleanup()
+        stopDrag()
         onHide()
         return
       }
       onWidth(Math.min(W_MAX, raw))
     }
-    window.addEventListener('pointermove', onMove)
-    window.addEventListener('pointerup', onUp)
+    bindDrag(e.pointerId, onMove)
 
   }
 
@@ -98,29 +137,25 @@ export function SidebarView(props) {
     const baseW = Math.max(wMin, Math.min(W_MAX, Math.round(Number(width) || wMin)))
     let expanded = false
     let expandStartX = 0
-    const cleanup = () => {
-      window.removeEventListener('pointermove', onMove)
-      window.removeEventListener('pointerup', onUp)
-    }
-    const onUp = () => cleanup()
+    /** @author ddj 2026年10月22号 @param ev Owning pointer movement. @description Apply this drag's width calculation. */
     const onMove = (ev) => {
       if (!expanded) {
         if (ev.clientX - startX < PULL_OUT_THRESHOLD) return
         expanded = true
         expandStartX = ev.clientX
+        seamOpening.current = true
         onShow()
         return
       }
       onWidth(Math.max(wMin, Math.min(W_MAX, baseW + (ev.clientX - expandStartX))))
     }
-    window.addEventListener('pointermove', onMove)
-    window.addEventListener('pointerup', onUp)
+    bindDrag(e.pointerId, onMove)
   }
 
   const rail = React.createElement('div', { className: 'edrv-rail' },
     React.createElement('div', { style: { flex: 1, display: 'flex', flexDirection: 'column', gap: 2 } },
       panels.map((p) => {
-        const count = typeof p.badge === 'function' ? p.badge(ctx) : null
+        const count = checked.find((entry) => entry.panel === p)?.badge
         return React.createElement('button', {
           key: p.id,
           className: 'edrv-rail-btn' + (visible && active && p.id === active.id ? ' edrv-rail-on' : ''),
@@ -131,7 +166,8 @@ export function SidebarView(props) {
             if (!visible && typeof onShow === 'function') onShow()
           },
         },
-          React.createElement('span', { className: 'edrv-rail-icon' }, railIconEl(p.icon)),
+          React.createElement('span', { className: 'edrv-rail-icon' },
+            React.createElement(PanelBoundary, { panel: p, scope: ctx?.scope, sessionId: ctx?.sessionId, compact: true }, railIconEl(p.icon))),
           count > 0
             ? React.createElement('span', { className: 'edrv-rail-badge' }, String(count))
             : null)
@@ -150,7 +186,8 @@ export function SidebarView(props) {
     rail,
     visible
       ? React.createElement('div', { className: 'edrv-side-body' },
-          active ? active.render(ctx) : null)
+          active ? React.createElement(PanelBoundary, { panel: active, scope: ctx?.scope, sessionId: ctx?.sessionId },
+            React.createElement(PanelContent, { panel: active, ctx })) : null)
       : null,
     visible
       ? React.createElement('div', { className: 'edrv-side-resize', onPointerDown: onPointerDown })

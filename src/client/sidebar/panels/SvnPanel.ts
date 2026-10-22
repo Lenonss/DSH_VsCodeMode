@@ -484,7 +484,7 @@ export function SvnPanel(props) {
   const [remote, setRemote] = React.useState(null)
   const [remoteBusy, setRemoteBusy] = React.useState(false)
   // W2-5：配对候选的文件大小（path → size|null）与成对结果
-  const [sizes, setSizes] = React.useState({})
+  const [sizeSnapshot, setSizes] = React.useState(null)
   // 渐进渲染预算：过滤/作用域变化时重置，避免过滤后仍停留在旧的大预算
   const [renderLimit, setRenderLimit] = React.useState(RENDER_STEP)
   // ctx 由编辑区每轮渲染重建；行动作回调改读 ref 取最新值，回调身份才能稳定（行 React.memo 生效前提）
@@ -606,14 +606,30 @@ export function SvnPanel(props) {
     () => [...missingEntries, ...unversionedEntries].slice(0, FILE_SIZES_CAP).map((entry) => entry.path),
     [missingEntries, unversionedEntries],
   )
-  const candidateKey = React.useMemo(() => requested.join('\n'), [requested])
-  const pairsNeeded = missingEntries.length > 0 && unversionedEntries.length > 0
+  const candidateKey = JSON.stringify(requested)
+  const sizeOwner = JSON.stringify([scope, sessionId, candidateKey, managed])
+  const sizeOwnerRef = React.useRef(sizeOwner)
+  sizeOwnerRef.current = sizeOwner
+  const sizes = sizeSnapshot?.owner === sizeOwner ? sizeSnapshot.table : {}
+  const pairsNeeded = managed && missingEntries.length > 0 && unversionedEntries.length > 0
   const pairsKnown = pairsNeeded && requested.every((path) => path in sizes)
-  React.useEffect(() => {
-    if (pairsKnown || !requested.length) return
-    void svnFileSizes(sessionId, requested).then((table) => setSizes(table))
-    // requested 内容由 candidateKey 代理：同 key 必同内容，闭包取旧数组无碍（去重语义与旧 join 依赖一致）
-  }, [pairsKnown, candidateKey, sessionId]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  /** @private @author ddj 2026年10月22号 @returns Cleanup invalidating this request. @description Keep sizes scoped to this candidate generation; failures do not retry in a render loop. */
+  function loadPairSizes() {
+    if (!pairsNeeded || !requested.length) return
+    let disposed = false
+    /** @author ddj 2026年10月22号 @param table Candidate sizes. @description Publish only to the current request owner. */
+    function acceptSizes(table) {
+      if (!disposed && sizeOwnerRef.current === sizeOwner) setSizes({ owner: sizeOwner, table })
+    }
+    /** @author ddj 2026年10月22号 @description Failed reads leave pairing unknown without breaking the changes list. */
+    function ignoreFailure() { /* A future candidate/session change may retry. */ }
+    /** @author ddj 2026年10月22号 @description Revoke this request on dependency change or unmount. */
+    function cancelSizes() { disposed = true }
+    void svnFileSizes(sessionId, requested).then(acceptSizes, ignoreFailure)
+    return cancelSizes
+  }
+  React.useEffect(loadPairSizes, [sizeOwner, pairsNeeded])
 
   const pairNoteOf = React.useMemo(() => {
     if (!pairsKnown) return {}

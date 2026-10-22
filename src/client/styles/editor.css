@@ -305,6 +305,14 @@
 [data-edrv-view] .edrv-side-btn { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border: none; border-radius: 6px; background: transparent; color: var(--dsw-alias-label-secondary, #52606d); font-size: 12px; cursor: pointer; flex-shrink: 0; }
 [data-edrv-view] .edrv-side-btn:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(15,157,88,.08)); }
 [data-edrv-view] .edrv-tree { flex: 1; min-height: 0; overflow: auto; padding: 4px 6px 12px; font-size: 12px; }
+/* Virtual rows and placeholders share the same geometry as treeWindow.ts. @author ddj 2026年10月22号 */
+[data-edrv-view] .edrv-tree.edrv-tree-virtual { padding-top: 0; padding-bottom: 0; }
+[data-edrv-view] .edrv-tree-virtual .edrv-tree-row,
+[data-edrv-view] .edrv-tree-virtual .edrv-tree-loading { height: 24px; min-height: 24px; box-sizing: border-box; }
+[data-edrv-view] .edrv-tree-virtual .edrv-tree-loading { line-height: 24px; }
+[data-edrv-view] .edrv-large-text { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+[data-edrv-view] .edrv-large-text-toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+[data-edrv-view] .edrv-large-text-content { margin: 0; flex: 1; min-height: 0; overflow: auto; white-space: pre; font-family: var(--ds-font-family-code, ui-monospace, monospace); user-select: text; }
 [data-edrv-view] .edrv-tree-row { display: flex; align-items: center; gap: 4px; height: 22px; padding-right: 6px; border-radius: 5px; color: var(--dsw-alias-label-primary, #1f2933); cursor: pointer; white-space: nowrap; }
 [data-edrv-view] .edrv-tree-row:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(15,157,88,.08)); }
 [data-edrv-view] .edrv-tree-row.edrv-tree-active { background: var(--dsw-alias-interactive-bg-hover, rgba(15,157,88,.14)); }

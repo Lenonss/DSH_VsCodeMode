@@ -76,6 +76,14 @@ import { flushPageState, flushUiState, hydrateUiState, installUiStatePersist, on
 import { workspaceScopeOf } from './state/scopeStore.js'
 import { dapStore } from './dap/store.js'
 import type { CompatAdapter } from '../shared/compat.js'
+import { setPanelImport } from './lazyPanel.js'
+import { dbg } from './rpc.js'
+import { BP_MODE, MODES, fieldOfMode } from './dap/BpWidget.js'
+import { ContextMenu } from './ui/ContextMenu.js'
+
+/** Root-owned live objects shared with independent panel chunks; no copied stores or transport state. */
+export const __lazyShared = { rpc, dbg, dapStore, BP_MODE, MODES, fieldOfMode, ContextMenu }
+export { setPanelImport as __setPanelImport }
 
 // ⚠️ inject 只列必需服务：webUiSettings 是 @linxin666/dsh-client-ui-web-ui-settings 提供的
 // 可选兼容桥（非官方服务），列入 inject 会让未装该桥的部署启动时 entry 永久 pending，
@@ -692,6 +700,7 @@ export async function apply(ctx: any): Promise<void> {
   // 注销挂在存活的 window.monaco 上的全部 Monaco provider 并复位模块状态。
   // 不做会导致重载后重复注册（补全/跳转/hover 各翻倍）与陈旧开关残留。
   ctx.effect(() => () => {
+    setPanelImport()
     try { disposeSnippets() } catch { /* 卸载异常不得阻断其余清理 */ }
     try { disposeLaunchJson() } catch { /* 同上 */ }
     try { disposeAiInline() } catch { /* 同上 */ }

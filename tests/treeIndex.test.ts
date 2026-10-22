@@ -7,7 +7,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { access, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
+import type { TreeEntry } from '../src/shared/rpc.js'
 import {
   ancestorsOf,
   disposeIndex,
@@ -17,7 +18,11 @@ import {
   indexSerialize,
   invalidateIndex,
   listDirCached,
+  MEM_MAX_DIRS,
+  PERSIST_DIR_ENTRIES,
+  putIndex,
   relOf,
+  TREE_TTL_MS,
   trimPersist,
 } from '../src/treeIndex.js'
 import { LEGACY_TREE_SIDECARS, pluginCacheRoot, treeCacheFile } from '../src/paths.js'
@@ -121,10 +126,52 @@ describe('indexSerialize/indexParse', () => {
     const text = JSON.stringify({ v: 1, root: null, dirs: { 'a': { ts: 1, full: true, entries: [{ name: 'ok', type: 'file' }, { bad: 1 }, 'x'] } } })
     const data = indexParse(text)
     expect(data!.dirs['a'].entries).toEqual([{ name: 'ok', path: 'a/ok', type: 'file' }])
+    expect(data!.dirs['a'].full).toBe(false)
   })
 })
 
+/**
+ * @private
+ * @author ddj 2026年10月22号
+ * @description 写入 v1 暖启动快照，供完整性和并发恢复用例读取。
+ * @param entries 持久化目录条目
+ * @param full 快照是否完整
+ * @returns 快照落盘完成
+ */
+async function seedSnapshot(entries: TreeEntry[], full: boolean): Promise<void> {
+  const cachePath = treeCacheFile(root)
+  await mkdir(dirname(cachePath), { recursive: true })
+  await writeFile(cachePath, indexSerialize({
+    v: 1,
+    root,
+    dirs: { src: { ts: Date.now(), full, entries } },
+  }), 'utf8')
+}
+
+/**
+ * @private
+ * @author ddj 2026年10月22号
+ * @description 创建内存目录样本，不产生实际工作区文件。
+ * @param count 条目数量
+ * @returns 完整目录条目
+ */
+function sampleEntries(count: number): TreeEntry[] {
+  return Array.from({ length: count }, (_, index) => ({
+    name: `f${index}.ts`, path: `src/f${index}.ts`, type: 'file',
+  }))
+}
+
 describe('trimPersist', () => {
+  it('短的不完整快照裁剪或重复往返后仍不完整', () => {
+    const snapshot = { v: 1 as const, root: null, dirs: {
+      src: { ts: 1000, full: false, entries: sampleEntries(1) },
+    } }
+    const trimmed = trimPersist(snapshot)
+    expect(trimmed.dirs.src.full).toBe(false)
+    expect(trimPersist(indexParse(indexSerialize(trimmed))!).dirs.src.full).toBe(false)
+    expect(snapshot.dirs.src.entries).toHaveLength(1)
+  })
+
   it('目录按 ts 裁旧、条目截断标 full=false、root 保留', () => {
     const data = {
       v: 1 as const,
@@ -145,6 +192,92 @@ describe('trimPersist', () => {
 })
 
 describe('状态机（真实临时目录 + 假 ctx + 临时 DSH_HOME）', () => {
+  it('热目录反复命中也在确认后 60s 到期；强制重列重新计时', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(1_000_000)
+    const ctx = makeCtx(root)
+    await mkdir(join(root, 'src'))
+    await writeFile(join(root, 'src', 'a.ts'), 'a')
+    await listDirCached(ctx, root, 'src', false)
+
+    for (const elapsed of [20_000, 40_000, TREE_TTL_MS - 1]) {
+      vi.setSystemTime(1_000_000 + elapsed)
+      expect(hitIndex(root, 'src')).toHaveLength(1)
+    }
+    vi.setSystemTime(1_000_000 + TREE_TTL_MS)
+    expect(hitIndex(root, 'src')).toBeNull()
+    await listDirCached(ctx, root, 'src', true)
+    expect(hitIndex(root, 'src')).toHaveLength(1)
+    vi.setSystemTime(1_000_000 + TREE_TTL_MS * 2)
+    expect(hitIndex(root, 'src')).toBeNull()
+  })
+
+  it('LRU 独立于确认时间，同毫秒命中保留热目录且新写不推迟 TTL', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(1_000_000)
+    const ctx = makeCtx(root)
+    // 等首次空快照加载结束，避免加载与批量 put 的无关竞态。
+    await listDirCached(ctx, root, '', false)
+    const entries = sampleEntries(1)
+    for (let index = 0; index < MEM_MAX_DIRS; index++) {
+      putIndex(ctx, root, `dir${index}`, entries)
+    }
+    expect(hitIndex(root, 'dir0')).toBe(entries)
+    putIndex(ctx, root, 'overflow', entries)
+    expect(hitIndex(root, 'dir0')).toBe(entries)
+    expect(hitIndex(root, 'dir1')).toBeNull()
+    expect(hitIndex(root, 'overflow')).toBe(entries)
+
+    vi.setSystemTime(1_000_000 + TREE_TTL_MS)
+    expect(hitIndex(root, 'overflow')).toBeNull()
+    expect(hitIndex(root, 'dir0')).toBeNull()
+  })
+
+  it('大目录内存完整可命中，落盘裁剪不改原始完整性', async () => {
+    const ctx = makeCtx(root)
+    await listDirCached(ctx, root, '', false)
+    const entries = sampleEntries(PERSIST_DIR_ENTRIES + 1)
+    putIndex(ctx, root, 'src', entries)
+    expect(hitIndex(root, 'src')).toBe(entries)
+    const trimmed = trimPersist({ v: 1, root, dirs: {
+      src: { ts: Date.now(), full: true, entries },
+    } })
+    expect(trimmed.dirs.src.full).toBe(false)
+    expect(trimmed.dirs.src.entries).toHaveLength(PERSIST_DIR_ENTRIES)
+    expect(hitIndex(root, 'src')).toHaveLength(PERSIST_DIR_ENTRIES + 1)
+  })
+
+  it('短的不完整 v1 快照不能命中，并发调用只实列一次后恢复完整', async () => {
+    await mkdir(join(root, 'src'))
+    await writeFile(join(root, 'src', 'a.ts'), 'a')
+    await writeFile(join(root, 'src', 'b.ts'), 'b')
+    await seedSnapshot(sampleEntries(1), false)
+    const ctx = makeCtx(root)
+    const resolveSpy = vi.spyOn(ctx.get('fs')!, 'resolve')
+    const results = await Promise.all(Array.from({ length: 8 }, () => listDirCached(ctx, root, 'src', false)))
+    for (const result of results) {
+      expect('entries' in result && result.entries.map((entry) => entry.name)).toEqual(['a.ts', 'b.ts'])
+    }
+    expect(resolveSpy).toHaveBeenCalledTimes(1)
+    expect(hitIndex(root, 'src')?.map((entry) => entry.name)).toEqual(['a.ts', 'b.ts'])
+  })
+
+  it('完整空目录 v1 快照可命中，不完整空快照必须重列', async () => {
+    await mkdir(join(root, 'src'))
+    await writeFile(join(root, 'src', 'a.ts'), 'a')
+    await seedSnapshot([], true)
+    const ctx = makeCtx(root)
+    const resolveSpy = vi.spyOn(ctx.get('fs')!, 'resolve')
+    expect(await listDirCached(ctx, root, 'src', false)).toEqual({ entries: [], root })
+    expect(resolveSpy).not.toHaveBeenCalled()
+    disposeIndex(root)
+
+    await seedSnapshot([], false)
+    const result = await listDirCached(ctx, root, 'src', false)
+    expect('entries' in result && result.entries.map((entry) => entry.name)).toEqual(['a.ts'])
+    expect(resolveSpy).toHaveBeenCalledTimes(1)
+  })
+
   it('命中/失效/force 重列：删除文件后 force 才见新列表', async () => {
     const ctx = makeCtx(root)
     await mkdir(join(root, 'src'))

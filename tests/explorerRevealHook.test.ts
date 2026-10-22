@@ -62,6 +62,32 @@ beforeEach(() => { reset(); vi.useFakeTimers(); vi.stubGlobal('window', new Even
 afterEach(() => { unmount(); vi.unstubAllGlobals(); vi.useRealTimers() })
 
 describe('explorer reveal lifecycle', () => {
+  it('virtual locator waits for model rows then highlights without querying mounted DOM', () => {
+    const f = fixture()
+    const locate = vi.fn().mockReturnValue(false)
+    const options = { ...f.options, locate }
+    render(options); render(options)
+    expect(render(options).revealPath).toBeNull()
+    expect(locate).toHaveBeenCalledWith('a/b.ts')
+    locate.mockReturnValue(true)
+    render(options)
+    expect(render(options).revealPath).toBe('a/b.ts')
+    expect(f.query).not.toHaveBeenCalled()
+    expect(f.options.prepare).toHaveBeenCalledTimes(1)
+  })
+  it('virtual locator never consumes an old scope target when a new scope takes over', () => {
+    const f = fixture()
+    const locate = vi.fn().mockReturnValue(false)
+    const options = { ...f.options, locate }
+    render(options); render(options)
+    locate.mockClear(); locate.mockReturnValue(true)
+    options.scope = 'two'; options.activePath = 'new.ts'
+    render(options); render(options)
+    expect(locate).not.toHaveBeenCalledWith('a/b.ts')
+    expect(locate).toHaveBeenCalledWith('new.ts')
+    expect(render(options).revealPath).toBe('new.ts')
+    expect(f.query).not.toHaveBeenCalled()
+  })
   it('expands on mount and waits beyond the previous short retry window', () => {
     const f = fixture()
     render(f.options); render(f.options)

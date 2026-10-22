@@ -9,8 +9,10 @@
  */
 import React from 'react'
 import { createPortal } from 'react-dom'
+import { createRoot } from 'react-dom/client'
 import { EditorPane, EditorSplit, PassiveEditor, GroupPathbar } from './EditorPane.js'
 import { FloatingEditor } from './FloatingEditor.js'
+import { LargeTextView } from './LargeTextView.js'
 import { FloatingWindow } from './FloatingWindow.js'
 import { createLayout, parseLayout, syncTabs, ownerOf, focusGroup, moveTab, returnGroup, GROUP_LIMIT, MAIN_GROUP } from '../state/editorLayout.js'
 import { createTabDrag, hitTarget } from '../tabDrag.js'
@@ -318,6 +320,11 @@ export function EditorView(props) {
   const aiStatusTimer = React.useRef(null)
   const [error, setError] = React.useState(null)
   const [loadError, setLoadError] = React.useState(null)
+  const [largeCandidate, setLargeCandidate] = React.useState(null)
+  const [pagedFile, setPagedFile] = React.useState(null)
+  const [pageChanged, setPageChanged] = React.useState(null)
+  const pageIdentity = JSON.stringify([scope, sessionId, active])
+  const paging = pagedFile === pageIdentity
   const [loadStage, setLoadStage] = React.useState({ progress: 0, message: '准备加载编辑器…' })
   const [openInput, setOpenInput] = React.useState(false)
   const [pathDraft, setPathDraft] = React.useState('')
@@ -1013,6 +1020,9 @@ export function EditorView(props) {
     const seq = ++loadSeqRef.current
     setReceiptLoad({ path, cwd, sessionId: sid, sequence: seq, status: 'loading' })
     setLoadError(null)
+    setLargeCandidate(null)
+    setPagedFile(null)
+    setPageChanged(null)
     /**
      * 记下磁盘版本基线；markRead=true 表示本次真的从磁盘读了内容
      * （已读版本台账随之失效，下一轮轮询按新版本重新比对）。
@@ -1064,6 +1074,7 @@ export function EditorView(props) {
         setLoadStage((prev) => ({ progress: Math.max(84, prev.progress), message: '文件已读取，准备创建编辑器…' }))
         setStatus('已加载')
       } else {
+        if (res?.code === 'file-too-large') setLargeCandidate(JSON.stringify([scope, sid, path]))
         const base = res?.error ? String(res.error) : '读取失败'
         dapTrace('read-failed', { path, error: base, resolvedPath: res?.resolvedPath, cwd })
         // 带出 host 解析后的真实路径：跳转失败时一眼看出是路径解析错还是目标不存在
@@ -1222,7 +1233,7 @@ export function EditorView(props) {
    * @author ddj 2026年09月15号
    * @param change 轮询判定出的外部变更
    */
-  const onDiskChange = (change) => {
+  function onDiskChange(change) {
     if (!change || !change.path) return
     // 文件树同步：目录缓存按该路径失效并强制重列（外部新增/删除/改名都能看到）
     const eventId = emitFileChanged(change.path, { scope, kind: change.kind === 'deleted' ? 'structure' : 'text' })
@@ -1240,6 +1251,14 @@ export function EditorView(props) {
         recordBaseline(currentScope, change.path, result.version)
         clearSync(currentScope, change.path)
       }).catch(() => {})
+      return
+    }
+    if (change.kind === 'modified' && (paging || pageChanged === pageIdentity) && change.path === activeRef.current) {
+      // Invalidates the old page cursor immediately; retain an identity-scoped notice until explicit reread.
+      loadContent(change.path, sessionId, true)
+      setPageChanged(pageIdentity)
+      setStatus('文件已变化，请重新读取')
+      emitRefresh({ scope, paths: [change.path], kind: 'text', eventId })
       return
     }
     if (change.kind === 'modified') {
@@ -1264,7 +1283,10 @@ export function EditorView(props) {
    * @param path 文件路径
    * @returns 比对结果；模型不可用/读失败 → null（按「需要重载」处理）
    */
-  const readDiskCompare = (path) => {
+  function readDiskCompare(path) {
+    // A read-only page has no full Monaco buffer to compare. Acknowledge the observed
+    // version as changed so polling advances its baseline instead of invalidating every reread.
+    if (path === activeRef.current && (paging || pageChanged === pageIdentity)) return Promise.resolve({ equal: false })
     const model = modelsRef.current?.get(path)
     if (!model || typeof model.getValue !== 'function') return Promise.resolve(null)
     return rpc('edrv.read', { sessionId, path }).then((res) => {
@@ -3764,7 +3786,8 @@ export function EditorView(props) {
     }
   }, [])
 
-  const openPath = () => {
+  /** @private @author ddj 2026年10月22号 @description Probe a typed path; let oversized files enter the existing read-only paging flow. @returns Probe completion. */
+  function openPath() {
     const p = (pathDraft || '').trim()
     if (!p) return
     // 图片/PDF 文件跳过文本读探测（二进制会被 host 拒绝），直接进 tab 由专用预览接管
@@ -3774,8 +3797,9 @@ export function EditorView(props) {
       return
     }
     setStatus('打开中…')
-    rpc('edrv.read', { sessionId, path: p }).then((res) => {
-      if (res && res.ok) {
+    return rpc('edrv.read', { sessionId, path: p }).then((res) => {
+      // Only the explicit size-limit response may bypass the probe; other failures must remain visible.
+      if (res && (res.ok || res.code === 'file-too-large')) {
         openFile(p, false)
         setOpenInput(false); setPathDraft(''); setStatus('已打开'); setError(null)
       } else { setStatus('打开失败'); setError(res?.error ? String(res.error) : '打开失败') }
@@ -3907,9 +3931,19 @@ export function EditorView(props) {
     host.addEventListener('contextmenu', onCtx, true)
     return () => { unsubscribeBp?.(); host.removeEventListener('contextmenu', onCtx) }
   }
+  /** @private @author ddj 2026年10月22号 @param args Read-only page request. @returns Current Host capability result. */
+  function loadTextPage(args) { return rpc('edrv.textPage', args) }
+  /** @private @author ddj 2026年10月22号 @description Never replace a dirty or saving document with partial text. */
+  function openTextPages() {
+    if (largeCandidate !== pageIdentity || dirtyRef.current[active] || savingRef.current.has(active)) return
+    flushSave()
+    if (dirtyRef.current[active] || savingRef.current.has(active)) return
+    setPageChanged(null)
+    setPagedFile(pageIdentity)
+  }
   /** @private @author ddj 2026年10月16号 @param host Passive body. @param path Canonical file. @param groupId Owning group id（find 快照按组隔离）. @returns View-only cleanup, models remain workbench-owned. */
   function mountPassive(host, path, groupId) {
-    let disposed = false, keeper = null, subscription = null, observer = null, unbindGutter = null
+    let disposed = false, keeper = null, subscription = null, observer = null, unbindGutter = null, pageRoot = null
     const focus = () => { const owner = ownerOf(benchRef.current, path); if (owner) selectGroup(owner.id, path) }
     host.addEventListener('pointerdown', focus)
     if (isPdfPath(path) && pdfNodes.current.has(path)) {
@@ -3923,7 +3957,27 @@ export function EditorView(props) {
     void request.then((result) => {
       if (disposed) return
       host.textContent = ''
-      if (!result?.ok) { host.textContent = result?.error || '文件加载失败'; return }
+      if (!result?.ok) {
+        host.textContent = result?.error || '文件加载失败'
+        if (result?.code === 'file-too-large' && !binary) {
+          const button = document.createElement('button')
+          button.textContent = '只读分段查看'
+          /** @author ddj 2026年10月22号 @param event Pointer event. @description Do not focus and unmount the passive group before click. */
+          button.onpointerdown = (event) => event.stopPropagation()
+          /** @author ddj 2026年10月22号 @description Keep partial text out of passive models, autosave and editing commands. */
+          button.onclick = () => {
+            if (disposed || dirtyRef.current[path] || savingRef.current.has(path)) return
+            flushSave()
+            if (dirtyRef.current[path] || savingRef.current.has(path)) return
+            host.textContent = ''
+            host.removeEventListener('pointerdown', focus)
+            pageRoot = createRoot(host)
+            pageRoot.render(React.createElement(LargeTextView, { sessionId, path, loadPage: loadTextPage }))
+          }
+          host.appendChild(button)
+        }
+        return
+      }
       if (binary) {
         const image = document.createElement(isPdfPath(path) ? 'div' : 'img')
         if (isPdfPath(path)) image.textContent = 'PDF · 点击此编辑组继续查看和编辑'
@@ -3948,7 +4002,7 @@ export function EditorView(props) {
       observer = new ResizeObserver(() => editor.layout())
       observer.observe(host)
     }).catch((failure) => { if (!disposed) host.textContent = '文件加载失败：' + String(failure) })
-    return () => { disposed = true; host.removeEventListener('pointerdown', focus); unbindGutter?.(); observer?.disconnect(); subscription?.dispose(); keeper?.dispose(); paneEditors.current.delete(path) }
+    return () => { disposed = true; pageRoot?.unmount(); host.removeEventListener('pointerdown', focus); unbindGutter?.(); observer?.disconnect(); subscription?.dispose(); keeper?.dispose(); paneEditors.current.delete(path) }
   }
   const passiveOps = React.useRef(mountPassive)
   passiveOps.current = mountPassive
@@ -3976,7 +4030,7 @@ export function EditorView(props) {
     return React.createElement(EditorPane, { key: id, group, focused, dirty: dirtyMap, suppressActive: hideDiskActive, tabsRef: chrome ? tabsHostRef : undefined, extras: chrome ? planTabExtras : undefined, tools: chrome ? rowTools : undefined, onSelect: selectGroup, onClose: closeTab, onMenu: paneMenu, onDrag: dragTab, consumeClick: consumeDrag },
       focused ? React.createElement('div', { className: 'edrv-full-slot', ref: mountFull }) : React.createElement(React.Fragment, null,
         React.createElement(GroupPathbar, { path: group.active, onFocus: () => selectGroup(id) }),
-        React.createElement(PassiveEditor, { key: String(scope) + ':' + group.active, path: group.active, groupId: id, mount: passiveMount })))
+        React.createElement(PassiveEditor, { key: JSON.stringify([scope, sessionId, group.active]), path: group.active, groupId: id, mount: passiveMount })))
   }
   /** @private @author ddj 2026年10月14号 @param node Layout subtree. @returns Recursive resizable panes. */
   function renderTree(node) {
@@ -4176,6 +4230,12 @@ export function EditorView(props) {
       : React.createElement('pre', { className: 'edrv-mdview-pre' }, text)
     body = React.createElement('div', { className: 'edrv-mdview', ref: planHostRef, 'data-plan-address': activePlan.address },
       React.createElement('div', { className: 'edrv-mdview-stage' }, React.createElement('div', { className: 'edrv-mdview-doc' }, render)))
+  } else if (pageChanged === pageIdentity && largeCandidate === pageIdentity) {
+    body = React.createElement('div', { className: 'edrv-empty', role: 'status' },
+      React.createElement('div', null, '文件已变化，请重新读取'),
+      React.createElement('button', { className: 'edrv-pill edrv-pill-ghost', onClick: openTextPages }, '重新读取首段'))
+  } else if (paging) {
+    body = React.createElement(LargeTextView, { key: pageIdentity, sessionId, path: active, loadPage: loadTextPage })
   } else if (!monaco && !monacoErr) {
     body = loadingBody(loadStage.message, loadStage.progress)
   } else if (monacoErr) {
@@ -4200,13 +4260,13 @@ export function EditorView(props) {
         loadContent(active, sessionId)
       } }, '重试'))
   } else if (content === null && loadError) {
-    body = loadingBody('文件加载失败：' + loadError, 0, () => {
+    body = React.createElement(React.Fragment, null, loadingBody('文件加载失败：' + loadError, 0, () => {
       setLoadError(null)
       setContent(null)
       setContentPath(null)
       setLoadStage({ progress: 10, message: '重新读取文件…' })
       loadContent(active, sessionId)
-    })
+    }), largeCandidate === pageIdentity && React.createElement('button', { className: 'edrv-pill edrv-pill-ghost', onClick: openTextPages }, '只读分段查看'))
   } else if (isImageActive && imageSrc) {
     body = imagePanel()
   } else if (isImageActive) {

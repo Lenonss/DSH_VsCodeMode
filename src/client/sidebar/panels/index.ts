@@ -10,9 +10,8 @@ import { IconBranchOutline16, IconFolderOpenOutline16, IconListPenOutline16, Ico
 import { dapStore } from '../../dap/store.js'
 import { FileExplorer } from './FileExplorer.js'
 import { SearchPanel } from './SearchPanel.js'
-import { RulesPanel } from './RulesPanel.js'
+import { LazyPanel } from '../../lazyPanel.js'
 import { SvnPanel } from './SvnPanel.js'
-import { DebugPanel } from './DebugPanel.js'
 import type { SidebarPanelDef, SidebarCtx } from '../types.js'
 
 /**
@@ -57,7 +56,7 @@ export function createRulesPanel(): SidebarPanelDef {
     title: '规则',
     icon: IconListPenOutline16,
     order: 20,
-    render: (ctx: SidebarCtx) => React.createElement(RulesPanel, { ctx }),
+    render: (ctx: SidebarCtx) => React.createElement(LazyPanel, { key: 'rules', panel: 'rules', ctx }),
   }
 }
 
@@ -113,6 +112,6 @@ export function createDebugPanel(): SidebarPanelDef {
     icon: '🐞',
     order: 22,
     badge: () => (dapStore.getSnapshot().phase === 'paused' ? 1 : null),
-    render: (ctx: SidebarCtx) => React.createElement(DebugPanel, { ctx }),
+    render: (ctx: SidebarCtx) => React.createElement(LazyPanel, { key: 'debug', panel: 'debug', ctx }),
   }
 }

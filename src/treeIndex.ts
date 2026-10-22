@@ -21,9 +21,9 @@ import { DirListError, listDirCheap } from './treeRead.js'
 import { LEGACY_TREE_SIDECARS, treeCacheFile } from './paths.js'
 
 // --region 常量
-/** 命中新鲜度：超过则视为过期，按需重列。 */
+/** 硬 TTL：距最近实列确认达到此时间即过期，命中不续期。 */
 export const TREE_TTL_MS = 60_000
-/** 内存目录上限：超出按 ts 逐出最旧（常驻目录命中保活，不会误逐）。 */
+/** 内存目录上限：超出按独立运行时 LRU 逐出，不改变确认时间。 */
 export const MEM_MAX_DIRS = 2000
 /** 落盘目录上限（按 ts 裁旧）。 */
 export const PERSIST_MAX_DIRS = 400
@@ -65,6 +65,8 @@ interface IndexState {
   cwd: string
   data: TreeIndexData
   stale: Set<string>
+  /** 插入顺序即访问顺序，仅运行时使用，不写入 v1 快照。 */
+  lru: Map<string, true>
   dirty: boolean
   persistTimer: ReturnType<typeof setTimeout> | null
   healTimer: ReturnType<typeof setTimeout> | null
@@ -75,14 +77,6 @@ interface IndexState {
 
 /** cwd → 索引状态（随会话销毁清理）。 */
 const states = new Map<string, IndexState>()
-/** 单调时钟：连续 put 的 ts 严格递增（同毫秒不并列，逐出/裁剪顺序可预期）。 */
-let clock = 0
-
-/** 取下一时间戳（不小于真实时间且严格递增）。 */
-function nextTs(): number {
-  clock = Math.max(Date.now(), clock + 1)
-  return clock
-}
 
 // --region 纯函数（可单测）
 /** 条目原始值 → 合法条目（非法返回 null）。 */
@@ -147,8 +141,9 @@ export function indexParse(text: string | null): TreeIndexData | null {
         if (!e) continue
         entries.push({ name: e.name, path: rel ? rel + '/' + e.name : e.name, type: e.type })
       }
-      if (!entries.length) continue
-      dirs[rel] = { ts: typeof dir.ts === 'number' ? dir.ts : 0, full: dir.full === true, entries }
+      // 丢弃非法条目后不能再声称快照完整；空目录本身仍是有效快照。
+      const full = dir.full === true && entries.length === dir.entries.length
+      dirs[rel] = { ts: typeof dir.ts === 'number' ? dir.ts : 0, full, entries }
     }
     return { v: 1, root: typeof raw.root === 'string' ? raw.root : null, dirs }
   } catch (error) {
@@ -162,15 +157,16 @@ export function trimPersist(data: TreeIndexData, maxDirs = PERSIST_MAX_DIRS, max
   const sorted = Object.entries(data.dirs).sort((a, b) => b[1].ts - a[1].ts)
   for (const [rel, dir] of sorted) {
     if (Object.keys(dirs).length >= maxDirs) break
-    const full = dir.entries.length <= maxEntries
-    dirs[rel] = { ts: dir.ts, full, entries: full ? dir.entries : dir.entries.slice(0, maxEntries) }
+    const truncated = dir.entries.length > maxEntries
+    const full = dir.full && !truncated
+    dirs[rel] = { ts: dir.ts, full, entries: truncated ? dir.entries.slice(0, maxEntries) : dir.entries }
   }
   return { v: 1, root: data.root, dirs }
 }
 // --endregion
 
 // --region 状态机
-/** 取（或建）某 cwd 的索引状态，并惰性加载落盘快照（合并：文件 ts 更新才采纳）。 */
+/** 取（或建）某 cwd 的索引状态并惰性加载快照；加载期间真实列取优先，不被旧快照覆盖。 */
 function ensureState(ctx: Ctx, cwd: string): IndexState {
   const existing = states.get(cwd)
   if (existing) return existing
@@ -179,6 +175,7 @@ function ensureState(ctx: Ctx, cwd: string): IndexState {
     cwd,
     data: { v: 1, root: null, dirs: {} },
     stale: new Set(),
+    lru: new Map(),
     dirty: false,
     persistTimer: null,
     healTimer: null,
@@ -209,9 +206,12 @@ async function loadIndex(state: IndexState): Promise<void> {
   try {
     const parsed = indexParse(await readFile(treeCacheFile(state.cwd), 'utf8'))
     if (!parsed) return
-    for (const [rel, dir] of Object.entries(parsed.dirs)) {
-      const cur = state.data.dirs[rel]
-      if (!cur || dir.ts > cur.ts) state.data.dirs[rel] = dir
+    // 旧快照先进入 LRU；加载期间完成的真实列取优先，不被磁盘覆盖。
+    const snapshots = Object.entries(parsed.dirs).sort((a, b) => a[1].ts - b[1].ts)
+    for (const [rel, dir] of snapshots) {
+      if (state.data.dirs[rel]) continue
+      state.data.dirs[rel] = dir
+      touchDir(state, rel)
     }
     if (parsed.root && !state.data.root) state.data.root = parsed.root
   } catch (error) { /* 缺失/损坏/失败均按空索引 */ }
@@ -220,34 +220,57 @@ async function loadIndex(state: IndexState): Promise<void> {
   }
 }
 
-/** 命中：新鲜且未失效 → 条目（并刷新 ts 保活）；否则 null。 */
+/**
+ * @private
+ * @author ddj 2026年10月22号
+ * @description 更新运行时访问顺序，超限时同步清理目录及失效标记。
+ * @param state 工作区索引状态
+ * @param rel 本次访问的相对目录
+ */
+function touchDir(state: IndexState, rel: string): void {
+  state.lru.delete(rel)
+  state.lru.set(rel, true)
+  if (state.lru.size <= MEM_MAX_DIRS) return
+
+  const oldest = state.lru.keys().next().value
+  if (oldest === undefined) return
+  state.lru.delete(oldest)
+  state.stale.delete(oldest)
+  delete state.data.dirs[oldest]
+}
+
+/**
+ * @public
+ * @author ddj 2026年10月22号
+ * @description 完整、新鲜且未失效才命中；访问仅更新 LRU，不续期硬 TTL。
+ * @param cwd 工作区根
+ * @param rel 相对目录
+ * @returns 完整条目，或未命中时的 null
+ */
 export function hitIndex(cwd: string, rel: string): TreeEntry[] | null {
   const state = states.get(cwd)
   if (!state) return null
   const dir = state.data.dirs[rel]
-  if (!dir || state.stale.has(rel)) return null
-  const now = Date.now()
-  if (now - dir.ts > TREE_TTL_MS) return null
-  dir.ts = now
+  if (!dir || !dir.full || state.stale.has(rel)) return null
+  if (Date.now() - dir.ts >= TREE_TTL_MS) return null
+  touchDir(state, rel)
   return dir.entries
 }
 
-/** 更新某目录条目：写内存 + 打脏 + 防抖落盘；stale 撤销。 */
+/**
+ * @public
+ * @author ddj 2026年10月22号
+ * @description 保存完整实列结果与确认时间，更新 LRU、撤销 stale 并防抖落盘。
+ * @param ctx 工作区上下文
+ * @param cwd 工作区根
+ * @param rel 相对目录
+ * @param entries 完整实列条目
+ */
 export function putIndex(ctx: Ctx, cwd: string, rel: string, entries: TreeEntry[]): void {
   const state = ensureState(ctx, cwd)
-  const dirs = state.data.dirs
-  if (!dirs[rel] && Object.keys(dirs).length >= MEM_MAX_DIRS) {
-    let oldest = rel
-    let oldestTs = Infinity
-    for (const [k, v] of Object.entries(dirs)) {
-      if (v.ts < oldestTs) {
-        oldestTs = v.ts
-        oldest = k
-      }
-    }
-    delete dirs[oldest]
-  }
-  dirs[rel] = { ts: nextTs(), full: entries.length <= PERSIST_DIR_ENTRIES, entries }
+  // 实列结果在内存中始终完整；条目上限仅约束持久化副本。
+  state.data.dirs[rel] = { ts: Date.now(), full: true, entries }
+  touchDir(state, rel)
   state.stale.delete(rel)
   state.dirty = true
   schedulePersist(state)
@@ -319,6 +342,7 @@ export function disposeIndex(cwd: string): void {
     state.healTimer = null
   }
   if (state.dirty) void persistNow(state)
+  state.lru.clear()
   states.delete(cwd)
 }
 // --endregion
@@ -379,6 +403,7 @@ export async function listDirCached(
       if (error instanceof DirListError && error.code === 'not-found') {
         if (state.data.dirs[rel]) {
           delete state.data.dirs[rel]
+          state.lru.delete(rel)
           state.dirty = true
           schedulePersist(state)
         }
