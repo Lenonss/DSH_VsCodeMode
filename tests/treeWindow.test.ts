@@ -29,7 +29,7 @@ vi.mock('../src/client/ui/SvnOverlay.js', () => ({ svnOverlayEl: () => null, vie
 vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({ Button: 'button' }))
 vi.mock('../src/client/ui/ContextMenu.js', () => ({ ContextMenu: 'menu' }))
 vi.mock('../src/client/sidebar/contextMenu.js', () => ({ buildTreeMenu: () => [{ id: 'open', label: 'open', run: vi.fn() }] }))
-vi.mock('../src/client/state/explorerCache.js', () => ({ explorerLoad: () => null, explorerSave: vi.fn() }))
+vi.mock('../src/client/state/explorerCache.js', () => ({ explorerLoad: vi.fn(() => null), explorerSave: vi.fn() }))
 vi.mock('../src/client/state/explorerEntriesCache.js', () => ({ entriesCacheGet: (_scope: string, rel: string) => harness.entries[rel], entriesCacheIsFresh: () => true, entriesCachePut: vi.fn() }))
 vi.mock('../src/client/svnStatus.js', () => ({ refreshSvnChanges: vi.fn(), refreshSvnStatus: vi.fn() }))
 vi.mock('../src/client/sidebar/panels/useExplorerSvn.js', () => ({ useExplorerSvn: (_ctx: any, rows: any[]) => {
@@ -37,6 +37,8 @@ vi.mock('../src/client/sidebar/panels/useExplorerSvn.js', () => ({ useExplorerSv
   return { local: new Map([['f9999.ts', { kind: 'modified' }]]), remote: new Map([['f9999.ts', 1]]) }
 } }))
 import { FileExplorer } from '../src/client/sidebar/panels/FileExplorer.js'
+import { rpc } from '../src/client/rpc.js'
+import { explorerLoad, explorerSave } from '../src/client/state/explorerCache.js'
 
 /** @private @author ddj 2026年10月22号 @param factory Memo calculation. @param deps Dependencies. @returns Stable memo value. */
 function memoSlot(factory: any, deps: any[]) {
@@ -85,6 +87,9 @@ function reveal(path: string) {
 beforeEach(() => {
   harness.slots = []; harness.effects = []; harness.layout = []; harness.passive = []; harness.frames = []
   harness.entries = { '': files(10000) }; harness.observers = []
+  vi.mocked(rpc).mockReset().mockImplementation(() => new Promise(() => {}))
+  vi.mocked(explorerLoad).mockReset().mockReturnValue(null)
+  vi.mocked(explorerSave).mockClear()
   vi.stubGlobal('ResizeObserver', class {
     observe = vi.fn()
     disconnect = vi.fn()
@@ -98,6 +103,81 @@ beforeEach(() => {
   vi.stubGlobal('cancelAnimationFrame', vi.fn())
 })
 afterEach(() => { for (const effect of harness.effects) effect?.cleanup?.(); vi.unstubAllGlobals(); vi.useRealTimers() })
+
+/** @private @author ddj 2026年10月23号 @param output Committed tree. @returns Visible directory error text. */
+function dirError(output: any): string {
+  const banner = nodes(output).find((node) => node.props.className === 'edrv-tree-error')
+  return banner?.children[0]?.children.join('') ?? ''
+}
+
+/** @private @author ddj 2026年10月23号 @param ctx Sidebar context. @param host Viewport. @returns Tree after RPC promise handlers and loading cleanup finish. */
+async function settleTree(ctx: any, host: any) {
+  await Promise.resolve(); await Promise.resolve(); await Promise.resolve()
+  render(ctx, host)
+  return render(ctx, host)
+}
+
+describe('missing directory recovery', () => {
+  it.each(['目录不存在', '目录不存在：gone'])('removes restored missing expansion and persists it: %s', async (message) => {
+    vi.mocked(explorerLoad).mockReturnValue({ root: '/workspace', expanded: ['gone', 'keep'] })
+    vi.mocked(rpc).mockImplementation(async (_method, args) => {
+      if (args.path === 'gone') return { ok: false, error: message }
+      return { ok: true, entries: [] }
+    })
+    const { ctx, host } = fixture()
+    render(ctx, host)
+    const output = await settleTree(ctx, host)
+    expect(dirError(output)).toBe('')
+    await vi.advanceTimersByTimeAsync(300)
+    expect(explorerSave).toHaveBeenLastCalledWith('one', { root: '/workspace', expanded: ['keep'] })
+    vi.mocked(rpc).mockClear()
+    await vi.advanceTimersByTimeAsync(10000)
+    expect(vi.mocked(rpc).mock.calls.some(([, args]) => args.path === 'gone')).toBe(false)
+  })
+  it('keeps a missing root visible rather than silently collapsing it', async () => {
+    harness.entries = {}
+    vi.mocked(rpc).mockResolvedValue({ ok: false, error: '目录不存在' })
+    const { ctx, host } = fixture()
+    render(ctx, host)
+    expect(dirError(await settleTree(ctx, host))).toBe('目录不存在')
+  })
+  it.each(['权限不足', '不是目录', '读取目录失败'])('preserves non-missing errors and shows their relative path: %s', async (message) => {
+    vi.mocked(explorerLoad).mockReturnValue({ root: '/workspace', expanded: ['locked'] })
+    vi.mocked(rpc).mockImplementation(async (_method, args) => args.path === 'locked'
+      ? { ok: false, error: message } : { ok: true, entries: [] })
+    const { ctx, host } = fixture()
+    render(ctx, host)
+    expect(dirError(await settleTree(ctx, host))).toBe(message + '：locked')
+    await vi.advanceTimersByTimeAsync(300)
+    expect(explorerSave).toHaveBeenLastCalledWith('one', { root: '/workspace', expanded: ['locked'] })
+  })
+  it('clears loading after recovery and allows a recreated directory to expand manually', async () => {
+    harness.entries = { '': [{ name: 'gone', path: 'gone', type: 'directory' }] }
+    vi.mocked(explorerLoad).mockReturnValue({ root: '/workspace', expanded: ['gone'] })
+    vi.mocked(rpc).mockImplementation(async (_method, args) => args.path === 'gone'
+      ? { ok: false, error: '目录不存在' } : { ok: true, entries: harness.entries[''] })
+    const { ctx, host } = fixture()
+    render(ctx, host)
+    let output = await settleTree(ctx, host)
+    expect(mounted(output)[0].props.isOpen).toBe(false)
+    expect(nodes(output).some((node) => node.children.includes('加载中…'))).toBe(false)
+    vi.mocked(rpc).mockResolvedValue({ ok: true, entries: [{ name: 'child.ts', path: 'gone/child.ts', type: 'file' }] })
+    mounted(output)[0].props.onSelect('gone', true)
+    output = await settleTree(ctx, host)
+    expect(mounted(output)[0].props.isOpen).toBe(true)
+    expect(mounted(output).some((node) => node.props.path === 'gone/child.ts')).toBe(true)
+  })
+  it('retains SWR cached entries on a failed background load', async () => {
+    harness.entries.gone = [{ name: 'child.ts', path: 'gone/child.ts', type: 'file' }]
+    vi.mocked(explorerLoad).mockReturnValue({ root: '/workspace', expanded: ['gone'] })
+    vi.mocked(rpc).mockResolvedValue({ ok: false, error: '目录不存在' })
+    const { ctx, host } = fixture()
+    render(ctx, host)
+    expect(dirError(await settleTree(ctx, host))).toBe('')
+    await vi.advanceTimersByTimeAsync(300)
+    expect(explorerSave).toHaveBeenLastCalledWith('one', { root: '/workspace', expanded: ['gone'] })
+  })
+})
 
 describe('file tree viewport', () => {
   it('keeps all 10000 entries and metadata, with bounded first and last windows', () => {

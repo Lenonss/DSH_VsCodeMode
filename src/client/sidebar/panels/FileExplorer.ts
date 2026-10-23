@@ -35,6 +35,8 @@ const PREFETCH_MAX = 4
 const PREFETCH_EXCLUDED = new Set(['node_modules', '.git', '.hg', '.svn', '.pnpm', '.pnpm-store'])
 /** 外部文件变化重列去抖：一轮外部批量写入（如 agent 连写多文件）合并为一次重列。 */
 const FILE_CHANGE_DEBOUNCE_MS = 400
+/** 兼容 host 返回裸文案或附带路径的缺失目录错误。 */
+const MISSING_DIR_PREFIX = '目录不存在'
 
 // --region 行图标（官方原语：目录文件夹图标 + 文件类型图标；缺失时回落纯文本）
 
@@ -135,6 +137,24 @@ export function FileExplorer(props) {
   /** 渲染取数：内存态 → 本地条目缓存 → null（显示加载态）。 */
   const entriesOf = (rel) => dirsRef.current[rel] ?? entriesCacheGet(scope, rel) ?? null
 
+  /**
+   * @private
+   * @author ddj 2026年10月23号
+   * @description 移除已删除目录的展开记录，经现有防抖持久化自愈；不改请求 token，保留 finally 的加载态清理。
+   * @param rel 已确认缺失的非根相对目录
+   */
+  function dropDeadDir(rel) {
+    setExpanded(removeExpansion)
+
+    /** @private @author ddj 2026年10月23号 @param prev 当前展开映射。 @returns 移除失效目录后的展开映射。 */
+    function removeExpansion(prev) {
+      if (prev[rel] !== true) return prev
+      const next = Object.assign({}, prev)
+      delete next[rel]
+      return next
+    }
+  }
+
   /** 预取子目录：≤4 个、排除重型目录、缓存新鲜跳过、已加载跳过、不级联。 */
   const prefetchDirs = (rel, entries) => {
     const want = []
@@ -176,11 +196,14 @@ export function FileExplorer(props) {
         if (res.root) setRoot((prev) => prev || res.root)
         entriesCachePut(scope, rel, res.entries)
         if (doPrefetch) prefetchDirs(rel, res.entries)
-      } else {
-        // 有可渲染数据时静默（旧数据可能过期但可用）；全无数据才报错
-        if (!entriesOf(rel)) {
-          setErrors((prev) => Object.assign({}, prev, { [rel]: res?.error ? String(res.error) : '读取目录失败' }))
+      } else if (!entriesOf(rel)) {
+        // 保留有缓存时的 SWR 降级；仅缺失的子目录自愈，根目录错误必须继续展示。
+        const message = res?.error ? String(res.error) : '读取目录失败'
+        if (rel && message.startsWith(MISSING_DIR_PREFIX)) {
+          dropDeadDir(rel)
+          return
         }
+        setErrors((prev) => Object.assign({}, prev, { [rel]: message }))
       }
     }).catch((e) => {
       if (scopeRef.current !== scope || tokensRef.current !== tokens || tokens[rel] !== token) return
@@ -475,7 +498,13 @@ export function FileExplorer(props) {
 
   const errorList = Object.entries(errors)
   // 跨端会话缺失：裸错误替换为友好标题 + 详情（重试仍保留，会话在本端可用后即恢复）
-  const rawErrorText = errorList.length ? errorList[0][1] : null
+  let rawErrorText = null
+  if (errorList.length) {
+    const [errorRel, message] = errorList[0]
+    rawErrorText = message
+    // 路径只在展示层追加，RPC 业务错误与异常均可定位；兼容已带路径的 host。
+    if (errorRel && !message.endsWith('：' + errorRel)) rawErrorText += '：' + errorRel
+  }
   const sessionMissing = isSessionMissingError(rawErrorText)
   const errorText = rawErrorText === null
     ? null

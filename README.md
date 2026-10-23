@@ -460,18 +460,18 @@ DSH 每次启动监听随机端口，`http://127.0.0.1:<port>` 就是浏览器 o
 
 官方 `dsh plugin` 方式，三选一。下面以 `web` profile 为例；Desktop 或其他命名
 profile 请替换为实际目标，不要把示例目录当成当前运行 profile。升级前可阅读
-[0.19.1 更新摘要](#更新日志)（浏览器安全随机 ID 兼容、界面状态镜像卸载清理、FPGA 语言映射及编辑器默认字号跟随；字号在编辑器创建时读取，真实 pocket/LAN 环境尚未验收；升级后须重启 Host 并强制刷新页面）；从 0.14.2 或更旧版本升级还须阅读
+[0.19.2 发布说明](docs/release-0.19.2.md)（修复已删除目录的历史展开记录导致「目录不存在」常驻，子目录错误附带相对路径；本次真实 GUI 尚未验收，用户接受该发布缺口；升级后请强制刷新页面）；从 0.14.2 或更旧版本升级还须阅读
 [0.14.3 数据迁移与回退说明](docs/release-0.14.3.md)。
 
 ```bash
 # ① Git 安装（clone + prepare 构建；推荐打固定 tag）
-dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.19.1
+dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.19.2
 
 # ② npm 注册表（发布到 npm 后）
-dsh plugin --profile web add dsh-vscode-mode@0.19.1
+dsh plugin --profile web add dsh-vscode-mode@0.19.2
 
 # ③ GitHub Release tgz 直装（Release asset 可用后）
-dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.19.1/dsh-vscode-mode-0.19.1.tgz
+dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.19.2/dsh-vscode-mode-0.19.2.tgz
 ```
 
 > **DSH 版本政策（0.17.0 起）**：六项 DSH peer 仍统一声明为 `*`，另以
@@ -811,6 +811,8 @@ Keep All / Undo All 却是亮的。修复：单文件 Keep / Undo 覆盖冲突�
 
 完整变更见 [GitHub Releases](https://github.com/Lenonss/DSH_VsCodeMode/releases)。
 近期关键版本：
+
+- **v0.19.2**：**资源管理器缺失目录自愈**——无可用缓存的子目录返回「目录不存在」时，移除其历史展开记录并经现有防抖持久化，避免红条常驻及跟随刷新重复请求；保留根目录缺失和权限错误，子目录错误显示相对路径。不修改请求 token，确保加载态正常清理，目录重建后可手动展开。有缓存时保持原有降级行为。本次真实 GUI 尚未验收，用户接受该发布缺口；不自动安装或重启当前实例。详见 [0.19.2 发布说明](docs/release-0.19.2.md)。
 
 - **v0.19.1**：**浏览器兼容与编辑器默认值修复**——外部打开与编辑器回执优先使用 `crypto.randomUUID()`，不可用或抛错时回落安全的 `getRandomValues()` UUID；无安全随机源时停用对应能力，不拖垮插件启动。界面状态镜像卸载时清理定时器、存储包装与页面监听，阻止迟到水合回填及卸载后重试。补全 Verilog/SystemVerilog 与 Tcl/FPGA 约束扩展名映射和片段语言目录。焦点与被动编辑器创建时统一读取宿主正文字号，非法或不可用时回退 16px，行高保持原比例；不实时修改已创建实例。已在当前本地 Web 验证受影响入口，真实 pocket/LAN 环境仍未验收。升级须重启 DSH Host 并强制刷新页面；发布不自动安装或重启当前实例。
 
