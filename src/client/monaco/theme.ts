@@ -291,6 +291,17 @@ const COLOR_TOKEN_MAP = [
 /** 已应用的官方主题序号（模块级计数，保证主题 id 每次唯一）。 */
 let officialSeq = 0
 
+/** @public @author ddj 2026年10月23号
+ * Read the host content font on editor creation, preserving the original line density.
+ * @returns Monaco font options; invalid or unavailable CSS falls back to 16px.
+ */
+export function editorFont(): { fontSize: number; lineHeight: number } {
+  const raw = readCssVar('--dsh-content-font-size') ?? ''
+  const parsed = /^\d+(?:\.\d+)?px$/i.test(raw) ? Number(raw.slice(0, -2)) : NaN
+  const fontSize = Number.isFinite(parsed) && parsed > 0 ? parsed : 16
+  return { fontSize, lineHeight: Math.round(fontSize * 21 / 16) }
+}
+
 /**
  * 读官方 CSS 变量（先 body 后文档根；未定义/空值/未解析 var() 返回 undefined）。
  * 依据运行态实测：DSH 的 --dsw-alias-* 定义在 body 上，仅 --shiki-token-* 在根。

@@ -49,7 +49,7 @@ import {
 import { useFileWatch } from './useFileWatch.js'
 import { createPdfPanel } from '../pdf/pdfPanel.js'
 import { SvnDiffPanel } from './SvnDiffPanel.js'
-import { applyOfficial, registerThemes, themeNameOf } from '../monaco/theme.js'
+import { applyOfficial, editorFont, registerThemes, themeNameOf } from '../monaco/theme.js'
 import { createDiffRenderer } from '../monaco/diffRender.js'
 import { ST, callIdAttr, noopHunk, summarize } from '../state/records.js'
 import { diffRegions } from '../state/regions.js'
@@ -2392,9 +2392,7 @@ export function EditorView(props) {
       language: 'plaintext',
       theme: themeNameOf(),
       fontFamily: 'var(--ds-font-family-code, ui-monospace, monospace)',
-      // 16px/21px：与 md 预览渲染态同字号，切分页/切组时观感不再跳变（ddj 2026-10-16）
-      fontSize: 16,
-      lineHeight: 21,
+      ...editorFont(),
       minimap: { enabled: !side, scale: 1 },
       glyphMargin: true,
       lineDecorationsWidth: 16,
@@ -3990,7 +3988,7 @@ export function EditorView(props) {
       if (result.version) { revRef.current[path] = result.version; recordBaseline(scope, path, result.version) }
       const editor = window.monaco.editor.create(host, { model, automaticLayout: true, minimap: { enabled: false }, scrollBeyondLastLine: false, glyphMargin: true,
         // 与焦点编辑器（ensureEditor）同观感参数：字号/行高/顶部留白（side 形态 6，tab 形态 8）/装饰宽度，切分页行号位置不跳变（ddj 2026-10-16）
-        fontFamily: 'var(--ds-font-family-code, ui-monospace, monospace)', fontSize: 16, lineHeight: 21,
+        fontFamily: 'var(--ds-font-family-code, ui-monospace, monospace)', ...editorFont(),
         lineDecorationsWidth: 16, padding: { top: layoutRef.current === 'side' ? 6 : 8 } })
       const unbindGutter = bindBpGutter(editor, host, path)
       keeper = createViewKeeper(editor)

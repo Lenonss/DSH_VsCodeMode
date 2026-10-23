@@ -1,4 +1,5 @@
 import { openEditorView } from './events.js'
+import { createRequestId } from './requestId.js'
 
 import type { PlanDocument } from './planState.js'
 
@@ -41,7 +42,9 @@ export function finishOpen(requestId: string, success: boolean, error?: string):
  */
 export function requestOpen(path: string | null, line?: number, column?: number, sessionId = '', options: OpenOptions = {}): Promise<boolean> {
   if (typeof window === 'undefined' || !sessionId || options.signal?.aborted) return Promise.resolve(false)
-  const request: EditorRequest = { requestId: crypto.randomUUID(), sessionId, path, line, column }
+  const requestId = createRequestId()
+  if (!requestId) return Promise.resolve(false)
+  const request: EditorRequest = { requestId, sessionId, path, line, column }
   if (options.preview !== undefined) request.preview = options.preview
   if (options.plan) request.plan = options.plan
   return new Promise((resolve) => {

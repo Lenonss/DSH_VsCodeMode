@@ -10,6 +10,7 @@ import { openDeepLink } from './openFlow.js'
 import { disposeOpenWait } from './openReceipt.js'
 import { rpc } from './rpc.js'
 import { log } from './log.js'
+import { createRequestId } from './requestId.js'
 
 /** toast 自隐时长。 */
 const TOAST_MS = 5000
@@ -68,7 +69,12 @@ function startPresencePoll(ctx: unknown): () => void {
   if (typeof window === 'undefined') return () => {}
   const marker = window as unknown as { __edrvExtPoll?: () => void }
   if (typeof marker.__edrvExtPoll === 'function') marker.__edrvExtPoll()
-  const clientId = crypto.randomUUID()
+  const generatedId = createRequestId()
+  if (!generatedId) {
+    log.warn('安全随机源不可用，已停用外部打开心跳')
+    return () => {}
+  }
+  const clientId: string = generatedId
   let disposed = false
   let polling = false
   let executing = false

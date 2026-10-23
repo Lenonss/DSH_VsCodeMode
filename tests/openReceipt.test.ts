@@ -6,6 +6,19 @@ beforeEach(() => { vi.useFakeTimers(); vi.stubGlobal('window', new EventTarget()
 afterEach(() => { disposeOpenWait(); vi.unstubAllGlobals(); vi.useRealTimers() })
 
 describe('actual editor receipt bridge', () => {
+  it('correlates receipts without randomUUID on LAN HTTP', async () => {
+    vi.stubGlobal('crypto', { getRandomValues: (bytes: Uint8Array) => bytes.fill(2) })
+    const opened = requestOpen('/a.v', undefined, undefined, 'session-a')
+    const request = peekOpen('session-a')!
+    expect(request.requestId).toBe('02020202-0202-4202-8202-020202020202')
+    finishOpen(request.requestId, true)
+    expect(await opened).toBe(true)
+  })
+  it('fails closed without secure randomness', async () => {
+    vi.stubGlobal('crypto', undefined)
+    await expect(requestOpen('/a.v', undefined, undefined, 'session-a')).resolves.toBe(false)
+    expect(peekOpen('session-a')).toBeUndefined()
+  })
   it('requires the owning session to atomically claim before completing', async () => {
     const result = requestOpen('/a.cs', 12, 3, 'session-a')
     expect(peekOpen('session-b')).toBeUndefined()

@@ -5,10 +5,14 @@
  *       首次搬运标记仅在整批成功后落盘 / 水合失败重试与「水合阶段结束」语义 / 无门控上报口径。
  * 作者 ddj 2026-09-28 / 2026-09-29
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+import { rpc } from '../src/client/rpc.js'
+vi.mock('../src/client/rpc.js', () => ({ rpc: vi.fn(), dbg: vi.fn() }))
 import {
   chunkPatch,
   createUiStateMirror,
+  installUiStatePersist,
+  uiStateSettled,
   HYDRATE_RETRY_MAX,
   isGlobalKey,
   isMirroredKey,
@@ -91,6 +95,96 @@ function makeHarness(options: {
     },
   }
 }
+
+describe('mirror disposal', () => {
+  it('cleans up the context and does not let an old fetch alter a replacement', async () => {
+    const storage = new FakeStorage()
+    const page = new EventTarget()
+    const removeListener = vi.spyOn(page, 'removeEventListener')
+    vi.stubGlobal('localStorage', storage)
+    vi.stubGlobal('window', page)
+    const effects: Array<() => void> = []
+    const ctx = { get: () => undefined, effect: (setup: () => () => void) => { effects.push(setup()) } }
+    let completeOld!: (snapshot: { ok: true; keys: Record<string, string> }) => void
+    let completeNew!: (snapshot: { ok: true; keys: Record<string, string> }) => void
+    vi.mocked(rpc).mockImplementationOnce(() => new Promise((resolve) => { completeOld = resolve as typeof completeOld }))
+    vi.mocked(rpc).mockImplementationOnce(() => new Promise((resolve) => { completeNew = resolve as typeof completeNew }))
+    const cancel = vi.fn()
+    const schedule = vi.fn(() => cancel)
+    try {
+      expect(installUiStatePersist(ctx, schedule)).toBe(true)
+      storage.setItem('edrv.pending', 'value')
+      effects[0]()
+      expect(cancel).toHaveBeenCalledOnce()
+      expect(removeListener).toHaveBeenCalledWith('pagehide', expect.any(Function))
+      expect(installUiStatePersist(ctx, schedule)).toBe(true)
+      completeOld({ ok: true, keys: { 'edrv.stale': 'no' } })
+      await tick()
+      expect(storage.getItem('edrv.stale')).toBeNull()
+      expect(uiStateSettled()).toBe(false)
+      storage.removeItem('edrv.pending')
+      vi.mocked(rpc).mockResolvedValue({ ok: true } as never)
+      completeNew({ ok: true, keys: { 'edrv.fresh': 'yes' } })
+      await tick()
+      expect(storage.getItem('edrv.fresh')).toBe('yes')
+      expect(uiStateSettled()).toBe(true)
+    } finally {
+      for (const dispose of effects) dispose()
+      vi.unstubAllGlobals()
+      vi.restoreAllMocks()
+      vi.mocked(rpc).mockReset()
+    }
+  })
+  it('does not overwrite newer storage wrappers on disposal', () => {
+    const storage = new FakeStorage()
+    const mirror = createUiStateMirror({ storage, push: async () => {}, fetch: async () => ({}) })
+    mirror.install()
+    const replacement = vi.fn()
+    storage.setItem = replacement
+    mirror.dispose()
+    expect(storage.setItem).toBe(replacement)
+  })
+  it.each([false, true])('ignores a fetch completing after disposal (reject=%s)', async (rejectFetch) => {
+    let complete!: (snapshot: {}) => void
+    let fail!: (error: Error) => void
+    const storage = new FakeStorage()
+    const originalSet = storage.setItem
+    let scheduled = 0
+    const mirror = createUiStateMirror({ storage, push: async () => {},
+      fetch: () => new Promise((resolve, reject) => { complete = resolve; fail = reject }),
+      schedule: () => { scheduled++; return 1 }, cancel: () => {} })
+    mirror.install()
+    const hydration = mirror.hydrate()
+    mirror.dispose()
+    mirror.dispose()
+    if (rejectFetch) fail(new Error('fetch failed'))
+    else complete({ keys: { 'edrv.test': 'late' } })
+    expect(await hydration).toBe(0)
+    expect(storage.getItem('edrv.test')).toBeNull()
+    expect(storage.setItem).toBe(originalSet)
+    expect(scheduled).toBe(0)
+    expect(mirror.settled()).toBe(false)
+    expect(mirror.install()).toBe(false)
+  })
+  it('cancels pending retries and debounce jobs', async () => {
+    const storage = new FakeStorage()
+    const handles: unknown[] = []
+    const canceled: unknown[] = []
+    const mirror = createUiStateMirror({ storage, push: async () => {}, fetch: async () => { throw new Error('offline') },
+      schedule: () => { const handle = {}; handles.push(handle); return handle }, cancel: (handle) => { canceled.push(handle) } })
+    mirror.install()
+    storage.setItem('edrv.test', 'state')
+    await mirror.hydrate()
+    mirror.dispose()
+    expect(canceled).toEqual(handles)
+  })
+  it('handles a refused retry scheduler without rejecting hydration', async () => {
+    const mirror = createUiStateMirror({ storage: new FakeStorage(), push: async () => {}, fetch: async () => { throw new Error('offline') },
+      schedule: () => { throw new Error('inactive context') } })
+    await expect(mirror.hydrate()).resolves.toBe(0)
+    mirror.dispose()
+  })
+})
 
 describe('refresh-only strict mirror flush', () => {
   it('rejects until installed and settled', async () => {

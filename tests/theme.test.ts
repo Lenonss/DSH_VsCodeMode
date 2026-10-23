@@ -2,9 +2,10 @@
  * client monaco/theme 纯函数测试（node 环境无 DOM：令牌读取与观察器的回落路径一并覆盖）。
  * 作者 ddj 2026-09-10
  */
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   EDRV_DARK,
+  editorFont,
   applyOfficial,
   diffColorsOf,
   observeScheme,
@@ -14,6 +15,18 @@ import {
   toMonacoColor,
   withBaseForeground,
 } from '../src/client/monaco/theme.js'
+
+afterEach(() => vi.unstubAllGlobals())
+describe('editor host font', () => {
+  it.each([['14px', 14, 18], ['16px', 16, 21], ['18px', 18, 24], [' 14.5px ', 14.5, 19], ['', 16, 21], ['0px', 16, 21], ['-2px', 16, 21], ['Infinitypx', 16, 21], ['14rem', 16, 21], ['14pxjunk', 16, 21]])('parses %s safely', (raw, fontSize, lineHeight) => {
+    vi.stubGlobal('document', { body: {}, documentElement: {} })
+    vi.stubGlobal('window', { getComputedStyle: () => ({ getPropertyValue: () => raw }) })
+    expect(editorFont()).toEqual({ fontSize, lineHeight })
+  })
+  it('preserves old defaults without DOM', () => {
+    expect(editorFont()).toEqual({ fontSize: 16, lineHeight: 21 })
+  })
+})
 
 describe('toMonacoColor', () => {
   it('#rgb 展开为 #rrggbb', () => {

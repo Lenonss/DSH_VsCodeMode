@@ -7,11 +7,25 @@
  * 作者 ddj 2026-09-10
  */
 import { describe, expect, it } from 'vitest'
-import { langOf, snippetLanguageOf } from '../src/client/monaco/loader.js'
+import { LANG_BY_EXT, langOf, snippetLanguageOf } from '../src/client/monaco/loader.js'
 import { languageOptions, fileMeta } from '../src/client/ui/SnippetsPicker.js'
 import {
   SNIPPET_LANGUAGES, languageLabelOf, snippetFileNameFor, snippetFileTemplate,
 } from '../src/shared/snippets.js'
+
+describe('HDL and FPGA language mapping', () => {
+  it.each([['v', 'verilog'], ['vh', 'verilog'], ['sv', 'systemverilog'], ['svh', 'systemverilog'], ['tcl', 'tcl'], ['xdc', 'tcl'], ['sdc', 'tcl'], ['ucf', 'tcl']])('maps %s to %s', (extension, language) => {
+    expect(langOf(`/work/module.${extension}`)).toBe(language)
+    expect(langOf(`C:\\work\\MODULE.${extension.toUpperCase()}`)).toBe(language)
+    expect(snippetLanguageOf(`module.${extension}`)).toBe(language)
+    expect(snippetLanguageOf(`${language}.code-snippets`)).toBe(language)
+    expect(langOf(`${language}.code-snippets`)).toBe('json')
+  })
+  it('keeps the snippet catalog aligned with mapped languages', () => {
+    for (const language of new Set(Object.values(LANG_BY_EXT))) expect(SNIPPET_LANGUAGES).toContain(language)
+    expect(langOf('module.unknown')).toBe('plaintext')
+  })
+})
 
 describe('snippetLanguageOf（片段文件名 → 绑定语言）', () => {
   it('按 `<语言>.code-snippets` 命名约定推导', () => {

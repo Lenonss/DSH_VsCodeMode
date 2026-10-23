@@ -357,6 +357,13 @@ describe('entriesForLanguage', () => {
     expect(entriesForLanguage([entry('x', 'Lua')], 'lua').map((e) => e.key)).toEqual(['x'])
   })
 
+  it.each(['verilog', 'systemverilog', 'tcl'])('filters %s without mixing HDL scopes', (language) => {
+    const list = [entry('any', ''), entry('v', 'verilog'), entry('sv', 'systemverilog'), entry('constraint', 'tcl'), entry('same', language), entry('same', language, 'project')]
+    const selected = entriesForLanguage(list, language)
+    expect(selected.map((item) => item.key)).toEqual(['any', { verilog: 'v', systemverilog: 'sv', tcl: 'constraint' }[language], 'same'])
+    expect(selected.at(-1)?.scope).toBe('project')
+  })
+
   it('空输入返回空数组', () => {
     expect(entriesForLanguage([], 'lua')).toEqual([])
   })

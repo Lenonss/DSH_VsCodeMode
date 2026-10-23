@@ -460,18 +460,18 @@ DSH 每次启动监听随机端口，`http://127.0.0.1:<port>` 就是浏览器 o
 
 官方 `dsh plugin` 方式，三选一。下面以 `web` profile 为例；Desktop 或其他命名
 profile 请替换为实际目标，不要把示例目录当成当前运行 profile。升级前可阅读
-[0.19.0 更新摘要](#更新日志)（侧栏隔离、树虚拟化及只读大文本分页；按需面板与分页依赖宿主对应能力，真实 GUI 尚未验收；升级后须重启 Host 并强制刷新页面）；从 0.14.2 或更旧版本升级还须阅读
+[0.19.1 更新摘要](#更新日志)（浏览器安全随机 ID 兼容、界面状态镜像卸载清理、FPGA 语言映射及编辑器默认字号跟随；字号在编辑器创建时读取，真实 pocket/LAN 环境尚未验收；升级后须重启 Host 并强制刷新页面）；从 0.14.2 或更旧版本升级还须阅读
 [0.14.3 数据迁移与回退说明](docs/release-0.14.3.md)。
 
 ```bash
 # ① Git 安装（clone + prepare 构建；推荐打固定 tag）
-dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.19.0
+dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.19.1
 
 # ② npm 注册表（发布到 npm 后）
-dsh plugin --profile web add dsh-vscode-mode@0.19.0
+dsh plugin --profile web add dsh-vscode-mode@0.19.1
 
 # ③ GitHub Release tgz 直装（Release asset 可用后）
-dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.19.0/dsh-vscode-mode-0.19.0.tgz
+dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.19.1/dsh-vscode-mode-0.19.1.tgz
 ```
 
 > **DSH 版本政策（0.17.0 起）**：六项 DSH peer 仍统一声明为 `*`，另以
@@ -811,6 +811,8 @@ Keep All / Undo All 却是亮的。修复：单文件 Keep / Undo 覆盖冲突�
 
 完整变更见 [GitHub Releases](https://github.com/Lenonss/DSH_VsCodeMode/releases)。
 近期关键版本：
+
+- **v0.19.1**：**浏览器兼容与编辑器默认值修复**——外部打开与编辑器回执优先使用 `crypto.randomUUID()`，不可用或抛错时回落安全的 `getRandomValues()` UUID；无安全随机源时停用对应能力，不拖垮插件启动。界面状态镜像卸载时清理定时器、存储包装与页面监听，阻止迟到水合回填及卸载后重试。补全 Verilog/SystemVerilog 与 Tcl/FPGA 约束扩展名映射和片段语言目录。焦点与被动编辑器创建时统一读取宿主正文字号，非法或不可用时回退 16px，行高保持原比例；不实时修改已创建实例。已在当前本地 Web 验证受影响入口，真实 pocket/LAN 环境仍未验收。升级须重启 DSH Host 并强制刷新页面；发布不自动安装或重启当前实例。
 
 - **v0.19.0**：**侧栏可靠性与大工作区读取**——扩展面板渲染、图标、可见性及徽标异常隔离；规则与调试面板按需加载并复用根模块单例。目录树采用完整逻辑索引与窗口化 DOM，缓存采用独立 LRU 和不续期的 60 秒硬 TTL，修正不完整持久化快照的命中；修复侧栏拖动清理及 SVN 配对请求过期结果。超出整读限制的文本可显式进入只读 UTF-8 分页，通过官方 `readByteRange/stat` 能力读取，不创建可保存的部分文档；旧宿主能力缺失时明确提示不支持。按需加载要求宿主提供 `require.async`。真实 GUI、HTTP 资源及浏览器滚动验收尚未完成，用户接受该发布缺口；发布不自动安装或重启当前实例。详见 [扩展与读取契约](docs/sidebar-extension-contract.md)。
 

@@ -128,7 +128,7 @@ export const SNIPPET_LANGUAGES: readonly string[] = [
   'c', 'cpp', 'csharp', 'css', 'dart', 'dockerfile', 'go', 'html', 'ini', 'java',
   'javascript', 'json', 'jsonc', 'kotlin', 'less', 'lua', 'markdown', 'mdx', 'php',
   'plaintext', 'powershell', 'python', 'ruby', 'rust', 'scss', 'shell', 'sql',
-  'swift', 'typescript', 'xml', 'yaml',
+  'swift', 'systemverilog', 'tcl', 'typescript', 'verilog', 'xml', 'yaml',
 ]
 
 /** 语言 id → 展示名（仅收录写法与 id 明显不同的；未收录的原样返回）。 */

@@ -65,6 +65,8 @@ export const LANG_BY_EXT = {
   // 工程/配置文件（拿到正确语法分色，而非 plaintext）
   csproj: 'xml', props: 'xml', targets: 'xml', plist: 'xml',
   lua51: 'lua', luac: 'lua',
+  v: 'verilog', vh: 'verilog', sv: 'systemverilog', svh: 'systemverilog',
+  tcl: 'tcl', xdc: 'tcl', sdc: 'tcl', ucf: 'tcl',
   gitattributes: 'ini', editorconfig: 'ini', env: 'ini', properties: 'ini',
   json5: 'jsonc', log: 'plaintext', txt: 'plaintext',
   // 代码片段文件按 JSON 高亮（VS Code 同款：.code-snippets 是带注释的 JSON）

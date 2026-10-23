@@ -97,6 +97,8 @@ export interface UiStateMirrorDeps {
 export interface UiStateMirror {
   /** 包装 localStorage 写口（写口不可用时返回 false）。 */
   install(): boolean
+  /** Release storage hooks and pending hydration work. */
+  dispose(): void
   /** 取回 host 镜像并回填本地缺失键，返回回填条数。 */
   hydrate(): Promise<number>
   /** 立即上送待推送批次，返回最终丢弃的键数（0 = 全部落盘；供卸载与测试驱动）。 */
@@ -194,6 +196,8 @@ export function createUiStateMirror(deps: UiStateMirrorDeps): UiStateMirror {
   let suppressed = 0
   let done = false
   let installed = false
+  let disposed = false
+  let restoreStorage: (() => void) | undefined
   let lastError = ''
   /** 水合尝试次数（失败重试；超过 `HYDRATE_RETRY_MAX` 放弃并解禁）。 */
   let attempts = 0
@@ -203,14 +207,19 @@ export function createUiStateMirror(deps: UiStateMirrorDeps): UiStateMirror {
 
   /** 记入待推送批次并安排去抖上送（水合期间或非镜像键 → 跳过）。 */
   function queue(key: string, value: string | null): void {
-    if (suppressed > 0 || !isMirroredKey(key)) return
+    if (disposed || suppressed > 0 || !isMirroredKey(key)) return
     const bucket = isGlobalKey(key) ? pending.globals : pending.keys
     bucket[key] = value
     if (timer !== null) cancel(timer)
-    timer = schedule(() => {
+    try {
+      timer = schedule(() => {
+        timer = null
+        if (!disposed) void flush()
+      }, FLUSH_DEBOUNCE_MS)
+    } catch (error) {
       timer = null
-      void flush()
-    }, FLUSH_DEBOUNCE_MS)
+      log('界面状态调度失败: ' + String(error))
+    }
   }
 
   /** 上送一批补丁（失败重试一次）。 */
@@ -273,7 +282,7 @@ export function createUiStateMirror(deps: UiStateMirrorDeps): UiStateMirror {
 
   /** @private @author ddj 2026年10月12号 @returns Durable refresh snapshot. @throws When state is unreadable, unsettled or rejected by Host. @sideEffects Resends current local state after waiting for inflight writes. */
   async function flushStrict(): Promise<void> {
-    if (!settleDone || !installed) throw new Error('界面状态镜像尚未就绪')
+    if (disposed || !settleDone || !installed) throw new Error('界面状态镜像尚未就绪')
     if (inflight) await inflight
     // Read directly: the lenient key scanner intentionally hides storage errors.
     for (let index = 0; index < storage.length; index++) {
@@ -338,7 +347,7 @@ export function createUiStateMirror(deps: UiStateMirrorDeps): UiStateMirror {
    * 未结束前界面不得写存档，否则空初值会覆盖 host 上的真实状态。
    */
   function settle(): void {
-    if (settleDone) return
+    if (disposed || settleDone) return
     settleDone = true
     emitReady()
     report('水合阶段结束（就绪；' + (done ? '已回填' : '未回填，退回纯 localStorage') + '）')
@@ -349,9 +358,11 @@ export function createUiStateMirror(deps: UiStateMirrorDeps): UiStateMirror {
    * @returns 本次回填键数（失败/重试中为 0）
    */
   async function hydrate(): Promise<number> {
+    if (disposed) return 0
     try {
       report('水合开始（origin=' + originOf() + '，第 ' + (attempts + 1) + ' 次）')
       const snapshot = await deps.fetch(deps.sessionIdOf?.())
+      if (disposed) return 0
       // 先搬运本 origin 既有状态（只含换 origin 前就存在的键），再回填缺失键：
       // 顺序反过来会把刚回填的键再回送一遍（值与 host 完全相同，纯属多余流量）。
       const seeded = seedLocal()
@@ -362,19 +373,24 @@ export function createUiStateMirror(deps: UiStateMirrorDeps): UiStateMirror {
       if (seeded > 0) {
         const lost = await flush()
         report('首次搬运输送完成：丢弃 ' + lost + ' 键')
-        if (lost === 0) markSeeded()
+        if (!disposed && lost === 0) markSeeded()
       }
       settle()
       return filled
     } catch (error) {
+      if (disposed) return 0
       attempts++
       if (attempts < HYDRATE_RETRY_MAX) {
         report('水合失败（第 ' + attempts + ' 次，' + HYDRATE_RETRY_MS + 'ms 后重试）: ' + String(error), 'warn')
-        retryTimer = schedule(() => {
-          retryTimer = null
-          void hydrate()
-        }, HYDRATE_RETRY_MS)
-        return 0
+        try {
+          retryTimer = schedule(() => {
+            retryTimer = null
+            void hydrate()
+          }, HYDRATE_RETRY_MS)
+          return 0
+        } catch (scheduleError) {
+          report('水合重试调度失败: ' + String(scheduleError), 'warn')
+        }
       }
       report('水合放弃（重试 ' + attempts + ' 次仍失败）: ' + String(error), 'warn')
       settle()
@@ -382,26 +398,58 @@ export function createUiStateMirror(deps: UiStateMirrorDeps): UiStateMirror {
     }
   }
 
+  /** @private @author ddj 2026年10月23号 Release timers and only this instance's storage hooks. */
+  function dispose(): void {
+    if (disposed) return
+    disposed = true
+    if (timer !== null) cancel(timer)
+    if (retryTimer !== null) cancel(retryTimer)
+    timer = null
+    retryTimer = null
+    restoreStorage?.()
+    installed = false
+  }
+
   return {
+    dispose,
     install(): boolean {
+      if (disposed) return false
       if (installed) return true
       try {
         const proto = Object.getPrototypeOf(storage) as Partial<UiStorage> | null
-        const rawSet = proto?.setItem
-        const rawRemove = proto?.removeItem
+        const rawSet = storage.setItem ?? proto?.setItem
+        const rawRemove = storage.removeItem ?? proto?.removeItem
         if (typeof rawSet !== 'function' || typeof rawRemove !== 'function') return false
-        storage.setItem = function (key: string, value: string): void {
+        const setDescriptor = Object.getOwnPropertyDescriptor(storage, 'setItem')
+        const removeDescriptor = Object.getOwnPropertyDescriptor(storage, 'removeItem')
+        /** @private @author ddj 2026年10月23号 @param key Storage key. @param value Stored text. @sideEffects Queues a mirror update. */
+        function wrappedSet(key: string, value: string): void {
           rawSet.call(storage, key, value)
           queue(String(key), String(value))
         }
-        storage.removeItem = function (key: string): void {
+        /** @private @author ddj 2026年10月23号 @param key Storage key. @sideEffects Queues a mirror deletion. */
+        function wrappedRemove(key: string): void {
           rawRemove.call(storage, key)
           queue(String(key), null)
         }
+        restoreStorage = () => {
+          if (storage.setItem === wrappedSet) {
+            if (setDescriptor) Object.defineProperty(storage, 'setItem', setDescriptor)
+            else delete (storage as Partial<UiStorage>).setItem
+          }
+          if (storage.removeItem === wrappedRemove) {
+            if (removeDescriptor) Object.defineProperty(storage, 'removeItem', removeDescriptor)
+            else delete (storage as Partial<UiStorage>).removeItem
+          }
+        }
+        storage.setItem = wrappedSet
+        storage.removeItem = wrappedRemove
         installed = true
         report('镜像已包装 localStorage 写口')
         return true
       } catch (error) {
+        restoreStorage?.()
+        installed = false
         report('界面状态镜像包装失败（退回纯 localStorage）: ' + String(error), 'warn')
         return false
       }
@@ -500,7 +548,7 @@ async function fetchViaRpc(sessionId?: string): Promise<UiStateSnapshot> {
  * @returns 是否安装成功（存储不可用 → false，功能退回纯 localStorage）
  */
 export function installUiStatePersist(
-  ctx: { get: (name: string) => unknown },
+  ctx: { get: (name: string) => unknown; effect: (setup: () => () => void, label?: string) => unknown },
   schedule: (fn: () => void, ms: number) => unknown,
   report?: (text: string, level?: string) => void,
 ): boolean {
@@ -518,6 +566,9 @@ export function installUiStatePersist(
     fetch: fetchViaRpc,
     sessionIdOf,
     schedule,
+    cancel: (handle) => {
+      if (typeof handle === 'function') handle()
+    },
     report: (text: string, level?: string) => reportUiStateEvent(text, level),
     log: (text: string) => {
       try { dbg(sessionIdOf(), 'ui-state: ' + text, 'warn') } catch (error) { /* 日志失败忽略 */ }
@@ -528,18 +579,28 @@ export function installUiStatePersist(
     return false
   }
   singleton = mirror
-  try {
-    if (typeof window !== 'undefined') {
-      window.addEventListener('pagehide', () => { void mirror.flush() })
+  const pageHost = typeof window === 'undefined' ? undefined : window
+  /** @private @author ddj 2026年10月23号 Persist pending changes when the page is hidden. */
+  function onPageHide(): void { void mirror.flush() }
+  ctx.effect(() => {
+    pageHost?.addEventListener('pagehide', onPageHide)
+    return () => {
+      pageHost?.removeEventListener('pagehide', onPageHide)
+      mirror.dispose()
+      if (singleton !== mirror) return
+      singleton = null
+      hydrating = null
+      uiReady = false
+      reporter = null
     }
-  } catch (error) { /* 无 window 环境忽略 */ }
+  }, 'vscode-mode: ui state lifecycle')
   hydrating = mirror.hydrate().then((filled) => {
-    if (filled > 0 || mirror.settled()) uiReady = true
+    if (singleton === mirror && (filled > 0 || mirror.settled())) uiReady = true
     return filled
   })
   void hydrating.finally(() => {
     // 首轮结束后：已结束水合阶段才允许后续 hydrateUiState() 重新发起（重试由镜像内部承担）
-    if (mirror.settled()) {
+    if (singleton === mirror && mirror.settled()) {
       uiReady = true
       hydrating = null
     }
