@@ -5,7 +5,7 @@ import { detectColorScheme, officialThemeOf, themeNameOf } from './theme.js'
 // #region 显示数据
 /** @private @author ddj 2026年10月09号 @param regions 待显示区域 @returns 内容敏感且无分隔符碰撞的展示键 */
 function renderKey(regions) {
-  return JSON.stringify(regions.map((r) => [r.callId, r.idx, r.start, r.end, r.oldStart, r.create, r.oldLines, r.newLines]))
+  return JSON.stringify(regions.map((r) => [r.recordId ?? r.callId, r.id ?? r.idx, r.start, r.end, r.oldStart, r.create, r.oldLines, r.newLines]))
 }
 
 /** @private @author ddj 2026年10月09号 @param node 接收样式的节点 @param colors Monaco 颜色 @returns 设置插件局部变量；不覆盖官方令牌 */
@@ -48,7 +48,7 @@ function marginRow(line) {
 function zoneOf(region) {
   const domNode = document.createElement('div')
   domNode.className = 'edrv-del-zone'
-  domNode.dataset.edrvHunk = String(region.callId) + ':' + region.idx
+  domNode.dataset.edrvHunk = String(region.recordId ?? region.callId) + ':' + (region.id ?? region.idx)
   const marginDomNode = document.createElement('div')
   marginDomNode.className = 'edrv-del-margin'
   const rows = []

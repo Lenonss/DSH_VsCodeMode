@@ -11,12 +11,13 @@ const feeds = new Map<string, Entry>()
 function notify(entry: Entry): void { for (const listener of entry.listeners) listener(entry.value) }
 
 /** @private @author ddj 2026年10月26号 @param sessionId Scope. @param entry Current generation. @returns First-page metadata update; no overlap or late publication. */
-async function refresh(sessionId: string, entry: Entry): Promise<void> {
+async function refresh(sessionId: string, entry: Entry, force = false): Promise<void> {
   if (entry.controller.signal.aborted) return
   if (entry.loading) { entry.again = true; return }
   clearTimeout(entry.timer)
   entry.loading = true
   entry.again = false
+  const previous = entry.value
   try {
     const result = await rpc('edrv.review.list', { sessionId }, entry.controller.signal)
     if (!entry.controller.signal.aborted) entry.value = result.ok
@@ -26,8 +27,11 @@ async function refresh(sessionId: string, entry: Entry): Promise<void> {
   finally {
     entry.loading = false
     if (!entry.controller.signal.aborted) {
-      notify(entry)
-      if (entry.again) void refresh(sessionId, entry)
+      // Polling returns fresh JSON objects even when nothing changed. Preserve identity so
+      // editors do not tear down Monaco zones and reload file details every five seconds.
+      if (!force && JSON.stringify(previous) === JSON.stringify(entry.value)) entry.value = previous
+      else notify(entry)
+      if (entry.again) void refresh(sessionId, entry, true)
       else entry.timer = setTimeout(() => { void refresh(sessionId, entry) }, 5000)
     }
   }
@@ -56,5 +60,5 @@ export function subscribeReview(sessionId: string, listener: Listener): () => vo
 /** @public @author ddj 2026年10月26号 @param sessionId Refresh metadata after a decision; does not alter legacy or disk. */
 export function refreshReview(sessionId: string): void {
   const entry = feeds.get(sessionId)
-  if (entry) { clearTimeout(entry.timer); void refresh(sessionId, entry) }
+  if (entry) { clearTimeout(entry.timer); void refresh(sessionId, entry, true) }
 }

@@ -1,6 +1,7 @@
 /** Session-scoped official review RPC. @author ddj 2026年10月26号 */
 import type { RpcHandlerMap } from './shared/rpc.js'
 import { decideReview, reviewDetail, reviewPage } from './reviewDb.js'
+import { undoReview } from './reviewUndo.js'
 import { bucketOf, cwdOfSession, sessionOf } from './registry.js'
 import type { Registry } from './registry.js'
 import type { Ctx } from './store.js'
@@ -27,7 +28,15 @@ export function reviewHandlers(ctx: Ctx, registry: Registry): Partial<RpcHandler
     },
     'edrv.review.decide': async (args) => {
       const cwd = await workspace(args.sessionId)
-      return { ok: true, ...decideReview(cwd, args) }
+      try {
+        const result = args.decision === 'rejected'
+          ? await undoReview(ctx, sessionOf(ctx, args.sessionId), cwd, args)
+          : decideReview(cwd, args)
+        return { ok: true, ...result }
+      } catch (error) {
+        // Guard failures are review results, not transport failures: preserve their reason.
+        return { ok: false, error: error instanceof Error ? error.message : String(error) }
+      }
     },
   }
 }

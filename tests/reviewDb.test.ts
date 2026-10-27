@@ -116,6 +116,27 @@ describe('official immutable ledger and decisions', () => {
     expect(reviewPage(cwd).overview?.coveredPaths).not.toContain('[object Object]')
     await repairPaths(cwd, async () => { throw new Error('must not resolve healthy history') })
   })
+  it('block Keep leaves remaining blocks pending, survives reopen and rolls back invalid block requests', () => {
+    const fixture = snapshot(1001, 10001)
+    if (fixture.files[0].diff.kind !== 'text') throw new Error('invalid fixture')
+    fixture.files[0].diff.hunks[0] = { oldStart: 1, oldLines: 3, newStart: 1, newLines: 3,
+      lines: ['-A', '+B', ' middle', '-C', '+D'] }
+    saveSnapshot(cwd, fixture)
+    const item = reviewPage(cwd).items.find((row) => row.seq === 10001)!
+    const detail = reviewDetail(cwd, item.id)!
+    expect(detail.blocks).toHaveLength(2)
+    const request = { ...decision(item.id, 10001, 'block-keep'), scope: 'hunk' as const, blockId: detail.blocks[0].id }
+    expect(decideReview(cwd, request)).toEqual({ revision: 1 })
+    expect(decideReview(cwd, request)).toEqual({ revision: 1 })
+    closeArchiveDbs()
+    expect(reviewDetail(cwd, item.id)?.blocks.map((block) => block.decision)).toEqual(['accepted', 'pending'])
+    expect(reviewDetail(cwd, item.id)?.item).toMatchObject({ decision: 'pending', revision: 1 })
+    expect(() => decideReview(cwd, { ...request, revision: 1, operationId: 'invalid-block', blockId: 'missing' })).toThrow('差异块')
+    expect(reviewDetail(cwd, item.id)?.item.revision).toBe(1)
+    decideReview(cwd, { ...request, revision: 1, operationId: 'keep-remaining', scope: 'file' })
+    expect(reviewDetail(cwd, item.id)?.blocks.every((block) => block.decision === 'accepted')).toBe(true)
+    expect(reviewPage(cwd).items.some((row) => row.id === item.id)).toBe(false)
+  })
   it('unknown/partial migration cannot silently become an empty official ledger', async () => {
     const other = '/official-unmigrated'
     expect(() => reviewDb(other)).toThrow('先完成活跃库迁移')

@@ -1,6 +1,6 @@
 /** Deferred official-event collection; no private snapshot access. @author ddj 2026年10月26号 */
 import { captureState, repairPaths, saveSnapshot } from './reviewDb.js'
-import type { OfficialDiff, OfficialSummary } from './shared/review.js'
+import type { OfficialDiff, OfficialSummary, ReviewSnapshot } from './shared/review.js'
 import type { Ctx } from './store.js'
 import { loadBucket } from './store.js'
 import { log } from './log.js'
@@ -148,12 +148,16 @@ async function readDiff(source: SourceService, task: CaptureTask, index: number,
 }
 
 /** @public @author ddj 2026年10月26号 @param ctx Host lifecycle owner; services remain optional for older Hosts. */
-export function installCapture(ctx: Ctx): () => Promise<void> {
+export function installCapture(ctx: Ctx, onSnapshot?: (cwd: string, snapshot: ReviewSnapshot) => void): () => Promise<void> {
   const collector = createCollector({
     source: () => ctx.get('workspaceChanges'),
     prepare: async (cwd) => { await loadBucket(ctx, cwd); await repairPaths(cwd, resolvePath) },
     identity: resolvePath,
-    persist: saveSnapshot, state: captureState, report: (message) => log.warn(message),
+    persist: (cwd, snapshot) => {
+      const saved = saveSnapshot(cwd, snapshot)
+      onSnapshot?.(cwd, snapshot)
+      return saved
+    }, state: captureState, report: (message) => log.warn(message),
   })
   // Subscribe first: seed reads must not create a live-event race window.
   ctx.on('session/event', collector.enqueue)

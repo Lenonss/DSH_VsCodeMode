@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from 'vitest'
 import { reviewHandlers } from '../src/reviewRpc.js'
 import type { Ctx } from '../src/store.js'
 import { reviewPage, reviewDetail, decideReview } from '../src/reviewDb.js'
+import { undoReview } from '../src/reviewUndo.js'
+vi.mock('../src/reviewUndo.js', () => ({ undoReview: vi.fn() }))
 vi.mock('../src/reviewDb.js', () => ({ reviewPage: vi.fn(), reviewDetail: vi.fn(), decideReview: vi.fn() }))
 
 describe('official review workspace boundary', () => {
@@ -30,5 +32,10 @@ describe('official review workspace boundary', () => {
     const request = { sessionId: 'view', id: 'immutable', seq: 1, revision: 0, operationId: 'operation', decision: 'accepted' as const }
     expect(await handlers['edrv.review.decide']!(request)).toEqual({ ok: true, revision: 1 })
     expect(decideReview).toHaveBeenLastCalledWith('/current', request)
+    vi.mocked(decideReview).mockImplementationOnce(() => { throw new Error('审查版本冲突，请刷新后重试') })
+    expect(await handlers['edrv.review.decide']!(request)).toEqual({ ok: false, error: '审查版本冲突，请刷新后重试' })
+    const conflict = '当前文件已被后续编辑，版本与回滚证据冲突，未修改文件'
+    vi.mocked(undoReview).mockRejectedValueOnce(new Error(conflict))
+    expect(await handlers['edrv.review.decide']!({ ...request, decision: 'rejected' })).toEqual({ ok: false, error: conflict })
   })
 })

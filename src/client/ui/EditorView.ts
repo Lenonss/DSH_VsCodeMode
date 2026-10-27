@@ -22,7 +22,9 @@ import { acceptsLoad, receiptErrorFor, receiptPath, receiptReadyFor, receiptTabP
 import { bindPanelCommand } from '../panelCommands.js'
 import { dbg, isDebug, rpc } from '../rpc.js'
 import { refreshFeed, subscribeErrors, subscribeRecords } from '../state/recordsFeed.js'
-import { subscribeReview } from '../state/reviewFeed.js'
+import { subscribeReview, refreshReview } from '../state/reviewFeed.js'
+import { runReviewBatch } from '../reviewBatch.js'
+import { reviewRegions } from '../../shared/reviewRegions.js'
 import { diffSummary, officialPath } from '../state/diffSummary.js'
 import { emitFileChanged, emitRefresh } from '../events.js'
 import { langOf, loadMonaco, snippetLanguageOf } from '../monaco/loader.js'
@@ -442,6 +444,13 @@ export function EditorView(props) {
   const hoverEditorRef = React.useRef(false) // 鼠标是否仍在编辑器命中区
   const hoverPanelRef = React.useRef(false) // 鼠标是否已进入 Keep/Undo 浮层
   const batchBusyRef = React.useRef(false) // 批量 Keep All/Undo All 防重入
+  const [reviewBatchBusy, setReviewBatchBusy] = React.useState(false)
+  const reviewLifeRef = React.useRef(null)
+  React.useEffect(() => {
+    const token = { live: true }
+    reviewLifeRef.current = token
+    return () => { token.live = false }
+  }, [sessionId])
   const menuHandlersRef = React.useRef(null) // 右键菜单动作的最新闭包（Monaco addAction 空依赖回调读取）
   const svnMenuDisposersRef = React.useRef([]) // Monaco 右键 SVN 组当前 disposables（同步时先注销旧组）
   // 调试（DAP）：store 订阅 tick 驱动重渲 + gutter/F9 切换闭包（ensureEditor 空依赖读取）
@@ -545,6 +554,44 @@ export function EditorView(props) {
     return list
   }, [records, active, cwd, review.page])
 
+  const reviewOpsRef = React.useRef(new Map())
+  const [officialDetail, setOfficialDetail] = React.useState(null)
+  const [officialRecords, setOfficialRecords] = React.useState([])
+  const [selectedReview, setSelectedReview] = React.useState(null)
+  // Only switching file/session/selection invalidates the visible source immediately.
+  // Background metadata refresh must not remove and recreate the current Monaco zones.
+  React.useEffect(() => {
+    setOfficialDetail(null)
+    setOfficialRecords([])
+  }, [sessionId, active, selectedReview])
+  React.useEffect(() => {
+    const controller = new AbortController()
+    if (!active || !review.page?.overview?.coveredPaths.some((path) => sameFile(path, active))) {
+      setOfficialDetail(null)
+      setOfficialRecords([])
+      return () => controller.abort()
+    }
+    /** @private @author ddj 2026年10月27号 Load the active file independently of the global history page. */
+    async function loadReview() {
+      try {
+        // Tabs use workspace-relative paths; the metadata index owns the backend identity.
+        const reviewPath = review.page?.overview?.coveredPaths.find((path) => sameFile(path, active)) ?? active
+        const page = await rpc('edrv.review.list', { sessionId, path: reviewPath }, controller.signal)
+        if (controller.signal.aborted) return
+        if (!page.ok) throw new Error(page.error)
+        const selected = page.page.items.find((item) => item.id === selectedReview) ?? page.page.items[0]
+        if (!selected) { setOfficialRecords([]); setOfficialDetail(null); return }
+        const result = await rpc('edrv.review.detail', { sessionId, id: selected.id }, controller.signal)
+        if (controller.signal.aborted) return
+        if (!result.ok) throw new Error(result.error)
+        setOfficialRecords((previous) => JSON.stringify(previous) === JSON.stringify(page.page.items) ? previous : page.page.items)
+        setOfficialDetail((previous) => JSON.stringify(previous) === JSON.stringify(result.detail) ? previous : result.detail)
+      } catch (cause) { if (!controller.signal.aborted) setError('官方差异读取失败：' + String(cause)) }
+    }
+    void loadReview()
+    return () => controller.abort()
+  }, [sessionId, active, review.page, selectedReview, sameFile])
+
   const contentReady = content !== null && contentPath === active
   // 当前 tab 是否处于图片预览模式（与 loadContent 的分派条件同源；SVG 文本模式时为 false）
   const isImageActive = !!active && isImagePath(active) && !svgTextRef.current.has(active)
@@ -558,14 +605,16 @@ export function EditorView(props) {
     const trace = isDebug() && contentReady && currentRecords.length > 0
     const start = trace ? performance.now() : 0
     // #endregion
-    const next = diffRegions(currentRecords, contentReady ? content : null).filter((r) => !r.superseded)
+    const next = officialDetail
+      ? reviewRegions(officialDetail.diff, officialDetail.item.id, officialDetail.blocks ?? [], contentReady ? content : null)
+      : diffRegions(currentRecords, contentReady ? content : null).filter((r) => !r.superseded)
     // #region debug log
     if (trace) {
       try { dbg(sessionId, `[DEBUG diffRegions] records=${currentRecords.length} bytes=${content.length} regions=${next.length} ms=${(performance.now() - start).toFixed(1)}`) } catch (e) { /* 诊断不可影响渲染 */ }
     }
     // #endregion
     return next
-  }, [currentRecords, content, contentPath, active])
+  }, [currentRecords, content, contentPath, active, officialDetail])
   // useMemo 稳定引用：否则 hover 等重渲染会让 view zone effect 反复重建（- 号闪烁）
   const pendingRegions = React.useMemo(() => regions.filter((r) => r.status === ST.PENDING && !r.stale), [regions])
   const staleRegions = React.useMemo(() => regions.filter((r) => r.status === ST.PENDING && r.stale), [regions])
@@ -2529,7 +2578,7 @@ export function EditorView(props) {
       if (!line || !map.size) { hoverEditorRef.current = false; hideSoon(); return }
       const hit = map.get(line)
       if (!hit) { hoverEditorRef.current = false; hideSoon(); return }
-      const key = callIdAttr(hit.callId, hit.idx)
+      const key = hit.sourceKind === 'official' ? hit.recordId + ':' + hit.id : callIdAttr(hit.callId, hit.idx)
       const top = Math.max(0, ed.getTopForLineNumber(Math.max(1, hit.start)) - ed.getScrollTop())
       const layout = ed.getLayoutInfo()
       const minimapLeft = layout.minimap?.minimapLeft || 0
@@ -3013,6 +3062,7 @@ export function EditorView(props) {
    * @returns Promise<boolean> 是否成功
    */
   const actHunk = (region, reject, silent) => {
+    if (region.sourceKind === 'official') return decideOfficial(reject, region.id)
     const method = reject ? 'edrv.reject' : 'edrv.accept'
     // #region debug log
     const trace = isDebug()
@@ -3113,7 +3163,38 @@ export function EditorView(props) {
    */
   const itemOf = (r, reject) => ({ callId: r.callId, scope: r.create ? 'call' : 'hunk', hunkIndex: r.idx, decision: reject ? 'rejected' : 'accepted' })
 
+  /** @private @author ddj 2026年10月27号 @param reject Undo instead of Keep. @param blockId Optional contiguous block. @returns Persisted decision result; never reloads over a dirty buffer. */
+  async function decideOfficial(reject, blockId) {
+    if (!officialDetail || batchBusyRef.current) return false
+    if (reject && (dirtyRef.current[active] || savingRef.current.has(active) || saveTimerRef.current.isPending())) {
+      setError('存在未保存或正在保存的修改，请等待完成后重试'); return false
+    }
+    batchBusyRef.current = true
+    const source = officialDetail.item
+    const undoPath = active
+    const undoModel = editorRef.current?.getModel?.()
+    const undoVersion = undoModel?.getVersionId?.()
+    const opKey = JSON.stringify([sessionId, source.id, source.seq, source.revision, blockId, reject])
+    let operationId = reviewOpsRef.current.get(opKey)
+    if (!operationId) { operationId = crypto.randomUUID(); reviewOpsRef.current.set(opKey, operationId) }
+    try {
+      const result = await rpc('edrv.review.decide', { sessionId, id: source.id, seq: source.seq,
+        revision: source.revision, operationId, scope: blockId ? 'hunk' : 'file', blockId,
+        decision: reject ? 'rejected' : 'accepted' })
+      if (!result.ok) throw new Error(result.error)
+      reviewOpsRef.current.delete(opKey)
+      if (reject && activeRef.current === undoPath && !dirtyRef.current[undoPath]
+        && !savingRef.current.has(undoPath) && undoModel?.getVersionId?.() === undoVersion) reloadFile(true)
+      else if (reject) setError('Undo 已完成，编辑器在等待期间变化；未覆盖当前缓冲区，请核对磁盘后刷新')
+      refreshReview(sessionId)
+      setStatus(reject ? '已 Undo 选中差异' : '已 Keep 选中差异')
+      return true
+    } catch (cause) { setError(String(cause)); return false }
+    finally { batchBusyRef.current = false }
+  }
+
   const acceptFile = () => {
+    if (officialDetail) return decideOfficial(false)
     if (batchBusyRef.current || !decideRegions.length) return
     batchBusyRef.current = true
     actMany(decideRegions.map((r) => itemOf(r, false))).then((result) => {
@@ -3125,6 +3206,7 @@ export function EditorView(props) {
     }).catch(() => { batchBusyRef.current = false })
   }
   const undoFile = () => {
+    if (officialDetail) return decideOfficial(true)
     if (batchBusyRef.current || !decideRegions.length) return
     batchBusyRef.current = true
     actMany([...decideRegions].reverse().map((r) => itemOf(r, true))).then((result) => {
@@ -3161,7 +3243,7 @@ export function EditorView(props) {
     batchBusyRef.current = true
     const list = reject ? [...allPending].sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : b.idx - a.idx)) : allPending
     const paths = [...new Set(list.map((r) => records[r.callId]?.path).filter(Boolean))]
-    actMany(list.map((r) => itemOf(r, reject))).then((result) => {
+    return actMany(list.map((r) => itemOf(r, reject))).then((result) => {
       batchBusyRef.current = false
       reloadFile(true)
       emitRefresh({ scope, paths: paths.length ? paths : undefined, kind: 'structure' })
@@ -3169,8 +3251,58 @@ export function EditorView(props) {
       if (result.fail) setError(result.fail + ' 处差异处理失败（可能已被后续修改影响），可刷新后重试')
     }).catch(() => { batchBusyRef.current = false })
   }
-  const acceptAllFiles = () => actAllPending(false)
-  const undoAllFiles = () => actAllPending(true)
+  /** @private @author ddj 2026年10月27号 @param reject Undo requires every local buffer to be saved. @param token Starting session lifetime. @returns Throws before the next mutation when unsafe. */
+  function guardReviewAll(reject, token) {
+    if (!token?.live) throw new Error('编辑器或会话已切换，批量操作已停止')
+    if (reject && (Object.values(dirtyRef.current).some(Boolean) || savingRef.current.size || saveTimerRef.current.isPending())) {
+      throw new Error('存在未保存或正在保存的文件，未执行下一项 Undo，请保存后重试')
+    }
+  }
+
+  /** @private @author ddj 2026年10月27号 @param detail Frozen official revision. @param reject Undo action. @returns Stable retry ID shared with single-file decisions. */
+  function batchOperation(detail, reject) {
+    const source = detail.item
+    const key = JSON.stringify([sessionId, source.id, source.seq, source.revision, undefined, reject])
+    let operationId = reviewOpsRef.current.get(key)
+    if (!operationId) { operationId = crypto.randomUUID(); reviewOpsRef.current.set(key, operationId) }
+    return operationId
+  }
+
+  /** @private @author ddj 2026年10月27号 @param reject Undo or Keep all workspace pending records, including previous rounds. @returns Explicit partial results; legacy proceeds only when official stage fully succeeds. */
+  async function actReviewAll(reject) {
+    if (batchBusyRef.current) return
+    if (!review.page?.overview) { setError('官方待审列表尚未就绪，未执行批量操作'); return }
+    const count = sum.pendingFiles.length
+    if (!count) return
+    if (!window.confirm(`${reject ? 'Undo All' : 'Keep All'}：处理当前工作区全部 ${count} 个待审差异文件（含其他轮次）？${reject ? '\n撤销会改写磁盘；逐项安全校验，遇到冲突停止，已完成项不会自动恢复。' : '\n只标记待审修改为保留，不改写文件。'}`)) return
+    const token = reviewLifeRef.current
+    const undoPath = activeRef.current
+    const undoModel = editorRef.current?.getModel?.()
+    const undoVersion = undoModel?.getVersionId?.()
+    batchBusyRef.current = true; setReviewBatchBusy(true)
+    setStatus(reject ? '正在检查并 Undo 全部待审记录…' : '正在 Keep 全部待审记录…')
+    try {
+      const result = await runReviewBatch({
+        list: async (cursor) => { const res = await rpc('edrv.review.list', { sessionId, cursor }); if (!res.ok) throw new Error(res.error); return res.page },
+        detail: async (id) => { const res = await rpc('edrv.review.detail', { sessionId, id }); if (!res.ok) throw new Error(res.error); return res.detail },
+        decide: (detail, undo, operationId) => rpc('edrv.review.decide', { sessionId, id: detail.item.id, seq: detail.item.seq, revision: detail.item.revision, operationId, scope: 'file', decision: undo ? 'rejected' : 'accepted' }),
+        guard: () => guardReviewAll(reject, token), operation: batchOperation,
+      }, reject)
+      if (!token?.live) return
+      refreshReview(sessionId)
+      if (reject && result.paths.some((path) => sameFile(path, undoPath)) && activeRef.current === undoPath
+        && !dirtyRef.current[undoPath] && !savingRef.current.has(undoPath) && undoModel?.getVersionId?.() === undoVersion) reloadFile(true)
+      if (result.paths.length) emitRefresh({ scope, paths: result.paths, kind: 'structure' })
+      setStatus(`${reject ? 'Undo All' : 'Keep All'}：官方记录已完成 ${result.completed} / ${result.total}`)
+      if (result.error) { setError(`批量已停止，已完成 ${result.completed} 项，其余未处理。${result.error}`); return }
+      guardReviewAll(reject, token)
+      // Official-owned paths are excluded from allPending; never run legacy writes for official history.
+      if (allPending.length) { batchBusyRef.current = false; await actAllPending(reject) }
+    } catch (cause) { if (token?.live) setError(String(cause)) }
+    finally { batchBusyRef.current = false; if (token?.live) setReviewBatchBusy(false) }
+  }
+  const acceptAllFiles = () => actReviewAll(false)
+  const undoAllFiles = () => actReviewAll(true)
   const rollbackFile = () => {
     if (!active) return
     if (!window.confirm('回滚当前文件到修改前状态？（相关差异将归档）')) return
@@ -4318,7 +4450,10 @@ export function EditorView(props) {
         },
       },
         React.createElement('button', { className: 'edrv-pill edrv-pill-keep', onClick: () => { dismissHover(); actHunk(hoverAct.region, false) } }, '✓ Keep'),
-        React.createElement('button', { className: 'edrv-pill edrv-pill-undo', onClick: () => { dismissHover(); actHunk(hoverAct.region, true) } }, '↩ Undo'))
+        React.createElement('button', { className: 'edrv-pill edrv-pill-undo',
+          disabled: hoverAct.region.sourceKind === 'official' && !officialDetail?.capability.undo,
+          title: hoverAct.region.sourceKind === 'official' ? officialDetail?.capability.reason : undefined,
+          onClick: () => { dismissHover(); actHunk(hoverAct.region, true) } }, '↩ Undo'))
     : null
 
   /**
@@ -4330,8 +4465,9 @@ export function EditorView(props) {
   const buildDockSnapshot = () => ({
     mode: editorDockMode(active),
     official: officialFile ? { sessionId, page: review.page, path: officialFile,
-      pending: sum.files.find((file) => sameFile(file.path, active))?.pending ?? 0 } : null,
-    reviewError: review.error,
+      pending: sum.files.find((file) => sameFile(file.path, active))?.pending ?? 0,
+      detail: officialDetail, records: officialRecords, onSelect: setSelectedReview } : null,
+    reviewError: review.error || error,
     layout,
     pendingRegions,
     staleRegions,
@@ -4340,7 +4476,9 @@ export function EditorView(props) {
     onUndoFile: undoFile,
     onAcceptAllFiles: acceptAllFiles,
     onUndoAllFiles: undoAllFiles,
-    allPendingCount: allPending.length,
+    allPendingCount: allPending.length + (review.page?.pending ?? 0),
+    reviewBatchBusy,
+    batchUnavailable: !review.page?.overview ? '官方待审列表尚未就绪' : undefined,
     onRollback: rollbackFile,
     onJump: jumpTo,
     otherFiles,

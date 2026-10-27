@@ -1,5 +1,9 @@
 /** Official history shares the archive connection, but never the legacy callId namespace. @author ddj 2026年10月26号 */
 import { createHash } from 'node:crypto'
+import { existsSync } from 'node:fs'
+import { archiveDbFile } from './paths.js'
+import { reviewBlocks } from './shared/reviewRegions.js'
+import type { ReviewBlockState } from './shared/reviewRegions.js'
 import type { DatabaseSync } from 'node:sqlite'
 import { activeReady, dbFor } from './archiveDb.js'
 import type { CaptureGap, DecideReview, OfficialDiff, ReviewDetail, ReviewItem, ReviewPage, ReviewSnapshot } from './shared/review.js'
@@ -11,7 +15,7 @@ export function reviewDb(cwd: string): DatabaseSync {
   if (!activeReady(cwd)) throw new Error('官方审查要求先完成活跃库迁移')
   const db = dbFor(cwd)
   const version = db.prepare("SELECT value FROM metadata WHERE name='schema'").get() as Row
-  if (version.value === '4') return db
+  if (version.value === '4') { migrateBlocks(cwd, db); return db }
   db.exec('BEGIN IMMEDIATE')
   try {
     db.exec(`CREATE TABLE review_snapshots (
@@ -37,7 +41,35 @@ export function reviewDb(cwd: string): DatabaseSync {
     if (db.isTransaction) db.exec('ROLLBACK')
     throw error
   }
+  migrateBlocks(cwd, db)
   return db
+}
+
+/** @private @author ddj 2026年10月27号 @param cwd Workspace backup identity. @param db Open schema4 database. Extends the official-review sub-schema without changing legacy archive schema. @throws Migration failure, leaving prior decisions intact. */
+function migrateBlocks(cwd: string, db: DatabaseSync): void {
+  if (db.prepare("SELECT value FROM metadata WHERE name='review_schema'").get()) return
+  const backup = archiveDbFile(cwd) + '.before-review-blocks.bak'
+  if (!existsSync(backup)) db.exec(`VACUUM INTO '${backup.replace(/'/g, "''")}'`)
+
+  db.exec('BEGIN IMMEDIATE')
+  try {
+    db.exec(`CREATE TABLE review_blocks (file_id TEXT NOT NULL, block_id TEXT NOT NULL,
+      decision TEXT NOT NULL, PRIMARY KEY(file_id,block_id));
+      CREATE TABLE review_evidence (file_id TEXT PRIMARY KEY, payload TEXT NOT NULL);
+      INSERT INTO metadata(name,value) VALUES('review_schema','2');`)
+    const files = db.prepare('SELECT id,diff,decision FROM review_files').all() as Row[]
+    for (const file of files) seedBlocks(db, String(file.id), JSON.parse(String(file.diff)), String(file.decision))
+    db.exec('COMMIT')
+  } catch (error) {
+    if (db.isTransaction) db.exec('ROLLBACK')
+    throw error
+  }
+}
+
+/** @private @author ddj 2026年10月27号 @param db Transaction connection. @param id File record. @param diff Immutable official source. @param decision Prior file decision. Seeds deterministic blocks without changing source facts. */
+function seedBlocks(db: DatabaseSync, id: string, diff: OfficialDiff, decision: string): void {
+  const insert = db.prepare('INSERT INTO review_blocks VALUES(?,?,?)')
+  for (const block of reviewBlocks(diff)) insert.run(id, block.id, decision)
 }
 
 /** @private @author ddj 2026年10月26号 @param text Canonical serialized input. @returns Collision-resistant identity. */
@@ -107,7 +139,7 @@ export async function repairPaths(cwd: string, resolvePath: (cwd: string, path: 
 /** @private @author ddj 2026年10月26号 @param db Transaction. @param snapshot Source payload. @param hash Source digest. */
 function insertSnapshot(db: DatabaseSync, snapshot: ReviewSnapshot, hash: string): void {
   const { sessionId, turn, seq } = snapshot
-  const previous = db.prepare('SELECT identity,diff,decision FROM review_files WHERE session_id=? AND turn=? AND current=1').all(sessionId, turn) as Row[]
+  const previous = db.prepare('SELECT id,identity,diff,decision FROM review_files WHERE session_id=? AND turn=? AND current=1').all(sessionId, turn) as Row[]
   db.prepare('UPDATE review_snapshots SET current=0 WHERE session_id=? AND turn=?').run(sessionId, turn)
   db.prepare('UPDATE review_files SET current=0 WHERE session_id=? AND turn=?').run(sessionId, turn)
   db.prepare('INSERT INTO review_snapshots VALUES(?,?,?,?,?,1)').run(sessionId, turn, seq, JSON.stringify(snapshot), hash)
@@ -116,7 +148,17 @@ function insertSnapshot(db: DatabaseSync, snapshot: ReviewSnapshot, hash: string
     const encoded = JSON.stringify(file.diff)
     const unchanged = previous.find((item) => item.identity === file.identity && item.diff === encoded)
     const id = digest(JSON.stringify([sessionId, turn, seq, file.identity]))
-    insert.run(id, sessionId, turn, seq, file.identity, JSON.stringify(snapshot.summary.files[index]), encoded, unchanged?.decision ?? 'pending')
+    const decision = String(unchanged?.decision ?? 'pending')
+    insert.run(id, sessionId, turn, seq, file.identity, JSON.stringify(snapshot.summary.files[index]), encoded, decision)
+    seedBlocks(db, id, file.diff, decision)
+    if (unchanged) {
+      // A same-turn republish must preserve mixed per-block decisions, not seed all blocks as mixed.
+      db.prepare(`UPDATE review_blocks SET decision=(SELECT p.decision FROM review_blocks p
+        WHERE p.file_id=? AND p.block_id=review_blocks.block_id)
+        WHERE file_id=? AND EXISTS(SELECT 1 FROM review_blocks p WHERE p.file_id=? AND p.block_id=review_blocks.block_id)`)
+        .run(unchanged.id, id, unchanged.id)
+      db.prepare('INSERT INTO review_evidence SELECT ?,payload FROM review_evidence WHERE file_id=?').run(id, unchanged.id)
+    }
   }
 }
 
@@ -181,9 +223,33 @@ export function reviewDetail(cwd: string, id: string): ReviewDetail | null {
   const row = db.prepare(`SELECT f.*,json_extract(s.payload,'$.capturedAt') AS captured_at FROM review_files f JOIN review_snapshots s
     USING(session_id,turn,seq) WHERE f.id=?`).get(id) as Row | undefined
   if (!row) return null
-  return { item: itemOf(row), diff: JSON.parse(String(row.diff)), capturedAt: String(row.captured_at),
-    capability: { keep: row.current === 1 && row.decision === 'pending', undo: false,
-      reason: '官方仅提供差异块，缺少可验证的历史全文及原始字节；拒绝写回已禁用。可标记已审或打开当前文件继续编辑。' } }
+  const blocks = db.prepare('SELECT block_id AS id,decision FROM review_blocks WHERE file_id=? ORDER BY rowid').all(id) as unknown as ReviewBlockState[]
+  const diff = JSON.parse(String(row.diff)) as OfficialDiff
+  const evidence = db.prepare('SELECT 1 FROM review_evidence WHERE file_id=?').get(id)
+  const pending = row.current === 1 && row.decision === 'pending'
+  const undo = pending && !!evidence && diff.kind === 'text' && diff.before && diff.after && !diff.coarse
+  return { item: itemOf(row), diff, capturedAt: String(row.captured_at), blocks,
+    capability: { keep: pending, undo,
+      reason: undo ? 'Undo 将校验原始字节、当前文件版本及已处理差异块；文件变化会安全拒绝。'
+        : '该记录缺少可验证的原始字节或受控写回能力；仍可显示差异和 Keep，不能猜测历史全文执行 Undo。' } }
+}
+
+/** @public @author ddj 2026年10月27号 @param db Active decision transaction. @param request File or block action. Updates aggregate without losing mixed decisions. @throws Invalid or already-decided block. */
+export function changeBlocks(db: DatabaseSync, request: DecideReview): void {
+  if (request.scope === 'hunk') {
+    const changed = db.prepare("UPDATE review_blocks SET decision=? WHERE file_id=? AND block_id=? AND decision='pending'")
+      .run(request.decision, request.id, request.blockId ?? '')
+    if (changed.changes !== 1) throw new Error('差异块不存在或已处理')
+  } else {
+    db.prepare("UPDATE review_blocks SET decision=? WHERE file_id=? AND decision='pending'").run(request.decision, request.id)
+  }
+  const states = db.prepare('SELECT DISTINCT decision FROM review_blocks WHERE file_id=?').all(request.id) as Row[]
+  const decisions = states.map((row) => String(row.decision))
+  let aggregate = request.decision as string
+  if (decisions.includes('pending')) aggregate = 'pending'
+  else if (decisions.length > 1) aggregate = 'mixed'
+  else if (decisions.length === 1) aggregate = decisions[0]
+  db.prepare('UPDATE review_files SET decision=? WHERE id=?').run(aggregate, request.id)
 }
 
 /** @public @author ddj 2026年10月26号 @param cwd Workspace. @param request Frozen identity/revision. @returns Idempotent decision; rejection never guesses a target. */
@@ -196,13 +262,18 @@ export function decideReview(cwd: string, request: DecideReview): { revision: nu
     const previous = db.prepare('SELECT request,result FROM review_ops WHERE operation_id=?').get(request.operationId) as Row | undefined
     if (previous) {
       if (previous.request !== encoded) throw new Error('operationId 已用于其他请求')
+      if (!previous.result) throw new Error('Undo 尚待写后核对，请重试原操作')
       db.exec('COMMIT')
       return JSON.parse(String(previous.result))
+    }
+    if (db.prepare("SELECT 1 FROM review_ops WHERE state='prepared' AND json_extract(request,'$.id')=?").get(request.id)) {
+      throw new Error('该文件有尚待核对的 Undo，暂不能 Keep')
     }
     if (request.decision !== 'accepted') throw new Error('缺少可信全文证据，禁止拒绝写回')
     const change = db.prepare(`UPDATE review_files SET decision='accepted',revision=revision+1
       WHERE id=? AND seq=? AND revision=? AND current=1 AND decision='pending'`).run(request.id, request.seq, request.revision)
     if (change.changes !== 1) throw new Error('审查版本冲突，请刷新后重试')
+    changeBlocks(db, request)
     const result = { revision: request.revision + 1 }
     db.prepare("INSERT INTO review_ops VALUES(?,?,'committed',?,NULL)").run(request.operationId, encoded, JSON.stringify(result))
     db.exec('COMMIT')

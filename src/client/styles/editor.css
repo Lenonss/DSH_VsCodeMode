@@ -271,6 +271,45 @@
 [data-edrv-view] .edrv-side-diff-dock .edrv-diffbar-body { max-height: min(180px, 25vh); max-width: 100%; }
 [data-edrv-view] .edrv-side-diff-dock .edrv-diff-details { max-height: min(260px, 35vh); overflow-y: auto; }
 
+/* Official review: file context above, navigation/actions below. Theme-owned surfaces; no neon status outlines. @author ddj 2026年10月27号 */
+[data-edrv-diff-dock-shell] .edrv-reviewbar {
+  width: 520px; max-width: 100%; min-width: 0; box-sizing: border-box;
+  color: var(--dsw-alias-label-primary, #26313d); font-family: var(--dsw-font-family, sans-serif);
+  font-size: 12px; line-height: 1.4; container: edrv-review / inline-size;
+}
+[data-edrv-diff-dock-shell] .edrv-review-global { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px; padding: 6px 8px; border-bottom: 1px solid var(--dsw-alias-border-l1, #e5e9ef); }
+[data-edrv-diff-dock-shell] .edrv-review-all-actions { display: flex; align-items: center; gap: 4px; }
+[data-edrv-diff-dock-shell] .edrv-review-total strong { font-variant-numeric: tabular-nums; }
+[data-edrv-diff-dock-shell] .edrv-review-heading {
+  display: flex; align-items: center; gap: 8px; min-width: 0; padding: 10px 12px 8px;
+  border-bottom: 1px solid var(--dsw-alias-border-l1, #e5e9ef);
+}
+[data-edrv-diff-dock-shell] .edrv-review-filemark { display: inline-flex; flex: none; color: var(--dsw-alias-label-tertiary, #697586); }
+[data-edrv-diff-dock-shell] .edrv-review-filename { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 600; }
+[data-edrv-diff-dock-shell] .edrv-review-pending { flex: none; display: inline-flex; gap: 5px; align-items: center; color: var(--dsw-alias-label-secondary, #697586); font-size: 11px; white-space: nowrap; }
+[data-edrv-diff-dock-shell] .edrv-review-pending strong { font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--dsw-alias-label-primary, #26313d); }
+[data-edrv-diff-dock-shell] .edrv-review-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 7px 8px; }
+[data-edrv-diff-dock-shell] .edrv-review-nav { display: flex; align-items: center; flex: none; gap: 1px; }
+[data-edrv-diff-dock-shell] .edrv-review-blocknav { border-left: 1px solid var(--dsw-alias-border-l1, #e5e9ef); padding-left: 6px; }
+[data-edrv-diff-dock-shell] .edrv-review-position { min-width: 32px; text-align: center; font-size: 11px; font-variant-numeric: tabular-nums; color: var(--dsw-alias-label-secondary, #697586); }
+[data-edrv-diff-dock-shell] .edrv-review-actions { display: flex; align-items: center; flex: none; gap: 4px; margin-left: auto; }
+[data-edrv-diff-dock-shell] .edrv-reviewbar button { height: 28px; min-height: 28px; padding: 0 8px; border-radius: 6px; font-family: inherit; font-size: 12px; font-weight: 500; white-space: nowrap; gap: 5px; }
+[data-edrv-diff-dock-shell] .edrv-reviewbar button.edrv-review-icon { width: 28px; min-width: 28px; padding: 0; }
+[data-edrv-diff-dock-shell] .edrv-reviewbar button.edrv-review-record { padding: 0 6px; font-size: 11px; color: var(--dsw-alias-label-secondary, #697586); }
+[data-edrv-diff-dock-shell] .edrv-review-record svg { width: 12px; height: 12px; }
+[data-edrv-diff-dock-shell] .edrv-reviewbar button.edrv-review-keep { background: var(--dsw-alias-brand-primary, #3b63d9); color: var(--dsw-alias-label-primary-inverted, #fff); border: 1px solid transparent; }
+[data-edrv-diff-dock-shell] .edrv-reviewbar button.edrv-review-keep:hover:not(:disabled) { filter: brightness(.94); }
+[data-edrv-diff-dock-shell] .edrv-reviewbar button.edrv-review-undo:hover:not(:disabled) { color: var(--dsw-alias-state-error-primary, #b64043); }
+[data-edrv-diff-dock-shell] .edrv-reviewbar button:disabled { opacity: .4; cursor: not-allowed; }
+[data-edrv-diff-dock-shell] .edrv-reviewbar button:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary, #3b63d9); outline-offset: 2px; }
+[data-edrv-diff-dock-shell] .edrv-review-notice { padding: 7px 12px; border-top: 1px solid var(--dsw-alias-border-l1, #e5e9ef); color: var(--dsw-alias-label-secondary, #697586); font-size: 11px; overflow-wrap: anywhere; }
+[data-edrv-diff-dock-shell] .edrv-review-error { color: var(--dsw-alias-state-error-primary, #b64043); }
+[data-edrv-diff-dock-shell] .edrv-review-body { border-top: 1px solid var(--dsw-alias-border-l1, #e5e9ef); max-height: min(240px, 30vh); overflow: auto; padding: 8px 12px; }
+@container edrv-review (max-width: 420px) {
+  .edrv-reviewbar .edrv-review-heading { gap: 6px; padding-inline: 10px; }
+  .edrv-reviewbar .edrv-review-actions { justify-content: flex-end; flex: 1 0 100%; border-top: 1px solid var(--dsw-alias-border-l1, #e5e9ef); padding-top: 6px; }
+}
+
 /* ===== 侧边栏（活动栏 + 面板区 + 文件树） ===== */
 [data-edrv-view] .edrv-editor-row { display: flex; flex: 1 1 auto; min-width: 0; min-height: 0; overflow: hidden; }
 [data-edrv-view] .edrv-main-col { box-sizing: border-box; min-width: 0; min-height: 0; overflow: hidden; }

@@ -35,6 +35,7 @@ export interface ReviewSnapshot {
   files: { identity: string; diff: OfficialDiff }[]
 }
 export type ReviewDecision = 'pending' | 'accepted' | 'rejected'
+export type ReviewFileDecision = ReviewDecision | 'mixed'
 export interface ReviewItem {
   id: string
   sessionId: string
@@ -46,7 +47,7 @@ export interface ReviewItem {
   added: number
   deleted: number
   kind: OfficialDiff['kind']
-  decision: ReviewDecision
+  decision: ReviewFileDecision
   revision: number
   current: boolean
 }
@@ -54,6 +55,7 @@ export interface ReviewDetail {
   item: ReviewItem
   diff: OfficialDiff
   capturedAt: string
+  blocks: import('./reviewRegions.js').ReviewBlockState[]
   capability: { keep: boolean; undo: boolean; reason: string }
 }
 export interface CaptureGap {
@@ -86,6 +88,8 @@ export interface DecideReview extends ReviewRequest {
   seq: number
   revision: number
   operationId: string
+  scope?: 'file' | 'hunk'
+  blockId?: string
   decision: 'accepted' | 'rejected'
 }
 export type ReviewResult<T> = ({ ok: true } & T) | { ok: false; error: string }

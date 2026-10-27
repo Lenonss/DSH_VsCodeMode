@@ -7,6 +7,28 @@
  * 作者 ddj 2026-09-10
  */
 declare module '@deepseek-ai/dsh-client-ui-primitives' {
+  /** Compact theme-backed button; mirrors official Button.d.ts. @author ddj 2026年10月27号 */
+  export const Button: import('react').ComponentType<import('react').ButtonHTMLAttributes<HTMLButtonElement> & {
+    variant?: 'primary' | 'ghost' | 'outline' | 'toolbar'
+    size?: 'md' | 'sm'
+    icon?: import('react').ReactNode
+  }>
+
+  /** Anchored selectable menu; mirrors the subset used from official Menu.d.ts. @author ddj 2026年10月27号 */
+  export const Menu: import('react').ComponentType<{
+    open: boolean
+    anchor: import('react').ReactNode
+    items: readonly { id: string; label: import('react').ReactNode; disabled?: boolean }[]
+    selectedId?: string
+    onSelect: (id: string) => void
+    onClose: () => void
+    side?: 'top' | 'bottom' | 'right'
+    align?: 'start' | 'end'
+    portal?: boolean
+    compact?: boolean
+    autoFocus?: boolean
+  }>
+
   /** 图标组件通用 props（官方 Icon* 组件与 FileTypeIcon 共用形状）。 */
   export interface EdrvIconProps {
     /** 图标边长（px）；省略时用图标自带尺寸。 */

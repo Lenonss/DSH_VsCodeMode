@@ -134,17 +134,25 @@
 
 ### 6. 差异审查（核心能力）
 
-Host 捕获 agent 的 `edit` / `write`（`tools/result`），客户端统一使用**唯一一个**
-挂在 DSH `conversation.input.dock` 的 DiffBox 实例：
+Host 优先采集官方 `workspaceChanges` 的轮次净差异；旧版逐工具记录保留兼容，
+同一路径有官方记录时不重复计数。客户端复用现有差异列表、角标和编辑器操作条，
+不增加独立审查栏。
 
-- 编辑器未打开 → 紧凑「差异 N 个文件 · 查看下一个」按钮，点击自动打开侧栏编辑器
-  并聚焦差异；编辑器打开后 → 完整操作条（Keep / Undo / 跳转 / 回滚 / 归档对比），
-  不会再出现第二个差异栏。
-- header 差异角标 + DiffLauncher 全局总览 + 归档 / 批次回滚；状态持久化到工作区
-  旁车 `.dsh-edit-review.json`（重启不丢）。
-- v0.4.3 起单文件 Keep / Undo 覆盖**冲突差异**（pending hunk 已被后续修改覆盖）：
-  Keep 记账后归档；Undo 对已不在文件中的差异不改动文件、直接按不采纳归档
-  （状态栏提示「其中 N 处已不存在于文件，未改动」）。
+- 编辑器未打开 → 差异角标和总览；打开文件后 → 文件内增删区域、↑↓ 定位与
+  Keep / Undo。无法唯一映射到当前内容的历史块仍可查看，但不会标在猜测的位置。
+- 官方原始摘要及 hunks、审查决定分别保存到插件工作区 SQLite 数据库；跨轮次
+  pending 保留。手动保存、文件失配和列表容量限制均不表示已审；旧旁车仅供迁移。
+- **Keep** 只改变审查状态，不写文件；支持整条记录或单块处理，尚有 pending 块时
+  文件仍在待审列表。文件级动作不暗中处理同路径的其他轮次。
+- **Undo** 需要与官方差异一致的独立原始字节证据。写回校验当前内容、文件版本及
+  操作日志，保留 BOM、行尾和末尾换行；脏缓冲、版本竞争或内容冲突时拒绝覆盖，
+  不把失败当作成功已审。没有受控删除能力的新建文件等场景不强行启用。
+- 历史记录不会从当前文件倒推虚构基线；缺证据时仍可看差异和 Keep，但 Undo 禁用
+  并说明原因。新证据采集限本会话可观测的 `edit` / `write`，不承诺覆盖 shell、
+  外部编辑器或旧 Host 启动前的修改。升级 Host 后需要重启才能启用新回调。
+
+> v0.20.1 已完成重启后真实 GUI 的文件/块级审查与安全拒绝验收。Keep All / Undo All
+> 已接入全部分页；批量 Undo 不是跨文件原子事务，遇冲突停止，已完成项不会自动恢复。
 
 ### 7. Monaco 离线分发
 
@@ -460,18 +468,18 @@ DSH 每次启动监听随机端口，`http://127.0.0.1:<port>` 就是浏览器 o
 
 官方 `dsh plugin` 方式，三选一。下面以 `web` profile 为例；Desktop 或其他命名
 profile 请替换为实际目标，不要把示例目录当成当前运行 profile。升级前可阅读
-[0.20.0 发布说明](docs/release-0.20.0.md)（官方轮次净差异持久化并接入现有差异列表和角标；保存不等于已审，缺少可信全文时禁止拒绝写回；升级后重启 DSH 并刷新页面）；从 0.14.2 或更旧版本升级还须阅读
+**v0.20.1** 恢复官方差异的文件内增删展示、块级/文件级 Keep 与有可信原始字节证据的安全 Undo，并恢复总文件数、Keep All / Undo All，修复五秒轮询闪动。升级后重启 DSH 并刷新页面；持久化与回退边界见 [0.20.0 发布说明](docs/release-0.20.0.md)；从 0.14.2 或更旧版本升级还须阅读
 [0.14.3 数据迁移与回退说明](docs/release-0.14.3.md)。
 
 ```bash
 # ① Git 安装（clone + prepare 构建；推荐打固定 tag）
-dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.20.0
+dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.20.1
 
 # ② npm 注册表（发布到 npm 后）
-dsh plugin --profile web add dsh-vscode-mode@0.20.0
+dsh plugin --profile web add dsh-vscode-mode@0.20.1
 
 # ③ GitHub Release tgz 直装（Release asset 可用后）
-dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.20.0/dsh-vscode-mode-0.20.0.tgz
+dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.20.1/dsh-vscode-mode-0.20.1.tgz
 ```
 
 > **DSH 版本政策（0.17.0 起）**：六项 DSH peer 仍统一声明为 `*`，另以
@@ -812,6 +820,7 @@ Keep All / Undo All 却是亮的。修复：单文件 Keep / Undo 覆盖冲突�
 完整变更见 [GitHub Releases](https://github.com/Lenonss/DSH_VsCodeMode/releases)。
 近期关键版本：
 
+- **v0.20.1**：恢复官方差异文件内增删、差异导航和块级/文件级 Keep / Undo；Undo 仅在可信原始字节、差异覆盖及文件版本校验通过时写回，无证据或冲突不覆盖。恢复工作区差异文件总数及跨分页、跨轮次 Keep All / Undo All，批量撤销先检查能力、遇冲突停止并报告部分完成。工具栏明确区分全局与当前文件；相同元数据轮询不再重复发布，同文件刷新保留差异直到新详情就绪，消除五秒闪动。升级后需重启 DSH 并刷新页面。
 - **v0.20.0**：**官方净差异持久化与现有审查入口整合**——采集官方轮次摘要及差异块，SQLite 保存并保留跨轮次 pending；复用现有列表、角标和文件导航，不新增独立审查栏。支持标记已审和编辑当前文件，保存不自动已审；没有可信历史全文及原始字节时禁止拒绝写回。修复路径身份和冷启动历史补采，无法恢复的旧摘要明确显示缺口；修正浅色主题操作栏文字对比度。详见 [0.20.0 发布说明](docs/release-0.20.0.md)。
 
 - **v0.19.2**：**资源管理器缺失目录自愈**——无可用缓存的子目录返回「目录不存在」时，移除其历史展开记录并经现有防抖持久化，避免红条常驻及跟随刷新重复请求；保留根目录缺失和权限错误，子目录错误显示相对路径。不修改请求 token，确保加载态正常清理，目录重建后可手动展开。有缓存时保持原有降级行为。本次真实 GUI 尚未验收，用户接受该发布缺口；不自动安装或重启当前实例。详见 [0.19.2 发布说明](docs/release-0.19.2.md)。
