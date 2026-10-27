@@ -23,6 +23,7 @@ import { cp, mkdir, readFile, rename, rm, stat, writeFile, readdir } from 'node:
 import { basename, dirname, join } from 'node:path'
 import { archiveEntryFor, markDecision, recordResolved, reconstructOriginal } from './model.js'
 import { clearRevertState, listArchives, pageArchives, readArchives, revertState, setRevertState, startReverts } from './archiveDb.js'
+import { hasOfficial } from './reviewDb.js'
 import { log } from './log.js'
 import type { Registry } from './registry.js'
 import { bucketOf, cwdOfSession, sessionOf } from './registry.js'
@@ -57,6 +58,7 @@ import { patchHasPerfConfig, patchInsertPerfConfig, patchRemovePerfConfig, perfC
 import type { FileVersions } from './fileVersions.js'
 import { settingsDocPath } from './settingsDocPath.js'
 import { createTextPages } from './textPages.js'
+import { reviewHandlers } from './reviewRpc.js'
 
 /** Process-local cursor signer; reads must stay on the Host filesystem capability. */
 const readTextPage = createTextPages()
@@ -239,17 +241,8 @@ async function afterManualSave(
 ): Promise<void> {
   // 手动保存后目录树可能变化（新建/删除文件）：父目录+祖先进失效，后台自愈。
   invalidateIndex(ctx, sc.cwd, path)
-  const bucket = await bucketOf(registry, ctx, sc.cwd)
-  let changed = false
-  for (const rec of bucket.values()) {
-    if (rec.path === path && rec.superseded !== true) { rec.superseded = true; rec.at = new Date().toISOString(); changed = true }
-  }
-  if (changed) {
-    const done: DiffRecord[] = []
-    for (const rec of bucket.values()) if (rec.path === path && rec.superseded) done.push(rec)
-    if (done.length) await archiveRecords(ctx, sc.session, sc.cwd, bucket, done, '被手动编辑覆盖')
-    else await saveBucket(ctx, sc.cwd, bucket, sc.session, { upserts: [...bucket.values()].filter((rec) => rec.path === path), removed: [] })
-  }
+  // Editing disk is not a review decision. Keep all historical pending records;
+  // location checks may report conflict but must not silently accept or archive them.
 }
 
 /**
@@ -286,6 +279,10 @@ async function applyDecisions(
     const record = bucket.get(item.callId)
     if (!record) {
       results.push({ callId: item.callId, ok: false, error: '记录不存在' })
+      continue
+    }
+    if (hasOfficial(cwd, record.path)) {
+      results.push({ callId: item.callId, ok: false, error: '该文件已有官方审查记录；旧工具记录禁止决策或回滚，请使用官方审查入口' })
       continue
     }
     if (record.archived) {
@@ -364,8 +361,8 @@ async function applyDecisions(
       // #endregion
       grouped.delete(index)
       try {
-        if (outcome.ok || outcome.stale === true) setRevertState(cwd, record.callId, scope, hunkIndex, 'applied')
-        else if (outcome.error === '找不到该差异块' || outcome.error === '回滚失败：文件不存在'
+        if (outcome.ok) setRevertState(cwd, record.callId, scope, hunkIndex, 'applied')
+        else if (outcome.stale === true || outcome.error === '找不到该差异块' || outcome.error === '回滚失败：文件不存在'
           || outcome.error === '回滚失败：文件过大，无法安全定位') {
           clearRevertState(cwd, record.callId, scope, hunkIndex)
         }
@@ -375,11 +372,8 @@ async function applyDecisions(
         continue
       }
       if (!outcome.ok) {
-        if (scope !== 'hunk' || outcome.stale !== true) {
-          results.push({ callId: item.callId, ok: false, error: outcome.error })
-          continue
-        }
-        revertedStale = true
+        results.push({ callId: item.callId, ok: false, error: outcome.error || '差异已偏移，未修改文件，保留待处理' })
+        continue
       }
     }
     const wasResolved = recordResolved(record)
@@ -595,6 +589,7 @@ export function buildHandlers(
     ...((svnHandlers ?? {}) as RpcHandlerMap),
     // edrv.dap.* 由 createDapRpc 提供（调试会话单例），这里并入。
     ...((dapHandlers ?? {}) as RpcHandlerMap),
+    ...(reviewHandlers(ctx, registry) as RpcHandlerMap),
     'edrv.list': async (args) => {
       // #region debug log
       const start = performance.now()
@@ -945,6 +940,7 @@ export function buildHandlers(
       if (!fs) return { ok: false, error: '缺少 fs' }
       const batch = args.batch
       const bucket = await bucketOf(registry, ctx, sc.cwd)
+      if (hasOfficial(sc.cwd, args.path)) return { ok: false, error: '该文件已有官方审查记录，禁止使用旧版批次回滚覆盖当前文件' }
       try {
         let affected: DiffRecord[] = []
         let beforeRec: DiffRecord | null = null

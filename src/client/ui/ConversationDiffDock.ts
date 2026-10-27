@@ -7,7 +7,8 @@
  */
 import React from 'react'
 import { openDiffView } from '../events.js'
-import { summarize } from '../state/records.js'
+import { diffSummary } from '../state/diffSummary.js'
+import { subscribeReview } from '../state/reviewFeed.js'
 import { subscribeRecords } from '../state/recordsFeed.js'
 import { nextDiffPath } from '../diffDock.js'
 import { dockInLayout, readDiffDock, subscribeDiffDock } from '../diffDockStore.js'
@@ -33,9 +34,10 @@ export function ConversationDiffDock(props) {
       return undefined
     }
 
-    return subscribeRecords(sessionId, (records) => {
-      setSummary(summarize(records))
-    })
+    let records = [], page = null
+    const offRecords = subscribeRecords(sessionId, (next) => { records = next; setSummary(diffSummary(records, page)) })
+    const offReview = subscribeReview(sessionId, (feed) => { page = feed.page; setSummary(diffSummary(records, page)) })
+    return () => { offRecords(); offReview() }
   }, [sessionId])
 
   React.useEffect(() => {
@@ -73,11 +75,8 @@ export function ConversationDiffDock(props) {
   }
 
   return React.createElement(React.Fragment, null,
+    palette,
     renderDock(React.createElement(DiffBox, {
-      mode: 'chat',
-      dock: true,
-      fileTotal: paths.length,
-      onOpenNextFile: click,
-    }), sessionId || 'chat'),
-    palette)
+      mode: 'chat', dock: true, fileTotal: paths.length, onOpenNextFile: click,
+    }), sessionId || 'chat'))
 }

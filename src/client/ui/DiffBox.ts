@@ -8,6 +8,7 @@ import React from 'react'
 import { callIdAttr } from '../state/records.js'
 import { canDecideFile, diffDockText } from '../diffDock.js'
 import { badgeOf } from './shared.js'
+import { ReviewLedger } from './OfficialReview.js'
 
 /**
  * 折叠控制使用任务栏同尺寸的 chevron 轮廓，避免依赖未声明的运行时图标包。
@@ -63,6 +64,23 @@ export function DiffBox(props) {
           'aria-label': diffDockText(fileTotal),
           onClick: onOpenNextFile,
         }, diffDockText(fileTotal))))
+  }
+
+  if (props.official) {
+    const official = props.official
+    return React.createElement('div', { className: 'edrv-diffbar edrv-diffbar-dock', 'data-edrv-diffbox': '1', 'data-edrv-diff-source': 'official' },
+      React.createElement('div', { className: 'edrv-diffbar-row' },
+        React.createElement('button', { className: 'edrv-pill edrv-pill-ghost', onClick: onPrevFile, disabled: !fileTotal }, '←'),
+        React.createElement('span', null, base + ' · ' + official.pending + ' 条官方待审记录'),
+        React.createElement('button', { className: 'edrv-pill edrv-pill-ghost', onClick: onNextFile, disabled: !fileTotal }, '→'),
+        React.createElement('button', { className: 'edrv-pill edrv-pill-ghost', onClick: () => setExpanded(!expanded), 'aria-expanded': expanded }, expanded ? '收起差异' : '查看差异 / 标记已审'),
+        React.createElement('button', { className: 'edrv-pill edrv-pill-ghost', disabled: true, title: '官方仅提供差异块，缺少可验证全文，不能安全回滚。' }, 'Undo 不可用'),
+        React.createElement('button', { className: 'edrv-pill edrv-pill-ghost', onClick: () => onOpenLauncher('pending') }, '差异总览'),
+        React.createElement('button', { className: 'edrv-pill edrv-pill-ghost', onClick: () => onOpenLauncher('archive') }, '归档 / 历史')),
+      props.reviewError ? React.createElement('div', { role: 'alert' }, props.reviewError) : null,
+      expanded ? React.createElement('div', { className: 'edrv-diffbar-body' },
+        React.createElement(ReviewLedger, { key: official.sessionId + ':' + official.path, sessionId: official.sessionId,
+          first: official.page, path: official.path })) : null)
   }
 
   let bodyEl = null

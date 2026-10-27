@@ -460,18 +460,18 @@ DSH 每次启动监听随机端口，`http://127.0.0.1:<port>` 就是浏览器 o
 
 官方 `dsh plugin` 方式，三选一。下面以 `web` profile 为例；Desktop 或其他命名
 profile 请替换为实际目标，不要把示例目录当成当前运行 profile。升级前可阅读
-[0.19.2 发布说明](docs/release-0.19.2.md)（修复已删除目录的历史展开记录导致「目录不存在」常驻，子目录错误附带相对路径；本次真实 GUI 尚未验收，用户接受该发布缺口；升级后请强制刷新页面）；从 0.14.2 或更旧版本升级还须阅读
+[0.20.0 发布说明](docs/release-0.20.0.md)（官方轮次净差异持久化并接入现有差异列表和角标；保存不等于已审，缺少可信全文时禁止拒绝写回；升级后重启 DSH 并刷新页面）；从 0.14.2 或更旧版本升级还须阅读
 [0.14.3 数据迁移与回退说明](docs/release-0.14.3.md)。
 
 ```bash
 # ① Git 安装（clone + prepare 构建；推荐打固定 tag）
-dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.19.2
+dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.20.0
 
 # ② npm 注册表（发布到 npm 后）
-dsh plugin --profile web add dsh-vscode-mode@0.19.2
+dsh plugin --profile web add dsh-vscode-mode@0.20.0
 
 # ③ GitHub Release tgz 直装（Release asset 可用后）
-dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.19.2/dsh-vscode-mode-0.19.2.tgz
+dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.20.0/dsh-vscode-mode-0.20.0.tgz
 ```
 
 > **DSH 版本政策（0.17.0 起）**：六项 DSH peer 仍统一声明为 `*`，另以
@@ -811,6 +811,8 @@ Keep All / Undo All 却是亮的。修复：单文件 Keep / Undo 覆盖冲突�
 
 完整变更见 [GitHub Releases](https://github.com/Lenonss/DSH_VsCodeMode/releases)。
 近期关键版本：
+
+- **v0.20.0**：**官方净差异持久化与现有审查入口整合**——采集官方轮次摘要及差异块，SQLite 保存并保留跨轮次 pending；复用现有列表、角标和文件导航，不新增独立审查栏。支持标记已审和编辑当前文件，保存不自动已审；没有可信历史全文及原始字节时禁止拒绝写回。修复路径身份和冷启动历史补采，无法恢复的旧摘要明确显示缺口；修正浅色主题操作栏文字对比度。详见 [0.20.0 发布说明](docs/release-0.20.0.md)。
 
 - **v0.19.2**：**资源管理器缺失目录自愈**——无可用缓存的子目录返回「目录不存在」时，移除其历史展开记录并经现有防抖持久化，避免红条常驻及跟随刷新重复请求；保留根目录缺失和权限错误，子目录错误显示相对路径。不修改请求 token，确保加载态正常清理，目录重建后可手动展开。有缓存时保持原有降级行为。本次真实 GUI 尚未验收，用户接受该发布缺口；不自动安装或重启当前实例。详见 [0.19.2 发布说明](docs/release-0.19.2.md)。
 

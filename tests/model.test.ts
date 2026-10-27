@@ -285,14 +285,18 @@ describe('fileMaxBatch / groupByBatch / archiveEntryFor / prune', () => {
     expect(e.batch).toBe(1)
     expect(e.records[0].summary.accepted).toBe(1)
   })
-  it('prune 剔除最旧记录', () => {
+  it('prune 不淘汰未决记录，只清除已归档且已解决的记录', () => {
     const map = new Map<string, DiffRecord>([
       ['old', rec({ callId: 'old', at: '2026-08-20T00:00:00.000Z' })],
       ['mid', rec({ callId: 'mid', at: '2026-08-20T00:01:00.000Z' })],
       ['new', rec({ callId: 'new', at: '2026-08-20T00:02:00.000Z' })],
     ])
     prune(map, 2)
-    expect(map.has('old')).toBe(false)
+    expect(map.size).toBe(3)
+    map.set('done', rec({ callId: 'done', archived: true, decisions: { call: 'accepted', perHunk: ['accepted'] } }))
+    prune(map, 2)
+    expect(map.has('done')).toBe(false)
+    expect(map.has('old')).toBe(true)
     expect(map.has('mid')).toBe(true)
     expect(map.has('new')).toBe(true)
   })

@@ -7,6 +7,8 @@
 import React from 'react'
 import { rpc } from '../rpc.js'
 import { MONO, btn } from './shared.js'
+import { ReviewLedger } from './OfficialReview.js'
+import { subscribeReview } from '../state/reviewFeed.js'
 
 /**
  * 文件与批次共同标识归档卡片，避免同文件多批次共用展开状态。
@@ -57,6 +59,12 @@ export function DiffLauncher(props) {
   const detailRef = React.useRef(0)
   const moreRef = React.useRef(false)
   const [error, setError] = React.useState(null)
+  const [source, setSource] = React.useState('official')
+  const [review, setReview] = React.useState({ page: null, error: '' })
+  React.useEffect(() => {
+    setReview({ page: null, error: '' })
+    return subscribeReview(sessionId, setReview)
+  }, [sessionId])
 
   /** @author ddj 2026年09月30号 @description 仅加载一个归档摘要页并丢弃失效响应。 */
   const loadArchives = (cursor = null) => {
@@ -92,16 +100,22 @@ export function DiffLauncher(props) {
     moreRef.current = false
     setMoreBusy(false)
     setArchiveDetail(null); setArchivePath(null); setArchiveErr(null)
-    if (tab === 'archive') loadArchives()
+    if (tab === 'archive' && source === 'legacy') loadArchives()
     else { setArchives(null); setNextCursor(null) }
     return () => { requestRef.current++; detailRef.current++ }
-  }, [tab, sessionId])
+  }, [tab, sessionId, source])
 
   let body
-  if (tab === 'pending') {
-    body = (sum.pendingFiles.length === 0
+  const legacyFiles = sum.pendingFiles.filter((file) => file.sourceKind !== 'official')
+  if (source === 'official') {
+    body = React.createElement(React.Fragment, null,
+      React.createElement('div', { className: 'edrv-search-empty' }, '官方轮次净差异 · 原始历史只读；编辑按钮打开当前文件，保存不代表已审。'),
+      review.error ? React.createElement('div', { role: 'alert' }, review.error) : null,
+      React.createElement(ReviewLedger, { key: sessionId + ':' + tab, sessionId, first: review.page, history: tab === 'archive' }))
+  } else if (tab === 'pending') {
+    body = (legacyFiles.length === 0
       ? React.createElement('div', { className: 'edrv-search-empty' }, '暂无待处理差异（已全部处理）')
-      : sum.pendingFiles.map((f) => React.createElement('div', { key: f.path, className: 'edrv-launch-row', title: '打开并跳转到差异 ' + (f.label ?? f.path), onClick: () => onOpenFile(f.path) },
+      : legacyFiles.map((f) => React.createElement('div', { key: f.path, className: 'edrv-launch-row', title: '打开并跳转到差异 ' + (f.label ?? f.path), onClick: () => onOpenFile(f.path) },
           React.createElement('span', { className: 'edrv-launch-path' }, f.label ?? f.path),
           React.createElement('span', { className: 'edrv-launch-cnt' }, '待处理 ' + f.pending + ' 处'),
           React.createElement('button', { className: 'edrv-btn-mini edrv-btn-keep', onClick: (e) => { e.stopPropagation(); onOpenFile(f.path) } }, '打开'))))
@@ -178,6 +192,8 @@ export function DiffLauncher(props) {
       React.createElement('span', { style: { fontSize: 12, fontWeight: 600, color: 'var(--dsw-alias-label-primary,#eee)', marginRight: 4 } }, '差异'),
       React.createElement('button', { className: 'edrv-launch-tab' + (tab === 'pending' ? ' on' : ''), onClick: () => setTab('pending') }, '待处理' + (sum.totalFiles ? ' (' + sum.totalFiles + ')' : '')),
       React.createElement('button', { className: 'edrv-launch-tab' + (tab === 'archive' ? ' on' : ''), onClick: () => setTab('archive') }, '归档'),
+      React.createElement('button', { className: 'edrv-launch-tab' + (source === 'official' ? ' on' : ''), onClick: () => setSource('official') }, '官方净差异'),
+      React.createElement('button', { className: 'edrv-launch-tab' + (source === 'legacy' ? ' on' : ''), onClick: () => setSource('legacy') }, '旧工具记录'),
       React.createElement('span', { style: { flex: 1 } }),
       (error ? React.createElement('span', { style: { fontSize: 11, color: 'var(--dsw-alias-state-error-primary,#d9534f)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '40%' } }, '错误：' + String(error)) : null),
       React.createElement('button', { onClick: onClose, style: btn(false) }, '✕ 关闭')),

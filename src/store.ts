@@ -221,10 +221,10 @@ export async function readForCache(ctx: Ctx, session: Session, cache: Map<string
  */
 export async function recordIsStale(ctx: Ctx, session: Session, cache: Map<string, ReadState>, rec: DiffRecord): Promise<boolean> {
   if (rec.superseded === true) return true
-  if (!Array.isArray(rec.hunks) || !rec.hunks.length) return true
+  if (!Array.isArray(rec.hunks) || !rec.hunks.length) { rec.conflict = true; return false }
   const state = await readForCache(ctx, session, cache, rec.path)
   if (state.kind === 'unavailable') return false
-  if (state.kind === 'missing') return true
+  if (state.kind === 'missing') { rec.conflict = true; return false }
   if (rec.create === true) return false
   const pending = rec.hunks.map((_, idx) => ({ idx, hunk: preciseHunk(rec, idx), status: rec.decisions.perHunk[idx] ?? rec.decisions.call }))
     .filter((item) => item.status === 'pending' && item.hunk && !isNoopHunk(item.hunk))

@@ -277,11 +277,15 @@ export function fileMaxBatch(records: Map<string, DiffRecord>, path: string): nu
   return m
 }
 
-/** 记录桶裁剪：超出 MAX_RECORDS 时剔除最旧的。 */
+/** @public @author ddj 2026年10月26号 @param map Legacy records. @param max Cache target, never a pending retention limit. */
 export function prune(map: Map<string, DiffRecord>, max = MAX_RECORDS): void {
   if (map.size <= max) return
-  const sorted = [...map.values()].sort((a, b) => (a.at < b.at ? -1 : 1))
-  for (let i = 0; i < sorted.length - max; i++) map.delete(sorted[i].callId)
+  const sorted = [...map.values()].filter((record) => record.archived && recordResolved(record))
+    .sort((a, b) => (a.at < b.at ? -1 : 1))
+  for (const record of sorted) {
+    if (map.size <= max) break
+    map.delete(record.callId)
+  }
 }
 
 /** 按批次分组记录。 */

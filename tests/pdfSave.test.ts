@@ -172,7 +172,7 @@ describe('edrv.saveBinary', () => {
     if (!res.ok) expect(res.error).toContain('文件不存在')
   })
 
-  it('成功后该路径 pending 记录被标记 superseded 并归档', async () => {
+  it('保存成功不代表已审：保留本文件与其他文件 pending 记录', async () => {
     writeFileMock.mockClear()
     const fs = fakeFs()
     const pending = rec({ callId: 'c1', path: 'doc.pdf', superseded: false })
@@ -181,9 +181,10 @@ describe('edrv.saveBinary', () => {
     const res = await handlers['edrv.saveBinary']({ sessionId: 's1', path: 'doc.pdf', content: 'JVBERi0=', encoding: 'base64' })
     expect(res.ok).toBe(true)
     const bucket = registry.get(CWD)!
-    expect(bucket.get('c1')!.superseded).toBe(true)
+    expect(bucket.get('c1')!.superseded).toBe(false)
+    expect(bucket.get('c1')!.decisions.call).toBe('pending')
     expect(bucket.get('c2')!.superseded).toBe(false)
-    expect(readActive(CWD).get('c1')).toMatchObject({ superseded: true, archived: true })
+    expect(readActive(CWD).get('c1')).toMatchObject({ superseded: false, archived: false, decisions: { call: 'pending' } })
     expect(readActive(CWD).get('c2')).toMatchObject({ superseded: false, archived: false })
   })
 })

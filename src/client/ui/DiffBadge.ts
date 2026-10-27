@@ -7,7 +7,8 @@
 import React from 'react'
 import { appUrl } from '../../shared/appUrl.js'
 import { openEditorView, emitShowLauncher } from '../events.js'
-import { summarize } from '../state/records.js'
+import { diffSummary } from '../state/diffSummary.js'
+import { subscribeReview } from '../state/reviewFeed.js'
 import { subscribeRecords } from '../state/recordsFeed.js'
 
 /**
@@ -23,13 +24,14 @@ export function DiffBadge(props) {
       return undefined
     }
 
-    return subscribeRecords(sessionId, (records) => {
-      setSummary(summarize(records))
-    })
+    let records = [], page = null
+    const offRecords = subscribeRecords(sessionId, (next) => { records = next; setSummary(diffSummary(records, page)) })
+    const offReview = subscribeReview(sessionId, (feed) => { page = feed.page; setSummary(diffSummary(records, page)) })
+    return () => { offRecords(); offReview() }
   }, [sessionId])
 
   const n = summary?.totalFiles ?? 0
-  if (!n) return null
+  if (!sessionId) return null
 
   const click = () => {
     // 侧栏形态：带首个待处理文件路径（内容打开自动展开面板）；旧形态行为不变
@@ -39,7 +41,7 @@ export function DiffBadge(props) {
 
   return React.createElement('button', {
     onClick: click,
-    title: n + ' 个文件有差异，点击在编辑区查看',
+    title: '差异审查：' + n + ' 个待处理文件；点击查看总览与历史',
     style: { position: 'relative', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 30, height: 30, padding: 0, background: 'transparent', border: 'none', borderRadius: 6, cursor: 'pointer' },
   },
     React.createElement('img', { src: appUrl('/edrv/assets/compare-select.png'), alt: '差异', style: { width: 22, height: 22, display: 'block' } }),

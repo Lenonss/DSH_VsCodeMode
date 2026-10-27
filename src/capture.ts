@@ -30,7 +30,7 @@ interface CaptureExec {
 /** 捕获所需的工具结果最小形状（tools/result 的结构子集）。 */
 interface CaptureResult {
   isError?: unknown
-  value?: { path?: unknown; before?: unknown; after?: unknown } | null
+  value?: { path?: unknown; before?: unknown; after?: unknown; operation?: unknown } | null
   meta?: { diffs?: unknown }
 }
 
@@ -90,7 +90,7 @@ function buildLocalRecord(exec: CaptureExec, args: Record<string, unknown>, resu
   if (typeof path !== 'string' || !path) return null
   const before = value && typeof value.before === 'string' ? value.before : null
   const after = value && typeof value.after === 'string' ? value.after : (typeof args.content === 'string' ? args.content : null)
-  const create = exec.name === 'write' && !!value && value.before === null
+  const create = exec.name === 'write' && value?.operation === 'create'
   const callHunk = exec.name === 'edit' && typeof args.old_string === 'string' && typeof args.new_string === 'string'
     ? { oldText: args.old_string, newText: args.new_string }
     : null

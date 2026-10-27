@@ -22,6 +22,8 @@ import { acceptsLoad, receiptErrorFor, receiptPath, receiptReadyFor, receiptTabP
 import { bindPanelCommand } from '../panelCommands.js'
 import { dbg, isDebug, rpc } from '../rpc.js'
 import { refreshFeed, subscribeErrors, subscribeRecords } from '../state/recordsFeed.js'
+import { subscribeReview } from '../state/reviewFeed.js'
+import { diffSummary, officialPath } from '../state/diffSummary.js'
 import { emitFileChanged, emitRefresh } from '../events.js'
 import { langOf, loadMonaco, snippetLanguageOf } from '../monaco/loader.js'
 import { bindEditActions, runEditAction } from '../monaco/editActions.js'
@@ -256,6 +258,12 @@ export function EditorView(props) {
   const [monaco, setMonaco] = React.useState(null)
   const [monacoErr, setMonacoErr] = React.useState(null)
   const [records, setRecords] = React.useState({})
+  const [review, setReview] = React.useState({ page: null, error: '' })
+  React.useEffect(() => {
+    setReview({ page: null, error: '' })
+    if (!sessionId) return undefined
+    return subscribeReview(sessionId, setReview)
+  }, [sessionId])
   const [tabs, setTabs] = React.useState([])
   const [active, setDiskActive] = React.useState(null)
   const [planTabs, setPlanTabs] = React.useState([])
@@ -531,11 +539,11 @@ export function EditorView(props) {
   const currentRecords = React.useMemo(() => {
     const list = []
     for (const rec of Object.values(records)) {
-      if (rec.archived === true) continue
+      if (rec.archived === true || officialPath(rec.path, review.page)) continue
       if (sameFile(rec.path, active)) list.push(rec)
     }
     return list
-  }, [records, active, cwd])
+  }, [records, active, cwd, review.page])
 
   const contentReady = content !== null && contentPath === active
   // 当前 tab 是否处于图片预览模式（与 loadContent 的分派条件同源；SVG 文本模式时为 false）
@@ -575,7 +583,7 @@ export function EditorView(props) {
     return map
   }, [pendingRegions])
   lineRegionMapRef.current = lineRegionMap
-  const sum = React.useMemo(() => summarize(Object.values(records)), [records])
+  const sum = React.useMemo(() => diffSummary(Object.values(records), review.page), [records, review.page])
 
   /** @private @author ddj 2026年10月08号 @param path Disk path. @param select Select tab. @param preview Optional explicit Markdown mode. */
   function addTab(path, select, preview) {
@@ -3132,7 +3140,7 @@ export function EditorView(props) {
   const allPending = React.useMemo(() => {
     const out = []
     for (const rec of Object.values(records)) {
-      if (rec.superseded === true) continue
+      if (rec.superseded === true || officialPath(rec.path, review.page)) continue
       const perHunk = Array.isArray(rec.decisions?.perHunk) ? rec.decisions.perHunk : []
       const hunks = Array.isArray(rec.hunks) ? rec.hunks : []
       for (let i = 0; i < hunks.length; i++) {
@@ -3141,7 +3149,7 @@ export function EditorView(props) {
       }
     }
     return out
-  }, [records])
+  }, [records, review.page])
 
   /**
    * 批量处理所有差异文件：采纳全部 / 不采纳全部。不采纳按 at 降序（新改先回滚）排序后一次 RPC。
@@ -4318,8 +4326,12 @@ export function EditorView(props) {
    * @author ddj 2026年09月29号
    * @returns 含布局及操作回调的差异快照
    */
+  const officialFile = review.page?.overview?.coveredPaths.find((path) => sameFile(path, active))
   const buildDockSnapshot = () => ({
     mode: editorDockMode(active),
+    official: officialFile ? { sessionId, page: review.page, path: officialFile,
+      pending: sum.files.find((file) => sameFile(file.path, active))?.pending ?? 0 } : null,
+    reviewError: review.error,
     layout,
     pendingRegions,
     staleRegions,

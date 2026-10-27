@@ -263,13 +263,23 @@ describe('captureToolResult · 本地 write 回归（S4）', () => {
     const abs = join(cwd, 'f.txt')
     await captureToolResult(fakeCtx(), registry,
       execOf('write', { file_path: abs, content: 'x' }, cwd),
-      { value: { path: abs, before: null, after: 'x' }, isError: false })
+      { value: { path: abs, before: null, after: 'x', operation: 'create' }, isError: false })
     const rec = recOf(registry, cwd, 'c1')
     expect(rec).toBeDefined()
     expect(rec!.toolName).toBe('write')
     expect(rec!.create).toBe(true)
     expect(norm(rec!.path)).toBe(norm(abs))
     expect(rec!.note).toContain('新建文件')
+  })
+
+  it('before=null 的 update 不得误判新建', async () => {
+    const cwd = mkWorkspace(false)
+    const registry: Registry = new Map()
+    const abs = join(cwd, 'existing.txt')
+    await captureToolResult(fakeCtx(), registry,
+      execOf('write', { file_path: abs, content: 'x' }, cwd),
+      { value: { path: abs, before: null, after: 'x', operation: 'update' }, isError: false })
+    expect(recOf(registry, cwd, 'c1')?.create).toBe(false)
   })
 
   it('远程工作区里的本地 edit/write 照旧走原分支（toolName=edit）', async () => {

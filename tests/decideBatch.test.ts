@@ -11,6 +11,7 @@ import { join } from 'node:path'
 import { closeArchiveDbs, listArchives, migrateActive } from '../src/archiveDb.js'
 import { archiveDbFile } from '../src/paths.js'
 import { buildHandlers } from '../src/rpc.js'
+import { saveSnapshot } from '../src/reviewDb.js'
 import type { DiffRecord } from '../src/shared/types.js'
 
 const SIDECAR = '.dsh-edit-review.json'
@@ -88,6 +89,22 @@ function bucketOf(records: DiffRecord[]): Map<string, DiffRecord> {
 }
 
 describe('edrv.decideBatch', () => {
+  it('official identity blocks old accept, reject, batch and rollback without file IO', async () => {
+    const path = CWD + '/a.ts'
+    saveSnapshot(CWD, { sourceKind: 'official', sessionId: 'source', turn: 1, seq: 10, capturedAt: '',
+      summary: { cwd: CWD, turn: 1, total: 1, added: 1, deleted: 1, files: [{ path, display: path, added: 1, deleted: 1 }] },
+      files: [{ identity: path, diff: { kind: 'text', path, display: path, before: true, after: true, coarse: false, hunks: [] } }] })
+    const fs = fakeFs({ [path]: 'b' })
+    const registry = new Map([[CWD, bucketOf([rec({})])]])
+    const handlers = buildHandlers(fakeCtx(fs), registry)
+    expect(await handlers['edrv.accept']({ sessionId: 's1', callId: 'c1' })).toMatchObject({ ok: false, error: expect.stringContaining('官方审查') })
+    expect(await handlers['edrv.reject']({ sessionId: 's1', callId: 'c1' })).toMatchObject({ ok: false })
+    const batch = await handlers['edrv.decideBatch']({ sessionId: 's1', items: [{ callId: 'c1', decision: 'rejected' }] })
+    expect(batch).toMatchObject({ ok: true, results: [{ ok: false }] })
+    expect(await handlers['edrv.rollback']({ sessionId: 's1', path })).toMatchObject({ ok: false, error: expect.stringContaining('官方审查') })
+    expect(fs.writeText).not.toHaveBeenCalled()
+    expect(registry.get(CWD)!.get('c1')!.decisions.call).toBe('pending')
+  })
   it('批量采纳多记录：SQLite 同批次去重且不重写 sidecar', async () => {
     const fs = fakeFs({})
     const ctx = fakeCtx(fs)
@@ -209,7 +226,9 @@ describe('edrv.decideBatch', () => {
     })
     expect(result.ok).toBe(true)
     if (!result.ok) return
-    expect(result.results.map(({ ok, stale }) => [ok, stale])).toEqual([[true, undefined], [true, true], [true, undefined]])
+    expect(result.results.map(({ ok }) => ok)).toEqual([true, false, true])
+    expect(registry.get(CWD)!.get('multi')!.decisions.perHunk).toEqual(['rejected', 'pending', 'rejected'])
+    expect(registry.get(CWD)!.get('multi')!.archived).toBe(false)
     expect(await fs.readText(CWD + '/a.ts')).toBe('old1\nold3')
     expect(fs.writeText.mock.calls.filter(([path]: [string]) => path === CWD + '/a.ts')).toHaveLength(1)
   })
@@ -236,7 +255,7 @@ describe('edrv.decideBatch', () => {
     expect(record.decisions.perHunk).toEqual(['pending', 'pending'])
   })
 
-  it('rejected 目标 hunk 已不在文件中：不改文件，按已回滚归档并标记 stale', async () => {
+  it('rejected 目标 hunk 已不在文件中：不改文件，保留 pending 并报告失败', async () => {
     // 磁盘内容与 hunk newText 不匹配 → 该差异已被后续修改覆盖，无可回滚内容
     const fs = fakeFs({ [CWD + '/a.ts']: 'xxx' })
     const ctx = fakeCtx(fs)
@@ -249,11 +268,11 @@ describe('edrv.decideBatch', () => {
     ] })
     expect(res.ok).toBe(true)
     if (!res.ok) return
-    expect(res.results[0]).toMatchObject({ callId: 'a', ok: true, stale: true })
-    expect(res.results[0].record?.decisions.perHunk).toEqual(['rejected'])
-    // 文件保持原样（未写回滚内容），仅写 SQLite 归档
+    expect(res.results[0]).toMatchObject({ callId: 'a', ok: false })
+    expect(registry.get(CWD)!.get('a')!.decisions.perHunk).toEqual(['pending'])
+    // 无法定位不是已撤销；文件和用户决定均保持原样。
     expect(await fs.readText(CWD + '/a.ts')).toBe('xxx')
-    expect(registry.get(CWD)!.get('a')!.archived).toBe(true)
+    expect(registry.get(CWD)!.get('a')!.archived).toBe(false)
     expect(fs.writeText.mock.calls.length).toBe(0)
   })
 
@@ -320,8 +339,8 @@ describe('edrv.accept / edrv.reject 单条委托', () => {
 })
 
 describe('edrv.list skipStale', () => {
-  it('skipStale:true 跳过 stale 清理（幽灵差异保留），默认全量会归档', async () => {
-    // ghost.ts 磁盘不存在 → recordIsStale 命中 missing → 默认 list 会自动归档
+  it('skipStale 和默认轮询均不把文件缺失当作已处理', async () => {
+    // 文件缺失只说明冲突，不能证明用户已经拒绝或接受。
     const stale = rec({ callId: 'ghost', path: CWD + '/ghost.ts' })
     const fs = fakeFs({})
     const ctx = fakeCtx(fs)
@@ -337,8 +356,7 @@ describe('edrv.list skipStale', () => {
     const full = await handlers['edrv.list']({ sessionId: 's1' })
     expect(full.ok).toBe(true)
     if (!full.ok) return
-    // 全量轮询触发 autoArchiveStale → ghost 被归档，不再出现在列表
-    expect(full.records.map((r) => r.callId)).not.toContain('ghost')
-    expect(registry.get(CWD)!.get('ghost')!.superseded).toBe(true)
+    expect(full.records.map((r) => r.callId)).toContain('ghost')
+    expect(registry.get(CWD)!.get('ghost')).toMatchObject({ superseded: false, conflict: true, archived: false })
   })
 })

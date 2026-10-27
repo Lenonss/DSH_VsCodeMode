@@ -1,6 +1,7 @@
 /** dsh-vscode-mode Host composition. @author ddj 2026年09月28号 */
 import { registerRoutes } from './routes.js'
 import { captureToolResult } from './capture.js'
+import { installCapture } from './officialCapture.js'
 import { closeArchiveDbs } from './archiveDb.js'
 import { handleRpc, integrationBaseUrlOf } from './rpc.js'
 import { newSearcher } from './search/orchestrator.js'
@@ -67,6 +68,7 @@ function createRuntime(ctx: Ctx, config: unknown) {
  * @param runtime Managers created by this instance.
  */
 function attachRuntime(ctx: Ctx, runtime: Runtime): void {
+  const stopCapture = installCapture(ctx)
   /** @author ddj 2026年09月28号 @param exec Tool execution. @param result Tool result. */
   function onResult(exec: unknown, result: unknown): void {
     void captureToolResult(ctx, runtime.registry, exec, result)
@@ -84,6 +86,7 @@ function attachRuntime(ctx: Ctx, runtime: Runtime): void {
   }
   /** @author ddj 2026年09月28号 Release every manager even if another cleanup rejects. */
   async function cleanup(): Promise<void> {
+    await stopCapture()
     runtime.fileVersions.dispose()
     closeArchiveDbs()
     disposeAllServers()

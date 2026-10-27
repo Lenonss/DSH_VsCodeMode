@@ -33,7 +33,7 @@ type Row = Record<string, string | number | null>
  * @param cwd 工作区绝对路径
  * @returns 已缓存连接
  */
-function dbFor(cwd: string): DatabaseSync {
+export function dbFor(cwd: string): DatabaseSync {
   const existing = connections.get(cwd)
   if (existing) return existing
   const file = archiveDbFile(cwd)
@@ -44,7 +44,7 @@ function dbFor(cwd: string): DatabaseSync {
     db.exec('CREATE TABLE IF NOT EXISTS metadata (name TEXT PRIMARY KEY, value TEXT NOT NULL)')
     const version = db.prepare("SELECT value FROM metadata WHERE name='schema'").get() as Row | undefined
     const workspace = db.prepare("SELECT value FROM metadata WHERE name='cwd'").get() as Row | undefined
-    if ((version && version.value !== '2' && version.value !== '3') || (workspace && workspace.value !== cwd)) throw new Error('归档数据库 schema/工作区不匹配')
+    if ((version && version.value !== '2' && version.value !== '3' && version.value !== '4') || (workspace && workspace.value !== cwd)) throw new Error('归档数据库 schema/工作区不匹配')
     if (!!version !== !!workspace) throw new Error('归档数据库元数据不完整')
     if (!version) {
       const other = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name<>'metadata' LIMIT 1").get()
@@ -81,7 +81,7 @@ function dbFor(cwd: string): DatabaseSync {
         throw error
       }
     }
-    if (version?.value === '3') {
+    if (version && (version.value === '3' || version.value === '4')) {
       const active = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='active_records'").get()
       const source = db.prepare("SELECT value FROM metadata WHERE name='active_source'").get()
       if (!active || !source) throw new Error('活跃记录数据库元数据不完整')
@@ -105,7 +105,7 @@ function dbFor(cwd: string): DatabaseSync {
 export async function migrateActive(cwd: string, source: string | null, confirm: () => Promise<string | null>): Promise<Map<string, DiffRecord>> {
   const db = dbFor(cwd)
   const version = String((db.prepare("SELECT value FROM metadata WHERE name='schema'").get() as Row).value)
-  if (version === '3') return readActive(cwd)
+  if (version === '3' || version === '4') return readActive(cwd)
   const digest = source === null ? 'absent' : createHash('sha256').update(source).digest('hex')
   let recs: Record<string, DiffRecord> = {}
   if (source !== null) {
@@ -148,7 +148,7 @@ export async function migrateActive(cwd: string, source: string | null, confirm:
  * @returns 迁移完成返回 true
  */
 export function activeReady(cwd: string): boolean {
-  return (dbFor(cwd).prepare("SELECT value FROM metadata WHERE name='schema'").get() as Row).value === '3'
+  return ['3', '4'].includes(String((dbFor(cwd).prepare("SELECT value FROM metadata WHERE name='schema'").get() as Row).value))
 }
 
 /**
@@ -173,7 +173,7 @@ export function checkActiveSource(cwd: string, source: string | null): void {
  */
 export function readActive(cwd: string): Map<string, DiffRecord> {
   const db = dbFor(cwd)
-  if ((db.prepare("SELECT value FROM metadata WHERE name='schema'").get() as Row).value !== '3') throw new Error('工作区活跃记录未迁移')
+  if (!activeReady(cwd)) throw new Error('工作区活跃记录未迁移')
   const rows = db.prepare('SELECT payload FROM active_records ORDER BY rowid').all() as Row[]
   const recs = rows.map((row) => JSON.parse(String(row.payload)) as DiffRecord)
   return new Map(recs.map((rec) => [rec.callId, rec]))
@@ -189,7 +189,7 @@ export function readActive(cwd: string): Map<string, DiffRecord> {
  */
 export function commitActive(cwd: string, changes: ActiveChange, entries: ArchiveBatch[] = []): number {
   const db = dbFor(cwd)
-  if ((db.prepare("SELECT value FROM metadata WHERE name='schema'").get() as Row).value !== '3') throw new Error('工作区活跃记录未迁移')
+  if (!activeReady(cwd)) throw new Error('工作区活跃记录未迁移')
   const upsert = db.prepare(`INSERT INTO active_records(call_id,payload,path,archived,pending,at) VALUES(?,?,?,?,?,?)
     ON CONFLICT(call_id) DO UPDATE SET payload=excluded.payload,path=excluded.path,
       archived=excluded.archived,pending=excluded.pending,at=excluded.at`)
@@ -218,7 +218,7 @@ export function commitActive(cwd: string, changes: ActiveChange, entries: Archiv
  */
 export function activeSummary(cwd: string): { active: number; pendingByFile: { path: string; pending: number }[] } {
   const db = dbFor(cwd)
-  if ((db.prepare("SELECT value FROM metadata WHERE name='schema'").get() as Row).value !== '3') throw new Error('工作区活跃记录未迁移')
+  if (!activeReady(cwd)) throw new Error('工作区活跃记录未迁移')
   const active = Number((db.prepare('SELECT count(*) AS n FROM active_records WHERE archived=0').get() as Row).n)
   const rows = db.prepare('SELECT path, sum(pending) AS pending FROM active_records WHERE archived=0 AND pending>0 GROUP BY path ORDER BY pending DESC').all() as Row[]
   return { active, pendingByFile: rows.map((row) => ({ path: String(row.path), pending: Number(row.pending) })) }

@@ -25,6 +25,7 @@ import { DAP_ACTIONS } from './dap.js'
 import { appUrl } from './appUrl.js'
 import type { LoggerLevel } from './logger.js'
 import type { SvnViewRequest, SvnViewPayload } from './svnExplorer.js'
+import type { DecideReview, ReviewDetail, ReviewPage, ReviewRequest } from './review.js'
 
 /** webServer 精确路由。 */
 export const RPC_PATH = '/edrv/rpc'
@@ -368,6 +369,9 @@ export interface UiStatePatchInput {
 
 /** 每个方法的请求参数（sessionId 为公共可选字段）。 */
 export interface RpcRequestMap {
+  'edrv.review.list': ReviewRequest & { cursor?: number; history?: boolean; path?: string }
+  'edrv.review.detail': ReviewRequest & { id: string }
+  'edrv.review.decide': DecideReview
   'edrv.list': { sessionId?: string; callIds?: string[]; skipStale?: boolean }
   'edrv.accept': { sessionId?: string; callId: string; scope?: RpcScope; hunkIndex?: number }
   'edrv.reject': { sessionId?: string; callId: string; scope?: RpcScope; hunkIndex?: number }
@@ -537,6 +541,9 @@ export type RpcMethod = keyof RpcRequestMap
 
 /** 每个方法成功（ok:true）时的附加载荷。 */
 export interface RpcOkMap {
+  'edrv.review.list': { page: ReviewPage }
+  'edrv.review.detail': { detail: ReviewDetail }
+  'edrv.review.decide': { revision: number }
   'edrv.list': { records: RecordView[] }
   'edrv.accept': { record: RecordView }
   'edrv.reject': { record: RecordView }
