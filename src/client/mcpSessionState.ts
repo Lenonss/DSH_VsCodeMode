@@ -2,11 +2,16 @@
 import { rpc } from './rpc.js'
 import type { McpSessionStatus } from '../shared/mcp.js'
 
-export interface SessionMcpView { status?: McpSessionStatus; stale: boolean }
+export interface SessionMcpView {
+  status?: McpSessionStatus
+  stale: boolean
+  /** Query lifecycle only; never a connection failure classification. */
+  reason?: 'pending' | 'paused' | 'unavailable'
+  /** Browser receipt time of the last accepted snapshot, in epoch milliseconds. */
+  observedAt?: number
+}
 type Snapshot = { sessions: McpSessionStatus[]; sampledAt: number }
 type FetchStatus = (signal: AbortSignal) => Promise<Snapshot>
-const unavailable: SessionMcpView = { stale: true }
-const inactive: SessionMcpView = { stale: false }
 
 /** One poller for all mounted row/hover consumers; never retains or activates sessions. */
 export class McpSessionState {
@@ -15,14 +20,14 @@ export class McpSessionState {
   private timer?: ReturnType<typeof setTimeout>
   private request?: AbortController
   private epoch = 0
-  private stale = true
+  private fallback: SessionMcpView = { stale: true, reason: 'pending' }
   private disposed = false
 
   /** @public @author ddj 2026年10月20号 @param fetchStatus Authenticated read-only query. @param page Visibility boundary, omitted for server tests. */
   constructor(private readonly fetchStatus: FetchStatus, private readonly page?: Document) {}
 
   /** @public @author ddj 2026年10月20号 @param sessionId Row identity. @returns Stable view until the next observation. */
-  get(sessionId: string): SessionMcpView { return this.views.get(sessionId) ?? (this.stale ? unavailable : inactive) }
+  get(sessionId: string): SessionMcpView { return this.views.get(sessionId) ?? this.fallback }
 
   /** @public @author ddj 2026年10月20号 @param sessionId Row identity. @param listener React invalidation. @returns Idempotent unsubscribe; the last consumer stops polling. */
   subscribe(sessionId: string, listener: () => void): () => void {
@@ -33,7 +38,8 @@ export class McpSessionState {
     this.listeners.set(sessionId, listeners)
     if (first) {
       this.page?.addEventListener('visibilitychange', this.visibility)
-      void this.poll()
+      if (this.page?.hidden) this.markStale('paused')
+      else void this.poll()
     }
     return () => {
       listeners.delete(listener)
@@ -54,7 +60,7 @@ export class McpSessionState {
     clearTimeout(this.timer)
     this.timer = undefined
     this.request?.abort()
-    this.publish(undefined)
+    this.markStale('paused')
   }
 
   /** @private @author ddj 2026年10月20号 Cleans listener lifetime as well as timers. */
@@ -66,32 +72,53 @@ export class McpSessionState {
   /** @public @author ddj 2026年10月20号 Permanently disposes HMR-owned polling. */
   dispose(): void { this.disposed = true; this.pause(); this.listeners.clear(); this.views.clear() }
 
-  /** @private @author ddj 2026年10月20号 @param snapshot Fresh ledger, or undefined to mark all previous observations stale. */
-  private publish(snapshot?: Snapshot): void {
-    this.stale = snapshot === undefined
-    if (snapshot) this.views = new Map(snapshot.sessions.map((status) => [status.sessionId, { status, stale: false }]))
-    else for (const [id, view] of this.views) this.views.set(id, { ...view, stale: true })
+  /** @private @author ddj 2026年10月27号 @param snapshot Fresh ledger. Records browser receipt time without changing the host protocol. */
+  private publish(snapshot: Snapshot): void {
+    const observedAt = Date.now()
+    this.fallback = { stale: false, observedAt }
+    this.views = new Map(snapshot.sessions.map((status) => [status.sessionId, { status, stale: false, observedAt }]))
+    this.notify()
+  }
+
+  /** @private @author ddj 2026年10月27号 @param reason Query lifecycle, never a claim about connection health. Preserves stable references for unchanged observations. */
+  private markStale(reason: NonNullable<SessionMcpView['reason']>): void {
+    if (this.fallback.stale && this.fallback.reason === reason) return
+    this.fallback = { ...this.fallback, stale: true, reason }
+    for (const [id, view] of this.views) this.views.set(id, { ...view, stale: true, reason })
+    this.notify()
+  }
+
+  /** @private @author ddj 2026年10月27号 Notifies mounted row and hover consumers after an observation changes. */
+  private notify(): void {
     for (const listeners of this.listeners.values()) for (const listener of listeners) listener()
   }
 
   /** @private @author ddj 2026年10月20号 Queries once, with a 10-second deadline and a 2.5-second gap after settlement. */
   private async poll(): Promise<void> {
     if (this.disposed || this.request || !this.listeners.size || this.page?.hidden) return
+    clearTimeout(this.timer)
+    this.timer = undefined
+    if (this.fallback.reason === 'paused') this.markStale('pending')
+
     const request = new AbortController()
     const epoch = this.epoch
     this.request = request
     /** @author ddj 2026年10月20号 Marks overdue responses unusable even if a transport ignores cancellation. */
-    const expire = (): void => { request.abort(); if (epoch === this.epoch) this.publish(undefined) }
+    const expire = (): void => { request.abort(); if (epoch === this.epoch) this.markStale('unavailable') }
     const deadline = setTimeout(expire, 10000)
     try {
       const snapshot = await this.fetchStatus(request.signal)
       if (epoch === this.epoch && !request.signal.aborted) this.publish(snapshot)
     } catch {
-      if (epoch === this.epoch) this.publish(undefined)
+      if (epoch === this.epoch) this.markStale('unavailable')
     } finally {
       clearTimeout(deadline)
       this.request = undefined
-      if (!this.disposed && this.listeners.size && !this.page?.hidden) this.timer = setTimeout(() => { void this.poll() }, 2500)
+      // A visibility/subscription change resumes promptly, but only after the old transport settles.
+      if (!this.disposed && this.listeners.size && !this.page?.hidden) {
+        const delay = epoch === this.epoch ? 2500 : 0
+        this.timer = setTimeout(() => { void this.poll() }, delay)
+      }
     }
   }
 }

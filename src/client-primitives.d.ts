@@ -14,6 +14,18 @@ declare module '@deepseek-ai/dsh-client-ui-primitives' {
     icon?: import('react').ReactNode
   }>
 
+  /** Centered body-portaled dialog; mirrors official Modal.d.ts. @author ddj 2026年10月27号 */
+  export const Modal: import('react').ComponentType<{
+    open: boolean
+    onClose: () => void
+    title: string
+    description?: string
+    children?: import('react').ReactNode
+    footer?: import('react').ReactNode
+    className?: string
+    contentClassName?: string
+  } & ({ headless: true; closeLabel?: never } | { headless?: false; closeLabel: string })>
+
   /** Anchored selectable menu; mirrors the subset used from official Menu.d.ts. @author ddj 2026年10月27号 */
   export const Menu: import('react').ComponentType<{
     open: boolean

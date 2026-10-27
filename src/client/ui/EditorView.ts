@@ -24,6 +24,7 @@ import { dbg, isDebug, rpc } from '../rpc.js'
 import { refreshFeed, subscribeErrors, subscribeRecords } from '../state/recordsFeed.js'
 import { subscribeReview, refreshReview } from '../state/reviewFeed.js'
 import { runReviewBatch } from '../reviewBatch.js'
+import { ReviewAllConfirm } from './ReviewAllConfirm.js'
 import { reviewRegions } from '../../shared/reviewRegions.js'
 import { diffSummary, officialPath } from '../state/diffSummary.js'
 import { emitFileChanged, emitRefresh } from '../events.js'
@@ -445,6 +446,7 @@ export function EditorView(props) {
   const hoverPanelRef = React.useRef(false) // 鼠标是否已进入 Keep/Undo 浮层
   const batchBusyRef = React.useRef(false) // 批量 Keep All/Undo All 防重入
   const [reviewBatchBusy, setReviewBatchBusy] = React.useState(false)
+  const [reviewAllPrompt, setReviewAllPrompt] = React.useState(null)
   const reviewLifeRef = React.useRef(null)
   React.useEffect(() => {
     const token = { live: true }
@@ -3272,9 +3274,7 @@ export function EditorView(props) {
   async function actReviewAll(reject) {
     if (batchBusyRef.current) return
     if (!review.page?.overview) { setError('官方待审列表尚未就绪，未执行批量操作'); return }
-    const count = sum.pendingFiles.length
-    if (!count) return
-    if (!window.confirm(`${reject ? 'Undo All' : 'Keep All'}：处理当前工作区全部 ${count} 个待审差异文件（含其他轮次）？${reject ? '\n撤销会改写磁盘；逐项安全校验，遇到冲突停止，已完成项不会自动恢复。' : '\n只标记待审修改为保留，不改写文件。'}`)) return
+    if (!sum.pendingFiles.length) return
     const token = reviewLifeRef.current
     const undoPath = activeRef.current
     const undoModel = editorRef.current?.getModel?.()
@@ -3301,8 +3301,28 @@ export function EditorView(props) {
     } catch (cause) { if (token?.live) setError(String(cause)) }
     finally { batchBusyRef.current = false; if (token?.live) setReviewBatchBusy(false) }
   }
-  const acceptAllFiles = () => actReviewAll(false)
-  const undoAllFiles = () => actReviewAll(true)
+  /** @private @author ddj 2026年10月27号 @param reject Whether to undo pending files. @description Open a DSH confirmation without starting any mutations. */
+  function askReviewAll(reject) {
+    if (batchBusyRef.current || !sum.pendingFiles.length) return
+    if (!review.page?.overview) { setError('官方待审列表尚未就绪，未执行批量操作'); return }
+    setReviewAllPrompt({ reject, count: sum.pendingFiles.length, token: reviewLifeRef.current })
+  }
+
+  /** @private @author ddj 2026年10月27号 @description Dismiss the pending confirmation without changing review state. */
+  function cancelReviewAll() {
+    setReviewAllPrompt(null)
+  }
+
+  /** @private @author ddj 2026年10月27号 @description Confirm only within the session lifetime that opened the modal. @returns The guarded batch operation, if still valid. */
+  function confirmReviewAll() {
+    const prompt = reviewAllPrompt
+    setReviewAllPrompt(null)
+    if (!prompt?.token?.live || prompt.token !== reviewLifeRef.current) return
+    return actReviewAll(prompt.reject)
+  }
+
+  const acceptAllFiles = () => askReviewAll(false)
+  const undoAllFiles = () => askReviewAll(true)
   const rollbackFile = () => {
     if (!active) return
     if (!window.confirm('回滚当前文件到修改前状态？（相关差异将归档）')) return
@@ -5015,5 +5035,11 @@ export function EditorView(props) {
         snippetPickerEl,
         dapBpMenuEl,
         dapBpEditEl)
-  return rootEl
+  const reviewAllEl = reviewAllPrompt?.token?.live && reviewAllPrompt.token === reviewLifeRef.current
+    ? React.createElement(ReviewAllConfirm, {
+        reject: reviewAllPrompt.reject, count: reviewAllPrompt.count,
+        onCancel: cancelReviewAll, onConfirm: confirmReviewAll,
+      })
+    : null
+  return React.createElement(React.Fragment, null, rootEl, reviewAllEl)
 }

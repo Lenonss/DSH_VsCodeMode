@@ -20,7 +20,7 @@ function useMcpView({ sessionId, store }: McpRowProps): SessionMcpView {
 
 /** @public @author ddj 2026年10月20号 @param view Current observation. @returns Accessible row label; steady states deliberately do not occupy the leading slot. */
 export function mcpRowLabel(view: SessionMcpView): string | undefined {
-  if (view.stale) return '项目 MCP 状态暂不可用（上次状态已过期）'
+  if (view.stale) return undefined
   if (!view.status || (!busy.has(view.status.phase) && view.status.phase !== 'error')) return undefined
   return '项目 MCP：' + labels[view.status.phase]
 }
@@ -30,7 +30,7 @@ export function McpSessionIcon(props: McpRowProps): React.ReactElement | null {
   const view = useMcpView(props)
   const label = mcpRowLabel(view)
   if (!label) return null
-  const warning = view.stale || view.status?.phase === 'error'
+  const warning = view.status?.phase === 'error'
   return React.createElement('span', {
     role: 'img', 'aria-label': label, title: label,
     style: { display: 'inline-flex', width: 16, height: 16, alignItems: 'center', justifyContent: 'center',
@@ -40,6 +40,13 @@ export function McpSessionIcon(props: McpRowProps): React.ReactElement | null {
 
 /** @private @author ddj 2026年10月20号 @param start Stage start. @param end Stage finish or local clock. @returns Human-readable elapsed time, without claiming a timeout. */
 function elapsed(start: number, end: number): string { return Math.max(0, (end - start) / 1000).toFixed(1) + ' 秒' }
+
+/** @private @author ddj 2026年10月27号 @param view Query observation. @returns Query-only explanation, separate from initialization health. */
+function queryMessage(view: SessionMcpView): string {
+  if (view.reason === 'paused') return '状态查询已暂停'
+  if (view.reason === 'pending') return '正在查询项目 MCP 状态'
+  return '状态查询暂不可用，不代表 MCP 初始化失败'
+}
 
 /** @public @author ddj 2026年10月20号 @param props Official hover sessionId and poller. @returns Project-only diagnostic detail, never transport credentials. */
 export function McpSessionDetail(props: McpRowProps): React.ReactElement {
@@ -53,10 +60,18 @@ export function McpSessionDetail(props: McpRowProps): React.ReactElement {
   }, [status, view.stale])
 
   const children: React.ReactNode[] = [React.createElement('strong', { key: 'title' }, '项目 MCP')]
-  if (view.stale) children.push(React.createElement('div', { key: 'stale', role: 'status' }, '状态暂不可用；以下如有记录，为上次观测结果'))
-  if (!status) children.push(React.createElement('div', { key: 'empty' }, view.stale ? '等待状态查询' : '当前无活跃 MCP 实例'))
-  else {
-    const end = status.finishedAt ?? now
+  if (view.stale) {
+    children.push(React.createElement('div', { key: 'stale', role: 'status' }, queryMessage(view)))
+    if (status) children.push(React.createElement('div', { key: 'history' }, '以下为上次观测结果，不代表当前状态'))
+    if (view.observedAt !== undefined) children.push(React.createElement('div', { key: 'observed' },
+      '上次观测时间：' + new Date(view.observedAt).toLocaleString()))
+  }
+  if (!status && !view.stale) children.push(React.createElement('div', { key: 'empty' }, '当前无活跃 MCP 实例'))
+  if (status) {
+    // Unobserved time must not look like continued initialization, including per-server timing.
+    let observedNow = now
+    if (view.stale) observedNow = view.observedAt ?? status.phaseAt
+    const end = status.finishedAt ?? observedNow
     const completed = status.servers.filter((server) => server.phase === 'ready').length
     const slow = !view.stale && busy.has(status.phase) && now - status.phaseAt > 10000
     children.push(React.createElement('div', { key: 'phase' }, labels[status.phase], slow ? '（耗时较长，不代表失败）' : ''))
@@ -64,7 +79,7 @@ export function McpSessionDetail(props: McpRowProps): React.ReactElement {
     if (status.configMs !== undefined) children.push(React.createElement('div', { key: 'config' }, `配置准备 ${elapsed(0, status.configMs)}`))
     if (status.error) children.push(React.createElement('div', { key: 'error' }, status.error))
     for (const server of status.servers) children.push(React.createElement('div', { key: 'server:' + server.serverName },
-      `${server.serverName}：${labels[server.phase]}${server.reused ? ' · 复用已有连接' : ''}${server.phase === 'idle' ? '' : ' · ' + elapsed(server.startedAt, server.finishedAt ?? now)}`,
+      `${server.serverName}：${labels[server.phase]}${server.reused ? ' · 复用已有连接' : ''}${server.phase === 'idle' ? '' : ' · ' + elapsed(server.startedAt, server.finishedAt ?? observedNow)}`,
       server.queuedMs === undefined ? '' : ' · 排队 ' + elapsed(0, server.queuedMs),
       server.connectMs === undefined ? '' : ' · 初始化 ' + elapsed(0, server.connectMs),
       server.firstCallMs === undefined ? '' : ' · 首次工具执行 ' + elapsed(0, server.firstCallMs),

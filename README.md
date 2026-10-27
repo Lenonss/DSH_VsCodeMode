@@ -468,18 +468,18 @@ DSH 每次启动监听随机端口，`http://127.0.0.1:<port>` 就是浏览器 o
 
 官方 `dsh plugin` 方式，三选一。下面以 `web` profile 为例；Desktop 或其他命名
 profile 请替换为实际目标，不要把示例目录当成当前运行 profile。升级前可阅读
-**v0.20.1** 恢复官方差异的文件内增删展示、块级/文件级 Keep 与有可信原始字节证据的安全 Undo，并恢复总文件数、Keep All / Undo All，修复五秒轮询闪动。升级后重启 DSH 并刷新页面；持久化与回退边界见 [0.20.0 发布说明](docs/release-0.20.0.md)；从 0.14.2 或更旧版本升级还须阅读
+**v0.20.2** 修复项目 MCP 状态查询暂停或暂不可用时的会话列表误告警；Keep All / Undo All 使用 DSH 原生确认弹窗。保留 v0.20.1 的文件内差异展示、块级/文件级安全审查和跨分页批量操作。升级后重启 DSH 并刷新页面；持久化与回退边界见 [0.20.0 发布说明](docs/release-0.20.0.md)；从 0.14.2 或更旧版本升级还须阅读
 [0.14.3 数据迁移与回退说明](docs/release-0.14.3.md)。
 
 ```bash
 # ① Git 安装（clone + prepare 构建；推荐打固定 tag）
-dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.20.1
+dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.20.2
 
 # ② npm 注册表（发布到 npm 后）
-dsh plugin --profile web add dsh-vscode-mode@0.20.1
+dsh plugin --profile web add dsh-vscode-mode@0.20.2
 
 # ③ GitHub Release tgz 直装（Release asset 可用后）
-dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.20.1/dsh-vscode-mode-0.20.1.tgz
+dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.20.2/dsh-vscode-mode-0.20.2.tgz
 ```
 
 > **DSH 版本政策（0.17.0 起）**：六项 DSH peer 仍统一声明为 `*`，另以
@@ -820,6 +820,7 @@ Keep All / Undo All 却是亮的。修复：单文件 Keep / Undo 覆盖冲突�
 完整变更见 [GitHub Releases](https://github.com/Lenonss/DSH_VsCodeMode/releases)。
 近期关键版本：
 
+- **v0.20.2**：区分项目 MCP 的等待查询、查询暂停与暂不可用状态；过期观测不再让所有会话显示警告，悬浮详情保留上次观测时间并冻结历史耗时，只有新鲜的初始化错误继续告警。页面恢复可见后串行恢复查询，避免取消中的请求重叠。Keep All / Undo All 改用随 DSH 主题的原生确认弹窗，默认聚焦取消；确认前校验打开弹窗的会话生命周期，取消不执行批量修改。
 - **v0.20.1**：恢复官方差异文件内增删、差异导航和块级/文件级 Keep / Undo；Undo 仅在可信原始字节、差异覆盖及文件版本校验通过时写回，无证据或冲突不覆盖。恢复工作区差异文件总数及跨分页、跨轮次 Keep All / Undo All，批量撤销先检查能力、遇冲突停止并报告部分完成。工具栏明确区分全局与当前文件；相同元数据轮询不再重复发布，同文件刷新保留差异直到新详情就绪，消除五秒闪动。升级后需重启 DSH 并刷新页面。
 - **v0.20.0**：**官方净差异持久化与现有审查入口整合**——采集官方轮次摘要及差异块，SQLite 保存并保留跨轮次 pending；复用现有列表、角标和文件导航，不新增独立审查栏。支持标记已审和编辑当前文件，保存不自动已审；没有可信历史全文及原始字节时禁止拒绝写回。修复路径身份和冷启动历史补采，无法恢复的旧摘要明确显示缺口；修正浅色主题操作栏文字对比度。详见 [0.20.0 发布说明](docs/release-0.20.0.md)。
 
