@@ -304,6 +304,7 @@
 [data-edrv-diff-dock-shell] .edrv-reviewbar button:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary, #3b63d9); outline-offset: 2px; }
 [data-edrv-diff-dock-shell] .edrv-review-notice { padding: 7px 12px; border-top: 1px solid var(--dsw-alias-border-l1, #e5e9ef); color: var(--dsw-alias-label-secondary, #697586); font-size: 11px; overflow-wrap: anywhere; }
 [data-edrv-diff-dock-shell] .edrv-review-error { color: var(--dsw-alias-state-error-primary, #b64043); }
+[data-edrv-diff-dock-shell] .edrv-review-notice-warn { color: var(--dsw-alias-state-warning-primary, #a86a1f); }
 [data-edrv-diff-dock-shell] .edrv-review-body { border-top: 1px solid var(--dsw-alias-border-l1, #e5e9ef); max-height: min(240px, 30vh); overflow: auto; padding: 8px 12px; }
 @container edrv-review (max-width: 420px) {
   .edrv-reviewbar .edrv-review-heading { gap: 6px; padding-inline: 10px; }

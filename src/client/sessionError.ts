@@ -36,3 +36,15 @@ export function sessionMissingDetail(): string {
   return '该会话可能正被其他 DSH 实例（桌面端 / Web 端）占用，或尚未在当前实例激活。' +
     '请在持有该会话的一端查看，或在本端打开该会话后重试。'
 }
+
+/**
+ * 把任意错误文本归一为可展示文案：会话缺失类替换为终态提示，其余原样返回。
+ * 差异栏等狭窄区域共用，避免裸「会话不存在」与业务提示混排。
+ * @author ddj 2026年10月27号
+ * @param text 任意错误文本（host 业务 error、异常 message 等原始形态）
+ * @returns 会话缺失为「标题：详情」，其他错误为原文本，空值返回空串
+ */
+export function sessionErrorText(text: unknown): string {
+  if (isSessionMissingError(text)) return sessionMissingTitle() + '：' + sessionMissingDetail()
+  return String(text ?? '')
+}

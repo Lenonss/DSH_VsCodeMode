@@ -127,7 +127,10 @@ import { buildBpMenu } from '../dap/bpMenu.js'
 import { clampToolbarPosition, loadToolbarPosition, saveToolbarPosition } from '../dap/toolbarDrag.js'
 import { editorModelPathOf } from '../dap/modelPath.js'
 import { dapTrace } from '../dap/trace.js'
-import { isSessionMissingError, sessionMissingDetail, sessionMissingTitle } from '../sessionError.js'
+import { isSessionMissingError, sessionErrorText, sessionMissingDetail, sessionMissingTitle } from '../sessionError.js'
+
+/** 官方差异读取失败前缀：仅用于清理同源陈旧错误，不吞并保存类错误。@author ddj 2026年10月27号 */
+const REVIEW_LOAD_ERROR = '官方差异读取失败：'
 
 /**
  * 只在 Lua 注解类型槽开启注释自动建议；跨文件/离开类型槽立即恢复默认。
@@ -588,7 +591,9 @@ export function EditorView(props) {
         if (!result.ok) throw new Error(result.error)
         setOfficialRecords((previous) => JSON.stringify(previous) === JSON.stringify(page.page.items) ? previous : page.page.items)
         setOfficialDetail((previous) => JSON.stringify(previous) === JSON.stringify(result.detail) ? previous : result.detail)
-      } catch (cause) { if (!controller.signal.aborted) setError('官方差异读取失败：' + String(cause)) }
+        // 读取成功后清除同源陈旧错误，避免会话恢复后仍挂着上一次失败提示。
+        setError((previous) => (typeof previous === 'string' && previous.startsWith(REVIEW_LOAD_ERROR) ? null : previous))
+      } catch (cause) { if (!controller.signal.aborted) setError(REVIEW_LOAD_ERROR + String(cause)) }
     }
     void loadReview()
     return () => controller.abort()
@@ -4482,12 +4487,13 @@ export function EditorView(props) {
    * @returns 含布局及操作回调的差异快照
    */
   const officialFile = review.page?.overview?.coveredPaths.find((path) => sameFile(path, active))
+  const rawReviewError = review.error || error
   const buildDockSnapshot = () => ({
     mode: editorDockMode(active),
     official: officialFile ? { sessionId, page: review.page, path: officialFile,
       pending: sum.files.find((file) => sameFile(file.path, active))?.pending ?? 0,
       detail: officialDetail, records: officialRecords, onSelect: setSelectedReview } : null,
-    reviewError: review.error || error,
+    reviewError: rawReviewError ? sessionErrorText(rawReviewError) : undefined,
     layout,
     pendingRegions,
     staleRegions,
@@ -4507,6 +4513,7 @@ export function EditorView(props) {
     onRefresh: reloadFile,
     activePath: active,
     diffIdx: contentReady ? diffIdx : 0,
+    contentReady,
     diffTotal: displayDiffTotal(contentReady, pendingRegions.length, sum.files.find((file) => sameFile(file.path, active))?.pending ?? 0),
     fileIdx,
     fileTotal: sum.pendingFiles.length,

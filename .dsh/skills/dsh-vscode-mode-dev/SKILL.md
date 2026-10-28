@@ -5,7 +5,7 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
 
 # dsh-vscode-mode 开发/发布经验集（自我更新型技能）
 
-> updated: 2026-10-19 · 维护者：ddj（AI 会话按文末协议更新，保持精炼、去重）
+> updated: 2026-10-28 · 维护者：ddj（AI 会话按文末协议更新，保持精炼、去重）
 > **发布时先读「发布流程」与「失败恢复」**；下方实录是历史证据，不授权当前重跑发布、改 tag 或部署。冲突旧口径以更新后的规则为准。
 - 2026-10-19 实录（v0.17.0 发布：DSH 0.2.1 吸收——locale 元数据 meta 化、engines.dsh、workingDirectory 投影跟随 cd、
   会话级 recordsFeed 轮询收敛、ctx.locale 接入、plugins.detail.section；基线 v0.16.0 @ `8b79f8f`）：
@@ -420,6 +420,12 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
 
 ## 差异审查（DiffBox / 旁车）设计口径
 
+- 2026-10-28 坑（**失效记录全 stale 时差异栏空白，v0.20.3 修**）：`pendingRegions=0` 时官方差异栏既不渲染 zone 也不给任何提示，
+  用户只看到「待审 N + 位置 `—` + 上下箭头点了没反应」（桌面端真实报障）；prompt 待审数是**记录数**、箭头是**可定位块数**，两者不同源却无文案解释。
+  修法 = 客户端纯函数 `src/client/reviewBar.ts`（`reviewBarView`）统一「位置 / 箭头禁用原因 / 失效叙事 / Keep 提示 / 待审标题」四条分支：
+  全 stale 给「无可跳转 + 点 Keep 结案（只标记已采纳、不改写磁盘）」，`contentReady` 门控避免内容未载入时误报失效；
+  `reviewError` 经 `sessionErrorText()` 归一（裸 `会话不存在` → 可读指引），`loadReview` 成功清同源陈旧错误。
+  与 2026-09-15「可见性必须配套可操作性」同源，补的是另一半：**无操作可用时必须有解释**。
 - 2026-09-23 事实（issue #7）：dsh-remote-ssh 远程工作区 cwd = **本机镜像**（根含 `.remote-ssh.json {profileId,host,user,remotePath}`，向上 ≤8 层判定，与上游 findMirrorRoot 同判据）；agent
   `remote_ssh_write` 直写远端不落镜像 → `capture.ts` 已扩展捕获（before=镜像快照 / after=args.content，before===after 不产记录）并以 **node:fs 写穿镜像**——勿走 ctx.fs，否则触发上游 2.4.14 写桥把相同内容
   再推回远端（重复 SSH 往返 + 补丁次序）；展示走 `RecordView.displayPath`（`recView(record, ws)` 运行时算、**不落盘**），client 一律渲染 `displayPath ?? path`，分组/打开仍用 `path`。
@@ -533,6 +539,9 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
   三门在用户真实终端或 CI 执行，会话内只跑 typecheck（tsc 无子进程）与 build（rolldown 原生）；
   2026-09-22 补：策略 danger-full-access 时 vitest 直接可跑；workspace-write（审批 ask）下对同一
   `npm run test` 命令一次性升 danger-full-access 重跑即可（v0.1.57 三门实测 597 passed）。
+  2026-10-28 补：绕过 vitest 用裸 node 直跑 TS 行不通——Node 24 的 `--experimental-strip-types` 不会把源码里
+  `./x.js` 说明符映射到 `./x.ts`（`ERR_MODULE_NOT_FOUND`），纯函数验证仍走 vitest；另 `pnpm build` 会先做
+  store 检查并因 `[ERR_SQLITE_ERROR] unable to open database file` 失败，发布三门一律用 `npm run typecheck/test/build`。
 
 ## DSH host 环境约束
 

@@ -2,6 +2,7 @@ import React from 'react'
 import { Button, Menu } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ReviewDetail, ReviewItem, ReviewPage } from '../../shared/review.js'
 import { ReviewLedger } from './OfficialReview.js'
+import { reviewBarView } from '../reviewBar.js'
 
 export interface OfficialBarProps {
   official: { sessionId: string; path: string; pending: number; detail?: ReviewDetail; records?: ReviewItem[]; page: ReviewPage; onSelect: (id: string) => void }
@@ -9,6 +10,8 @@ export interface OfficialBarProps {
   pendingRegions?: unknown[]
   staleRegions?: unknown[]
   diffIdx?: number
+  /** 编辑器内容是否就绪；未就绪时不得断言差异失效 */
+  contentReady?: boolean
   fileTotal?: number
   fileIdx?: number
   allPendingCount?: number
@@ -61,7 +64,8 @@ export function OfficialDiffBar(props: OfficialBarProps): React.ReactElement {
   const detail = official.detail
   const records = official.records ?? []
   const count = pendingRegions.length
-  const position = count ? `${Math.min(diffIdx + 1, count)} / ${count}` : '—'
+  const view = reviewBarView({ jumps: count, stale: staleRegions.length, index: diffIdx, ready: props.contentReady === true,
+    pendingRecords: official.pending, canKeep: detail?.capability.keep === true })
 
   /** @private @author ddj 2026年10月27号 @returns Close current popup without changing selection. */
   function closeMenu(): void { setMenu(null) }
@@ -69,9 +73,9 @@ export function OfficialDiffBar(props: OfficialBarProps): React.ReactElement {
   function selectRecord(id: string): void { official.onSelect(id); closeMenu() }
   /** @private @author ddj 2026年10月27号 @param tab Existing launcher tab. @returns Open existing overview, never create another review entry. */
   function openOverview(tab: string): void { props.onOpenLauncher(tab); closeMenu() }
-  /** @private @author ddj 2026年10月27号 @param mark Navigation icon. @param label Accessible action. @param action Existing callback. @param disabled Whether navigation is unavailable. @returns Compact keyboard-focusable navigation control. */
-  function navButton(mark: Mark, label: string, action: () => void, disabled: boolean): React.ReactElement {
-    return <Button size="sm" variant="ghost" className="edrv-review-icon" aria-label={label} title={label} disabled={disabled} onClick={action}>{barIcon(mark)}</Button>
+  /** @private @author ddj 2026年10月27号 @param mark Navigation icon. @param label Accessible action. @param action Existing callback. @param disabled Whether navigation is unavailable. @param title Hover reason, defaults to the label. @returns Compact keyboard-focusable navigation control. */
+  function navButton(mark: Mark, label: string, action: () => void, disabled: boolean, title?: string): React.ReactElement {
+    return <Button size="sm" variant="ghost" className="edrv-review-icon" aria-label={label} title={title || label} disabled={disabled} onClick={action}>{barIcon(mark)}</Button>
   }
 
   const recordTrigger = <Button size="sm" variant="ghost" className="edrv-review-record" aria-label="选择官方差异记录" aria-haspopup="menu" aria-expanded={menu === 'records'} disabled={!records.length} onClick={() => setMenu(menu === 'records' ? null : 'records')}>
@@ -85,7 +89,7 @@ export function OfficialDiffBar(props: OfficialBarProps): React.ReactElement {
     <div className="edrv-review-heading">
       <span className="edrv-review-filemark">{barIcon('file')}</span>
       <span className="edrv-review-filename" title={props.activePath}>{name}</span>
-      <span className="edrv-review-pending" title={`${official.pending} 条官方待审记录`}>待审 <strong>{official.pending}</strong></span>
+      <span className="edrv-review-pending" title={view.pendingTitle}>待审 <strong>{official.pending}</strong></span>
       <Menu open={menu === 'records'} anchor={recordTrigger} items={records.map((item) => ({ id: item.id, label: `轮次 ${item.turn} / 事件 ${item.seq}` }))} selectedId={detail?.item.id} onSelect={selectRecord} onClose={closeMenu} side="top" align="end" portal compact autoFocus />
     </div>
     <div className="edrv-review-tools">
@@ -94,18 +98,18 @@ export function OfficialDiffBar(props: OfficialBarProps): React.ReactElement {
         {navButton('right', '下一个差异文件', props.onNextFile, !props.fileTotal)}
       </div>
       <div className="edrv-review-nav edrv-review-blocknav" role="group" aria-label="差异导航">
-        {navButton('up', '上一个差异', props.onPrevDiff, !count)}
-        <span className="edrv-review-position" aria-live="polite">{position}</span>
-        {navButton('down', '下一个差异', props.onNextDiff, !count)}
+        {navButton('up', '上一个差异', props.onPrevDiff, !count, view.navPrevTitle)}
+        <span className="edrv-review-position" aria-live="polite">{view.position}</span>
+        {navButton('down', '下一个差异', props.onNextDiff, !count, view.navNextTitle)}
       </div>
       <div className="edrv-review-actions">
         <Button size="sm" variant="ghost" className="edrv-review-undo" icon={barIcon('undo')} onClick={props.onUndoFile} disabled={props.reviewBatchBusy || !detail?.capability.undo} title={detail?.capability.reason}>Undo</Button>
-        <Button size="sm" variant="primary" className="edrv-review-keep" icon={barIcon('check')} onClick={props.onAcceptFile} disabled={props.reviewBatchBusy || !detail?.capability.keep} title="保留当前记录的未处理修改">Keep</Button>
+        <Button size="sm" variant="primary" className="edrv-review-keep" icon={barIcon('check')} onClick={props.onAcceptFile} disabled={props.reviewBatchBusy || !detail?.capability.keep} title={detail?.capability.keep ? view.keepHint : detail?.capability.reason}>Keep</Button>
         <Button size="sm" variant="ghost" className="edrv-review-details" onClick={() => setExpanded(!expanded)} aria-expanded={expanded} aria-label={expanded ? '收起差异' : '展开差异'} title={expanded ? '收起差异' : '展开差异'}>详情{barIcon(expanded ? 'up' : 'down')}</Button>
         <Menu open={menu === 'more'} anchor={moreTrigger} items={[{ id: 'pending', label: '差异总览' }, { id: 'archive', label: '归档 / 历史' }]} onSelect={openOverview} onClose={closeMenu} side="top" align="end" portal compact autoFocus />
       </div>
     </div>
-    {detail && staleRegions.length > 0 ? <div className="edrv-review-notice" role="status">{staleRegions.length} 处历史差异无法定位，展开详情查看原始增删。</div> : null}
+    {detail && view.notice ? <div className={view.noticeTone === 'warn' ? 'edrv-review-notice edrv-review-notice-warn' : 'edrv-review-notice'} role="status">{view.notice}</div> : null}
     {props.reviewError ? <div className="edrv-review-notice edrv-review-error" role="alert">{props.reviewError}</div> : null}
     {expanded ? <div className="edrv-review-body"><ReviewLedger key={`${official.sessionId}:${official.path}`} sessionId={official.sessionId} first={official.page} path={official.path} /></div> : null}
   </div>
