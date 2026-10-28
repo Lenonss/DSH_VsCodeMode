@@ -17,6 +17,7 @@ import {
   autoArchiveStale,
   policyOf,
   resolveTarget,
+  resolveTargetIn,
   saveBucket,
 } from './store.js'
 import { cp, mkdir, readFile, rename, rm, stat, writeFile, readdir } from 'node:fs/promises'
@@ -25,8 +26,8 @@ import { archiveEntryFor, markDecision, recordResolved, reconstructOriginal } fr
 import { clearRevertState, listArchives, pageArchives, readArchives, revertState, setRevertState, startReverts } from './archiveDb.js'
 import { hasOfficial } from './reviewDb.js'
 import { log } from './log.js'
-import type { Registry } from './registry.js'
-import { bucketOf, cwdOfSession, sessionOf } from './registry.js'
+import type { Registry, SessionScope } from './registry.js'
+import { bucketOf, cwdOfSession, resolveScope, sessionOf } from './registry.js'
 import type { SearchOrchestrator } from './search/orchestrator.js'
 import { newSearcher } from './search/orchestrator.js'
 import type { ContentSearcher } from './search/content.js'
@@ -166,13 +167,13 @@ interface ReadTargetOk {
  */
 async function readTargetOf(
   ctx: Ctx,
-  sc: { session: Session; cwd: string },
+  sc: SessionScope,
   path: string,
 ): Promise<ReadTargetOk | { err: string; resolvedPath?: string; code?: 'file-too-large' }> {
   const fs = ctx.get('fs')
   if (!fs) return { err: '缺少 fs' }
   try {
-    const target = await resolveTarget(ctx, sc.session, path)
+    const target = await resolveTargetIn(ctx, sc.cwd, path)
     debugRecord(ctx, sc.cwd, '[DEBUG path.resolve] input=' + String(path ?? '') + ' resolved=' + fs.processPath(target), 'debug')
     const info = await fs.stat(target)
     if (!info || info.type !== 'file') {
@@ -596,7 +597,7 @@ export function buildHandlers(
       let staleMs = 0
       let staleChecked = false
       // #endregion
-      const sc = await requireSession(ctx, args.sessionId)
+      const sc = await resolveScope(ctx, args.sessionId)
       if ('err' in sc) return { ok: false, error: sc.err }
       const bucket = await bucketOf(registry, ctx, sc.cwd)
       // #region debug log
@@ -606,7 +607,8 @@ export function buildHandlers(
       // 全量轮询时自动清理 stale 幽灵差异（批量决策后的即时刷新可 skipStale 跳过）；
       // 三个组件各自 5s 全量 list，stale 检查节流到 STALE_CHECK_MIN_MS 一次，
       // 避免每轮都对全部记录读文件 + 算指纹（keepall 期间多组件同时刷新的主要 host 开销）。
-      if (!want && args.skipStale !== true) {
+      // 跨实例冷读没有 live 会话：stale 清理要写侧车与归档，一律跳过（只读语义）。
+      if (sc.session && !want && args.skipStale !== true) {
         const now = Date.now()
         if (now - (staleCheckedAt.get(sc.cwd) ?? 0) > STALE_CHECK_MIN_MS) {
           staleCheckedAt.set(sc.cwd, now)
@@ -645,7 +647,7 @@ export function buildHandlers(
      * @author ddj 2026年09月28号
      */
     'edrv.uiState.get': async (args) => {
-      const sc = await requireSession(ctx, args.sessionId)
+      const sc = await resolveScope(ctx, args.sessionId)
       if ('err' in sc) return { ok: false, error: sc.err }
       const keys = await readUiState(uiStateFile(sc.cwd))
       const globals = await readUiState(uiGlobalsFile())
@@ -657,7 +659,7 @@ export function buildHandlers(
      * @author ddj 2026年09月28号 / 2026年09月29号
      */
     'edrv.uiState.set': async (args) => {
-      const sc = await requireSession(ctx, args.sessionId)
+      const sc = await resolveScope(ctx, args.sessionId)
       if ('err' in sc) return { ok: false, error: sc.err }
       const tasks: Array<Promise<{ ok: true } | { ok: false; error: string }>> = []
       if (args.keys && Object.keys(args.keys).length) tasks.push(writeUiState(uiStateFile(sc.cwd), args.keys))
@@ -700,10 +702,10 @@ export function buildHandlers(
     },
     /** @author ddj 2026年10月22号 @param args Read-only request. @returns Bounded official range read, or unsupported on older providers; never bypasses Host IO. */
     'edrv.textPage': async (args) => {
-      const sc = await requireSession(ctx, args.sessionId)
+      const sc = await resolveScope(ctx, args.sessionId)
       if ('err' in sc) return { ok: false, error: sc.err, reason: 'read-failed' }
       try {
-        const target = await resolveTarget(ctx, sc.session, args.path)
+        const target = await resolveTargetIn(ctx, sc.cwd, args.path)
         const fs = ctx.get('fs')
         if (typeof fs?.readByteRange !== 'function' || typeof fs.stat !== 'function') return readTextPage(undefined, args)
         // Keys are opaque identities, never decoded into physical paths. Both legacy string and official FsTarget are supported.
@@ -741,7 +743,7 @@ export function buildHandlers(
           return { ok: false, error: '读取片段文件失败：' + String(error), resolvedPath: snippetTarget }
         }
       }
-      const sc = await requireSession(ctx, args.sessionId)
+      const sc = await resolveScope(ctx, args.sessionId)
       if ('err' in sc) return { ok: false, error: sc.err }
       const prep = await readTargetOf(ctx, sc, args.path)
       if ('err' in prep) return targetErrOf(prep)
@@ -763,7 +765,7 @@ export function buildHandlers(
       // 二进制直读通道（图片/PDF 预览）：与 edrv.read base64 分支共用 readTargetOf 前置，
       // 返回 Uint8Array 信封；routes 接线后以 octet-stream + x-edrv-* 头直出，
       // 未接线时信封被 JSON 化，由 client 探测到后自动回退 base64 路径（见 shared/rpc readBinaryPreview）。
-      const sc = await requireSession(ctx, args.sessionId)
+      const sc = await resolveScope(ctx, args.sessionId)
       if ('err' in sc) return { ok: false, error: sc.err }
       const prep = await readTargetOf(ctx, sc, args.path)
       if ('err' in prep) return targetErrOf(prep)
@@ -802,12 +804,12 @@ export function buildHandlers(
     'edrv.original': async (args) => {
       // 重建"本批次修改前"内容：DiffEditor 原始侧。仅反解 pending 块；
       // 全部反解失败时回退到最早记录的整体 before（若存在）。
-      const sc = await requireSession(ctx, args.sessionId)
+      const sc = await resolveScope(ctx, args.sessionId)
       if ('err' in sc) return { ok: false, error: sc.err }
       const fs = ctx.get('fs')
       if (!fs) return { ok: false, error: '缺少 fs' }
       try {
-        const target = await resolveTarget(ctx, sc.session, args.path)
+        const target = await resolveTargetIn(ctx, sc.cwd, args.path)
          debugRecord(ctx, sc.cwd, '[DEBUG path.resolve] input=' + String(args.path ?? '') + ' resolved=' + fs.processPath(target), 'debug')
         const info = await fs.stat(target)
         if (!info || info.type !== 'file') return { ok: false, error: '文件不存在' }
@@ -898,7 +900,7 @@ export function buildHandlers(
       }
     },
     'edrv.archiveList': async (args) => {
-      const sc = await requireSession(ctx, args.sessionId)
+      const sc = await resolveScope(ctx, args.sessionId)
       if ('err' in sc) return { ok: false, error: sc.err }
       try {
         const ws = findRemoteWs(sc.cwd)
@@ -911,7 +913,7 @@ export function buildHandlers(
       }
     },
     'edrv.archivePage': async (args) => {
-      const sc = await requireSession(ctx, args.sessionId)
+      const sc = await resolveScope(ctx, args.sessionId)
       if ('err' in sc) return { ok: false, error: sc.err }
       try {
         const ws = findRemoteWs(sc.cwd)
@@ -924,7 +926,7 @@ export function buildHandlers(
       }
     },
     'edrv.archiveRead': async (args) => {
-      const sc = await requireSession(ctx, args.sessionId)
+      const sc = await resolveScope(ctx, args.sessionId)
       if ('err' in sc) return { ok: false, error: sc.err }
       try {
         if (args.batch !== undefined && (!args.path || (args.batch !== null && !Number.isInteger(args.batch)))) return { ok: false, error: '归档批次参数无效' }
@@ -1064,7 +1066,7 @@ export function buildHandlers(
     'edrv.listDir': async (args) => {
       // 目录树（侧边栏文件管理用）：树索引命中直出（内存，0 IO）；失效/force 时
       // 走快路径（resolve + listDirCheap + putIndex）；同路径在途请求去重复用。
-      const sc = await requireSession(ctx, args.sessionId)
+      const sc = await resolveScope(ctx, args.sessionId)
       if ('err' in sc) return { ok: false, error: sc.err }
       const rel = normalizeRel(args.path)
       if (rel === null) return { ok: false, error: '路径不合法' }

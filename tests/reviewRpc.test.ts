@@ -38,4 +38,25 @@ describe('official review workspace boundary', () => {
     vi.mocked(undoReview).mockRejectedValueOnce(new Error(conflict))
     expect(await handlers['edrv.review.decide']!({ ...request, decision: 'rejected' })).toEqual({ ok: false, error: conflict })
   })
+
+  it('crosses Host instances for reads only: persisted sessions resolve through sessionQuery', async () => {
+    const query = { filterSessions: async () => [{ header: { id: 'remote', cwd: '/remote-repo' } }] }
+    const ctx = {
+      get: (name: string) => (name === 'sessionQuery' ? query : name === 'sessions' ? { get: () => undefined } : undefined),
+    } as unknown as Ctx
+    const handlers = reviewHandlers(ctx, new Map([['/remote-repo', new Map()]]))
+    vi.mocked(reviewPage).mockReturnValue({ items: [], pending: 0, gaps: [], nextCursor: null })
+    expect(await handlers['edrv.review.list']!({ sessionId: 'remote' }))
+      .toEqual({ ok: true, page: { items: [], pending: 0, gaps: [], nextCursor: null } })
+    expect(reviewPage).toHaveBeenLastCalledWith('/remote-repo', undefined, undefined, undefined)
+    vi.mocked(reviewDetail).mockReturnValue(null)
+    expect(await handlers['edrv.review.detail']!({ sessionId: 'remote', id: 'remote-id' }))
+      .toEqual({ ok: false, error: '官方审查记录不存在' })
+    expect(reviewDetail).toHaveBeenLastCalledWith('/remote-repo', 'remote-id')
+    // 写类操作仍要求 live 会话：另一端不得并发写同一工作区审查库
+    await expect(handlers['edrv.review.decide']!({
+      sessionId: 'remote', id: 'remote-id', seq: 1, revision: 1, operationId: 'operation', decision: 'accepted',
+    })).rejects.toThrow('会话不存在')
+    expect(decideReview).not.toHaveBeenCalledWith('/remote-repo', expect.anything())
+  })
 })

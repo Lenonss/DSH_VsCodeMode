@@ -65,6 +65,19 @@ export async function resolveTarget(ctx: Ctx, session: Session | undefined, path
   return fs.resolve(path, cwd ? { cwd } : {})
 }
 
+/**
+ * 按已知工作区目录解析目标路径：跨实例只读路径在无 live 会话时使用。
+ * @author ddj 2026年10月28号
+ * @param ctx DSH 上下文
+ * @param cwd 工作区绝对路径（live 投影或持久化 header）
+ * @param path 客户端请求路径
+ * @returns 解析后的目标
+ */
+export async function resolveTargetIn(ctx: Ctx, cwd: string, path: string): Promise<string> {
+  const fs = ctx.get('fs')
+  return fs.resolve(path, cwd ? { cwd } : {})
+}
+
 /** 读取工作区主 sidecar 文本（缺失/失败 → null）。 */
 async function readSidecarText(ctx: Ctx, cwd: string | null): Promise<string | null> {
   const fs = ctx.get('fs')

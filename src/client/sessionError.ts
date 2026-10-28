@@ -1,9 +1,12 @@
 /**
  * dsh-vscode-mode client — 会话缺失错误识别与友好文案。
  * 跨端场景：桌面端与 Web 端各自运行独立 DSH 实例，会话列表跨实例可见，
- * 但会话仅在一端激活；另一端发起的 edrv.* RPC 会被 host requireSession
- * 以「会话不存在」拒绝。此处把该错误归类为终态提示（非反复重试可解），
- * 并给出引导文案，替代裸错误卡死观感。
+ * 但会话仅在一端激活；另一端发起的写类 edrv.* RPC（以及尚未接入冷读的读接口）
+ * 会被 host requireSession 以「会话不存在」拒绝。此处把该错误归类为终态提示
+ * （非反复重试可解），并给出引导文案，替代裸错误卡死观感。
+ * 官方审查读路径（review.list/detail）与工作区只读路径（read/original/textPage/
+ * list/archiveList/listDir/uiState，自 0.20.5 起）按持久化会话头冷读 cwd，
+ * 不再落在这里。
  * 作者 ddj 2026年10月16号
  */
 import { SESSION_MISSING_ERROR } from '../shared/rpc.js'
