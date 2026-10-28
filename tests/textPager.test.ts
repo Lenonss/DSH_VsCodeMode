@@ -19,6 +19,7 @@ vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({ Button: 'button' }))
 import { LargeTextView } from '../src/client/ui/LargeTextView.js'
 import { readFile } from 'node:fs/promises'
 import ts from 'typescript'
+import { isExcelPath } from '../src/client/excel/model.js'
 
 /** @private @author ddj 2026年10月22号 @param name Production function name. @param dependencies Explicit isolated closure. @returns Transpiled real production function, never copied implementation. */
 async function editorFunction(name: string, dependencies: Record<string, unknown>): Promise<any> {
@@ -33,7 +34,9 @@ async function editorFunction(name: string, dependencies: Record<string, unknown
   visit(ast)
   if (!found) throw new Error('Missing production function: ' + name)
   const javascript = ts.transpileModule(found.getText(ast), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText
-  return new Function(...Object.keys(dependencies), javascript + `;return ${name}`)(...Object.values(dependencies))
+  // Extracted functions still need the production import used by their Excel guard.
+  const scope = { isExcelPath, ...dependencies }
+  return new Function(...Object.keys(scope), javascript + `;return ${name}`)(...Object.values(scope))
 }
 
 /** @private @author ddj 2026年10月22号 @returns Passive production closure with observable page-root and focus ownership. */

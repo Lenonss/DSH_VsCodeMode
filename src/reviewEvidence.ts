@@ -1,6 +1,7 @@
 /** Raw UTF-8 evidence and patch correspondence; never reconstructs a historical file from disk. @author ddj 2026年10月27号 */
 import { createHash } from 'node:crypto'
 import { reviewBlocks } from './shared/reviewRegions.js'
+import { logicalLine } from './shared/lineEndings.js'
 import type { OfficialDiff } from './shared/review.js'
 
 export interface RawReviewFile { present: boolean; bytes: string; hash: string }
@@ -32,7 +33,7 @@ function rawLines(text: string): string[] {
 }
 
 /** @private @author ddj 2026年10月27号 @param lines Physical storage lines. @returns Official logical-line comparison basis. */
-function logical(lines: string[]): string[] { return lines.map((line) => line.replace(/(?:\r\n|\r|\n)$/, '')) }
+function logical(lines: string[]): string[] { return lines.map(logicalLine) }
 
 /** @public @author ddj 2026年10月27号 @param diff Official source. @param evidence Independent raw captures. @returns Exact raw segments only when every official hunk reproduces the entire captured result. @throws Incomplete chain, coarse patch or mismatched context/content. */
 export function evidenceBlocks(diff: OfficialDiff, evidence: ReviewEvidence): RawReviewBlock[] {

@@ -33,6 +33,9 @@ import { bindEditActions, runEditAction } from '../monaco/editActions.js'
 import { addReloadGuard } from '../pageReload.js'
 import { clampZoom, clearZoomMem, dataUrlOf, isImagePath, isSvgPath, recallZoom, rememberZoom, zoomKeyOf, zoomStepOf } from '../imagePreview.js'
 import { isMarkdownPath } from '../markdownPreview.js'
+import { isExcelPath } from '../excel/model.js'
+import { excelState, loadExcel, allowClose, releaseExcel, renameExcel, unsafeExcel, notifyExcel } from '../excel/controller.js'
+import { excelPanel } from '../excel/panel.js'
 import { setActiveEditorPath } from '../activePathStore.js'
 import { MarkdownPanel } from '../md/mdPanel.js'
 import { isPlanPath, planDocument } from '../planState.js'
@@ -605,6 +608,24 @@ export function EditorView(props) {
   const isImageActive = !!active && isImagePath(active) && !svgTextRef.current.has(active)
   // 当前 tab 是否为 PDF 面板（与 loadContent 分派条件同源）
   const isPdfActive = !!active && isPdfPath(active)
+  const excelScope = JSON.stringify([scope, sessionId])
+  const isExcelActive = !!active && isExcelPath(active)
+
+  React.useEffect(() => {
+    /** @private @author ddj 2026年10月28号 @param event Browser exit. @sideEffects Warns on all retained sessions; never silently saves or discards. */
+    function warnExcel(event) { if (unsafeExcel()) { event.preventDefault(); event.returnValue = '' } }
+    window.addEventListener('beforeunload', warnExcel)
+    return () => window.removeEventListener('beforeunload', warnExcel)
+  }, [])
+  React.useEffect(() => {
+    if (!isExcelActive) return
+    const state = excelState(excelScope, active)
+    /** @private @author ddj 2026年10月28号 @sideEffects Mirrors dirty to tabs only; workbook stays in shared controller across session/unmount. */
+    function syncExcel() { setDirtyMap((prev) => ({ ...prev, [active]: state.dirty })); if (state.notice) setStatus(state.notice) }
+    state.listeners.add(syncExcel)
+    syncExcel()
+    return () => state.listeners.delete(syncExcel)
+  }, [excelScope, active, isExcelActive])
   // 当前 tab 是否为可预览的 Markdown，以及是否正处于预览态（预览态替换 Monaco host，只读）
   const isMdActive = !!active && isMarkdownPath(active)
   const mdPreviewing = isMdActive && mdPreviewRef.current.has(active)
@@ -626,6 +647,9 @@ export function EditorView(props) {
   // useMemo 稳定引用：否则 hover 等重渲染会让 view zone effect 反复重建（- 号闪烁）
   const pendingRegions = React.useMemo(() => regions.filter((r) => r.status === ST.PENDING && !r.stale), [regions])
   const staleRegions = React.useMemo(() => regions.filter((r) => r.status === ST.PENDING && r.stale), [regions])
+  const staleMissing = staleRegions.filter((region) => region.staleReason === 'missing').length
+  const staleAmbiguous = staleRegions.filter((region) => region.staleReason === 'ambiguous').length
+  const noBlocks = !!officialDetail && (officialDetail.diff.kind !== 'text' || officialDetail.diff.hunks.length === 0)
   // 单文件 Keep/Undo 的作用域：可定位差异 + 无法定位的冲突差异（后者否则永久留在待处理列表）
   const decideRegions = React.useMemo(() => [...pendingRegions, ...staleRegions], [pendingRegions, staleRegions])
   hoverRegionsRef.current = pendingRegions
@@ -685,6 +709,7 @@ export function EditorView(props) {
   React.useEffect(() => {
     /** @private @author ddj 2026年10月12号 @returns Unsafe editor state without saving or discarding file content. */
     function checkReload() {
+      if (unsafeExcel()) return '存在未导出的 Excel 编辑（不会自动保存原件）'
       if (Object.values(dirtyRef.current).some(Boolean)) return '存在未保存文件'
       if (saveTimerRef.current.isPending() || savingRef.current.size || docRef.current?.unsafe()) return '文件正在等待保存或保存中'
       for (const ctl of pdfCtlRef.current.values()) {
@@ -803,6 +828,7 @@ export function EditorView(props) {
    */
   const releaseTab = (path) => {
     if (path === activeRef.current) { saveViewState(path); recordNav() }
+    if (isExcelPath(path)) releaseExcel(excelScope, path)
     const pdfCtl = pdfCtlRef.current.get(path)
     if (pdfCtl) { pdfCtl.destroy(); pdfCtlRef.current.delete(path) }
     pdfNodes.current.delete(path)
@@ -830,7 +856,14 @@ export function EditorView(props) {
    * @author ddj 2026年08月25号 / 2026年09月11号
    * @param path 待关闭页签路径
    */
-  const closeTab = (path) => {
+  const closeTab = async (path) => {
+    const lifetime = reviewLifeRef.current
+    if (isExcelPath(path)) {
+      const state = excelState(excelScope, path)
+      const revision = state.editRevision
+      if (!await allowClose(state, path)) return
+      if (!lifetime?.live || lifetime !== reviewLifeRef.current || state.released || state.path !== path || state.editRevision !== revision) return
+    }
     // 先静默落盘再关闭：flushSave 立即提交待执行的防抖保存（不是取消），
     // persistDirty 再对仍标脏者（保存失败/在途）用 model 当前文本补一次
     flushSave()
@@ -845,13 +878,25 @@ export function EditorView(props) {
    * @param result 关闭结果（来自 tabActions 的 closeOthers/closeRight/closeSaved/closeAll）
    * @param label 状态栏文案前缀（如「已关闭其他」）
    */
-  const closeTabs = (result, label) => {
+  const closeTabs = async (result, label) => {
+    const lifetime = reviewLifeRef.current
+    const targets = new Set(tabsRef.current.filter((tab) => !result.tabs.some((item) => item.path === tab.path)).map((tab) => tab.path))
+    const approvals = []
+    for (const path of targets) {
+      if (!isExcelPath(path)) continue
+      const state = excelState(excelScope, path)
+      const revision = state.editRevision
+      if (!await allowClose(state, path)) return
+      if (!lifetime?.live || lifetime !== reviewLifeRef.current) return
+      approvals.push({ state, revision, path })
+    }
+    if (approvals.some(({ state, revision, path }) => state.released || state.path !== path || state.editRevision !== revision)) return
     flushSave()
-    const closing = tabsRef.current.filter((t) => !result.tabs.some((r) => r.path === t.path))
+    const closing = tabsRef.current.filter((tab) => targets.has(tab.path))
     if (!closing.length) { setStatus('无可关闭的页签'); return }
     persistDirty(closing.map((t) => t.path))
     for (const tab of closing) releaseTab(tab.path)
-    commitClose(result)
+    commitClose(applyClose(tabsRef.current, new Set(closing.map((tab) => tab.path)), activeRef.current))
     setStatus(label + '（' + closing.length + ' 个）')
   }
 
@@ -864,8 +909,11 @@ export function EditorView(props) {
   const dropDeletedTabs = (path) => {
     const doomed = tabsRef.current.filter((t) => t.path === path || t.path.startsWith(path + '/'))
     if (!doomed.length) return
-    for (const tab of doomed) releaseTab(tab.path)
-    commitClose(applyClose(tabsRef.current, new Set(doomed.map((t) => t.path)), activeRef.current))
+    const retained = doomed.filter((tab) => isExcelPath(tab.path) && excelState(excelScope, tab.path).dirty)
+    for (const tab of retained) { const state = excelState(excelScope, tab.path); state.notice = '原件已删除，未导出编辑保留。请导出副本或明确关闭放弃。'; notifyExcel(state) }
+    const removable = doomed.filter((tab) => !retained.includes(tab))
+    for (const tab of removable) releaseTab(tab.path)
+    commitClose(applyClose(tabsRef.current, new Set(removable.map((t) => t.path)), activeRef.current))
   }
 
   /**
@@ -875,6 +923,7 @@ export function EditorView(props) {
    * @param to 新路径
    */
   const remapRenamedTabs = (from, to) => {
+    renameExcel(excelScope, from, to)
     setTabs((prev) => prev.map((tab) => ({ ...tab, path: remapPathOf(tab.path, from, to) })))
     setDirtyMap((prev) => {
       const next = {}
@@ -1099,6 +1148,24 @@ export function EditorView(props) {
       clearSync(scope, path)
       if (markRead === true) clearReadVersion(scope, path)
     }
+    if (isExcelPath(path)) {
+      const state = excelState(excelScope, path)
+      void loadExcel(state, async () => {
+        const result = await readBinaryPreview(rpc, { sessionId: sid, path })
+        if (!result.ok) throw new Error(result.error || '读取 Excel 失败')
+        const bytes = result.via === 'binary' ? result.bytes : base64ToBytes(result.content)
+        return { bytes, version: result.version }
+      }, force === true).then(() => {
+        if (!loadCurrent(path, seq)) return
+        recordBaseline(scope, path, state.document?.baseline)
+        setContent('')
+        setContentPath(path)
+        stampLoad(path, sid, seq)
+        setLoadStage({ progress: 100, message: 'Excel 已就绪' })
+        setStatus(state.notice || 'Excel 基础编辑 · 仅导出副本')
+      }).catch((error) => { if (loadCurrent(path, seq)) failLoad(path, sid, seq, String(error)) })
+      return
+    }
     // 图片文件走专用通道：base64 → data URL 预览，不建 Monaco model、不进文本/差异流程
     if (isImagePath(path) && !svgTextRef.current.has(path)) {
       loadImage(path, sid, seq, version)
@@ -1300,6 +1367,13 @@ export function EditorView(props) {
    */
   function onDiskChange(change) {
     if (!change || !change.path) return
+    if (isExcelPath(change.path)) {
+      const state = excelState(excelScope, change.path)
+      state.notice = state.dirty ? '原件发生外部修改或删除，编辑已保留；不会覆盖原件。' : '原件已变化，请点击重新读取；不会自动覆盖当前视图。'
+      notifyExcel(state)
+      markDiskFlag({ path: change.path, kind: change.kind === 'deleted' ? 'deleted' : 'conflict', at: Date.now() })
+      return
+    }
     // 文件树同步：目录缓存按该路径失效并强制重列（外部新增/删除/改名都能看到）
     const eventId = emitFileChanged(change.path, { scope, kind: change.kind === 'deleted' ? 'structure' : 'text' })
     if (change.kind === 'modified' && change.path !== activeRef.current) {
@@ -1349,6 +1423,7 @@ export function EditorView(props) {
    * @returns 比对结果；模型不可用/读失败 → null（按「需要重载」处理）
    */
   function readDiskCompare(path) {
+    if (isExcelPath(path)) return Promise.resolve({ equal: false })
     // A read-only page has no full Monaco buffer to compare. Acknowledge the observed
     // version as changed so polling advances its baseline instead of invalidating every reread.
     if (path === activeRef.current && (paging || pageChanged === pageIdentity)) return Promise.resolve({ equal: false })
@@ -2178,7 +2253,7 @@ export function EditorView(props) {
     if (!path) return Promise.resolve(false)
     if (modelsRef.current.get(path)) return Promise.resolve(true)
     // 图片/PDF 不建文本 model（各自走预览控件），预热对它们没有意义
-    if (isImagePath(path) || isPdfPath(path)) return Promise.resolve(false)
+    if (isExcelPath(path) || isImagePath(path) || isPdfPath(path)) return Promise.resolve(false)
     const sid = sessionId
     if (!sid) return Promise.resolve(false)
 
@@ -2207,6 +2282,7 @@ export function EditorView(props) {
    */
   const flushSave = (path) => {
     const target = path ?? active
+    if (isExcelPath(target)) return false
     if (target && readSync(scope, target)) return false
     saveTimerRef.current?.flush()
     if (docRef.current) void docRef.current.flush(target)
@@ -2274,6 +2350,7 @@ export function EditorView(props) {
   }
   /** @private @author ddj 2026年10月14号 @param path Canonical path. @param manual Explicit save. @returns Guarded save, never another pane's content. */
   function saveDocument(path, manual) {
+    if (isExcelPath(path)) return Promise.resolve({ ok: false })
     const model = modelsRef.current.get(path)
     if (!model) return Promise.resolve({ ok: false })
     const store = documents()
@@ -2285,6 +2362,7 @@ export function EditorView(props) {
 
   const doSave = (silent) => {
     if (!active) return
+    if (isExcelPath(active)) { if (!silent) setStatus('Excel 不写原件；请使用「基础 · 导出副本」'); return }
     // 外部改动待处理：自动保存（silent）直接放弃，避免陈旧缓冲覆盖磁盘；
     // 手工保存（Ctrl+S / 命令栏）继续走版本守卫，由 host 判定并给冲突提示。
     if (silent && readSync(scope, active)) { setStatus('外部已修改（未保存的编辑保留）'); return }
@@ -2315,6 +2393,7 @@ export function EditorView(props) {
    */
   const persistDirty = (paths) => {
     for (const path of paths) {
+      if (isExcelPath(path)) continue
       if (!dirtyRef.current[path]) continue
       // 外部改动未处理：不落盘（避免覆盖），脏内容仍保留在 model 中
       if (readSync(scope, path)) { setStatus('未落盘（外部已修改）：' + baseNameOf(path)); continue }
@@ -3774,7 +3853,7 @@ export function EditorView(props) {
     // 原生打开范围（nativeOpenExts 设置）：命中且非差异跳转 → 走官方渲染器
     //（focusDiff=true 跳过：差异审查对象必为本插件编辑的文本文件，审查优先）；
     // handler 缺失/失败（旧版无 openResource / seat 未挂）→ 回退现状页签打开，不阻断
-    if (!focusDiff && inNativePath(path) && tryNativeOpen(path)) return
+    if (!focusDiff && !isExcelPath(path) && inNativePath(path) && tryNativeOpen(path)) return
     // 对比浮窗独立保留，允许同时打开并编辑其他文件。
     recordNav()
     // G9：统一归一为页签规范形态（差异栏/启动器/树/命令栏等入口一致）
@@ -3955,7 +4034,7 @@ export function EditorView(props) {
     const p = (pathDraft || '').trim()
     if (!p) return
     // 图片/PDF 文件跳过文本读探测（二进制会被 host 拒绝），直接进 tab 由专用预览接管
-    if (isImagePath(p) || isPdfPath(p)) {
+    if (isExcelPath(p) || isImagePath(p) || isPdfPath(p)) {
       openFile(p, false)
       setOpenInput(false); setPathDraft(''); setStatus('已打开'); setError(null)
       return
@@ -4110,6 +4189,10 @@ export function EditorView(props) {
     let disposed = false, keeper = null, subscription = null, observer = null, unbindGutter = null, pageRoot = null
     const focus = () => { const owner = ownerOf(benchRef.current, path); if (owner) selectGroup(owner.id, path) }
     host.addEventListener('pointerdown', focus)
+    if (isExcelPath(path)) {
+      host.textContent = 'Excel · 点击此编辑组继续查看和编辑（同一文件共享编辑状态）'
+      return () => host.removeEventListener('pointerdown', focus)
+    }
     if (isPdfPath(path) && pdfNodes.current.has(path)) {
       host.appendChild(pdfNode(path))
       return () => host.removeEventListener('pointerdown', focus)
@@ -4431,6 +4514,10 @@ export function EditorView(props) {
       setLoadStage({ progress: 10, message: '重新读取文件…' })
       loadContent(active, sessionId)
     }), largeCandidate === pageIdentity && React.createElement('button', { className: 'edrv-pill edrv-pill-ghost', onClick: openTextPages }, '只读分段查看'))
+  } else if (isExcelActive && contentPath === active && excelState(excelScope, active).document) {
+    body = React.createElement('div', { className: 'edrv-excel-host', key: excelScope + active, ref: (host) => { if (host) { const node = excelPanel(excelState(excelScope, active), active, cwd); if (node.parentNode !== host) host.appendChild(node) } } })
+  } else if (isExcelActive) {
+    body = loadingBody(loadStage.message || '读取 Excel…', loadStage.progress)
   } else if (isImageActive && imageSrc) {
     body = imagePanel()
   } else if (isImageActive) {
@@ -4507,6 +4594,9 @@ export function EditorView(props) {
     layout,
     pendingRegions,
     staleRegions,
+    staleMissing,
+    staleAmbiguous,
+    noBlocks,
     onAct: actHunk,
     onAcceptFile: acceptFile,
     onUndoFile: undoFile,

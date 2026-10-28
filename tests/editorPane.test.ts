@@ -4,6 +4,7 @@ import { EditorPane, GroupPathbar, bindPaneView, type PaneProps } from '../src/c
 import { buildTabMenu } from '../src/client/tabMenu.js'
 import { readFileSync } from 'node:fs'
 import ts from 'typescript'
+import { isExcelPath } from '../src/client/excel/model.js'
 import { createDocStore } from '../src/client/state/documentStore.js'
 import { createLayout, moveTab, syncTabs, ownerOf } from '../src/client/state/editorLayout.js'
 import { applyClose, closeAll, closeOthers, closeRight, closeSaved } from '../src/client/tabActions.js'
@@ -68,7 +69,9 @@ collect(source)
 function adapter(name: string, scope: Record<string, unknown>): (...args: any[]) => any {
   const text = adapters.get(name)
   if (!text) throw new Error('Missing workbench adapter: ' + name)
-  return new Function(...Object.keys(scope), text + '; return ' + name)(...Object.values(scope))
+  // Preserve the production Excel guard when executing a detached adapter.
+  const dependencies = { isExcelPath, ...scope }
+  return new Function(...Object.keys(dependencies), text + '; return ' + name)(...Object.values(dependencies))
 }
 
 describe('actual workbench adapters', () => {

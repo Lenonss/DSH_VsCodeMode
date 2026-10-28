@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises'
+import { createRequire } from 'node:module'
 import { basename, dirname, resolve as resolvePath } from 'node:path'
 import type { UserConfig } from 'tsdown'
 
@@ -94,6 +95,16 @@ function clientConfig(panel?: 'rules' | 'debug'): UserConfig {
     noExternal: (source: string) => (CLIENT_EXTERNALS.includes(source) || (panel && source === ID) ? undefined : true),
     plugins: [
       {
+        name: 'excel-browser-entry',
+        /** @private @author ddj 2026年10月28号 @param source Import id. @returns Browser-only ExcelJS bundle, excluding filesystem/streaming writer implementations. */
+        resolveId(source: string) { return source === 'exceljs' ? createRequire(import.meta.url).resolve('exceljs/dist/exceljs.min.js') : null },
+        /** @private @author ddj 2026年10月28号 @param code Browser chunk. @returns No transform. @throws If a Node-only loader or worker entry leaks into the client artifact. */
+        renderChunk(code: string) {
+          if (/\brequire(?:\$\d+)?\(["'](?:node:)?(?:module|worker_threads)["']\)/.test(code)) throw new Error('Browser bundle contains a Node-only module/worker_threads import')
+          return null
+        },
+      },
+      {
         name: 'dsh-shared-panel-state',
         /** @author ddj 2026年10月22号 @param source Import request. @param importer Requesting module. @returns Virtual bridge only for shared live root objects. */
         resolveId(source: string, importer: string | undefined) {
@@ -114,7 +125,7 @@ function clientConfig(panel?: 'rules' | 'debug'): UserConfig {
         resolveId(source: string, importer: string | undefined) {
           if (!source.endsWith('.css')) return null
           const abs =
-            importer !== undefined ? resolvePath(dirname(importer), source) : source
+            source.startsWith('.') && importer !== undefined ? resolvePath(dirname(importer), source) : createRequire(import.meta.url).resolve(source)
           return CSS_VIRTUAL_PREFIX + abs + CSS_VIRTUAL_SUFFIX
         },
         async load(virtualId: string) {

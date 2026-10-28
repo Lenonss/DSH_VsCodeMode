@@ -10,6 +10,9 @@ export interface OfficialBarProps {
   activePath: string
   pendingRegions?: unknown[]
   staleRegions?: unknown[]
+  staleMissing?: number
+  staleAmbiguous?: number
+  noBlocks?: boolean
   diffIdx?: number
   /** 编辑器内容是否就绪；未就绪时不得断言差异失效 */
   contentReady?: boolean
@@ -59,7 +62,8 @@ export function OfficialDiffBar(props: OfficialBarProps): React.ReactElement {
   const records = official.records ?? []
   const count = pendingRegions.length
   const view = reviewBarView({ jumps: count, stale: staleRegions.length, index: diffIdx, ready: props.contentReady === true,
-    pendingRecords: official.pending, canKeep: detail?.capability.keep === true })
+    pendingRecords: official.pending, canKeep: detail?.capability.keep === true,
+    staleMissing: props.staleMissing, staleAmbiguous: props.staleAmbiguous, noBlocks: props.noBlocks })
 
   /** @private @author ddj 2026年10月27号 @returns Close current popup without changing selection. */
   function closeMenu(): void { setMenu(null) }

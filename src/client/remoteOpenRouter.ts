@@ -8,18 +8,21 @@
  * 纯逻辑，node 环境可单测（不依赖 DOM / events 模块）。
  * 作者 ddj 2026年09月08号
  */
-import { patchAccessor } from './compat.js'
 import { isAvailable, selectOpener, type FileOpenContext, type FileOpenerRegistry } from './fileOpeners.js'
+import { absoluteOf, isAbsolutePath } from './tabActions.js'
 
 /** session.openWorkspacePath 的结果形状（host 返回 { opened: true }；客户端不做输出校验）。 */
 export interface OpenPathResult {
   ok: boolean
   value?: { opened: boolean }
+  error?: { code?: string; message?: string }
 }
 
 /** openWorkspacePath 的请求形状；path 为 "." 时表示打开工作区文件夹。 */
 export interface OpenPathRequest {
   path?: unknown
+  action?: 'reveal'
+  application?: string
 }
 
 /** 补丁前 openWorkspacePath 的实时实现形状。 */
@@ -60,11 +63,17 @@ export function probeRemoteOpen(ctx: { get: (name: string) => unknown }): object
  * @returns 恢复函数；目标属性缺失时返回 null（调用方停止安装并告警）
  */
 export function patchRemoteOpen(service: object, options: RemoteOpenRouterOptions): (() => void) | null {
-  return patchAccessor(service, 'openWorkspacePath', async (original, ...args) => {
-    const fallback = original as unknown as RemoteOpen
-    const request = (args[0] ?? {}) as OpenPathRequest
-    const path = typeof request.path === 'string' ? request.path : ''
-    if (!path || path === '.') return fallback(request)
+  const descriptor = Object.getOwnPropertyDescriptor(service, 'openWorkspacePath')
+  const original = Reflect.get(service, 'openWorkspacePath', service)
+  if (!descriptor || !descriptor.configurable || typeof original !== 'function') return null
+  const fallback: RemoteOpen = original.bind(service)
+  const owner = { open: fallback, context: options.context }
+  nativeOwner = owner
+
+  /** @private @author ddj 2026年10月28号 @param request Official request. @returns Routed result; native actions never enter plugin openers. */
+  async function route(request: OpenPathRequest): Promise<OpenPathResult> {
+    const path = typeof request?.path === 'string' ? request.path : ''
+    if (!path || path === '.' || request.action || request.application) return fallback(request)
     const opener = selectOpener(options.registry, options.selected())
     if (!opener || !isAvailable(opener)) return fallback(request)
     try {
@@ -74,5 +83,31 @@ export function patchRemoteOpen(service: object, options: RemoteOpenRouterOption
       options.logger?.('文件打开器 ' + opener.id + ' 失败，回退系统打开: ' + String(error))
       return fallback(request)
     }
-  })
+  }
+  Object.defineProperty(service, 'openWorkspacePath', { configurable: true, enumerable: descriptor.enumerable, value: route })
+  return () => {
+    if (nativeOwner === owner) nativeOwner = undefined
+    if (Object.getOwnPropertyDescriptor(service, 'openWorkspacePath')?.value === route) {
+      Object.defineProperty(service, 'openWorkspacePath', descriptor)
+    }
+  }
+}
+
+/** Captured official capability, independent of the patched routing entry. */
+let nativeOwner: { open: RemoteOpen; context: () => FileOpenContext } | undefined
+
+/** @public @author ddj 2026年10月28号 @param request Original path and optional official action/application. @param cwd Owning view workspace; otherwise current routing context. @returns Native handoff result. @throws Original Host failure or missing absolute workspace path. */
+export async function openOriginal(request: OpenPathRequest, cwd?: string): Promise<OpenPathResult> {
+  if (!nativeOwner) throw new Error('官方系统打开能力不可用，请在支持桌面打开的 Host 中重试')
+  const path = absoluteOf(String(request.path ?? ''), cwd ?? nativeOwner.context().cwd)
+  if (!isAbsolutePath(path)) throw new Error('无法确定文件的 Host 绝对路径，请确认所属工作区')
+
+  // The official endpoint resolves against the Host process, not this tab's workspace.
+  const result = await nativeOwner.open({ ...request, path })
+  if (!result.ok) {
+    const failure = result.error
+    throw new Error(failure ? `${failure.code || 'Host'}: ${failure.message || '系统打开失败'}` : 'Host 未确认系统打开')
+  }
+  if (result.value?.opened !== true) throw new Error('Host 未确认系统打开')
+  return result
 }

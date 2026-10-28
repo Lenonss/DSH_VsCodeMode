@@ -278,7 +278,7 @@ describe('registerOfficialFileClaim', () => {
     expect(canOpen('dsh-resource://file/session/s1/%zz.ts')).toBe(false)
     // G2：Office/不可预览后缀让位官方（不认领 → 回落官方预览/提示）
     expect(canOpen('dsh-resource://file/session/s1/a.docx')).toBe(false)
-    expect(canOpen('dsh-resource://file/session/s1/a.xlsx')).toBe(false)
+    expect(canOpen('dsh-resource://file/session/s1/a.xlsx')).toBe(true)
     expect(canOpen('dsh-resource://file/session/s1/a.pptx')).toBe(false)
     expect(canOpen('dsh-resource://file/session/s1/a.zip')).toBe(false)
     expect(canOpen('dsh-resource://file/session/s1/a.mp4')).toBe(false)
@@ -324,7 +324,7 @@ describe('registerOfficialFileClaim', () => {
 describe('deferToOfficial（G2：Office / 不可预览后缀让位官方）', () => {
   it('Office 文档后缀让位（含同类文档补全）', () => {
     expect(OFFICE_EXT).toContain('docx')
-    for (const ext of OFFICE_EXT) expect(deferToOfficial('a.' + ext)).toBe(true)
+    for (const ext of OFFICE_EXT) expect(deferToOfficial('a.' + ext)).toBe(ext !== 'xlsx')
   })
 
   it('官方不可预览二进制容器让位', () => {

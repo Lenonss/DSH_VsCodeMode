@@ -1,7 +1,7 @@
 /** remote.session 文件链接路由测试（DSH 0.1.3+）：补丁拦截 / 透传回退 / 恢复。作者 ddj 2026年09月08号 */
 import { describe, expect, it } from 'vitest'
 import { createFileOpenerRegistry } from '../src/client/fileOpeners.js'
-import { patchRemoteOpen, probeRemoteOpen } from '../src/client/remoteOpenRouter.js'
+import { openOriginal, patchRemoteOpen, probeRemoteOpen } from '../src/client/remoteOpenRouter.js'
 
 /** 复刻 DSH 0.1.3+ remote.session 形态：openWorkspacePath 为 getter-only accessor。 */
 function makeRemoteService(originalLogs) {
@@ -44,6 +44,65 @@ describe('probeRemoteOpen', () => {
 })
 
 describe('patchRemoteOpen', () => {
+  it('原始桥保留receiver并绕过路由，action/application原样透传', async () => {
+    const requests: unknown[] = []
+    const service = {
+      /** @public @author ddj 2026年10月28号 @param request Official request. @returns Successful native handoff. */
+      async openWorkspacePath(request: unknown) {
+        expect(this).toBe(service)
+        requests.push(request)
+        return { ok: true, value: { opened: true } }
+      },
+    }
+    const registry = createFileOpenerRegistry()
+    registry.register({ id: 'trap', label: 'trap', priority: 100, open: () => { throw new Error('不得路由原生动作') } })
+    const dispose = patchRemoteOpen(service, deps(registry))!
+    const reveal = { path: '中文 空格.xlsx', action: 'reveal' as const }
+    const application = { path: '中文 空格.xlsx', application: 'excel' }
+    await service.openWorkspacePath(reveal)
+    await service.openWorkspacePath(application)
+    await openOriginal({ path: '中文 空格.xlsx' })
+    expect(requests).toEqual([reveal, application, { path: 'D:/ws/中文 空格.xlsx' }])
+    dispose()
+    await expect(openOriginal({ path: 'a.xlsx' })).rejects.toThrow('官方系统打开能力不可用')
+  })
+
+  it('原件打开按所属工作区解析路径且保留官方失败原因', async () => {
+    const requests: unknown[] = []
+    const service = {
+      /** @public @author ddj 2026年10月28号 @param request Host request. @returns Real Remote failure shape. */
+      async openWorkspacePath(request: unknown) {
+        requests.push(request)
+        return { ok: false, error: { code: 'gateway/bad-request', message: 'Path has no verified Host path' } }
+      },
+    }
+    const dispose = patchRemoteOpen(service, deps(createFileOpenerRegistry()))!
+    try {
+      await expect(openOriginal({ path: 'Assets/状态表.xlsx' }, '/project')).rejects.toThrow('gateway/bad-request: Path has no verified Host path')
+      await expect(openOriginal({ path: '/absolute/状态表.xlsx', application: 'excel' }, '/project')).rejects.toThrow('Path has no verified Host path')
+      expect(requests).toEqual([{ path: '/project/Assets/状态表.xlsx' }, { path: '/absolute/状态表.xlsx', application: 'excel' }])
+    } finally { dispose() }
+  })
+
+  it('没有绝对工作区时拒绝把相对路径交给Host进程', async () => {
+    const originalLogs = []
+    const service = makeRemoteService(originalLogs)
+    const dispose = patchRemoteOpen(service, { ...deps(createFileOpenerRegistry()), context: () => ({}) })!
+    try {
+      await expect(openOriginal({ path: 'Assets/状态表.xlsx' })).rejects.toThrow('Host 绝对路径')
+      expect(originalLogs).toEqual([])
+    } finally { dispose() }
+  })
+
+  it('卸载不覆盖后来安装的补丁', () => {
+    const service = makeRemoteService([])
+    const dispose = patchRemoteOpen(service, deps(createFileOpenerRegistry()))!
+    const later = async () => ({ ok: true })
+    Object.defineProperty(service, 'openWorkspacePath', { configurable: true, value: later })
+    dispose()
+    expect(service.openWorkspacePath).toBe(later)
+  })
+
   it('插件打开器优先接管并返回成功结果', async () => {
     const originalLogs = []
     const service = makeRemoteService(originalLogs)

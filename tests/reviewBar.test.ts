@@ -56,6 +56,46 @@ describe('reviewBarView 全部失效', () => {
   })
 })
 
+describe('reviewBarView 定位失败原因', () => {
+  it('仅歧义时所有提示不宣称改动消失', () => {
+    const view = reviewBarView({ ...base, stale: 2, staleAmbiguous: 2, staleMissing: 0 })
+    expect(view.position).toBe('无可跳转')
+    expect(view.notice).toContain('出现多次')
+    expect(view.navPrevTitle).toContain('无法唯一定位')
+    expect(view.navNextTitle).toContain('无法唯一定位')
+    expect(view.keepHint).toContain('不改写磁盘')
+    expect(Object.values(view).join(' ')).not.toContain('已不在')
+  })
+  it('混合原因分别计数，Keep不冒称全部消失', () => {
+    const view = reviewBarView({ ...base, stale: 3, staleMissing: 1, staleAmbiguous: 2 })
+    expect(view.notice).toContain('1 处改动未在当前文件中找到')
+    expect(view.notice).toContain('2 处上下文出现多次')
+    expect(view.navNextTitle).toContain('无法唯一定位')
+    expect(view.keepHint).not.toContain('已不在')
+    expect(view.notice).not.toContain('均已')
+  })
+  it.each([0, 2])('无行级块时不承诺全文或断言缺失（stale=%i）', (stale) => {
+    const view = reviewBarView({ ...base, stale, noBlocks: true })
+    expect(view.notice).toContain('没有可定位的行级差异块')
+    expect(view.navPrevTitle).toContain('没有可定位的行级差异块')
+    expect(view.navNextTitle).toContain('没有可定位的行级差异块')
+    expect(view.keepHint).toContain('不改写磁盘')
+    expect(Object.values(view).join(' ')).not.toMatch(/已不在|旧新全文/)
+  })
+  it('有待审记录但零块仍给中性说明', () => {
+    const view = reviewBarView(base)
+    expect(view.position).toBe('—')
+    expect(view.notice).toBe('该记录的官方补丁没有可定位的行级差异块')
+  })
+  it('载入优先覆盖原因字段和Keep失效叙事', () => {
+    const view = reviewBarView({ ...base, ready: false, stale: 3, staleMissing: 1, staleAmbiguous: 2, noBlocks: true })
+    expect(view.notice).toBe('')
+    expect(view.navPrevTitle).toBe('文件载入中')
+    expect(view.navNextTitle).toBe('文件载入中')
+    expect(view.keepHint).toBe('保留当前记录的未处理修改')
+  })
+})
+
 describe('reviewBarView 无差异', () => {
   it('给出中性占位与原因', () => {
     const view = reviewBarView({ ...base, pendingRecords: 0 })
@@ -67,7 +107,7 @@ describe('reviewBarView 无差异', () => {
 
 describe('reviewBarView 输入归一', () => {
   it('负数与非数字计数归零', () => {
-    const view = reviewBarView({ ...base, jumps: -3, stale: Number.NaN, index: Number.NaN })
+    const view = reviewBarView({ ...base, jumps: -3, stale: Number.NaN, index: Number.NaN, pendingRecords: 0 })
     expect(view.position).toBe('—')
     expect(view.notice).toBe('')
   })

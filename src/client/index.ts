@@ -29,7 +29,7 @@ import { observeScheme, schemeOfSnapshot } from './monaco/theme.js'
 import { createFileOpenerRegistry, scanSidebar, officialSidebarOpener, shouldClaimFiles, type FileOpenContext } from './fileOpeners.js'
 import type { FileOpenerRegistry } from './fileOpeners.js'
 import { installOpenPathRouter, vscodeOpener, autoValue } from './openPathRouter.js'
-import { patchRemoteOpen, probeRemoteOpen } from './remoteOpenRouter.js'
+import { openOriginal, patchRemoteOpen, probeRemoteOpen } from './remoteOpenRouter.js'
 import { patchSettingsDoc, probeSettingsDoc } from './settingsDocRouter.js'
 import { openEditorView } from './events.js'
 import { setupExtOpen } from './externalOpen.js'
@@ -332,7 +332,7 @@ export async function apply(ctx: any): Promise<void> {
   ctx.effect(() => sidebarPanels.register(createOutlinePanel()), 'vscode-mode: sidebar panel outline')
   ctx.effect(() => registry.register({
     id: 'system', label: '系统默认应用', priority: 0,
-    open: (path: string) => originalOpenPath.call(workspaces, path),
+    open: async (path: string) => { await openOriginal({ path }) },
   }), 'vscode-mode: system file opener')
   ctx.effect(() => {
     const sidebar = scanSidebar(ctx)

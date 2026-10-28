@@ -53,7 +53,7 @@ const DEFER_EXT_SET: Set<string> = new Set([...OFFICE_EXT, ...BLIND_EXT])
  * @returns 是否让位官方
  */
 export function deferToOfficial(path: unknown): boolean {
-  return DEFER_EXT_SET.has(suffixOf(path))
+  return suffixOf(path) !== 'xlsx' && DEFER_EXT_SET.has(suffixOf(path))
 }
 
 /** 官方 Tab 打开参数（官方运行时不校验的 JSON，正文经 navigation.params 读回）。 */
@@ -353,7 +353,7 @@ export function registerOfficialFileClaim(options: {
       canOpen: (address: string) => {
         const parsed = parseOfficialFileAddress(address)
         if (parsed === null) return false
-        return !deferToOfficial(parsed.path) && !inNativePath(parsed.path)
+        return !deferToOfficial(parsed.path) && (suffixOf(parsed.path) === 'xlsx' || !inNativePath(parsed.path))
       },
       title: (address: string) => officialFileTitle(address),
     })

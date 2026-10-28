@@ -14,6 +14,12 @@ export interface ReviewBarInput {
   jumps: number
   /** 无法定位的历史差异块数 */
   stale: number
+  /** 已确认无法匹配的块数；省略时兼容历史栏计数 */
+  staleMissing?: number
+  /** 全上下文多命中的块数 */
+  staleAmbiguous?: number
+  /** 官方详情已就绪且没有行级块；与 coarse 独立 */
+  noBlocks?: boolean
   /** 当前差异块索引（0 基） */
   index: number
   /** 编辑器内容是否已就绪；未就绪时不得断言差异失效 */
@@ -48,9 +54,21 @@ function safeCount(value: unknown): number {
   return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 0
 }
 
-/** @private @author ddj 2026年10月27号 @returns 无差异可跳转时的 Keep 提示 */
-function fullStaleKeepHint(): string {
-  return '保留该记录的全部改动并结案：这些改动已不在文件中，记录将被标记为已采纳（不改写磁盘）'
+/** @private @author ddj 2026年10月28号 @param stale 无法定位块数。 @param ambiguous 多命中块数。 @param noBlocks 是否无行级块。 @returns 导航原因与准确的失效叙事。 */
+function staleMessage(stale: number, ambiguous: number, noBlocks: boolean): { reason: string; notice: string } {
+  if (noBlocks) {
+    const reason = '该记录的官方补丁没有可定位的行级差异块'
+    return { reason, notice: `${reason}，无法行内跳转；可展开详情核对官方记录。` }
+  }
+  if (ambiguous === 0) {
+    return { reason: '该记录的改动已不在当前文件中，无可跳转差异',
+      notice: `本记录 ${stale} 处改动均已不在当前文件中（被后续编辑覆盖或已撤销）；可点 Keep 结案（只标记已采纳，不改写磁盘），或展开详情核对原始增删。` }
+  }
+
+  const reason = '同一段上下文在当前文件出现多次，无法唯一定位'
+  if (ambiguous === stale) return { reason, notice: `${reason}（可能存在重复代码块），可展开详情核对原始增删。` }
+  return { reason: '部分改动缺失，其余上下文存在多处匹配，无法唯一定位',
+    notice: `${stale - ambiguous} 处改动未在当前文件中找到，${ambiguous} 处上下文出现多次、无法唯一定位；可展开详情核对原始增删。` }
 }
 
 /**
@@ -65,7 +83,15 @@ export function reviewBarView(input: ReviewBarInput): ReviewBarView {
   const stale = safeCount(input.stale)
   const index = safeCount(input.index)
   const pendingTitle = `${safeCount(input.pendingRecords)} 条官方待审记录` + (input.ready ? `，本文件可跳转 ${jumps} 处` : '')
-  const keepHint = jumps === 0 && stale > 0 && input.canKeep ? fullStaleKeepHint() : '保留当前记录的未处理修改'
+  const ambiguous = Math.min(stale, safeCount(input.staleAmbiguous))
+  const missing = Math.min(stale - ambiguous, safeCount(input.staleMissing ?? stale - ambiguous))
+  let keepHint = '保留当前记录的未处理修改'
+  if (input.ready === true && jumps === 0 && input.canKeep && (stale > 0 || input.noBlocks)) {
+    keepHint = '保留该记录的全部改动并结案：只标记已采纳，不改写磁盘'
+    if (!input.noBlocks && ambiguous === 0 && missing === stale) {
+      keepHint = '保留该记录的全部改动并结案：这些改动已不在文件中，记录将被标记为已采纳（不改写磁盘）'
+    }
+  }
 
   // 载入期所有块天然 stale，此时只能报告进度，不能断言改动已失效。
   if (input.ready !== true) {
@@ -79,12 +105,13 @@ export function reviewBarView(input: ReviewBarInput): ReviewBarView {
   }
 
   if (stale > 0) {
-    const reason = '该记录的改动已不在当前文件中，无可跳转差异'
-    const notice = `本记录 ${stale} 处改动均已不在当前文件中（被后续编辑覆盖或已撤销）；可点 Keep 结案（只标记已采纳，不改写磁盘），或展开详情核对原始增删。`
+    const { reason, notice } = staleMessage(stale, ambiguous, input.noBlocks === true)
     return { position: '无可跳转', navPrevTitle: reason, navNextTitle: reason, notice, noticeTone: 'warn', keepHint, pendingTitle }
   }
 
-  return { position: '—', navPrevTitle: '当前文件没有可定位差异', navNextTitle: '当前文件没有可定位差异', notice: '', noticeTone: 'info', keepHint, pendingTitle }
+  const notice = safeCount(input.pendingRecords) > 0 ? '该记录的官方补丁没有可定位的行级差异块' : ''
+  const reason = notice || '当前文件没有可定位差异'
+  return { position: '—', navPrevTitle: reason, navNextTitle: reason, notice, noticeTone: 'info', keepHint, pendingTitle }
 }
 
 /** 非官方栏标识：没有官方待审记录时回落的那套栏必须自述来源，避免被当成旧版插件。 */
