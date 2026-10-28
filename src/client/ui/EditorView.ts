@@ -61,6 +61,7 @@ import { applyOfficial, editorFont, registerThemes, themeNameOf } from '../monac
 import { createDiffRenderer } from '../monaco/diffRender.js'
 import { ST, callIdAttr, noopHunk, summarize } from '../state/records.js'
 import { diffRegions } from '../state/regions.js'
+import { missingBatch, missingRegion } from '../missingReview.js'
 import { QuickOpen } from './QuickOpen.js'
 import { attachHorizontalWheel } from './horizontalWheel.js'
 import { CommandPalette } from './CommandPalette.js'
@@ -319,6 +320,9 @@ export function EditorView(props) {
   const [dirtyMap, setDirtyMap] = React.useState({})
   const [content, setContent] = React.useState(null)
   const [contentPath, setContentPath] = React.useState(null)
+  const [missingPreview, setMissingPreview] = React.useState(null)
+  const missingRef = React.useRef(new Map())
+  const missingNow = missingPreview?.path === active && missingPreview?.sessionId === sessionId ? missingPreview : null
   const [receiptLoad, setReceiptLoad] = React.useState(null) // { sessionId, path, sequence, status, error }
   const [imageSrc, setImageSrc] = React.useState(null) // 图片预览 data URL（图片 tab 专用，文本 tab 恒为 null）
   const [imgSize, setImgSize] = React.useState(null) // 图片自然尺寸 { w, h }（路径栏 meta）
@@ -634,17 +638,25 @@ export function EditorView(props) {
     const trace = isDebug() && contentReady && currentRecords.length > 0
     const start = trace ? performance.now() : 0
     // #endregion
-    const next = officialDetail
-      ? reviewRegions(officialDetail.diff, officialDetail.item.id, officialDetail.blocks ?? [], contentReady ? content : null)
-      : diffRegions(currentRecords, contentReady ? content : null).filter((r) => !r.superseded)
+    let next
+    if (officialDetail) {
+      next = reviewRegions(officialDetail.diff, officialDetail.item.id, officialDetail.blocks ?? [], contentReady ? content : null)
+    } else if (missingNow && contentReady) {
+      next = missingNow.resolved ? [] : [missingRegion(missingNow)]
+    } else {
+      next = diffRegions(currentRecords, contentReady ? content : null).filter((r) => !r.superseded)
+    }
     // #region debug log
     if (trace) {
       try { dbg(sessionId, `[DEBUG diffRegions] records=${currentRecords.length} bytes=${content.length} regions=${next.length} ms=${(performance.now() - start).toFixed(1)}`) } catch (e) { /* 诊断不可影响渲染 */ }
     }
     // #endregion
     return next
-  }, [currentRecords, content, contentPath, active, officialDetail])
+  }, [currentRecords, content, contentPath, active, officialDetail, missingNow])
   // useMemo 稳定引用：否则 hover 等重渲染会让 view zone effect 反复重建（- 号闪烁）
+  React.useEffect(() => {
+    editorRef.current?.updateOptions({ readOnly: !!missingNow })
+  }, [missingNow, active, content, monaco])
   const pendingRegions = React.useMemo(() => regions.filter((r) => r.status === ST.PENDING && !r.stale), [regions])
   const staleRegions = React.useMemo(() => regions.filter((r) => r.status === ST.PENDING && r.stale), [regions])
   const staleMissing = staleRegions.filter((region) => region.staleReason === 'missing').length
@@ -1109,7 +1121,10 @@ export function EditorView(props) {
     /** @author ddj 2026年09月28号 @param res Disk content for a still-clean cached model. */
     const accept = (res) => {
       if (!loadCurrent(path, sequence) || dirtyRef.current[path] || model.getValue() !== before) return
+      if (res?.code === 'file-missing') { void loadMissing(path, sid, sequence); return }
       if (!res?.ok) return
+      missingRef.current.delete(path)
+      setMissingPreview(null)
       mark(res.version)
       if (res.content === before) return
       saveViewState(path)
@@ -1130,6 +1145,27 @@ export function EditorView(props) {
    * @param force 强制走 RPC（reloadFile 用，跳过 model 复用）
    * @param version 已知磁盘版本（缺省走 RPC 返回值）
    */
+  /** @private @author ddj 2026年10月28号 @param path Missing text file. @param sid Owning session. @param seq Loader generation. @sideEffects Loads deletion evidence without creating or saving the file. */
+  async function loadMissing(path, sid, seq) {
+    try {
+      const result = await rpc('edrv.missingReview', { sessionId: sid, path })
+      if (!loadCurrent(path, seq)) return
+      if (!result.ok) { failLoad(path, sid, seq, result.error); return }
+      if (!result.review) { loadContent(path, sid, true); return }
+      if (dirtyRef.current[path] || savingRef.current.has(path)) { failLoad(path, sid, seq, '文件已删除，但有未保存编辑；请先处理本地缓冲'); return }
+      const preview = { ...result.review, sessionId: sid, keepId: crypto.randomUUID(), undoId: crypto.randomUUID() }
+      missingRef.current.set(path, preview)
+      setMissingPreview(preview)
+      setContent('')
+      setContentPath(path)
+      setLoadError(null)
+      setError(null)
+      stampLoad(path, sid, seq)
+      setLoadStage({ progress: 100, message: '文件已删除 · 展示最后记录快照' })
+      setStatus('文件已删除 · 展示最后记录快照（只读）')
+    } catch (cause) { if (loadCurrent(path, seq)) failLoad(path, sid, seq, String(cause)) }
+  }
+
   const loadContent = (path, sid, force, version) => {
     const seq = ++loadSeqRef.current
     setReceiptLoad({ path, cwd, sessionId: sid, sequence: seq, status: 'loading' })
@@ -1176,7 +1212,7 @@ export function EditorView(props) {
       loadPdf(path, sid, seq, force === true, version)
       return
     }
-    const cachedModel = force ? null : modelsRef.current.get(path)
+    const cachedModel = force || missingRef.current.has(path) ? null : modelsRef.current.get(path)
     if (cachedModel) {
       // model 命中：直接显示其内容（切 tab 零等待），后台静默校验
       setContent(cachedModel.getValue())
@@ -1199,6 +1235,8 @@ export function EditorView(props) {
       // #endregion
       if (!loadCurrent(path, seq)) return
       if (res && res.ok) {
+        missingRef.current.delete(path)
+        setMissingPreview(null)
         mark(res.version, true)
         setContent(res.content)
         setContentPath(path)
@@ -1206,6 +1244,7 @@ export function EditorView(props) {
         setLoadStage((prev) => ({ progress: Math.max(84, prev.progress), message: '文件已读取，准备创建编辑器…' }))
         setStatus('已加载')
       } else {
+        if (res?.code === 'file-missing') { void loadMissing(path, sid, seq); return }
         if (res?.code === 'file-too-large') setLargeCandidate(JSON.stringify([scope, sid, path]))
         const base = res?.error ? String(res.error) : '读取失败'
         dapTrace('read-failed', { path, error: base, resolvedPath: res?.resolvedPath, cwd })
@@ -1408,6 +1447,9 @@ export function EditorView(props) {
       setStatus('已同步外部修改 ' + new Date().toTimeString().slice(0, 8))
       emitRefresh({ scope, paths: [change.path], kind: 'text', eventId })
       return
+    }
+    if (change.kind === 'deleted' && change.path === activeRef.current && !dirtyRef.current[change.path] && !savingRef.current.has(change.path)) {
+      loadContent(change.path, sessionId, true)
     }
     const kind = change.kind === 'deleted' ? 'deleted' : 'conflict'
     markDiskFlag(readSync(scope, change.path) ?? { path: change.path, kind, at: Date.now() })
@@ -2351,6 +2393,7 @@ export function EditorView(props) {
   /** @private @author ddj 2026年10月14号 @param path Canonical path. @param manual Explicit save. @returns Guarded save, never another pane's content. */
   function saveDocument(path, manual) {
     if (isExcelPath(path)) return Promise.resolve({ ok: false })
+    if (missingRef.current.has(path)) { setStatus('删除预览只读；请使用 Keep / Undo'); return Promise.resolve({ ok: false }) }
     const model = modelsRef.current.get(path)
     if (!model) return Promise.resolve({ ok: false })
     const store = documents()
@@ -2409,7 +2452,7 @@ export function EditorView(props) {
     const ed = editorRef.current
     const model = ed?.getModel()
     const path = [...modelsRef.current].find(([, item]) => item === model)?.[0]
-    if (!ed || !path) return
+    if (!ed || !path || missingRef.current.has(path)) return
     setDirtyMap((d) => Object.assign({}, d, { [path]: true }))
     // 编辑即「使用」：需求 2 的淘汰口径是「最近没有改动」，故有改动时刷新 LRU 序号，
     // 使长时间只在某文件里编辑的页签不会被其它文件的打开动作挤出。
@@ -2533,6 +2576,7 @@ export function EditorView(props) {
     const side = layoutRef.current === 'side'
     const ed = m.editor.create(node, {
       value: '',
+      readOnly: missingRef.current.has(activeRef.current),
       language: 'plaintext',
       theme: themeNameOf(),
       fontFamily: 'var(--ds-font-family-code, ui-monospace, monospace)',
@@ -3149,6 +3193,7 @@ export function EditorView(props) {
    * @returns Promise<boolean> 是否成功
    */
   const actHunk = (region, reject, silent) => {
+    if (region.sourceKind === 'missing') return decideMissing(reject)
     if (region.sourceKind === 'official') return decideOfficial(reject, region.id)
     const method = reject ? 'edrv.reject' : 'edrv.accept'
     // #region debug log
@@ -3280,7 +3325,35 @@ export function EditorView(props) {
     finally { batchBusyRef.current = false }
   }
 
+  /** @private @author ddj 2026年10月28号 @param reject Restore the shown snapshot instead of keeping absence. @returns Safe whole-file decision, never a hunk reversal. */
+  async function decideMissing(reject) {
+    if (batchBusyRef.current || !missingNow || missingNow.resolved) return false
+    const preview = missingNow
+    const lifetime = reviewLifeRef.current
+    batchBusyRef.current = true
+    setReviewBatchBusy(true)
+    try {
+      guardReviewAll(reject, lifetime)
+      const result = await rpc('edrv.missingDecide', { sessionId, token: preview.token, operationId: reject ? preview.undoId : preview.keepId, undo: reject })
+      if (!lifetime?.live) return false
+      if (!result.ok) { setError(result.error); return false }
+      setRecords((previous) => Object.fromEntries(Object.entries(previous).filter(([id]) => !result.callIds.includes(id))))
+      missingRef.current.set(preview.path, { ...preview, resolved: true })
+      if (activeRef.current === preview.path) {
+        if (reject) loadContent(preview.path, sessionId, true)
+        else setMissingPreview({ ...preview, resolved: true })
+      }
+      refreshRecords()
+      emitRefresh({ scope, paths: [preview.path], kind: 'structure' })
+      setStatus(reject ? '已恢复展示的完整历史快照' : '已保留文件删除')
+      setError(null)
+      return true
+    } catch (cause) { if (lifetime?.live) setError(String(cause)); return false }
+    finally { batchBusyRef.current = false; if (lifetime?.live) setReviewBatchBusy(false) }
+  }
+
   const acceptFile = () => {
+    if (missingNow && !officialDetail) return decideMissing(false)
     if (officialDetail) return decideOfficial(false)
     if (batchBusyRef.current || !decideRegions.length) return
     batchBusyRef.current = true
@@ -3293,6 +3366,7 @@ export function EditorView(props) {
     }).catch(() => { batchBusyRef.current = false })
   }
   const undoFile = () => {
+    if (missingNow && !officialDetail) return decideMissing(true)
     if (officialDetail) return decideOfficial(true)
     if (batchBusyRef.current || !decideRegions.length) return
     batchBusyRef.current = true
@@ -3325,18 +3399,47 @@ export function EditorView(props) {
    * @author ddj 2026年08月20号
    * @param reject true=全部不采纳（回滚），false=全部采纳
    */
-  const actAllPending = (reject) => {
+  const actAllPending = async (reject) => {
     if (batchBusyRef.current || !allPending.length) return
+    const lifetime = reviewLifeRef.current
     batchBusyRef.current = true
     const list = reject ? [...allPending].sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : b.idx - a.idx)) : allPending
     const paths = [...new Set(list.map((r) => records[r.callId]?.path).filter(Boolean))]
-    return actMany(list.map((r) => itemOf(r, reject))).then((result) => {
-      batchBusyRef.current = false
-      reloadFile(true)
-      emitRefresh({ scope, paths: paths.length ? paths : undefined, kind: 'structure' })
-      setStatus(decideStatus(reject ? '已不采纳 ' : '已采纳 ', result))
-      if (result.fail) setError(result.fail + ' 处差异处理失败（可能已被后续修改影响），可刷新后重试')
-    }).catch(() => { batchBusyRef.current = false })
+    try {
+      const handled = await missingBatch(paths, {
+        query: async (path) => {
+          // The active deletion must use exactly the evidence the user saw.
+          const cached = missingRef.current.get(path)
+          if (cached?.sessionId === sessionId && !cached.resolved) return { ok: true, review: cached }
+          const result = await rpc('edrv.missingReview', { sessionId, path })
+          if (result.ok && result.review) {
+            const preview = { ...result.review, sessionId, keepId: crypto.randomUUID(), undoId: crypto.randomUUID() }
+            missingRef.current.set(path, preview)
+            return { ok: true, review: preview }
+          }
+          return result
+        },
+        decide: (preview, operationId) => rpc('edrv.missingDecide', { sessionId, token: preview.token, operationId, undo: reject }),
+        guard: () => guardReviewAll(reject, lifetime),
+        operation: (preview) => reject ? preview.undoId : preview.keepId,
+        committed: (preview, callIds) => {
+          if (!lifetime?.live) return
+          missingRef.current.set(preview.path, { ...preview, resolved: true })
+          setRecords((previous) => Object.fromEntries(Object.entries(previous).filter(([id]) => !callIds.includes(id))))
+          if (!reject && sameFile(activeRef.current, preview.path)) setMissingPreview({ ...preview, path: activeRef.current, sessionId, resolved: true })
+          emitRefresh({ scope, paths: [preview.path], kind: 'structure' })
+        },
+      })
+      guardReviewAll(reject, lifetime)
+      const remaining = list.filter((item) => !handled.has(records[item.callId]?.path))
+      const result = await actMany(remaining.map((item) => itemOf(item, reject)))
+      if (!lifetime?.live) return
+      if (reject || !missingNow) reloadFile(true)
+      emitRefresh({ scope, paths, kind: 'structure' })
+      setStatus(decideStatus(reject ? '已不采纳 ' : '已采纳 ', result) + `；删除文件 ${handled.size} 个`)
+      if (result.fail) setError(result.fail + ' 处差异处理失败，可刷新后重试')
+    } catch (cause) { if (lifetime?.live) setError(String(cause)) }
+    finally { batchBusyRef.current = false; if (lifetime?.live) refreshRecords() }
   }
   /** @private @author ddj 2026年10月27号 @param reject Undo requires every local buffer to be saved. @param token Starting session lifetime. @returns Throws before the next mutation when unsafe. */
   function guardReviewAll(reject, token) {
@@ -4584,6 +4687,7 @@ export function EditorView(props) {
   const reviewErrorText = !rawReviewError ? undefined : sessionDown ? SESSION_DOWN_NOTICE : sessionErrorText(rawReviewError)
   const buildDockSnapshot = () => ({
     mode: editorDockMode(active),
+    missingDeletion: !!missingNow,
     official: officialFile ? { sessionId, page: review.page, path: officialFile,
       pending: sum.files.find((file) => sameFile(file.path, active))?.pending ?? 0,
       detail: officialDetail, records: officialRecords, onSelect: setSelectedReview } : null,

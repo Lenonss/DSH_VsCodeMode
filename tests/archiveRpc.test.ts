@@ -127,7 +127,8 @@ describe('SQLite archive RPC', () => {
   })
 
   it('同一次决策内不同文件的相同批次分别归档并可按路径查询', async () => {
-    const { fs } = fakeFs()
+    const { fs, files } = fakeFs()
+    files.set(CWD + '/b.ts', 'new')
     const first = record()
     first.callId = 'file-one'
     first.batch = 3

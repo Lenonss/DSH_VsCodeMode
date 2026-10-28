@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createDiffRenderer } from '../src/client/monaco/diffRender.js'
 import { officialThemeOf } from '../src/client/monaco/theme.js'
+import { missingRegion } from '../src/client/missingReview.js'
 
 class FakeNode {
   className = ''
@@ -69,6 +70,18 @@ function deferred() {
 afterEach(() => vi.unstubAllGlobals())
 
 describe('行内差异渲染', () => {
+  it('缺失文件快照全部渲染为删除行，旧行号从 1 开始且没有新增装饰', () => {
+    const f = fixture()
+    const renderer = createDiffRenderer(vi.fn())
+    renderer.render(f.monaco, f.editor, [missingRegion({ token: 't', path: 'gone.ts', content: 'first\r\nsecond', callIds: ['c1'], at: '' })], 's1')
+    const zone = zoneOf(f)
+    expect(zone.afterLineNumber).toBe(0)
+    expect(zone.heightInLines).toBe(2)
+    expect(zone.domNode.children.map((row) => row.firstChild.textContent)).toEqual(['first', 'second'])
+    expect(zone.marginDomNode.children.map((row) => row.children.map((node) => node.textContent))).toEqual([['1', '−'], ['2', '−']])
+    expect(f.editor.deltaDecorations.mock.calls.at(-1)![1]).toEqual([])
+    renderer.dispose()
+  })
   it('新增行用整行和边栏装饰，删除行拥有旧号/减号且遵循实际字体布局', async () => {
     const f = fixture()
     const renderer = createDiffRenderer(vi.fn())

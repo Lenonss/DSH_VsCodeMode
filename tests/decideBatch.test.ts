@@ -88,6 +88,67 @@ function bucketOf(records: DiffRecord[]): Map<string, DiffRecord> {
   return new Map(records.map((r) => [r.callId, r]))
 }
 
+describe('missing file review', () => {
+  it.each([false, true])('keeps absence or restores exactly the newest complete snapshot: undo=%s', async (undo) => {
+    const fs = fakeFs({})
+    const records = bucketOf([rec({ callId: 'older', after: 'older full text' }), rec({ callId: 'latest', at: '2026-10-28', after: 'complete\r\nnewest\r\n' })])
+    const handlers = buildHandlers(fakeCtx(fs), new Map([[CWD, records]]))
+    const preview = await handlers['edrv.missingReview']({ sessionId: 's1', path: CWD + '/a.ts' })
+    expect(preview.ok).toBe(true)
+    if (!preview.ok || !preview.review) throw new Error('Missing preview')
+    expect(preview.review.content).toBe('complete\r\nnewest\r\n')
+    expect(fs.writeText).not.toHaveBeenCalled()
+    const args = { sessionId: 's1', token: preview.review.token, operationId: 'retry-id', undo }
+    expect(await handlers['edrv.missingDecide'](args)).toEqual({ ok: true, callIds: ['older', 'latest'] })
+    expect(await handlers['edrv.missingDecide'](args)).toMatchObject({ ok: true })
+    expect(fs.writeText).toHaveBeenCalledTimes(undo ? 1 : 0)
+    if (undo) expect(fs.writeText.mock.calls[0].slice(0, 3)).toEqual([CWD + '/a.ts', preview.review.content, { kind: 'createIfAbsent' }])
+    expect([...records.values()].every((record) => record.archived)).toBe(true)
+  })
+
+  it.each([false, true])('refuses a reappeared file without overwriting or resolving: undo=%s', async (undo) => {
+    const fs = fakeFs({})
+    const record = rec({ after: 'full snapshot' })
+    const handlers = buildHandlers(fakeCtx(fs), new Map([[CWD, bucketOf([record])]]))
+    const result = await handlers['edrv.missingReview']({ sessionId: 's1', path: record.path })
+    if (!result.ok || !result.review) throw new Error('Missing preview')
+    await fs.writeText(record.path, 'external text')
+    fs.writeText.mockClear()
+    expect(await handlers['edrv.missingDecide']({ sessionId: 's1', token: result.review.token, operationId: 'op', undo })).toMatchObject({ ok: false, error: expect.stringContaining('重新出现') })
+    expect(await fs.readText(record.path)).toBe('external text')
+    expect(fs.writeText).not.toHaveBeenCalled()
+    expect(record.decisions.call).toBe('pending')
+  })
+
+  it('requires full evidence and refuses changed records or failed exclusive creation', async () => {
+    const fs = fakeFs({})
+    const record = rec({})
+    const handlers = buildHandlers(fakeCtx(fs), new Map([[CWD, bucketOf([record])]]))
+    expect(await handlers['edrv.missingReview']({ sessionId: 's1', path: record.path })).toMatchObject({ ok: false, error: expect.stringContaining('完整历史快照') })
+    record.after = ''
+    const preview = await handlers['edrv.missingReview']({ sessionId: 's1', path: record.path })
+    if (!preview.ok || !preview.review) throw new Error('Missing preview')
+    record.after = 'changed'
+    expect(await handlers['edrv.missingDecide']({ sessionId: 's1', token: preview.review.token, operationId: 'op', undo: true })).toMatchObject({ ok: false, error: expect.stringContaining('历史记录已变化') })
+    expect(fs.writeText).not.toHaveBeenCalled()
+    const next = await handlers['edrv.missingReview']({ sessionId: 's1', path: record.path })
+    if (!next.ok || !next.review) throw new Error('Missing preview')
+    fs.writeText.mockRejectedValueOnce(new Error('FS_STALE_VERSION'))
+    expect(await handlers['edrv.missingDecide']({ sessionId: 's1', token: next.review.token, operationId: 'op', undo: true })).toMatchObject({ ok: false, error: expect.stringContaining('FS_STALE_VERSION') })
+    expect(record.archived).toBe(false)
+    expect(record.decisions.call).toBe('pending')
+  })
+
+  it('blocks legacy missing-file accept and returns null for normal files', async () => {
+    const fs = fakeFs({})
+    const record = rec({ after: 'snapshot' })
+    const handlers = buildHandlers(fakeCtx(fs), new Map([[CWD, bucketOf([record])]]))
+    expect(await handlers['edrv.accept']({ sessionId: 's1', callId: record.callId })).toMatchObject({ ok: false, error: expect.stringContaining('整文件删除预览') })
+    await fs.writeText(record.path, 'present')
+    expect(await handlers['edrv.missingReview']({ sessionId: 's1', path: record.path })).toEqual({ ok: true, review: null })
+  })
+})
+
 describe('edrv.decideBatch', () => {
   it('official identity blocks old accept, reject, batch and rollback without file IO', async () => {
     const path = CWD + '/a.ts'
@@ -106,7 +167,7 @@ describe('edrv.decideBatch', () => {
     expect(registry.get(CWD)!.get('c1')!.decisions.call).toBe('pending')
   })
   it('批量采纳多记录：SQLite 同批次去重且不重写 sidecar', async () => {
-    const fs = fakeFs({})
+    const fs = fakeFs({ [CWD + '/a.ts']: 'b' })
     const ctx = fakeCtx(fs)
     const registry = new Map<string, Map<string, DiffRecord>>([
       [CWD, bucketOf([rec({ callId: 'a' }), rec({ callId: 'b' })])],
@@ -130,7 +191,7 @@ describe('edrv.decideBatch', () => {
   })
 
   it('含不存在记录的项报错，其余项正常处理', async () => {
-    const fs = fakeFs({})
+    const fs = fakeFs({ [CWD + '/a.ts']: 'b' })
     const ctx = fakeCtx(fs)
     const registry = new Map<string, Map<string, DiffRecord>>([
       [CWD, bucketOf([rec({ callId: 'a' })])],
@@ -289,7 +350,7 @@ describe('edrv.decideBatch', () => {
     expect(res.ok).toBe(true)
     if (!res.ok) return
     expect(res.results[0].ok).toBe(false)
-    expect(String(res.results[0].error)).toContain('文件不存在')
+    expect(String(res.results[0].error)).toContain('整文件删除预览')
     // 未写任何决策，也未归档
     expect(registry.get(CWD)!.get('a')!.decisions.perHunk).toEqual(['pending'])
     expect(registry.get(CWD)!.get('a')!.archived).toBe(false)
@@ -298,7 +359,7 @@ describe('edrv.decideBatch', () => {
 
 describe('edrv.accept / edrv.reject 单条委托', () => {
   it('accept 单条返回 record 并归档', async () => {
-    const fs = fakeFs({})
+    const fs = fakeFs({ [CWD + '/a.ts']: 'b' })
     const ctx = fakeCtx(fs)
     const registry = new Map<string, Map<string, DiffRecord>>([
       [CWD, bucketOf([rec({ callId: 'a' })])],

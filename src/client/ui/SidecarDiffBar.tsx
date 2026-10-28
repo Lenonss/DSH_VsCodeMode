@@ -22,6 +22,7 @@ export interface SidecarRegion {
 /** 侧车栏输入：字段与官方栏对齐，缺的是官方记录元数据，多的是侧车区域的 keep/undo 能力。 */
 export interface SidecarBarProps {
   activePath?: string
+  missingDeletion?: boolean
   pendingRegions?: SidecarRegion[]
   staleRegions?: SidecarRegion[]
   diffIdx?: number
@@ -115,6 +116,7 @@ export function SidecarDiffBar(props: SidecarBarProps): React.ReactElement {
       keepTitle="把这批历史改动全部标记为已看过（只改记录，不动磁盘文件）"
       undoTitle="逐项撤销这些历史改动；缺少证据或遇到冲突即停止"
     />
+    {props.missingDeletion ? <div className="edrv-review-notice" role="status">文件已删除 · 展示最后记录快照。Keep 保留删除；Undo 恢复展示的完整快照。</div> : null}
     {busy ? <div className="edrv-review-notice" role="status">正在处理历史改动…</div> : null}
     {down ? <div className="edrv-review-notice edrv-review-notice-warn edrv-sidecar-down" role="status">
       <span className="edrv-sidecar-down-text">{down.text}</span>
@@ -137,8 +139,8 @@ export function SidecarDiffBar(props: SidecarBarProps): React.ReactElement {
         {navButton('down', '下一个差异', props.onNextDiff, !count, view.navNextTitle)}
       </div>
       <div className="edrv-review-actions">
-        <Button size="sm" variant="ghost" className="edrv-review-undo" icon={barIcon('undo')} onClick={props.onUndoFile} disabled={!canDecide} title={SIDECAR_UNDO_TITLE}>Undo</Button>
-        <Button size="sm" variant="primary" className="edrv-review-keep" icon={barIcon('check')} onClick={props.onAcceptFile} disabled={!canDecide} title={SIDECAR_KEEP_TITLE}>Keep</Button>
+        <Button size="sm" variant="ghost" className="edrv-review-undo" icon={barIcon('undo')} onClick={props.onUndoFile} disabled={!canDecide} title={props.missingDeletion ? '恢复展示的完整历史快照（不会覆盖重新出现的文件）' : SIDECAR_UNDO_TITLE}>Undo</Button>
+        <Button size="sm" variant="primary" className="edrv-review-keep" icon={barIcon('check')} onClick={props.onAcceptFile} disabled={!canDecide} title={props.missingDeletion ? '保持文件删除并结清覆盖的待审历史记录，不写文件' : SIDECAR_KEEP_TITLE}>Keep</Button>
         <Button size="sm" variant="ghost" className="edrv-review-details" onClick={() => setExpanded(!expanded)} aria-expanded={expanded} aria-label={expanded ? '收起差异' : '展开差异'} title={expanded ? '收起差异' : '展开差异'}>详情{barIcon(expanded ? 'up' : 'down')}</Button>
         <Menu open={menu === 'more'} anchor={moreTrigger} items={[{ id: 'pending', label: '差异总览' }, { id: 'archive', label: '归档 / 历史' }, { id: 'rollback', label: '回滚当前文件' }, { id: 'refresh', label: '刷新' }]} onSelect={(id: string) => {
           if (id === 'rollback') { setMenu(null); props.onRollback?.(); return }

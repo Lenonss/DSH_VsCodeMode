@@ -377,6 +377,8 @@ export interface RpcRequestMap {
   'edrv.reject': { sessionId?: string; callId: string; scope?: RpcScope; hunkIndex?: number }
   'edrv.decideBatch': { sessionId?: string; items: DecideItem[] }
   'edrv.textPage': import('./textPages.js').TextPageArgs
+  'edrv.missingReview': { sessionId?: string; path: string }
+  'edrv.missingDecide': { sessionId?: string; token: string; operationId: string; undo: boolean }
   'edrv.read': { sessionId?: string; path: string; encoding?: 'base64' }
   'edrv.readBinary': { sessionId?: string; path: string }
   'edrv.versions': { sessionId?: string; paths: string[] }
@@ -549,6 +551,8 @@ export interface RpcOkMap {
   'edrv.reject': { record: RecordView }
   'edrv.decideBatch': { results: DecideResult[] }
   'edrv.textPage': Extract<import('./textPages.js').TextPageResult, { ok: true }>
+  'edrv.missingReview': { review: import('./types.js').MissingReview | null }
+  'edrv.missingDecide': { callIds: string[] }
   'edrv.read': { content: string; size: number; encoding?: 'base64'; mime?: string; version?: string }
   'edrv.readBinary': { binary: BinaryReadPayload }
   'edrv.versions': { items: FileVersionItem[] }
@@ -707,7 +711,7 @@ export interface RpcOkMap {
 /** 统一响应：{ok:true, ...payload} 或 {ok:false, error}。 */
 export type RpcResult<M extends RpcMethod> =
   | ({ ok: true } & RpcOkMap[M])
-  | { ok: false; error: string; code?: 'file-too-large'; reason?: Extract<import('./textPages.js').TextPageResult, { ok: false }>['reason'] }
+  | { ok: false; error: string; code?: 'file-too-large' | 'file-missing'; reason?: Extract<import('./textPages.js').TextPageResult, { ok: false }>['reason'] }
 
 /** 每个方法的 handler 签名（host 分发表与 client 类型检查共用）。 */
 export type RpcHandler<M extends RpcMethod> = (

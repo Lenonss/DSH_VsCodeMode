@@ -8,6 +8,15 @@
  * 作者 ddj 2026-08-20
  */
 
+/** Frozen whole-file deletion preview, backed by a complete Host snapshot. */
+export interface MissingReview {
+  token: string
+  path: string
+  content: string
+  callIds: string[]
+  at: string
+}
+
 /** 单条差异块的决策状态。 */
 export type Decision = 'pending' | 'accepted' | 'rejected'
 

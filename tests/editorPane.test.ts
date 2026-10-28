@@ -70,7 +70,7 @@ function adapter(name: string, scope: Record<string, unknown>): (...args: any[])
   const text = adapters.get(name)
   if (!text) throw new Error('Missing workbench adapter: ' + name)
   // Preserve the production Excel guard when executing a detached adapter.
-  const dependencies = { isExcelPath, ...scope }
+  const dependencies = { isExcelPath, missingRef: { current: new Map() }, ...scope }
   return new Function(...Object.keys(dependencies), text + '; return ' + name)(...Object.values(dependencies))
 }
 

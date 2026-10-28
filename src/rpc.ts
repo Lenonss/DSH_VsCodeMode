@@ -60,6 +60,7 @@ import type { FileVersions } from './fileVersions.js'
 import { settingsDocPath } from './settingsDocPath.js'
 import { createTextPages } from './textPages.js'
 import { reviewHandlers } from './reviewRpc.js'
+import { fileAbsent, missingReview, missingDecide } from './missingReview.js'
 
 /** Process-local cursor signer; reads must stay on the Host filesystem capability. */
 const readTextPage = createTextPages()
@@ -169,20 +170,19 @@ async function readTargetOf(
   ctx: Ctx,
   sc: SessionScope,
   path: string,
-): Promise<ReadTargetOk | { err: string; resolvedPath?: string; code?: 'file-too-large' }> {
+): Promise<ReadTargetOk | { err: string; resolvedPath?: string; code?: 'file-too-large' | 'file-missing' }> {
   const fs = ctx.get('fs')
   if (!fs) return { err: '缺少 fs' }
   try {
     const target = await resolveTargetIn(ctx, sc.cwd, path)
     debugRecord(ctx, sc.cwd, '[DEBUG path.resolve] input=' + String(path ?? '') + ' resolved=' + fs.processPath(target), 'debug')
     const info = await fs.stat(target)
-    if (!info || info.type !== 'file') {
-      // 带上解析后的真实路径：跳转失败时可直接看出是路径解析错还是目标本身不存在
-      return { err: '文件不存在', resolvedPath: fs.processPath(target) }
-    }
+    if (!info) return { err: '文件不存在', resolvedPath: fs.processPath(target), code: 'file-missing' }
+    if (info.type !== 'file') return { err: '目标不是文件', resolvedPath: fs.processPath(target) }
     if ((info.size ?? 0) > BINARY_READ_CAP) return { err: '文件过大（>32MB），不支持整文件预览', code: 'file-too-large' }
     return { target, fs, info }
   } catch (error) {
+    if (['ENOENT', 'FS_NOT_FOUND'].includes(String((error as { code?: string }).code))) return { err: '文件不存在', code: 'file-missing' }
     return { err: '读取失败：' + String(error) }
   }
 }
@@ -193,7 +193,7 @@ async function readTargetOf(
  * @param prep readTargetOf 的失败分支
  * @returns { ok:false } 形态载荷
  */
-function targetErrOf(prep: { err: string; resolvedPath?: string; code?: 'file-too-large' }): { ok: false; error: string; resolvedPath?: string; code?: 'file-too-large' } {
+function targetErrOf(prep: { err: string; resolvedPath?: string; code?: 'file-too-large' | 'file-missing' }): { ok: false; error: string; resolvedPath?: string; code?: 'file-too-large' | 'file-missing' } {
   return { ok: false, error: prep.err,
     ...(prep.resolvedPath !== undefined ? { resolvedPath: prep.resolvedPath } : {}),
     ...(prep.code ? { code: prep.code } : {}) }
@@ -288,6 +288,15 @@ async function applyDecisions(
     }
     if (record.archived) {
       results.push({ callId: item.callId, ok: false, error: '记录已归档，无法重复决策' })
+      continue
+    }
+    try {
+      if (await fileAbsent(ctx, cwd, record.path)) {
+        results.push({ callId: item.callId, ok: false, error: '文件已删除，请刷新后按整文件删除预览执行 Keep / Undo' })
+        continue
+      }
+    } catch (error) {
+      results.push({ callId: item.callId, ok: false, error: '无法确认文件状态：' + String(error) })
       continue
     }
     // 重试已执行的决定只补持久化，不能再次修改磁盘上的同一个 hunk。
@@ -692,6 +701,23 @@ export function buildHandlers(
       const item = results[0]
       if (!item?.ok) return { ok: false, error: item?.error ?? '操作失败' }
       return { ok: true, record: item.record! }
+    },
+    'edrv.missingReview': async (args) => {
+      const sc = await requireSession(ctx, args.sessionId)
+      if ('err' in sc) return { ok: false, error: sc.err }
+      try {
+        const bucket = await bucketOf(registry, ctx, sc.cwd)
+        if (!await fileAbsent(ctx, sc.cwd, args.path)) return { ok: true, review: null }
+        return { ok: true, review: await missingReview(ctx, sc.session, sc.cwd, bucket, args.path) }
+      } catch (error) { return { ok: false, error: String(error) } }
+    },
+    'edrv.missingDecide': async (args) => {
+      const sc = await requireSession(ctx, args.sessionId)
+      if ('err' in sc) return { ok: false, error: sc.err }
+      try {
+        const bucket = await bucketOf(registry, ctx, sc.cwd)
+        return { ok: true, callIds: await missingDecide(ctx, sc.session, sc.cwd, bucket, args.token, args.operationId, args.undo === true) }
+      } catch (error) { return { ok: false, error: String(error) } }
     },
     'edrv.decideBatch': async (args) => {
       const sc = await requireSession(ctx, args.sessionId)
