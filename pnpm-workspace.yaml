@@ -1,5 +1,7 @@
 allowBuilds:
   esbuild: true
+  # protobufjs postinstall only warns about dependency version notation; no runtime build is needed.
+  protobufjs: false
 autoInstallPeers: true
 minimumReleaseAgeExclude:
   - '@deepseek-ai/cosmokit@1.8.5'
