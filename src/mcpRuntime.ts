@@ -265,8 +265,17 @@ export class McpRuntime {
     instance ??= this.reserve(agent, record, path, name, def)
     await waitMcp(instance.ready, signal)
     if (!this.valid(agent, record, name, instance)) throw new Error('项目 MCP 配置已失效')
-    const visible = agent.ctx.get('tools')?.view?.(agent)?.visible
-    const tools = [...instance.lease.entry.bridge!.tools.values()].filter((tool) => visible?.has(tool.name))
+    const registry = agent.ctx.get('tools')
+    // Discovery is not step admission; the official executor still owns execution permission.
+    let visible: ReadonlySet<string>
+    if (typeof registry?.definitions === 'function') {
+      visible = new Set(registry.definitions(agent).map((tool: { name: string }) => tool.name))
+    } else if (typeof registry?.view === 'function') {
+      visible = new Set(registry.view(agent).visible.keys())
+    } else {
+      throw new Error('项目 MCP 工具目录不可用：缺少公开 definitions 或旧版 view 接口')
+    }
+    const tools = [...instance.lease.entry.bridge!.tools.values()].filter((tool) => visible.has(tool.name))
       .map((tool) => ({ name: tool.name, description: tool.description, parameters: tool.parameters }))
     return { serverName: name, tools, resources: instance.lease.entry.bridge!.resources.has(name), nextRequest: 'Use these tools in the next model request; PTC must start a new program to refresh its SDK.' }
   }

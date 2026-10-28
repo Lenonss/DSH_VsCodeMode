@@ -90,6 +90,8 @@ async function setupHost(ctx: any, files: Map<string, string>, agents: any[]): P
   const resources = await hostModule('dsh-mcp-resources')
   await ctx.plugin(prompt.default, {})
   await ctx.plugin(tools.default, {})
+  const native = await hostModule('dsh-tool-executor-native')
+  await ctx.plugin(native)
   await ctx.plugin(resources.default)
   ctx.provide('workspaceRegistry', { list: () => [{ path: '/alpha' }, { path: '/beta' }] })
   ctx.provide('agents', { list: () => agents })
@@ -110,11 +112,72 @@ async function setupHost(ctx: any, files: Map<string, string>, agents: any[]): P
  * @param server Resource server argument.
  * @returns Materialized official tool result.
  */
-function listResources(ctx: any, agent: any, server: string): Promise<any> {
-  return ctx.get('tools').execute({ name: 'list_mcp_resources', arguments: { server }, agent, callId: crypto.randomUUID(), signal: new AbortController().signal })
+async function listResources(ctx: any, agent: any, server: string): Promise<any> {
+  return callTool(ctx.get('tools'), { agent }, 'list_mcp_resources', { server })
+}
+
+/**
+ * Dispatch one real model call through the installed executor's public batch contract.
+ * @private @author ddj 2026年10月28号
+ * @param tools Official scoped registry.
+ * @param execution Calling agent and optional cancellation signal.
+ * @param name Registered capability or executor transport.
+ * @param args JSON-compatible tool arguments.
+ * @returns Correlated result, asserting that the executor settled exactly this call.
+ */
+async function callTool(tools: any, execution: any, name: string, args: any): Promise<any> {
+  const callId = crypto.randomUUID()
+  const batch = await tools.execute({
+    agent: execution.agent, signal: execution.signal ?? new AbortController().signal,
+    calls: [{ type: 'tool-call', id: callId, name, arguments: JSON.stringify(args) }],
+  })
+  expect(batch.results).toHaveLength(1)
+  expect(batch.results[0].callId).toBe(callId)
+  return batch.results[0].result
+}
+
+/**
+ * Exercise the project bridge against an explicitly selected local CodeGraph command.
+ * @private @author ddj 2026年10月28号
+ * @returns Completion after a real stdio handshake, discovery and scoped cleanup.
+ * @throws Initialization failures, retaining the original Host diagnostic in test output.
+ */
+async function realCodeGraph(): Promise<void> {
+  const workspacePath = process.cwd().replace(/\\/g, '/')
+  const { Context } = await hostModule('cordis')
+  const { createScope } = await hostModule('dsh-scope')
+  const official = await hostModule('dsh-mcp-client')
+  const ctx = new Context()
+  const agent: any = { session: { id: 'codegraph-diagnostic', header: { cwd: workspacePath } } }
+  const files = new Map([[workspacePath + '/.mcp.json', JSON.stringify({ mcpServers: { diagnostic: {
+    command: process.env.DSH_CODEGRAPH_COMMAND,
+    args: ['serve', '--mcp', '--path', workspacePath],
+    failOnStartupError: true, reconnect: { enabled: false },
+  } } })]])
+  let scope: any
+  try {
+    await setupHost(ctx, files, [agent])
+    ctx.get('workspaceRegistry').list = () => [{ path: workspacePath }]
+    scope = createScope(ctx, agent)
+    agent.ctx = scope.ctx
+    vi.spyOn(runtimeOf(ctx) as any, 'load').mockResolvedValue(official)
+    installIsolation(ctx)
+    await installMcpRuntime(ctx)
+    await runtimeOf(ctx).connect(agent, 'diagnostic')
+    const schemas = ctx.get('tools').schemas(agent)
+    const projectTools = schemas.filter((tool: any) => tool.name.startsWith('mcp__diagnostic__'))
+    expect(projectTools.some((tool: any) => tool.name === 'mcp__diagnostic__codegraph_search')).toBe(true)
+    expect(ctx.get('tools').get('mcp__diagnostic__codegraph_search')).toBeUndefined()
+    expect(runtimeOf(ctx).views(workspacePath)[0]).toMatchObject({ instanceCount: 1, toolCount: projectTools.length })
+  } finally {
+    await runtimeOf(ctx).dispose()
+    if (scope) await scope.dispose()
+    await ctx.fiber.dispose()
+  }
 }
 
 describe.skipIf(!hostRoot)('installed official scoped MCP integration', () => {
+  it.skipIf(!process.env.DSH_CODEGRAPH_COMMAND)('connects real CodeGraph through the project stdio bridge', realCodeGraph, 20000)
   it('completes B while A is blocked in a real official MCP handshake', async () => {
     const peer = new HttpPeer()
     let release!: () => void
@@ -155,7 +218,7 @@ describe.skipIf(!hostRoot)('installed official scoped MCP integration', () => {
       expect(runtimeOf(ctx).sessionSnapshot().sessions.map((entry) => [entry.sessionId, entry.phase])).toEqual([['A', 'starting'], ['B', 'idle']])
       release()
       await creating
-      expect(ctx.get('tools').view(first).visible.has('mcp__alpha__search')).toBe(true)
+      expect(Boolean(ctx.get('tools').get('mcp__alpha__search', first))).toBe(true)
     } finally {
       release()
       await creating
@@ -194,8 +257,8 @@ describe.skipIf(!hostRoot)('installed official scoped MCP integration', () => {
       installIsolation(ctx)
       await installMcpRuntime(ctx)
       const tools = ctx.get('tools')
-      const { renderToolsSdk } = await hostModule('dsh-tools')
-      const sdkBefore = renderToolsSdk([...tools.view(agents[0]).visible.values()].map((tool: any) => ({ name: tool.name, description: tool.description, parameters: tool.parameters, output: tool.output.schema })))
+      const { renderToolsSdk } = await hostModule('dsh-tool-executor-ptc')
+      const sdkBefore = renderToolsSdk(tools.schemas(agents[0]))
       expect(sdkBefore).not.toContain('mcp__alpha__search')
       expect(peer.calls).toHaveLength(0)
       const execution = { callId: 'discover', signal: new AbortController().signal, agent: agents[0] }
@@ -214,32 +277,38 @@ describe.skipIf(!hostRoot)('installed official scoped MCP integration', () => {
           return { value: result, logs: [] }
         },
       })
-      const ptc = agents[0].ctx.get('tools').presentAs('ptc')
-      const discovered = await tools.execute({ ...execution, name: 'run_code', arguments: { code: 'discover', description: 'Controlled PTC discovery fixture' } })
+      const ptcModule = await hostModule('dsh-tool-executor-ptc')
+      const ptc = agents[0].ctx.plugin(ptcModule, {})
+      await ptc
+      const discovered = await callTool(tools, execution, 'run_code', { code: 'discover', description: 'Controlled PTC discovery fixture' })
       expect(programs[0]).not.toContain('mcp__alpha__search')
-      const ptcResult = await tools.execute({ ...execution, callId: 'next-program', name: 'run_code', arguments: { code: 'call', description: 'Controlled PTC next-program fixture' } })
+      const ptcResult = await callTool(tools, execution, 'run_code', { code: 'call', description: 'Controlled PTC next-program fixture' })
       expect(ptcResult.isError).toBe(false)
       expect(programs[1]).toContain('mcp__alpha__search')
-      ptc()
+      await ptc.dispose()
+      // An unloaded scope selection is unavailable; it must not silently inherit another executor.
+      await expect(callTool(tools, execution, 'discover_project_mcp', { action: 'list' }))
+        .rejects.toThrow('The selected tool executor is unavailable')
+      await agents[0].ctx.plugin(await hostModule('dsh-tool-executor-native'))
       expect(discovered.isError).toBe(false)
       expect(JSON.stringify(discovered)).toContain('mcp__alpha__search')
       await runtimeOf(ctx).connect(agents[1], 'alpha')
       expect(peer.calls.filter((call) => call.method === 'initialize')).toHaveLength(1)
       expect(runtimeOf(ctx).views('/alpha')[0]).toMatchObject({ instanceCount: 1, sessionCount: 2 })
       expect(tools.schemas(agents[0]).some((tool: any) => tool.name === 'mcp__alpha__search')).toBe(true)
-      const sdkAfter = renderToolsSdk([...tools.view(agents[0]).visible.values()].map((tool: any) => ({ name: tool.name, description: tool.description, parameters: tool.parameters, output: tool.output.schema })))
+      const sdkAfter = renderToolsSdk(tools.schemas(agents[0]))
       expect(sdkAfter).toContain('mcp__alpha__search')
       expect(sdkBefore).not.toContain('mcp__alpha__search')
       const restrict = agents[0].ctx.get('tools').restrict({ deny: ['discover_project_mcp'] })
-      const denied = await tools.execute({ ...execution, callId: 'denied', name: 'discover_project_mcp', arguments: { action: 'list' } })
+      const denied = await callTool(tools, execution, 'discover_project_mcp', { action: 'list' })
       expect(denied.isError).toBe(true)
       restrict()
       const guard = tools.guard((exec: any) => exec.name === 'mcp__alpha__search' ? 'test approval denied' : undefined)
       const beforeDenied = peer.calls.length
-      expect((await tools.execute({ ...execution, callId: 'guarded', name: 'mcp__alpha__search', arguments: {} })).isError).toBe(true)
+      expect((await callTool(tools, execution, 'mcp__alpha__search', {})).isError).toBe(true)
       expect(peer.calls).toHaveLength(beforeDenied)
       guard()
-      const result = await tools.execute({ ...execution, callId: 'call', name: 'mcp__alpha__search', arguments: {} })
+      const result = await callTool(tools, execution, 'mcp__alpha__search', {})
       expect(result.isError).toBe(false)
       expect(JSON.stringify(result)).toContain('alpha')
       await runtimeOf(ctx).detach(agents[0])
@@ -277,7 +346,7 @@ describe.skipIf(!hostRoot)('installed official scoped MCP integration', () => {
         scopes.push(scope)
         agent.ctx = scope.ctx
         await agent.ctx.plugin(official, { serverName, transport: 'streamable-http', url: base + '/' + endpoint, reconnect: { enabled: false } })
-        expect(ctx.get('tools').view(agent).visible.has('mcp__alpha__nested__search')).toBe(true)
+        expect(Boolean(ctx.get('tools').get('mcp__alpha__nested__search', agent))).toBe(true)
       }
     } finally {
       for (const scope of scopes.reverse()) await scope.dispose()
@@ -366,9 +435,9 @@ describe.skipIf(!hostRoot)('installed official scoped MCP integration', () => {
       expect(peer.calls.filter((call) => call.server === 'alpha' && call.method === 'initialize')).toHaveLength(2)
       expect(peer.calls.filter((call) => call.server === 'beta' && call.method === 'initialize')).toHaveLength(1)
       expect(runtimeOf(ctx).views('/beta')[0]).toMatchObject({ instanceCount: 1, toolCount: 0, status: 'unverified' })
-      expect(ctx.get('tools').view(undefined).visible.has('mcp__alpha__search')).toBe(false)
-      expect(ctx.get('tools').view(child).visible.has('mcp__alpha__search')).toBe(false)
-      expect(ctx.get('tools').view(parent).visible.has('mcp__alpha__search')).toBe(true)
+      expect(Boolean(ctx.get('tools').get('mcp__alpha__search'))).toBe(false)
+      expect(Boolean(ctx.get('tools').get('mcp__alpha__search', child))).toBe(false)
+      expect(Boolean(ctx.get('tools').get('mcp__alpha__search', parent))).toBe(true)
       expect(scopeParentOf(child)).toBe(parent)
       await child.ctx.plugin(official, { serverName: 'preset', transport: 'streamable-http', url: base + '/preset', reconnect: { enabled: false } })
       const prompt = await ctx.get('systemPrompt').assemble({ scope: child })
@@ -401,7 +470,7 @@ describe.skipIf(!hostRoot)('installed official scoped MCP integration', () => {
       await expect(projectSave(ctx, '/beta', config.serverName, config)).rejects.toThrow('命名空间冲突')
       await projectToggle(ctx, '/alpha', 'alpha', false)
       expect(runtimeOf(ctx).views('/alpha')[0].instanceCount).toBe(0)
-      expect(ctx.get('tools').view(parent).visible.has('mcp__alpha__search')).toBe(false)
+      expect(Boolean(ctx.get('tools').get('mcp__alpha__search', parent))).toBe(false)
       const removed = await listResources(ctx, parent, 'alpha')
       expect(JSON.stringify(removed)).toContain('unavailable')
     } finally {

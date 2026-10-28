@@ -404,6 +404,40 @@ describe('agent-owned project runtime', () => {
     expect(host.services.loader.create).not.toHaveBeenCalled()
   })
 
+  it('uses public scoped definitions without consulting private view or step admission', async () => {
+    const host = new TestHost()
+    host.source('/alpha', { alpha: { command: 'ok' } })
+    const agent = host.agent('/alpha')
+    await installReady(host)
+    const registry = agent.ctx.get('tools')
+    registry.definitions = vi.fn((scope) => [...host.view(scope).visible.values()])
+    registry.view = vi.fn(() => { throw new Error('private') })
+    registry.resolve = vi.fn()
+    registry.executable = vi.fn()
+    const result = await runtimeOf(host.ctx).connect(agent, 'alpha')
+    expect(result.tools.map((tool) => tool.name)).toEqual(['mcp__alpha__search'])
+    expect(registry.definitions).toHaveBeenCalledWith(agent)
+    expect(registry.view).not.toHaveBeenCalled()
+    expect(registry.resolve).not.toHaveBeenCalled()
+    expect(registry.executable).not.toHaveBeenCalled()
+    registry.definitions.mockReturnValue([])
+    expect((await runtimeOf(host.ctx).connect(agent, 'alpha')).tools).toEqual([])
+    registry.definitions.mockImplementation((scope) => [...host.view(scope).visible.values()])
+    const other = host.agent('/alpha')
+    await runtimeOf(host.ctx).attach(other)
+    expect(host.view(other).visible.has('mcp__alpha__search')).toBe(false)
+    expect(registry.definitions(other).some((tool) => tool.name === 'mcp__alpha__search')).toBe(false)
+  })
+
+  it('diagnoses a missing tool catalogue instead of exposing unfiltered tools', async () => {
+    const host = new TestHost()
+    host.source('/alpha', { alpha: { command: 'ok' } })
+    const agent = host.agent('/alpha')
+    await installReady(host)
+    agent.ctx.get('tools').view = undefined
+    await expect(runtimeOf(host.ctx).connect(agent, 'alpha')).rejects.toThrow('工具目录不可用')
+  })
+
   it('removes both legacy global formats before mounting each existing agent', async () => {
     const host = new TestHost()
     host.source('/alpha', { alpha: { command: 'ok' } })

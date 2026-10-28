@@ -533,6 +533,8 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
 
 ## CI/测试平台陷阱（写测试前必读）
 
+- 2026-10-28 坑（DSH 0.2.2-alpha.2 实装 MCP 集成）：`tools.view` 为私有，改用 `get/definitions/schemas`；`renderToolsSdk` 位于 `dsh-tool-executor-ptc`，`tools.execute` 接受 `{calls:[{type:'tool-call',id,name,arguments:JSON字符串}],agent,signal}` 并返回 `results[]`。通过 `ctx.plugin` 挂载 native/PTC 执行器以满足 inject；卸载 scoped PTC 后不会自动回退 root，须显式挂载后续执行器。真实 stdio 回归用 `DSH_MCP_HOST_ROOT` + 可选 `DSH_CODEGRAPH_COMMAND`，HTTP mock 绿不等于当前 Host 已连接。
+
 - CI 跑 ubuntu：新测试断言**禁止写死 Windows 反斜杠路径**。`path.join` 结果在 Linux 是 `/`
   分隔，断言前先 `.replace(/\\/g, '/')` 归一再比较（或两侧都用同一构造方式）。
 - 2026-09-11 坑（**第二次踩，务必内化**）：`norm()` 归一化只解决反斜杠，**解决了不盘符**。

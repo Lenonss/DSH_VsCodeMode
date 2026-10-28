@@ -1,6 +1,8 @@
 /** Connection ownership, bounded cold starts and workspace leases. @author ddj 2026年10月20号 */
 import { createHash } from 'node:crypto'
 import { McpBridge } from './mcpBridge.js'
+import { debugRecord } from './debugLog.js'
+import { mcpErrorText } from './mcpDiagnostic.js'
 import type { McpPolicy, McpPhase, MpcConfig } from './shared/mcp.js'
 import type { Ctx } from './store.js'
 
@@ -155,7 +157,9 @@ export class McpPool {
       entry.connectedAt = entry.finishedAt
     } catch (error) {
       entry.error = 'MCP 初始化失败或超时，请查看 Host 日志'
-      this.ctx.logger?.warn?.('MCP initialization failed: ' + String(error))
+      const diagnostic = 'MCP initialization failed; phase=' + entry.phase + '; transport=' + entry.spec.config.transport
+        + '; elapsedMs=' + (Date.now() - entry.startAt) + '; ' + mcpErrorText(error, entry.spec.config)
+      debugRecord(this.ctx, entry.spec.workspace, diagnostic, 'warn')
       // Invalidation precedes disposal; neither late module load nor callbacks may publish.
       entry.live = false
       entry.phase = 'stopping'

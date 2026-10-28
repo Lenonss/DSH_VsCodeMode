@@ -206,7 +206,10 @@ export function refOf(mention: string, range: RefRange | undefined): string {
     : `${mention} L${range.startLine}-${range.endLine}`
 }
 
-/** 构造 DSH 文件引用插入载荷（source=reference，发送序列化为 mention(+range) 文本）。
+/** 构造 DSH 文件引用插入载荷，模型文本、剪贴板投影与降级文本共用完整行区间。
+ * @public
+ * @author ddj 2026年10月28号
+ * @returns 引用载荷与含可选行区间的完整引用文本
  * @param path 目标路径（相对 cwd 或绝对）
  * @param cwd 会话工作区目录（可选）
  * @param range 行区间（可选）
@@ -218,12 +221,13 @@ export function buildFileRef(
   range?: RefRange,
   appearance: RefAppearance = 'file',
 ): { reference: ReferenceInsertLike; mention: string } {
-  const mention = mentionOf(path, cwd)
+  const mention = refOf(mentionOf(path, cwd), range)
+
   return {
     mention,
     reference: {
       source: REF_SOURCE,
-      ref: refOf(mention, range),
+      ref: mention,
       label: labelOf(path, range),
       appearance,
       clipboardText: mention,
@@ -264,6 +268,41 @@ export interface TokenSpanLike {
 /** ctx 依赖的最小面（sessions.scope + conversation.input）。 */
 export interface CtxLike {
   get: (name: string) => unknown
+  effect?: (setup: () => () => void, label?: string) => (() => void)
+}
+
+/** Public Controller subset; old Hosts need not provide retain/binding. */
+interface SessionBridge {
+  retain?: (id: string, options: { source: 'controllerOperation'; signal: AbortSignal }) => {
+    ready: Promise<{ session: { prompt(content: { type: 'text'; text: string }[], mode: 'queue', signal: AbortSignal): Promise<{ ok: boolean }> } }>
+    release(): void
+  }
+  binding?: (id: string) => { ctx: unknown } | undefined
+  scope?: (id: string) => unknown
+}
+
+/** @private @author ddj 2026年10月28号 @param ctx Lifecycle owner. @param sessions Public Controller. @param id Fixed target. @param text Task body. @returns Acceptance; failures never retry another transport. @sideEffects Retains one generation until completion or unload. */
+async function sendOwned(ctx: CtxLike, sessions: SessionBridge, id: string, text: string): Promise<boolean> {
+  const controller = new AbortController()
+  const reference = sessions.retain!(id, { source: 'controllerOperation', signal: controller.signal })
+  let released = false
+  /** @private @author ddj 2026年10月28号 Cancel pending admission and release this exact generation once. */
+  function release(): void {
+    if (released) return
+    released = true
+    controller.abort()
+    reference.release()
+  }
+  let remove: (() => void) | undefined
+  try {
+    remove = ctx.effect?.(() => release, 'vscode-mode: task session reference')
+    const binding = await reference.ready
+    if (controller.signal.aborted) return false
+    return (await binding.session.prompt([{ type: 'text', text }], 'queue', controller.signal)).ok === true
+  } finally {
+    release()
+    remove?.()
+  }
 }
 
 /** 新建会话结果（ok=false 供调用方降级回当前对话注入）。 */
@@ -368,8 +407,9 @@ export async function apiSessionPrompt(sessionId: string, text: string): Promise
 
 /**
  * 新建独立会话承载旁路任务（02-deep-session-prompt：深度分析不污染当前对话）。
- * 主路径 = apiproxy wire 直调（不依赖 service 面形态猜测）；回落 remote.session.create
- * 与旧 sessions.create 两代 service 面（宽松解析）。任一步不符返回 ok:false，调用方降级。
+ * 优先公开 sessions.create；旧 Host 按能力选择 remote 或 wire，调用后不换通道重试。
+ * 受理状态不明时返回 ok:false，不重复创建会话。
+ * @author ddj 2026年10月28号
  * @author ddj 2026年09月23号
  * @param ctx 客户端服务上下文（remote.session + sessions，仅回落用）
  * @param cwd 新会话工作区目录（与当前会话同工作区）
@@ -391,21 +431,20 @@ export async function newDraftSession(ctx: CtxLike, cwd: string | undefined): Pr
           : ''
       if (id) return { ok: true, id }
     }
-  } catch { /* 回落下一通道 */ }
+    // A create call may have succeeded remotely even when its receipt is unavailable.
+    if (typeof sessions?.create === 'function') return { ok: false }
+  } catch { return { ok: false } }
   try {
-    // 回落 1：api.sessions service 面（返回信封 {rpcId, result}，见 rpcOk；多形态容错）
+    // Legacy Hosts select one known transport; never retry a non-idempotent create.
     const remote = ctx.get('remote.session') as { create?: (req: unknown) => Promise<unknown> } | undefined
     if (typeof remote?.create === 'function') {
       const payload = cwd ? { cwd } : {}
-      for (const arg of [slotArg(payload), { request: { rpcId: mintRpcId(), payload } }, { rpcId: mintRpcId(), payload }, payload]) {
-        try {
-          const r = rpcOk(await remote.create(arg))
-          const id = r.value as { sessionId?: unknown } | undefined
-          if (r.ok && typeof id?.sessionId === 'string') return { ok: true, id: id.sessionId }
-        } catch { /* 单形态失败试下一形态 */ }
-      }
+      const receipt = rpcOk(await remote.create(slotArg(payload)))
+      const created = receipt.value as { sessionId?: unknown } | undefined
+      if (receipt.ok && typeof created?.sessionId === 'string') return { ok: true, id: created.sessionId }
+      return { ok: false }
     }
-  } catch { /* 回落 wire */ }
+  } catch { return { ok: false } }
   // 回落 2：wire 直调（创建成功但 store 无感，open 切换不保证；任务发送仍可用）
   try {
     const id = await apiSessionCreate(cwd)
@@ -441,9 +480,9 @@ export interface AddToConversation {
 export function inputFor(ctx: CtxLike, sessionId: string | undefined): InputLike | undefined {
   if (!sessionId) return undefined
   try {
-    const sessions = ctx.get('sessions') as { scope?: (id: string) => unknown } | undefined
+    const sessions = ctx.get('sessions') as SessionBridge | undefined
     const conversation = ctx.get('conversation') as { input?: { for: (actx: unknown) => unknown } } | undefined
-    const actx = sessions?.scope?.(sessionId)
+    const actx = typeof sessions?.binding === 'function' ? sessions.binding(sessionId)?.ctx : sessions?.scope?.(sessionId)
     const shell = actx && conversation?.input?.for?.(actx)
     // 探针须是我们的**实际依赖**（insertReference），而不是会被整篇重建的 setDraft
     return (shell && typeof (shell as InputLike).insertReference === 'function') ? shell as InputLike : undefined
@@ -569,13 +608,15 @@ export function createAddToConversation(ctx: CtxLike): AddToConversation {
   /**
    * 新建独立会话（02-deep-session-prompt：旁路任务不污染当前对话）。
    * 闭包持有真服务 ctx（面板 SidebarCtx 无 .get，会话操作必须经此门面）；
-   * 创建后尽力 `sessions.open(id)` 切换视图（缺失不致命，草稿仍可写入）。
+   * 新版仅返回已登记身份，视图选择由宿主负责；旧版保留可用的 open/select。
+   * @author ddj 2026年10月28号
    * @author ddj 2026年09月23号
    * @param cwd 新会话工作区目录（与当前会话同工作区）
    * @returns 新会话结果（失败供降级）
    */
   const startDraftSession: AddToConversation['startDraftSession'] = async (cwd) => {
     const result = await newDraftSession(ctx, cwd)
+    if (typeof (ctx.get('sessions') as SessionBridge | undefined)?.retain === 'function') return result
     if (result.ok && result.id) {
       try {
         // 主动铸造 scope（scope 对新会话惰性铸造，inputFor/composer 面依赖它）
@@ -598,48 +639,32 @@ export function createAddToConversation(ctx: CtxLike): AddToConversation {
 
   /**
    * 发送任务给目标会话 agent（点击即发送方案：任务落地会话即非 blank，列表可见）。
-   * 主路径 wire 直发 session/prompt；回落 remote.session.prompt service 面。
-   * @author ddj 2026年09月23号
+   * 新版持有目标 Controller 到 prompt 结束；旧版按能力选择唯一通道，不跨通道重发。
+   * @author ddj 2026年09月23号 / 2026年10月28号
    * @param sessionId 目标会话 id
    * @param text 任务文本
    * @returns 是否受理
    */
   const sendTask: AddToConversation['sendTask'] = async (sessionId, text) => {
     if (!sessionId) return false
-    // 主路径：**官方 composer 发送链路**（InputLike setDraft + submit —— UI「发送」的内部路径）。
-    // inputFor 依赖 sessions.scope(id)：新会话铸造有时延，重试 3 次后再降级。
-    const composerOnce = async (): Promise<boolean> => {
-      const input = inputFor(ctx, sessionId) as { setDraft?: (t: string) => void; submit?: (mode?: unknown) => void } | undefined
-      if (input && typeof input.setDraft === 'function' && typeof input.submit === 'function') {
+    try {
+      const sessions = ctx.get('sessions') as SessionBridge | undefined
+      if (typeof sessions?.retain === 'function') return await sendOwned(ctx, sessions, sessionId, text)
+
+      // Legacy composer remains an exclusive channel; never overwrite the draft and then retry elsewhere.
+      const input = inputFor(ctx, sessionId) as { setDraft?: (task: string) => void; submit?: () => void } | undefined
+      if (typeof input?.setDraft === 'function' && typeof input.submit === 'function') {
         input.setDraft(text)
         input.submit()
         return true
       }
-      return false
-    }
-    try {
-      for (let attempt = 3; attempt > 0; attempt--) {
-        if (await composerOnce()) return true
-        if (attempt > 1) await new Promise((resolve) => setTimeout(resolve, 500))
-      }
-    } catch { /* 降级下一通道 */ }
-    // 兜底 1：remote.session service 面（多形态容错）
-    try {
       const remote = ctx.get('remote.session') as { prompt?: (req: unknown) => Promise<unknown> } | undefined
       if (typeof remote?.prompt === 'function') {
         const payload = { sessionId, mode: 'queue', content: [{ type: 'text', text }] }
-        for (const arg of [slotArg(payload), { request: { rpcId: mintRpcId(), payload } }, { rpcId: mintRpcId(), payload }, payload]) {
-          try {
-            if (rpcOk(await remote.prompt(arg)).ok) return true
-          } catch { /* 单形态失败试下一形态 */ }
-        }
+        return rpcOk(await remote.prompt(slotArg(payload))).ok
       }
-    } catch { /* 降级下一通道 */ }
-    // 兜底 2：HTTP wire
-    try {
       return await apiSessionPrompt(sessionId, text)
-    } catch { /* 全失败 */ }
-    return false
+    } catch { return false }
   }
 
   return { appendReference, appendText, startDraftSession, sendTask }

@@ -10,7 +10,7 @@
  * 作者 ddj 2026年08月25号 / 2026年09月11号
  */
 import { describe, expect, it, vi } from 'vitest'
-import { buildFileRef, createAddToConversation, detectEndOf, detectToClipboardOf, insertOffsetOf, mentionOf, paddingAt, statusOfAdd } from '../src/client/addToConversation.js'
+import { buildFileRef, createAddToConversation, detectEndOf, detectToClipboardOf, insertOffsetOf, mentionOf, newDraftSession, paddingAt, statusOfAdd } from '../src/client/addToConversation.js'
 
 /** 构造假 ctx：sessions.scope + conversation.input.for 返回假 shell。 */
 const makeCtx = (shell) => ({
@@ -75,9 +75,34 @@ describe('buildFileRef', () => {
     const multi = buildFileRef('src/index.ts', 'C:/work/app', { startLine: 10, endLine: 20 })
     expect(multi.reference.ref).toBe('@src/index.ts L10-20')
     expect(multi.reference.label).toBe('index.ts L10-20')
+    expect(multi.mention).toBe('@src/index.ts L10-20')
+    expect(multi.reference.clipboardText).toBe(multi.reference.ref)
     const single = buildFileRef('src/index.ts', 'C:/work/app', { startLine: 5, endLine: 5 })
     expect(single.reference.ref).toBe('@src/index.ts L5')
     expect(single.reference.label).toBe('index.ts L5')
+    expect(single.mention).toBe('@src/index.ts L5')
+    expect(single.reference.clipboardText).toBe(single.reference.ref)
+  })
+
+  // ddj 2026年10月28号：所有投影必须保留同一范围，路径引号只包路径。
+  it('含空格路径的行区间在模型、剪贴板与降级文本中一致', () => {
+    const { reference, mention } = buildFileRef('src/my file.ts', undefined, { startLine: 2, endLine: 16 })
+    expect(mention).toBe('@"src/my file.ts" L2-16')
+    expect(reference).toEqual({
+      source: 'reference',
+      ref: mention,
+      label: 'my file.ts L2-16',
+      appearance: 'file',
+      clipboardText: mention,
+    })
+  })
+
+  it('反向行区间保持既有整文件回退，所有文本投影一致', () => {
+    const { reference, mention } = buildFileRef('src/index.ts', undefined, { startLine: 20, endLine: 10 })
+    expect(mention).toBe('@src/index.ts')
+    expect(reference.ref).toBe(mention)
+    expect(reference.clipboardText).toBe(mention)
+    expect(reference.label).toBe('index.ts')
   })
 
   it('文件夹引用：appearance 为 folder，ref/label 用目录名（缺省外观仍为 file）', () => {
@@ -271,9 +296,48 @@ describe('createAddToConversation.appendReference', () => {
     const add = createAddToConversation(makeCtx(shell))
     await add.appendReference('s1', 'src/index.ts', { startLine: 10, endLine: 20 })
     expect(shell.insertReference).toHaveBeenCalledWith(
-      expect.objectContaining({ ref: '@src/index.ts L10-20', label: 'index.ts L10-20' }),
+      expect.objectContaining({ ref: '@src/index.ts L10-20', label: 'index.ts L10-20', clipboardText: '@src/index.ts L10-20' }),
       expect.anything(),
     )
+  })
+
+  // ddj 2026年10月28号：覆盖截图中的范围引用与尾随普通文本，不重建草稿。
+  it('范围 chip 后插入新引用时正确换算坐标，并保留尾随 1', async () => {
+    const { reference } = buildFileRef('.validation/release-0.20.1-verify.log', undefined, { startLine: 2, endLine: 16 })
+    const prefix = '检查 '
+    const draft = prefix + reference.clipboardText + ' 1'
+    const snapshot = {
+      draft,
+      draftRev: 9,
+      occurrences: [{ offset: prefix.length, length: reference.clipboardText.length }],
+    }
+    const at = prefix.length + 2
+    const { shell } = makeShell(snapshot, { start: at, end: at })
+    const add = createAddToConversation(makeCtx(shell))
+
+    expect(detectEndOf(snapshot)).toBe(prefix.length + 3)
+    expect(detectToClipboardOf(snapshot, at)).toBe(draft.length - 1)
+    expect(paddingAt(snapshot, at)).toEqual({ lead: false, tail: true })
+    expect(await add.appendReference('s1', 'src/next.ts')).toBe('ok')
+    expect(shell.insertReference).toHaveBeenCalledWith(
+      expect.objectContaining({ ref: '@src/next.ts' }),
+      { start: at, end: at, draftRev: 9 },
+    )
+    expect(snapshot.draft).toBe('检查 @.validation/release-0.20.1-verify.log L2-16 1')
+    expect(shell.setDraft).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    [{ startLine: 2, endLine: 16 }, '@"src/my file.ts" L2-16'],
+    [{ startLine: 5, endLine: 5 }, '@"src/my file.ts" L5'],
+  ])('范围引用降级纯文本保留范围与相邻文本边界：%j', async (range, expected) => {
+    const { shell } = makeShell({ draft: '检查1', draftRev: 6 }, { start: 2, end: 2 })
+    shell.insertReference.mockReturnValue(false)
+    const add = createAddToConversation(makeCtx(shell))
+
+    expect(await add.appendReference('s1', 'src/my file.ts', range)).toBe('busy')
+    expect(shell.insertText).toHaveBeenCalledWith(` ${expected} `, { start: 2, end: 2, draftRev: 6 })
+    expect(shell.setDraft).not.toHaveBeenCalled()
   })
 
   it('folder 外观透传：insertReference 载荷 appearance 为 folder', async () => {
@@ -348,5 +412,107 @@ describe('createAddToConversation.appendReference', () => {
     expect(await add.appendReference('s1', 'x')).toBe('unavailable')
     const add2 = createAddToConversation(makeCtx(makeShell().shell))
     expect(await add2.appendReference(undefined, 'x')).toBe('unavailable')
+  })
+})
+
+/** @private @author ddj 2026年10月28号 @returns Controller fixture with observable ownership and legacy traps. */
+function ownedFixture() {
+  const prompt = vi.fn(async () => ({ ok: true }))
+  const release = vi.fn()
+  const remote = { prompt: vi.fn(), create: vi.fn() }
+  const sessions = { retain: vi.fn(() => ({ ready: Promise.resolve({ session: { prompt } }), release })), create: vi.fn() }
+  let unload = () => {}
+  const ctx = {
+    get: (name: string) => name === 'sessions' ? sessions : remote,
+    effect: (setup: () => () => void) => { unload = setup(); return unload },
+  }
+  return { ctx, sessions, prompt, release, remote, unload: () => unload() }
+}
+
+describe('Session Controller ownership', () => {
+  it('retains the explicit target, sends once and releases once', async () => {
+    const host = ownedFixture()
+    expect(await createAddToConversation(host.ctx).sendTask('fixed', '任务')).toBe(true)
+    expect(host.sessions.retain).toHaveBeenCalledWith('fixed', expect.objectContaining({ source: 'controllerOperation' }))
+    expect(host.prompt).toHaveBeenCalledWith([{ type: 'text', text: '任务' }], 'queue', expect.any(AbortSignal))
+    host.unload()
+    expect(host.release).toHaveBeenCalledTimes(1)
+    expect(host.remote.prompt).not.toHaveBeenCalled()
+  })
+
+  it.each(['denied', 'offline'])('does not switch transports after %s', async (failure) => {
+    const host = ownedFixture()
+    if (failure === 'denied') host.prompt.mockResolvedValue({ ok: false })
+    else host.prompt.mockRejectedValue(new Error('unknown receipt'))
+    expect(await createAddToConversation(host.ctx).sendTask('fixed', '任务')).toBe(false)
+    expect(host.prompt).toHaveBeenCalledTimes(1)
+    expect(host.release).toHaveBeenCalledTimes(1)
+    expect(host.remote.prompt).not.toHaveBeenCalled()
+  })
+
+  it('releases when opening the generation fails', async () => {
+    const host = ownedFixture()
+    host.sessions.retain.mockImplementation(() => ({ ready: Promise.reject(new Error('disposed')), release: host.release }))
+    expect(await createAddToConversation(host.ctx).sendTask('fixed', '任务')).toBe(false)
+    expect(host.release).toHaveBeenCalledTimes(1)
+    expect(host.prompt).not.toHaveBeenCalled()
+    expect(host.remote.prompt).not.toHaveBeenCalled()
+  })
+
+  it('unload while opening prevents a late prompt and releases only once', async () => {
+    const host = ownedFixture()
+    let opened!: (binding: { session: { prompt: typeof host.prompt } }) => void
+    host.sessions.retain.mockImplementation(() => ({ ready: new Promise((resolve) => { opened = resolve }), release: host.release }))
+    const sending = createAddToConversation(host.ctx).sendTask('fixed', '任务')
+    host.unload()
+    opened({ session: { prompt: host.prompt } })
+    expect(await sending).toBe(false)
+    expect(host.release).toHaveBeenCalledTimes(1)
+    expect(host.prompt).not.toHaveBeenCalled()
+  })
+
+  it('unload cancels pending admission and releases without retrying', async () => {
+    const host = ownedFixture()
+    host.prompt.mockImplementation((_content, _mode, signal) => new Promise((_resolve, reject) => {
+      signal.addEventListener('abort', () => reject(new Error('cancelled')), { once: true })
+    }))
+    const sending = createAddToConversation(host.ctx).sendTask('fixed', '任务')
+    await Promise.resolve()
+    host.unload()
+    expect(await sending).toBe(false)
+    expect(host.release).toHaveBeenCalledTimes(1)
+    expect(host.remote.prompt).not.toHaveBeenCalled()
+  })
+
+  it('legacy composer failure never retries another send transport', async () => {
+    const { shell } = makeShell()
+    shell.submit = vi.fn(() => { throw new Error('unknown receipt') })
+    const remote = { prompt: vi.fn() }
+    const base = makeCtx(shell)
+    const ctx = { get: (name: string) => name === 'remote.session' ? remote : base.get(name) }
+    expect(await createAddToConversation(ctx).sendTask('fixed', '任务')).toBe(false)
+    expect(shell.submit).toHaveBeenCalledTimes(1)
+    expect(remote.prompt).not.toHaveBeenCalled()
+  })
+
+  it('binding-based draft insertion does not submit or retain another generation', async () => {
+    const { shell } = makeShell()
+    const scope = { current: 'fixed' }
+    const sessions = { binding: vi.fn(() => ({ ctx: scope })), scope: vi.fn(), retain: vi.fn() }
+    const conversation = { input: { for: vi.fn(() => shell) } }
+    const ctx = { get: (name: string) => ({ sessions, conversation })[name] }
+    expect(await createAddToConversation(ctx).appendText('fixed', '草稿')).toBe('ok')
+    expect(conversation.input.for).toHaveBeenCalledWith(scope)
+    expect(sessions.scope).not.toHaveBeenCalled()
+    expect(sessions.retain).not.toHaveBeenCalled()
+    expect(shell.setDraft).not.toHaveBeenCalled()
+  })
+
+  it('does not retry creation when the first receipt is unknown', async () => {
+    const host = ownedFixture()
+    host.sessions.create.mockRejectedValue(new Error('unknown receipt'))
+    expect(await newDraftSession(host.ctx, '/workspace')).toEqual({ ok: false })
+    expect(host.sessions.create).toHaveBeenCalledTimes(1)
+    expect(host.remote.create).not.toHaveBeenCalled()
   })
 })
