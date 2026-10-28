@@ -128,6 +128,7 @@ import { clampToolbarPosition, loadToolbarPosition, saveToolbarPosition } from '
 import { editorModelPathOf } from '../dap/modelPath.js'
 import { dapTrace } from '../dap/trace.js'
 import { isSessionMissingError, sessionErrorText, sessionMissingDetail, sessionMissingTitle } from '../sessionError.js'
+import { officialDownView, SESSION_DOWN_NOTICE } from '../reviewBar.js'
 
 /** 官方差异读取失败前缀：仅用于清理同源陈旧错误，不吞并保存类错误。@author ddj 2026年10月27号 */
 const REVIEW_LOAD_ERROR = '官方差异读取失败：'
@@ -4487,13 +4488,22 @@ export function EditorView(props) {
    * @returns 含布局及操作回调的差异快照
    */
   const officialFile = review.page?.overview?.coveredPaths.find((path) => sameFile(path, active))
+  // 官方通道自身的失败（list 失败 / 缺 overview）只影响官方栏，不能混进保存类错误。
+  const officialDown = officialFile ? null : officialDownView(review.error)
   const rawReviewError = review.error || error
+  // 会话未在当前端激活属于环境提示，不是需要用户处置的错误：降级为中性说明，避免整栏红字。
+  const sessionDown = isSessionMissingError(rawReviewError)
+  const reviewErrorTone = sessionDown ? 'info' : 'error'
+  const reviewErrorText = !rawReviewError ? undefined : sessionDown ? SESSION_DOWN_NOTICE : sessionErrorText(rawReviewError)
   const buildDockSnapshot = () => ({
     mode: editorDockMode(active),
     official: officialFile ? { sessionId, page: review.page, path: officialFile,
       pending: sum.files.find((file) => sameFile(file.path, active))?.pending ?? 0,
       detail: officialDetail, records: officialRecords, onSelect: setSelectedReview } : null,
-    reviewError: rawReviewError ? sessionErrorText(rawReviewError) : undefined,
+    officialDown: officialDown ?? undefined,
+    onRetryOfficial: () => refreshReview(sessionId),
+    reviewError: reviewErrorText,
+    reviewErrorTone,
     layout,
     pendingRegions,
     staleRegions,

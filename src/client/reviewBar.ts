@@ -2,8 +2,11 @@
  * 官方差异栏派生视图：位置、导航提示、失效说明与 Keep 提示的唯一来源。
  * 计数口径分离：待审是「记录数」，可跳转是「块数」，两者不同源，
  * 全部块失效时必须给出可操作叙事，不能只留一句「无法定位」。
+ * 另含侧车（legacy）栏的标识文案与官方链路不可用说明：两套栏外观相近，
+ * 必须显式区分，否则用户会误判为插件未升级。
  * 作者 ddj 2026年10月27号
  */
+import { sessionErrorText } from './sessionError.js'
 
 /** 官方差异栏输入：全部来自 EditorView dock 快照，不读取磁盘或 RPC。 */
 export interface ReviewBarInput {
@@ -83,3 +86,41 @@ export function reviewBarView(input: ReviewBarInput): ReviewBarView {
 
   return { position: '—', navPrevTitle: '当前文件没有可定位差异', navNextTitle: '当前文件没有可定位差异', notice: '', noticeTone: 'info', keepHint, pendingTitle }
 }
+
+/** 非官方栏标识：没有官方待审记录时回落的那套栏必须自述来源，避免被当成旧版插件。 */
+export const SIDECAR_LABEL = '历史改动'
+
+/** 非官方栏标识的悬停说明：讲清这些改动为何不在官方列表里。 */
+export const SIDECAR_LABEL_TITLE = '这些改动没有进入官方审查列表，是插件早期版本自动保存的改动留痕。Keep 只标记为已看过，不改文件；Undo 会校验后写回文件。'
+
+/** 非官方 Keep 的作用域说明：只标记记录，不写磁盘。 */
+export const SIDECAR_KEEP_TITLE = '标记这些历史改动为已看过：只改记录，不改写磁盘文件，也不影响官方审查。'
+
+/** 非官方 Undo 的作用域说明：走原有回滚校验写回磁盘，但不影响官方记录。 */
+export const SIDECAR_UNDO_TITLE = '撤销这些历史改动（写回受回滚校验保护）：只影响这份历史记录，不影响官方审查。'
+
+/** 当前端没有该会话时，差异栏里给中性说明而不是红色报错。 */
+export const SESSION_DOWN_NOTICE = '这个会话没在当前端激活，官方审查数据暂时读不到；下面的历史改动仍可查看、Keep、Undo。'
+
+/** 官方链路不可用提示；null 表示官方元数据正常，不需要提示。 */
+export interface OfficialDownView {
+  /** 提示正文，已含「官方差异不可用」前缀与可读原因 */
+  text: string
+  /** 重试按钮文案 */
+  retryLabel: string
+}
+
+/**
+ * 把官方元数据通道的失败翻译成可操作提示。
+ * @public
+ * @author ddj 2026年10月28号
+ * @param error `edrv.review.list` 返回的错误原文（reviewFeed 的 error 字段）
+ * @returns 提示正文与重试文案；空错误表示官方通道正常
+ */
+export function officialDownView(error: unknown): OfficialDownView | null {
+  const reason = sessionErrorText(error).trim()
+  if (!reason) return null
+
+  return { text: `官方差异不可用：${reason}`, retryLabel: '重试' }
+}
+

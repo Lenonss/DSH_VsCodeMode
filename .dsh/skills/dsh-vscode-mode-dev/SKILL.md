@@ -420,6 +420,18 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
 
 ## 差异审查（DiffBox / 旁车）设计口径
 
+- 2026-10-28 坑（**两套差异栏互相冒充，v0.20.4 修**）：插件并存官方栏与侧车栏，`DiffBox.ts:69` `if (props.official) return OfficialDiffBar`，
+  而 `official` 只在 `review.page.overview.coveredPaths` 命中当前活动文件时非空；`coveredPaths` = `review_files WHERE current=1 AND decision='pending'`
+  的 identity 集合（`src/reviewDb.ts:196-199`）→ **没有官方待审记录的文件一律回落侧车栏**，两者外观迥异却都没有标识，
+  用户会断言「插件没更新」（桌面端真实误判，且当时 profile 里被 lockfile 钉在 0.20.2，双重误导）。
+  修法 = 两栏同版式（`OfficialDiffBar` 与 `SidecarDiffBar` 共用 `reviewAllRow`），非官方栏标注 `SIDECAR_LABEL`「历史改动」+ Keep/Undo 作用域说明
+  （内部术语「侧车」不得出现在界面上，2026-10-28 用户实报）；官方通道失败（`review.error`）经 `officialDownView()` 转成可读原因 + 重试（`refreshReview`），
+  不再静默降级；「会话没在当前端激活」用中性 `reviewErrorTone='info'`，只有磁盘/回滚冲突才保留红色。
+  排查口径：查归档 SQLite 的 `review_files.identity` 就能判断该文件该走哪套栏，别先怀疑版本。
+- 2026-10-28 坑（桌面端「更新了新版」却没生效）：`dsh plugin --profile desktop …` 被拒（`profile "desktop" is managed exclusively by the Electron application`），
+  只能在 profile 目录直接 `pnpm add dsh-vscode-mode@X --save-exact`；且 pnpm 有最小发布年龄策略（日志 `minimumReleaseAgeExclude`），
+  刚发布的版本会被插件市场更新静默跳过并装回旧版（`.plugin-manager/logs/operation-*/pnpm.log` 里 `+ dsh-vscode-mode <旧版本>` 即证据）。
+  桌面端 profile 是实目录（不是 Junction），升级后须重启桌面端才加载新 client bundle；`lib/index.js` 不变时只需重载前端。
 - 2026-10-28 坑（**失效记录全 stale 时差异栏空白，v0.20.3 修**）：`pendingRegions=0` 时官方差异栏既不渲染 zone 也不给任何提示，
   用户只看到「待审 N + 位置 `—` + 上下箭头点了没反应」（桌面端真实报障）；prompt 待审数是**记录数**、箭头是**可定位块数**，两者不同源却无文案解释。
   修法 = 客户端纯函数 `src/client/reviewBar.ts`（`reviewBarView`）统一「位置 / 箭头禁用原因 / 失效叙事 / Keep 提示 / 待审标题」四条分支：

@@ -3,6 +3,7 @@ import { Button, Menu } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ReviewDetail, ReviewItem, ReviewPage } from '../../shared/review.js'
 import { ReviewLedger } from './OfficialReview.js'
 import { reviewBarView } from '../reviewBar.js'
+import { ReviewAllRow } from './reviewAllRow.js'
 
 export interface OfficialBarProps {
   official: { sessionId: string; path: string; pending: number; detail?: ReviewDetail; records?: ReviewItem[]; page: ReviewPage; onSelect: (id: string) => void }
@@ -27,6 +28,7 @@ export interface OfficialBarProps {
   onUndoFile: () => void
   onOpenLauncher: (tab: string) => void
   reviewError?: string
+  reviewErrorTone?: 'info' | 'error'
 }
 
 type Mark = 'left' | 'right' | 'up' | 'down' | 'check' | 'undo' | 'more' | 'file'
@@ -36,23 +38,15 @@ const marks: Record<Mark, string> = {
   more: 'M3 8h.01M8 8h.01M13 8h.01', file: 'M9 2H4v12h8V5L9 2Zm0 0v4h3M6 9h4M6 11h3',
 }
 
-/** @private @author ddj 2026年10月27号 @param mark Toolbar action. @returns Decorative consistent-stroke icon; labels live on buttons. */
-function barIcon(mark: Mark): React.ReactElement {
+/**
+ * 差异栏图标：官方栏与侧车栏共用同一套 16×16 线性图标，避免两套栏外观不一致。
+ * @public
+ * @author ddj 2026年10月27号
+ * @param mark 工具栏动作
+ * @returns 装饰性一致描边图标（标签文字在按钮上）
+ */
+export function barIcon(mark: Mark): React.ReactElement {
   return <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={marks[mark]} /></svg>
-}
-
-/** @private @author ddj 2026年10月27号 @param props Global workspace counts and bulk handlers. @returns Persistent global review controls, distinct from current-file actions. */
-function ReviewAllRow(props: OfficialBarProps): React.ReactElement {
-  const total = props.fileTotal ?? 0
-  const current = total && (props.fileIdx ?? -1) >= 0 ? (props.fileIdx ?? 0) + 1 : 0
-  const disabled = props.reviewBatchBusy || !!props.batchUnavailable || !props.allPendingCount
-  return <div className="edrv-review-global" role="group" aria-label="全部待审文件">
-    <Button size="sm" variant="ghost" className="edrv-review-total" onClick={() => props.onOpenLauncher('pending')} title="打开当前工作区全部待审差异文件">差异文件 <strong>{current} / {total}</strong></Button>
-    <span className="edrv-review-all-actions">
-      <Button size="sm" variant="ghost" onClick={props.onAcceptAllFiles} disabled={disabled || !props.onAcceptAllFiles} title={props.batchUnavailable || 'Keep 当前工作区全部待审文件（含其他轮次），不改写磁盘'}>Keep All</Button>
-      <Button size="sm" variant="ghost" className="edrv-review-undo" onClick={props.onUndoAllFiles} disabled={disabled || !props.onUndoAllFiles} title={props.batchUnavailable || '检查全部待审记录后逐项 Undo；缺少证据或遇到冲突停止，不强制覆盖'}>Undo All</Button>
-    </span>
-  </div>
 }
 
 /** @public @author ddj 2026年10月27号 @param props Existing review callbacks and immutable record metadata. @returns Responsive review toolbar; no disk or decision side effects until an explicit action. */
@@ -84,7 +78,18 @@ export function OfficialDiffBar(props: OfficialBarProps): React.ReactElement {
   const moreTrigger = <Button size="sm" variant="ghost" className="edrv-review-icon" aria-label="更多审查操作" title="更多审查操作" aria-haspopup="menu" aria-expanded={menu === 'more'} onClick={() => setMenu(menu === 'more' ? null : 'more')}>{barIcon('more')}</Button>
 
   return <div className="edrv-diffbar edrv-diffbar-dock edrv-reviewbar" data-edrv-diffbox="1" data-edrv-diff-source="official" role="region" aria-label="文件差异审查">
-    <ReviewAllRow {...props} />
+    <ReviewAllRow
+      total={props.fileTotal ?? 0}
+      current={(props.fileTotal ?? 0) && (props.fileIdx ?? -1) >= 0 ? (props.fileIdx ?? 0) + 1 : 0}
+      busy={props.reviewBatchBusy}
+      unavailable={props.batchUnavailable}
+      pending={props.allPendingCount}
+      onOpen={() => props.onOpenLauncher('pending')}
+      onKeepAll={props.onAcceptAllFiles}
+      onUndoAll={props.onUndoAllFiles}
+      keepTitle="Keep 当前工作区全部待审文件（含其他轮次），不改写磁盘"
+      undoTitle="检查全部待审记录后逐项 Undo；缺少证据或遇到冲突停止，不强制覆盖"
+    />
     {props.reviewBatchBusy ? <div className="edrv-review-notice" role="status">正在处理全部待审记录…</div> : null}
     <div className="edrv-review-heading">
       <span className="edrv-review-filemark">{barIcon('file')}</span>
@@ -110,7 +115,7 @@ export function OfficialDiffBar(props: OfficialBarProps): React.ReactElement {
       </div>
     </div>
     {detail && view.notice ? <div className={view.noticeTone === 'warn' ? 'edrv-review-notice edrv-review-notice-warn' : 'edrv-review-notice'} role="status">{view.notice}</div> : null}
-    {props.reviewError ? <div className="edrv-review-notice edrv-review-error" role="alert">{props.reviewError}</div> : null}
+    {props.reviewError ? <div className={props.reviewErrorTone === 'info' ? 'edrv-review-notice' : 'edrv-review-notice edrv-review-error'} role={props.reviewErrorTone === 'info' ? 'status' : 'alert'}>{props.reviewError}</div> : null}
     {expanded ? <div className="edrv-review-body"><ReviewLedger key={`${official.sessionId}:${official.path}`} sessionId={official.sessionId} first={official.page} path={official.path} /></div> : null}
   </div>
 }

@@ -320,7 +320,7 @@ export function PerfSettings() {
   ) : null
 
   const guideBody = React.createElement('section', { className: 'vsm-panel' },
-    React.createElement('h3', { className: 'vsm-panel-title' }, '侧车摘要（agent/脚本取关键字段，不整份读 sidecar）'),
+    React.createElement('h3', { className: 'vsm-panel-title' }, '历史改动摘要（agent / 脚本只取关键字段，不整份读）'),
     React.createElement('div', { className: 'vsm-panel-body' },
     React.createElement('p', null, '工作区根目录的 .dsh-edit-review.json（可能数 MB）只应通过摘要接口读取，禁止 agent 整份 read/write 进对话：'),
     React.createElement('pre', { className: 'vsm-perf-block' },
