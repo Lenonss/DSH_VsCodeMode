@@ -429,6 +429,155 @@ function ownedFixture() {
   return { ctx, sessions, prompt, release, remote, unload: () => unload() }
 }
 
+/** @private @author ddj 2026年10月29号 @returns Controllable admission and cleanup, preserving the real facade. */
+function resultFixture() {
+  const host = ownedFixture()
+  let cleanup = () => {}
+  const remove = vi.fn()
+  const ctx = { get: host.ctx.get, effect: (setup: () => () => void) => { cleanup = setup(); return remove } }
+  return { ...host, ctx, remove, unload: () => cleanup() }
+}
+
+/** @private @author ddj 2026年10月29号 @param receipt Selected RPC receipt. @returns Isolated remote channel and fallback trap. */
+function remoteFixture(receipt: unknown) {
+  const remote = { prompt: vi.fn().mockResolvedValue(receipt) }
+  return { remote, ctx: { get: (name: string) => name === 'remote.session' ? remote : undefined } }
+}
+
+/** @private @author ddj 2026年10月29号 @param legacy Whether to exercise the old wrapper. @param outcome Receipt settled after abort. @returns Result from one real facade operation. */
+async function abortReceipt(legacy: boolean, outcome: 'ok' | 'false' | 'throw') {
+  const host = resultFixture()
+  let resolve!: (receipt: { ok: boolean }) => void
+  let reject!: (error: Error) => void
+  host.prompt.mockImplementation(() => new Promise((done, fail) => { resolve = done; reject = fail }))
+  const actions = createAddToConversation(host.ctx)
+  const sending = legacy ? actions.sendTask('fixed', '任务') : actions.sendTaskResult!('fixed', '任务')
+  await Promise.resolve()
+  host.unload()
+  if (outcome === 'throw') reject(new Error('unknown after abort'))
+  else resolve({ ok: outcome === 'ok' })
+  const result = await sending
+  expect(host.prompt).toHaveBeenCalledTimes(1)
+  expect(host.release).toHaveBeenCalledTimes(1)
+  expect(host.remote.prompt).not.toHaveBeenCalled()
+  return result
+}
+
+describe('Task send results', () => {
+  it.each([
+    [{ ok: true }, 'accepted', true], [{ ok: false }, 'rejected', false], [{}, 'unknown', false],
+  ])('classifies modern receipt %j', async (receipt, status, legacyOk) => {
+    const host = resultFixture()
+    host.prompt.mockResolvedValue(receipt as { ok: boolean })
+    expect(await createAddToConversation(host.ctx).sendTaskResult!('fixed', '任务')).toEqual({ status, legacyOk })
+    expect(host.prompt).toHaveBeenCalledTimes(1)
+    expect(host.release).toHaveBeenCalledTimes(1)
+    expect(host.remote.prompt).not.toHaveBeenCalled()
+  })
+  it.each(['ready', 'prompt', 'retain'])('classifies failure at %s without another transport', async (stage) => {
+    const host = resultFixture()
+    if (stage === 'prompt') host.prompt.mockRejectedValue(new Error('uncertain'))
+    else if (stage === 'retain') host.sessions.retain.mockImplementation(() => { throw new Error('no reference') })
+    else host.sessions.retain.mockReturnValue({ ready: Promise.reject(new Error('open failed')), release: host.release })
+    expect(await createAddToConversation(host.ctx).sendTaskResult!('fixed', '任务')).toEqual({ status: stage === 'prompt' ? 'unknown' : 'unavailable', legacyOk: false })
+    expect(host.prompt).toHaveBeenCalledTimes(Number(stage === 'prompt'))
+    expect(host.release).toHaveBeenCalledTimes(Number(stage !== 'retain'))
+    expect(host.remote.prompt).not.toHaveBeenCalled()
+  })
+  it.each(['ok', 'false', 'throw'] as const)('preserves abort-during-prompt %s in detailed and old wrappers', async (outcome) => {
+    expect(await abortReceipt(false, outcome)).toEqual({ status: 'cancelled', legacyOk: outcome === 'ok' })
+    expect(await abortReceipt(true, outcome)).toBe(outcome === 'ok')
+  })
+  it('cancels before prompt with no send and legacy false', async () => {
+    const host = resultFixture()
+    let opened!: (binding: any) => void
+    host.sessions.retain.mockReturnValue({ ready: new Promise((resolve) => { opened = resolve }), release: host.release })
+    const sending = createAddToConversation(host.ctx).sendTaskResult!('fixed', '任务')
+    host.unload()
+    opened({ session: { prompt: host.prompt } })
+    expect(await sending).toEqual({ status: 'cancelled', legacyOk: false })
+    expect(host.prompt).not.toHaveBeenCalled()
+    expect(host.release).toHaveBeenCalledTimes(1)
+  })
+  it.each(['release', 'remove'])('does not classify post-send %s failure as safe fallback', async (stage) => {
+    for (const legacy of [false, true]) {
+      const host = resultFixture()
+      host[stage].mockImplementation(() => { throw new Error('cleanup failed') })
+      const actions = createAddToConversation(host.ctx)
+      const result = legacy ? await actions.sendTask('fixed', '任务') : await actions.sendTaskResult!('fixed', '任务')
+      expect(result).toEqual(legacy ? false : { status: 'unknown', legacyOk: false })
+      expect(host.prompt).toHaveBeenCalledTimes(1)
+      expect(host.release).toHaveBeenCalledTimes(1)
+      expect(host.remote.prompt).not.toHaveBeenCalled()
+    }
+  })
+  it.each(['normal', 'submit-throw', 'draft-throw'])('legacy composer %s is not confirmed acceptance', async (mode) => {
+    for (const legacy of [false, true]) {
+      const { shell } = makeShell()
+      shell.submit = vi.fn()
+      if (mode === 'submit-throw') shell.submit.mockImplementation(() => { throw new Error('unknown') })
+      if (mode === 'draft-throw') shell.setDraft.mockImplementation(() => { throw new Error('locked') })
+      const remote = { prompt: vi.fn() }, base = makeCtx(shell)
+      const actions = createAddToConversation({ get: (name) => name === 'remote.session' ? remote : base.get(name) })
+      const result = legacy ? await actions.sendTask('fixed', '任务') : await actions.sendTaskResult!('fixed', '任务')
+      const status = mode === 'normal' ? 'submitted' : mode === 'submit-throw' ? 'unknown' : 'unavailable'
+      expect(result).toEqual(legacy ? mode === 'normal' : { status, legacyOk: mode === 'normal' })
+      expect(shell.submit).toHaveBeenCalledTimes(Number(mode !== 'draft-throw'))
+      expect(remote.prompt).not.toHaveBeenCalled()
+    }
+  })
+  it.each([[{ ok: true }, 'accepted'], [{ result: { ok: false } }, 'rejected'], [{ result: {} }, 'unknown']])('remote receipt %j retains explicit evidence', async (receipt, status) => {
+    const host = remoteFixture(receipt)
+    expect(await createAddToConversation(host.ctx).sendTaskResult!('fixed', '任务')).toEqual({ status, legacyOk: status === 'accepted' })
+    expect(host.remote.prompt).toHaveBeenCalledTimes(1)
+  })
+  it('remote thrown call stays unknown and never enters HTTP', async () => {
+    const host = remoteFixture(null), network = vi.fn()
+    host.remote.prompt.mockRejectedValue(new Error('lost receipt'))
+    vi.stubGlobal('fetch', network)
+    try {
+      expect(await createAddToConversation(host.ctx).sendTaskResult!('fixed', '任务')).toEqual({ status: 'unknown', legacyOk: false })
+      expect(network).not.toHaveBeenCalled()
+    } finally { vi.unstubAllGlobals() }
+  })
+  it.each(['accepted', 'rejected', 'missing', 'json', 'network'])('HTTP %s has one request and conservative classification', async (mode) => {
+    const network = vi.fn().mockResolvedValue({ json: async () => ({ result: mode === 'missing' ? {} : { ok: mode === 'accepted' } }) })
+    if (mode === 'json') network.mockResolvedValue({ json: async () => { throw new Error('invalid JSON') } })
+    if (mode === 'network') network.mockRejectedValue(new Error('lost connection'))
+    vi.stubGlobal('fetch', network)
+    try {
+      const status = mode === 'accepted' || mode === 'rejected' ? mode : 'unknown'
+      expect(await createAddToConversation({ get: () => undefined }).sendTaskResult!('fixed', '任务')).toEqual({ status, legacyOk: status === 'accepted' })
+      expect(network).toHaveBeenCalledTimes(1)
+    } finally { vi.unstubAllGlobals() }
+  })
+  it.each([true, false])('old modern wrapper returns %s after exactly one prompt', async (ok) => {
+    const host = resultFixture()
+    host.prompt.mockResolvedValue({ ok })
+    expect(await createAddToConversation(host.ctx).sendTask('fixed', '任务')).toBe(ok)
+    expect(host.prompt).toHaveBeenCalledTimes(1)
+    expect(host.release).toHaveBeenCalledTimes(1)
+  })
+  it('cleanup failure after an aborted prompt remains cancelled with legacy false', async () => {
+    const host = resultFixture()
+    let finish!: (receipt: { ok: boolean }) => void
+    host.prompt.mockImplementation(() => new Promise((resolve) => { finish = resolve }))
+    host.remove.mockImplementation(() => { throw new Error('remove failed') })
+    const sending = createAddToConversation(host.ctx).sendTaskResult!('fixed', '任务')
+    await Promise.resolve()
+    host.unload()
+    finish({ ok: true })
+    expect(await sending).toEqual({ status: 'cancelled', legacyOk: false })
+    expect(host.prompt).toHaveBeenCalledTimes(1)
+    expect(host.release).toHaveBeenCalledTimes(1)
+  })
+  it('does not send without a target', async () => {
+    const host = resultFixture()
+    expect(await createAddToConversation(host.ctx).sendTaskResult!(undefined, '任务')).toEqual({ status: 'unavailable', legacyOk: false })
+    expect(host.sessions.retain).not.toHaveBeenCalled()
+  })
+})
+
 describe('Session Controller ownership', () => {
   it('retains the explicit target, sends once and releases once', async () => {
     const host = ownedFixture()

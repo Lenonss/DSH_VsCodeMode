@@ -281,28 +281,78 @@ interface SessionBridge {
   scope?: (id: string) => unknown
 }
 
-/** @private @author ddj 2026年10月28号 @param ctx Lifecycle owner. @param sessions Public Controller. @param id Fixed target. @param text Task body. @returns Acceptance; failures never retry another transport. @sideEffects Retains one generation until completion or unload. */
-async function sendOwned(ctx: CtxLike, sessions: SessionBridge, id: string, text: string): Promise<boolean> {
+/** Detailed admission evidence; none of these states proves task completion. */
+export interface TaskSendResult {
+  status: 'accepted' | 'rejected' | 'unavailable' | 'unknown' | 'submitted' | 'cancelled'
+  /** Historical boolean from this same attempt, not an admission marker. */
+  legacyOk: boolean
+}
+
+/** @private @author ddj 2026年10月29号 @param receipt Raw selected-channel receipt. @returns Explicit admission evidence and the historical boolean. */
+function taskReceipt(receipt: unknown): TaskSendResult {
+  const ok = (receipt as { ok?: unknown } | null)?.ok
+  if (ok === true) return { status: 'accepted', legacyOk: true }
+  if (ok === false) return { status: 'rejected', legacyOk: false }
+  return { status: 'unknown', legacyOk: false }
+}
+
+/** @private @author ddj 2026年10月29号 @param ctx Lifecycle owner. @param sessions Public Controller. @param id Fixed target. @param text Task body. @returns Admission evidence without switching transport. @sideEffects Retains and releases exactly one generation. */
+async function sendOwned(ctx: CtxLike, sessions: SessionBridge, id: string, text: string): Promise<TaskSendResult> {
   const controller = new AbortController()
   const reference = sessions.retain!(id, { source: 'controllerOperation', signal: controller.signal })
   let released = false
-  /** @private @author ddj 2026年10月28号 Cancel pending admission and release this exact generation once. */
+  let cleanupFailed = false
+  /** @private @author ddj 2026年10月29号 Cancels and releases this exact generation once; remembers unload cleanup failures. */
   function release(): void {
     if (released) return
     released = true
     controller.abort()
-    reference.release()
+    try { reference.release() } catch (error) { cleanupFailed = true; throw error }
   }
   let remove: (() => void) | undefined
+  let started = false
+  let result: TaskSendResult = { status: 'unavailable', legacyOk: false }
   try {
     remove = ctx.effect?.(() => release, 'vscode-mode: task session reference')
     const binding = await reference.ready
-    if (controller.signal.aborted) return false
-    return (await binding.session.prompt([{ type: 'text', text }], 'queue', controller.signal)).ok === true
-  } finally {
-    release()
-    remove?.()
+    if (controller.signal.aborted) result = { status: 'cancelled', legacyOk: false }
+    else {
+      started = true
+      result = taskReceipt(await binding.session.prompt([{ type: 'text', text }], 'queue', controller.signal))
+    }
+  } catch {
+    result = { status: started ? 'unknown' : 'unavailable', legacyOk: false }
   }
+
+  // Snapshot cancellation before normal cleanup aborts our own signal.
+  const cancelled = controller.signal.aborted
+  try { release() } catch { cleanupFailed = true }
+  try { remove?.() } catch { cleanupFailed = true }
+  if (cleanupFailed) result = { status: started ? 'unknown' : 'unavailable', legacyOk: false }
+  if (cancelled) result = { status: 'cancelled', legacyOk: result.legacyOk }
+  return result
+}
+
+/** @private @author ddj 2026年10月29号 @param ctx Service owner. @param id Fixed target. @param text Task body. @returns One legacy-channel attempt; no cross-channel retry. */
+async function sendLegacy(ctx: CtxLike, id: string, text: string): Promise<TaskSendResult> {
+  const input = inputFor(ctx, id) as { setDraft?: (task: string) => void; submit?: () => void } | undefined
+  if (typeof input?.setDraft === 'function' && typeof input.submit === 'function') {
+    let submitted = false
+    try {
+      input.setDraft(text)
+      submitted = true
+      input.submit()
+      return { status: 'submitted', legacyOk: true }
+    } catch { return { status: submitted ? 'unknown' : 'unavailable', legacyOk: false } }
+  }
+
+  const remote = ctx.get('remote.session') as { prompt?: (req: unknown) => Promise<unknown> } | undefined
+  if (typeof remote?.prompt !== 'function') return httpTaskResult(id, text)
+  try {
+    const payload = { sessionId: id, mode: 'queue', content: [{ type: 'text', text }] }
+    const receipt = await remote.prompt(slotArg(payload))
+    return taskReceipt((receipt as { result?: unknown } | null)?.result ?? receipt)
+  } catch { return { status: 'unknown', legacyOk: false } }
 }
 
 /** 新建会话结果（ok=false 供调用方降级回当前对话注入）。 */
@@ -386,6 +436,11 @@ async function apiSessionCreate(cwd: string | undefined): Promise<string> {
  * @returns 是否受理
  */
 export async function apiSessionPrompt(sessionId: string, text: string): Promise<boolean> {
+  return (await httpTaskResult(sessionId, text)).legacyOk
+}
+
+/** @private @author ddj 2026年10月29号 @param sessionId Fixed target. @param text Task body. @returns HTTP receipt evidence; errors after request entry are never safe rejection. */
+async function httpTaskResult(sessionId: string, text: string): Promise<TaskSendResult> {
   try {
     const payload = { sessionId, mode: 'queue', content: [{ type: 'text', text }] }
     const res = await fetch(appUrl(SESSION_PROMPT_PATH), {
@@ -399,9 +454,9 @@ export async function apiSessionPrompt(sessionId: string, text: string): Promise
       }),
     })
     const json = await res.json().catch(() => null) as { result?: { ok?: boolean } } | null
-    return json?.result?.ok === true
+    return taskReceipt(json?.result)
   } catch {
-    return false
+    return { status: 'unknown', legacyOk: false }
   }
 }
 
@@ -466,8 +521,10 @@ export interface AddToConversation {
   appendText(sessionId: string | undefined, text: string): Promise<AddOutcome>
   /** 新建独立会话并切换（旁路任务隔离；失败 ok:false 供降级回当前对话）。 */
   startDraftSession(cwd?: string): Promise<DraftSessionResult>
-  /** 发送任务给目标会话 agent（点击即发送；失败 false 供降级）。 */
+  /** Historical compatibility result, not proof that a task was accepted. */
   sendTask(sessionId: string | undefined, text: string): Promise<boolean>
+  /** Optional on older injected facades; detailed callers must not infer acceptance from sendTask. */
+  sendTaskResult?(sessionId: string | undefined, text: string): Promise<TaskSendResult>
 }
 
 /**
@@ -640,32 +697,22 @@ export function createAddToConversation(ctx: CtxLike): AddToConversation {
   /**
    * 发送任务给目标会话 agent（点击即发送方案：任务落地会话即非 blank，列表可见）。
    * 新版持有目标 Controller 到 prompt 结束；旧版按能力选择唯一通道，不跨通道重发。
-   * @author ddj 2026年09月23号 / 2026年10月28号
+   * @author ddj 2026年10月29号
    * @param sessionId 目标会话 id
    * @param text 任务文本
-   * @returns 是否受理
+   * @returns 同一次调用的历史boolean语义，不能作为受理事实
    */
-  const sendTask: AddToConversation['sendTask'] = async (sessionId, text) => {
-    if (!sessionId) return false
+  const sendTask: AddToConversation['sendTask'] = async (sessionId, text) => (await sendTaskResult(sessionId, text)).legacyOk
+
+  /** @private @author ddj 2026年10月29号 @param sessionId Fixed target. @param text Task body. @returns Detailed evidence from exactly one selected transport. */
+  async function sendTaskResult(sessionId: string | undefined, text: string): Promise<TaskSendResult> {
+    if (!sessionId) return { status: 'unavailable', legacyOk: false }
     try {
       const sessions = ctx.get('sessions') as SessionBridge | undefined
       if (typeof sessions?.retain === 'function') return await sendOwned(ctx, sessions, sessionId, text)
-
-      // Legacy composer remains an exclusive channel; never overwrite the draft and then retry elsewhere.
-      const input = inputFor(ctx, sessionId) as { setDraft?: (task: string) => void; submit?: () => void } | undefined
-      if (typeof input?.setDraft === 'function' && typeof input.submit === 'function') {
-        input.setDraft(text)
-        input.submit()
-        return true
-      }
-      const remote = ctx.get('remote.session') as { prompt?: (req: unknown) => Promise<unknown> } | undefined
-      if (typeof remote?.prompt === 'function') {
-        const payload = { sessionId, mode: 'queue', content: [{ type: 'text', text }] }
-        return rpcOk(await remote.prompt(slotArg(payload))).ok
-      }
-      return await apiSessionPrompt(sessionId, text)
-    } catch { return false }
+      return await sendLegacy(ctx, sessionId, text)
+    } catch { return { status: 'unavailable', legacyOk: false } }
   }
 
-  return { appendReference, appendText, startDraftSession, sendTask }
+  return { appendReference, appendText, startDraftSession, sendTask, sendTaskResult }
 }

@@ -39,6 +39,7 @@ import type { ContextMenuEntry } from '../../ui/ContextMenu.js'
 import { SvnAiPlanDialog } from '../../ui/SvnAiPlanDialog.js'
 import { budgetGroupsOf } from './svnListBudget.js'
 import type { SidebarCtx } from '../types.js'
+import type { DraftSessionResult, TaskSendResult } from '../../addToConversation.js'
 
 /** 未分组条目的分组键（changelist 为空）。 */
 const NO_CHANGELIST = '（未分组）'
@@ -845,10 +846,9 @@ export function SvnPanel(props) {
 
   /**
    * 深度分析入口（02-deep-session-prompt 修正版）：**新建独立会话**承载任务
-   * （不污染当前对话），草稿箱填入分析任务（变更清单由 agent 自跑只读 svn status
-   * 取数，prompt 定长）→ 用户在新会话发送 → agent 投递方案回面板收件箱。
-   * 降级：不支持自动新建会话时回落当前对话注入 + notify 注明。
-   * @author ddj 2026年09月23号
+   * （不污染当前对话），显式受理才等待方案；不明回执不重发或填入另一草稿。
+   * 未发送或明确拒绝时仅填当前草稿，提示用户手动发送，prompt使用实际草稿会话。
+   * @author ddj 2026年10月29号
    */
   const runDeepPlan = React.useCallback(() => {
     const live = ctxRef.current
@@ -858,34 +858,42 @@ export function SvnPanel(props) {
     const since = Date.now()
     const add = live?.addToConversation
     if (!add?.appendText) { live?.notify?.('无法填入任务（无会话或输入框不可用）'); return }
-    /** 降级：当前对话注入（不支持自动新建会话时兜底）。 */
-    const degrade = (prompt) => {
-      void add.appendText(sessionId, prompt).then((outcome) => {
-        if (outcome === 'ok' || outcome === 'busy') {
-          live?.notify?.('已填入当前对话（降级），任务已自动发送，请在本对话查看')
-          startDeepPoll(since)
-        } else {
-          live?.notify?.('发起失败：' + (outcome === 'unavailable' ? '无会话或输入框不可用' : '输入框忙，请重试'))
-        }
-      })
+
+    /** @private @author ddj 2026年10月29号 @returns Draft insertion only; never submits or starts a task poll. */
+    async function draftCurrent(): Promise<void> {
+      if (!sessionId) { live?.notify?.('无法填入任务（无会话或输入框不可用）'); return }
+      try {
+        const outcome = await add.appendText(sessionId, buildAgentPrompt(wcRoot, sessionId))
+        if (outcome === 'ok' || outcome === 'busy') live?.notify?.('已填入当前草稿，请手动发送')
+        else live?.notify?.('发起失败：' + (outcome === 'unavailable' ? '无会话或输入框不可用' : '输入框忙，请重试'))
+      } catch { live?.notify?.('草稿填入失败，请检查当前输入框') }
     }
-    /** 统一收尾（点击即发送方案）：create 后构建 prompt（内嵌新会话 id）→ 发送任务。 */
-    const sendAndWatch = (id) => {
-      const prompt = buildAgentPrompt(wcRoot, id || sessionId || '')
-      if (!id || typeof add.sendTask !== 'function') { degrade(prompt); return }
-      void add.sendTask(id, prompt).then((sent) => {
-        if (sent) {
-          live?.notify?.('已在新会话「AI 深度分析」发起任务并自动发送，请在左侧会话列表点开查看进度')
-          startDeepPoll(since)
-        } else {
-          degrade(prompt)
-        }
-      })
+    /** @private @author ddj 2026年10月29号 @param id Created target. @returns One detailed send decision; ambiguous receipts never retry. */
+    async function sendAndWatch(id): Promise<void> {
+      if (!id) { await draftCurrent(); return }
+      if (typeof add.sendTaskResult !== 'function') {
+        live?.notify?.('发送接口不支持受理确认，本次未自动发送，请手动处理')
+        return
+      }
+      let result: TaskSendResult | undefined
+      try { result = await add.sendTaskResult(id, buildAgentPrompt(wcRoot, id)) }
+      catch { result = { status: 'unknown', legacyOk: false } }
+      if (result?.status === 'accepted') {
+        live?.notify?.('已在新会话「AI 深度分析」受理任务，请在左侧会话列表点开查看进度')
+        startDeepPoll(since)
+      } else if (result?.status === 'rejected' || result?.status === 'unavailable') await draftCurrent()
+      else if (result?.status === 'cancelled') live?.notify?.('发送操作已取消，任务可能已提交，请检查目标会话：' + id)
+      else if (result?.status === 'submitted') live?.notify?.('已调用提交但受理未确认，请检查目标会话，不要重复发送：' + id)
+      else live?.notify?.('任务受理未确认，请检查目标会话，不要重复发送：' + id)
     }
-    void (add.startDraftSession
-      ? add.startDraftSession(wcRoot || undefined)
-      : Promise.resolve({ ok: false })
-    ).then((result) => { sendAndWatch(result?.ok ? result.id : undefined) })
+    /** @private @author ddj 2026年10月29号 @returns Creates a target before sending; creation failure can only insert a manual draft. */
+    async function beginDeep(): Promise<void> {
+      let result: DraftSessionResult | undefined
+      try { result = await add.startDraftSession?.(wcRoot || undefined) }
+      catch { result = { ok: false } }
+      await sendAndWatch(result?.ok ? result.id : undefined)
+    }
+    void beginDeep()
   }, [aiBusy, aiRun, deepWaiting, entries, sessionId, startDeepPoll])
 
   // --endregion
