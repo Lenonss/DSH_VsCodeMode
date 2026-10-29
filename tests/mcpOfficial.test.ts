@@ -377,6 +377,17 @@ describe.skipIf(!hostRoot)('installed official scoped MCP integration', () => {
       vi.spyOn(runtimeOf(ctx) as any, 'load').mockResolvedValue(official)
       await installMcpRuntime(ctx)
       await expect(runtimeOf(ctx).connect(agent, 'alpha')).rejects.toThrow()
+      const failedEntries = [...runtimeOf(ctx).pool.entries.values()].filter((entry) => entry.spec.workspace === '/alpha' && entry.spec.config.serverName === 'alpha')
+      expect(failedEntries).toHaveLength(1)
+      const failedEntry = failedEntries[0]
+      expect(failedEntry).toBeDefined()
+      // Caller failure is not closure evidence; observe natural cleanup without forcing retirement.
+      await failedEntry.quiescence
+      expect(failedEntry).toMatchObject({ live: false, phase: 'error' })
+      expect(failedEntry.cleanupFailed).not.toBe(true)
+      expect(failedEntry.bridge).toBeUndefined()
+      expect(failedEntry.fiber).toBeUndefined()
+      expect(failedEntry.close).toBeUndefined()
       expect(runtimeOf(ctx).views('/alpha')[0]).toMatchObject({ status: 'error', toolCount: 0, instanceCount: 0 })
       expect(runtimeOf(ctx).views('/alpha')[0].error).toContain('请查看 Host 日志')
       const before = peer.calls.length

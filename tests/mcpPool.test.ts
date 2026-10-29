@@ -128,6 +128,7 @@ describe('MCP connection pool', () => {
     expect(() => pool.acquire(request)).toThrow()
     finish()
     await failure
+    await first.entry.quiescence
     expect(first.entry.phase).toBe('error')
     expect(() => pool.acquire(request)).toThrow()
     await vi.advanceTimersByTimeAsync(5000)
@@ -149,6 +150,105 @@ describe('MCP connection pool', () => {
     expect(bridges).toHaveLength(1)
     // This deliberately unrecoverable fake scope is fenced; remove only from the fixture cleanup list.
     pools.splice(pools.indexOf(pool), 1)
+  })
+
+  it.each(['throw', 'reject'] as const)('fences startup cleanup %s without confirming quiescence', async (kind) => {
+    vi.useFakeTimers()
+    let finish!: () => void
+    const { pool, bridges } = fixture(new Map([['alpha', new Promise<void>((resolve) => { finish = resolve })]]))
+    const request = { ...spec(), policy: parseMcpPolicy({ sharing: 'workspace', startupTimeoutMs: 1000 }) }
+    const lease = pool.acquire(request)
+    try {
+      await vi.advanceTimersByTimeAsync(0)
+      /** @private @author ddj 2026年10月29号 @returns Failed closure evidence; throws synchronously for the throw case. */
+      function failClose(): Promise<void> {
+        if (kind === 'throw') throw new Error('sync cleanup failed')
+        return Promise.reject(new Error('async cleanup failed'))
+      }
+      vi.spyOn(bridges[0].bridge, 'dispose').mockImplementation(failClose)
+      await vi.advanceTimersByTimeAsync(1000)
+      await expect(lease.entry.ready).rejects.toThrow('清理尚未确认')
+      finish()
+      await expect(lease.entry.quiescence).rejects.toThrow('释放未确认')
+      await vi.advanceTimersByTimeAsync(5000)
+      expect(lease.entry.retryAt).toBeUndefined()
+      expect(lease.entry.close).toBeDefined()
+      expect(() => pool.acquire(request)).toThrow('释放未确认')
+      await expect(pool.dispose()).rejects.toThrow('cleanup failed')
+      expect(pool.entries.get(lease.entry.key)).toBe(lease.entry)
+      expect(bridges).toHaveLength(1)
+    } finally {
+      finish()
+      pools.splice(pools.indexOf(pool), 1)
+    }
+  })
+
+  it.each(['resolve', 'reject'] as const)('owns late make disposal %s after caller deadline', async (outcome) => {
+    vi.useFakeTimers()
+    let finishMake!: (bridge: McpBridge) => void
+    const { pool, bridges } = fixture()
+    const original = await (pool as any).make() as McpBridge
+    const make = vi.fn(() => new Promise<McpBridge>((resolve) => { finishMake = resolve }))
+    ;(pool as any).make = make
+    const request = { ...spec(), policy: parseMcpPolicy({ sharing: 'workspace', startupTimeoutMs: 1000 }) }
+    const lease = pool.acquire(request)
+    let disposed = false
+    let closing: Promise<void> | undefined
+    try {
+      await vi.advanceTimersByTimeAsync(1000)
+      await expect(lease.entry.ready).rejects.toThrow('清理尚未确认')
+      expect(lease.entry.close).toBeUndefined()
+      if (outcome === 'reject') bridges[0].scope.dispose.mockRejectedValue(new Error('late cleanup failed'))
+      expect(() => pool.acquire(request)).toThrow('清理尚未确认')
+      closing = (outcome === 'reject' ? pool.retire(lease.entry) : pool.dispose()).then(() => { disposed = true })
+      const observed = closing.catch(() => undefined)
+      await vi.advanceTimersByTimeAsync(5000)
+      expect(disposed).toBe(false)
+      expect(pool.entries.has(lease.entry.key)).toBe(true)
+      finishMake(original)
+      await observed
+      expect(bridges[0].scope.ctx.plugin).not.toHaveBeenCalled()
+      expect(bridges[0].scope.dispose).toHaveBeenCalledOnce()
+      if (outcome === 'reject') {
+        await expect(closing).rejects.toThrow('释放未确认')
+        expect(lease.entry.retryAt).toBeUndefined()
+        expect(lease.entry.close).toBeDefined()
+        expect(lease.entry.cleanupFailed).toBe(true)
+        expect(() => pool.acquire(request)).toThrow('释放未确认')
+        await vi.advanceTimersByTimeAsync(5000)
+        expect(() => pool.acquire(request)).toThrow('释放未确认')
+        expect(pool.entries.get(lease.entry.key)).toBe(lease.entry)
+      } else {
+        expect(disposed).toBe(true)
+        expect(pool.entries.size).toBe(0)
+      }
+      expect(make).toHaveBeenCalledOnce()
+    } finally {
+      finishMake(original)
+      await closing?.catch(() => undefined)
+      pools.splice(pools.indexOf(pool), 1)
+    }
+  })
+
+  it.each(['resolve', 'reject'] as const)('observes late module %s without making a bridge', async (outcome) => {
+    vi.useFakeTimers()
+    let resolveLoad!: (module: unknown) => void
+    let rejectLoad!: (error: Error) => void
+    const loading = new Promise((resolve, reject) => { resolveLoad = resolve; rejectLoad = reject })
+    const make = vi.fn()
+    const pool = new McpPool({} as any, () => loading, make)
+    pools.push(pool)
+    const lease = pool.acquire({ ...spec(), policy: parseMcpPolicy({ sharing: 'workspace', startupTimeoutMs: 1000 }) })
+    try {
+      await vi.advanceTimersByTimeAsync(1000)
+      await expect(lease.entry.ready).rejects.toThrow('清理尚未确认')
+      if (outcome === 'resolve') resolveLoad({})
+      else rejectLoad(new Error('late load failed'))
+      await lease.entry.quiescence
+      expect(make).not.toHaveBeenCalled()
+      expect(lease.entry.phase).toBe('error')
+      await expect(lease.entry.ready).rejects.toThrow('清理尚未确认')
+    } finally { resolveLoad({}) }
   })
 
   it('serializes shared business calls and honors cancellation before dispatch', async () => {

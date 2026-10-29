@@ -12,6 +12,11 @@ export interface PoolSpec {
   config: MpcConfig
   policy: McpPolicy
 }
+/** Startup caller settlement, independent from the owned resource lifetime. */
+interface StartupResult {
+  resolve(): void
+  reject(error: unknown): void
+}
 export interface PoolEntry {
   key: string
   spec: PoolSpec
@@ -27,6 +32,9 @@ export interface PoolEntry {
   bridge?: McpBridge
   fiber?: any
   ready: Promise<void>
+  /** Entire queued mount/cleanup lifetime; rejection means closure remains unconfirmed. */
+  quiescence: Promise<void>
+  cleanupFailed?: boolean
   close?: Promise<void>
   idle?: ReturnType<typeof setTimeout>
   live: boolean
@@ -95,7 +103,7 @@ export class McpPool {
     }
     if (entry && !entry.live) throw new Error(entry.error ?? 'MCP 旧连接仍在释放，暂不能创建替代实例')
     if (!entry) {
-      entry = { key, spec, refs: 0, phase: 'queued', queuedAt: Date.now(), phaseAt: Date.now(), ready: Promise.resolve(), live: true, calls: Promise.resolve() }
+      entry = { key, spec, refs: 0, phase: 'queued', queuedAt: Date.now(), phaseAt: Date.now(), ready: Promise.resolve(), quiescence: Promise.resolve(), live: true, calls: Promise.resolve() }
       this.entries.set(key, entry)
       entry.ready = this.schedule(entry)
       void entry.ready.catch(() => undefined)
@@ -111,16 +119,27 @@ export class McpPool {
     } }
   }
 
-  /** @private @author ddj 2026年10月20号 @param entry New entry. @returns Queued initialization, bounded to two concurrent starts. */
+  /** @private @author ddj 2026年10月29号 @param entry New entry. @returns Caller result, independent from the two-slot cleanup lifetime. */
   private schedule(entry: PoolEntry): Promise<void> {
-    return new Promise<void>((resolve, reject) => {
-      /** @author ddj 2026年10月20号 Initializes a still-owned queue item. */
-      const run = async (): Promise<void> => {
-        try { await this.start(entry); resolve() } catch (error) { reject(error) }
+    let result!: StartupResult
+    const ready = new Promise<void>((resolve, reject) => { result = { resolve, reject } })
+    let lifetime!: StartupResult
+    entry.quiescence = new Promise<void>((resolve, reject) => { lifetime = { resolve, reject } })
+    void entry.quiescence.catch(() => undefined)
+
+    /** @private @author ddj 2026年10月29号 Runs and observes the complete owned mount even after caller rejection. */
+    const run = async (): Promise<void> => {
+      try {
+        await this.start(entry, result)
+        lifetime.resolve()
+      } catch (error) {
+        result.reject(error)
+        lifetime.reject(error)
       }
-      this.queue.push(run)
-      this.pump()
-    })
+    }
+    this.queue.push(run)
+    this.pump()
+    return ready
   }
 
   /** @private @author ddj 2026年10月20号 Advances FIFO work; each task holds its slot until startup or cleanup quiesces. */
@@ -137,9 +156,9 @@ export class McpPool {
     }
   }
 
-  /** @private @author ddj 2026年10月20号 @param entry Connection to initialize. @returns Initialization completion, or failure after owned cleanup. */
-  private async start(entry: PoolEntry): Promise<void> {
-    if (!entry.live || this.stopped) throw new Error('MCP 启动已取消')
+  /** @private @author ddj 2026年10月29号 @param entry Connection to initialize. @param result Caller settlement. @returns Full startup and cleanup lifetime. */
+  private async start(entry: PoolEntry, result: StartupResult): Promise<void> {
+    if (!entry.live || this.stopped) { result.reject(new Error('MCP 启动已取消')); return }
     entry.phase = 'loading'
     entry.phaseAt = Date.now()
     entry.startAt = entry.phaseAt
@@ -155,24 +174,31 @@ export class McpPool {
       entry.phase = 'ready'
       entry.finishedAt = Date.now()
       entry.connectedAt = entry.finishedAt
+      result.resolve()
     } catch (error) {
-      entry.error = 'MCP 初始化失败或超时，请查看 Host 日志'
+      if (!entry.cleanupFailed) entry.error = 'MCP 初始化失败或超时；旧连接清理尚未确认，暂不能重建，请查看 Host 日志'
       const diagnostic = 'MCP initialization failed; phase=' + entry.phase + '; transport=' + entry.spec.config.transport
         + '; elapsedMs=' + (Date.now() - entry.startAt) + '; ' + mcpErrorText(error, entry.spec.config)
       debugRecord(this.ctx, entry.spec.workspace, diagnostic, 'warn')
       // Invalidation precedes disposal; neither late module load nor callbacks may publish.
       entry.live = false
       entry.phase = 'stopping'
-      const closing = this.closeBridge(entry)
-      await Promise.allSettled([closing, work])
-      entry.phase = 'error'
-      entry.finishedAt = Date.now()
-      entry.retryAt = Date.now() + 5000
-      // Failed generations stay invalid; acquire can replace them only after confirmed closure and cooldown.
-      throw new Error(entry.error)
+      result.reject(new Error(entry.error))
+      await this.finishFailure(entry, work)
     } finally {
       if (timer) clearTimeout(timer)
     }
+  }
+
+  /** @private @author ddj 2026年10月29号 @param entry Failed generation. @param work Entire mount, including late factory cleanup. @returns Confirmed quiescence; throws when closure is unconfirmed. */
+  private async finishFailure(entry: PoolEntry, work: Promise<void>): Promise<void> {
+    await Promise.allSettled([this.closeBridge(entry), work])
+    if (entry.cleanupFailed) throw new Error(entry.error)
+
+    entry.phase = 'error'
+    entry.finishedAt = Date.now()
+    entry.retryAt = entry.finishedAt + 5000
+    entry.error = 'MCP 初始化失败或超时，请查看 Host 日志'
   }
 
   /** @private @author ddj 2026年10月20号 @param entry Owned generation. @returns Official initial sync; never publishes after invalidation. */
@@ -180,8 +206,9 @@ export class McpPool {
     const official = await this.load()
     if (!entry.live || this.stopped) return
     const bridge = await this.make()
-    if (!entry.live || this.stopped) { await bridge.dispose(); return }
     entry.bridge = bridge
+    // Keep late factory ownership visible, including synchronous or rejected disposal failures.
+    if (!entry.live || this.stopped) { await this.closeBridge(entry); return }
     entry.phase = 'starting'
     entry.phaseAt = Date.now()
     entry.fiber = bridge.scope.ctx.plugin(official, entry.spec.config)
@@ -189,10 +216,14 @@ export class McpPool {
     if (entry.fiber?.state !== undefined && entry.fiber.state !== 2) throw new Error('MCP 插件未完成激活')
   }
 
-  /** @private @author ddj 2026年10月20号 @param entry Connection to close. @returns Shared closure barrier; rejection retains a fenced entry. */
+  /** @private @author ddj 2026年10月29号 @param entry Connection to close. @returns Shared closure barrier; synchronous throws and rejections retain a fenced entry. */
   private async closeBridge(entry: PoolEntry): Promise<void> {
     if (entry.close) return entry.close
-    const close = entry.bridge?.dispose() ?? Promise.resolve()
+    const bridge = entry.bridge
+    if (!bridge) return
+    /** @private @author ddj 2026年10月29号 @returns Deferred disposal so synchronous throws are owned by the shared barrier. */
+    const dispose = (): Promise<void> => bridge.dispose()
+    const close = Promise.resolve().then(dispose)
     entry.close = close
     try {
       await close
@@ -200,6 +231,7 @@ export class McpPool {
       entry.fiber = undefined
       entry.close = undefined
     } catch (error) {
+      entry.cleanupFailed = true
       entry.error = 'MCP 释放未确认，禁止重建，请查看 Host 日志'
       this.ctx.logger?.warn?.('MCP cleanup failed: ' + String(error))
       throw error
@@ -220,10 +252,10 @@ export class McpPool {
     entry.live = false
     entry.phase = 'stopping'
     if (entry.idle) clearTimeout(entry.idle)
-    await this.closeBridge(entry)
-    await entry.ready.catch(() => undefined)
-    // A late mount checks live before assigning its bridge.
-    await entry.calls.catch(() => undefined)
+    const closures = await Promise.allSettled([this.closeBridge(entry), entry.quiescence, entry.calls])
+    const failure = closures.find((closure) => closure.status === 'rejected')
+    if (failure?.status === 'rejected') throw failure.reason
+    // Only the whole mount barrier proves that no late factory can still create a scope.
     if (this.entries.get(entry.key) === entry) this.entries.delete(entry.key)
   }
 
@@ -243,7 +275,9 @@ export class McpPool {
   /** @public @author ddj 2026年10月20号 @returns Full disposal of entries, queue, timers and owned work. */
   async dispose(): Promise<void> {
     this.stopped = true
-    await Promise.all([...this.entries.values()].map((entry) => this.retire(entry)))
+    const closures = await Promise.allSettled([...this.entries.values()].map((entry) => this.retire(entry)))
     await Promise.all([...this.jobs])
+    const failure = closures.find((closure) => closure.status === 'rejected')
+    if (failure?.status === 'rejected') throw failure.reason
   }
 }

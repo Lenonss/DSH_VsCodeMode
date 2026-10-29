@@ -83,6 +83,8 @@ describe.skipIf(!hostRoot)('installed private MCP bridge', () => {
     try {
       await ctx.plugin((await hostModule('dsh-system-prompt')).default, {})
       await ctx.plugin((await hostModule('dsh-tools')).default, {})
+      const native = await hostModule('dsh-tool-executor-native')
+      await ctx.plugin(native)
       await ctx.plugin((await hostModule('dsh-mcp-resources')).default)
       bridge = await McpBridge.create(ctx, createScope)
       const official = await hostModule('dsh-mcp-client')
@@ -102,9 +104,15 @@ describe.skipIf(!hostRoot)('installed private MCP bridge', () => {
       const remove = agent.ctx.get('tools').register(definition)
       agent.ctx.get('mcpResources').register('private', bridge.resources.get('private'))
       agent.ctx.get('systemPrompt').section(bridge.sections.get('mcp:private'))
-      const execution = { agent, callId: 'proof', signal: new AbortController().signal }
-      expect(JSON.stringify(await tools.execute({ ...execution, name: 'mcp__private__echo', arguments: {} }))).toContain('private result')
-      expect(JSON.stringify(await tools.execute({ ...execution, name: 'list_mcp_resources', arguments: { server: 'private' } }))).toContain('test://private')
+      const execution = { agent, signal: new AbortController().signal }
+      const toolBatch = await tools.execute({ ...execution, calls: [{ type: 'tool-call', id: 'proof', name: 'mcp__private__echo', arguments: JSON.stringify({}) }] })
+      expect(toolBatch.results).toHaveLength(1)
+      expect(toolBatch.results[0].callId).toBe('proof')
+      expect(JSON.stringify(toolBatch.results[0].result)).toContain('private result')
+      const resourceBatch = await tools.execute({ ...execution, calls: [{ type: 'tool-call', id: 'proof-resources', name: 'list_mcp_resources', arguments: JSON.stringify({ server: 'private' }) }] })
+      expect(resourceBatch.results).toHaveLength(1)
+      expect(resourceBatch.results[0].callId).toBe('proof-resources')
+      expect(JSON.stringify(resourceBatch.results[0].result)).toContain('test://private')
       expect(JSON.stringify(await ctx.get('systemPrompt').assemble({ scope: agent }))).toContain('private instructions {{literal}}')
       expect(tools.get('mcp__private__echo', {})).toBeUndefined()
       remove()

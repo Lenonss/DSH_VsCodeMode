@@ -619,6 +619,49 @@ describe('agent-owned project runtime', () => {
     expect(host.mounts[0].config.command).toBe('new')
   })
 
+  it('rejects startup callers before non-cooperative cleanup quiesces', async () => {
+    const host = new TestHost()
+    host.source('/alpha', { alpha: { command: 'ok', vscodeMode: { startupTimeoutMs: 1000 } } })
+    const agent = host.agent('/alpha')
+    await installMcpRuntime(host.ctx)
+    const runtime = runtimeOf(host.ctx)
+    // Runtime intentionally owns a lazy resource provider before connecting; it is not a published binding.
+    const resourcesBefore = [...agent.resources]
+    let releaseWork!: () => void
+    let releaseClose!: () => void
+    const work = new Promise<void>((resolve) => { releaseWork = resolve })
+    const closure = new Promise<void>((resolve) => { releaseClose = resolve })
+    const plugin = vi.fn(() => work)
+    const privateCtx = { isolate: () => privateCtx, provide: () => undefined, plugin }
+    const dispose = vi.fn(() => closure)
+    const make = vi.fn(() => McpBridge.create(host.ctx, () => ({ ctx: privateCtx, dispose })))
+    ;(runtime.pool as any).make = make
+    vi.useFakeTimers()
+    const connecting = runtime.connect(agent, 'alpha')
+    const failure = expect(connecting).rejects.toThrow('清理尚未确认')
+    try {
+      await vi.advanceTimersByTimeAsync(0)
+      expect(plugin).toHaveBeenCalledOnce()
+      await vi.advanceTimersByTimeAsync(1000)
+      await failure
+      const entry = [...runtime.pool.entries.values()][0]
+      expect(entry).toMatchObject({ phase: 'stopping', live: false })
+      expect(entry.retryAt).toBeUndefined()
+      expect(runtime.sessionSnapshot().sessions[0].servers[0]).toMatchObject({ phase: 'stopping', error: expect.stringContaining('清理尚未确认') })
+      expect(agent.tools.size).toBe(0)
+      expect([...agent.resources]).toEqual(resourcesBefore)
+      await expect(runtime.connect(agent, 'alpha')).rejects.toThrow('清理尚未确认')
+      expect(make).toHaveBeenCalledOnce()
+      expect(dispose).toHaveBeenCalledOnce()
+    } finally {
+      releaseWork()
+      releaseClose()
+      await connecting.catch(() => undefined)
+      await host.cleanup()
+      vi.useRealTimers()
+    }
+  })
+
   it('surfaces plugin startup failure without reporting a connection', async () => {
     const host = new TestHost()
     host.source('/alpha', { alpha: { command: 'ok' } })
