@@ -477,18 +477,19 @@ DSH 每次启动监听随机端口，`http://127.0.0.1:<port>` 就是浏览器 o
 
 官方 `dsh plugin` 方式，三选一。下面以 `web` profile 为例；Desktop 或其他命名
 profile 请替换为实际目标，不要把示例目录当成当前运行 profile。升级前可阅读
+**v0.21.2** 的新版 DSH 会话 Controller 与 MCP 公开工具目录适配：任务发送按目标会话持有生命周期，受理不明时不跨通道重发；文件范围引用的剪贴板与降级文本保留行区间；MCP 初始化失败增加脱敏持久化诊断。当前 Web Host 已完成真实 CodeGraph 调用，但首次连接偶发超时根因尚未证实，不宣称已修复，见 [0.21.2 发布说明](docs/release-0.21.2.md)。保留以下历史版本能力与验收边界：
 **v0.21.1** 修复缺失历史文件：按完整快照显示整文件删除，Keep 保留删除、Undo 安全恢复快照，预览只读且拒绝覆盖重新出现的文件；真实 GUI 验收缺口已明确保留，见 [0.21.1 发布说明](docs/release-0.21.1.md)。保留 **v0.21.0** 新增 XLSX 基础编辑与浏览器导出副本，原件不自动写回，高级应用通过官方 Host 打开；官方差异定位统一 BOM 与 LF/CRLF/混合行尾口径，并区分内容缺失和多处命中。定位修复不扩展 CRLF patch Undo 能力，目标官方记录 ↑/↓ 的真实点击验收仍保留缺口。保留 **v0.20.5** 跨 DSH 实例只读互通——桌面端与 Web 端各自运行独立宿主时，官方审查列表/详情与工作区只读接口改按持久化会话头的 cwd 解析，另一实例创建的会话也能只读打开官方差异栏，写入类接口仍要求本端活跃会话。保留 **v0.20.4** 统一两套差异栏外观——非官方记录栏角标由内部术语「侧车记录」改为「历史改动」，悬停说明 Keep 只标记已看过、不改写磁盘，Undo 逐项校验后写回，两者都不影响官方审查；官方元数据不可用时给出可读原因与重试按钮，不再静默降级；「会话没在当前端激活」由红色告警改为中性说明。保留 v0.20.3 修复官方差异全部无法定位时差异栏无提示、上下箭头静默禁用（显示「无可跳转」与失效原因，Keep 说明只标记已采纳、不改写磁盘，会话缺失等宿主错误改为可读提示）、v0.20.2 的 MCP 状态告警收敛与原生确认弹窗，以及 v0.20.1 的文件内差异展示、块级/文件级安全审查和跨分页批量操作。升级后重启 DSH 并刷新页面；持久化与回退边界见 [0.20.0 发布说明](docs/release-0.20.0.md)；从 0.14.2 或更旧版本升级还须阅读
 [0.14.3 数据迁移与回退说明](docs/release-0.14.3.md)。
 
 ```bash
 # ① Git 安装（clone + prepare 构建；推荐打固定 tag）
-dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.21.1
+dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.21.2
 
 # ② npm 注册表（发布到 npm 后）
-dsh plugin --profile web add dsh-vscode-mode@0.21.1
+dsh plugin --profile web add dsh-vscode-mode@0.21.2
 
 # ③ GitHub Release tgz 直装（Release asset 可用后）
-dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.21.1/dsh-vscode-mode-0.21.1.tgz
+dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.21.2/dsh-vscode-mode-0.21.2.tgz
 ```
 
 > **DSH 版本政策（0.17.0 起）**：六项 DSH peer 仍统一声明为 `*`，另以
@@ -829,6 +830,7 @@ Keep All / Undo All 却是亮的。修复：单文件 Keep / Undo 覆盖冲突�
 完整变更见 [GitHub Releases](https://github.com/Lenonss/DSH_VsCodeMode/releases)。
 近期关键版本：
 
+- **v0.21.2**：适配新版 DSH Session Controller 与 MCP 公开工具目录；固定目标任务发送持有会话直到完成或卸载，受理不明时不跨通道重发。范围文件引用的模型文本、剪贴板与纯文本降级保持一致。MCP 初始化失败记录阶段、耗时和脱敏错误链；迁移官方 native/PTC 执行器集成测试并增加可选真实 CodeGraph stdio 验证。当前 Web Host 真实工具调用已通过，首次连接偶发超时根因仍未证实；不自动部署或重启。见 [发布说明](docs/release-0.21.2.md)。
 - **v0.21.1**：缺失历史文件读取完整快照并整文件显示删除行；Keep 保留删除，Undo 安全恢复当前展示快照，不覆盖重新出现的文件。删除预览只读，单文件和批量操作统一处理，记录变化或证据不足时停止。真实 GUI 验收缺口已获用户接受；发布不自动部署，升级后重启 DSH 并刷新页面。见 [发布说明](docs/release-0.21.1.md)。
 - **v0.21.0**：新增 XLSX 基础编辑、多工作表与浏览器导出副本，原件不自动写回；不支持结构只读预览，高级应用经官方 Host 打开原件。编辑状态仅在当前页面内保留，不承诺刷新或崩溃恢复。官方差异定位统一 BOM 与 LF/CRLF/混合行尾口径，区分内容缺失与多处命中，保持原始字节及写回校验边界；不扩展 CRLF patch Undo 能力，目标官方记录 ↑/↓ 的真实点击仍未验收。升级后重启 DSH 并刷新页面；发布不自动部署当前实例。
 - **v0.20.5**：**跨实例官方审查数据只读互通**——桌面端与 Web 端各自运行独立 DSH 宿主时，会话只存在于创建它的宿主内存里，插件原先一律用本进程的活跃会话解析工作区，另一端打开官方差异栏会拿到「会话不存在」并退化成历史改动栏。现在官方审查列表/详情与工作区只读接口（文件读取、原始字节、分页文本、记录桶、归档列表、目录列表、界面状态镜像）改为按持久化会话头的 cwd 解析：只要会话在共享的 `~/.dsh/sessions` 下留有会话头，其他实例即可只读访问它的官方审查数据；写入类接口（保存、回滚、采纳/拒绝、批量决策）仍要求本端活跃会话，避免两个宿主并发写同一工作区的审查库。已知限制：会话内 `cd` 过的记录只能按创建时的 cwd 冷读；桌面端本版本未重新部署，反向仍不可用。升级后重启 DSH 并刷新页面。
