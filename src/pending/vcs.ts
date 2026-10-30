@@ -373,8 +373,8 @@ async function runCommand(
  */
 async function readTextOf(path: string): Promise<string | null> {
   try {
-    const info = await stat(path)
-    if (!info.isFile()) return null
+    const fileStat = await stat(path)
+    if (!fileStat.isFile()) return null
     return await readFile(path, 'utf8')
   } catch {
     return null

@@ -43,14 +43,20 @@ if (Test-Path $pkg) {
 # --- 3) create junction to dev working directory ---
 New-Item -ItemType Junction -Path $pkg -Target $target | Out-Null
 $cj = Join-Path $pkg 'lib\client.js'
-if (-not (Test-Path $cj)) { Write-Host 'ERROR: junction created but lib\client.js missing!'; exit 1 }
+$hj = Join-Path $pkg 'lib\index.js'
+if (-not (Test-Path $cj) -or -not (Test-Path $hj)) { Write-Host 'ERROR: junction created but lib output missing!'; exit 1 }
 $len = (Get-Item $cj).Length
+$clientText = Get-Content $cj -Raw
+$hostText = Get-Content $hj -Raw
 Write-Host "Junction created -> $target"
-Write-Host "client.js size: $len (expect 109125 = MCP build)"
+Write-Host "client.js size: $len"
 
-# --- 4) report ---
-if ($len -eq 109125) {
-    Write-Host 'OK: latest build is now linked. Restart DSH and check Settings -> VSCodeMode.'
-} else {
-    Write-Host 'WARNING: client.js size differs from expected build; verify the dev build is up to date.'
+# --- 4) report：按内容标记核对，而不是易变的文件大小 ---
+$hasLauncher = $clientText.Contains('edrv-qm-launcher')
+$hasQuickRpc = $hostText.Contains('quickMenu')
+Write-Host "client has quick-menu launcher: $hasLauncher"
+Write-Host "host has quickMenu rpc        : $hasQuickRpc"
+if (-not $hasQuickRpc) {
+    Write-Host 'WARNING: 本地 lib 尚未构建出快捷菜单代码，先 npm run build 再重启 DSH。'
 }
+Write-Host 'OK: dev build linked. Restart DSH.'

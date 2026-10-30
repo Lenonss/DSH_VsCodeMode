@@ -1,5 +1,6 @@
 /** Source-aware metadata projection; official patches never become legacy hunks. @author ddj 2026年10月26号 */
 import { PENDING_PREFIX } from '../../shared/pendingReview.js'
+import { pathKeyFor } from '../../shared/pathKey.js'
 import type { ReviewPage } from '../../shared/review.js'
 import type { RecordView } from '../../shared/types.js'
 import type { FileSummary, Summary } from './records.js'
@@ -14,11 +15,15 @@ export interface DiffFile extends FileSummary {
 }
 export interface DiffSummary extends Summary { files: DiffFile[]; pendingFiles: DiffFile[] }
 
-/** @public @author ddj 2026年10月26号 @param path Functional local or remote identity. @returns Comparison key without rewriting remote case. */
+/**
+ * @public
+ * @author ddj 2026年10月26号
+ * @description: 客户端路径比较口径：浏览器里没有宿主平台信息，非盘符路径不折叠大小写。
+ * @param path 文件身份或相对路径
+ * @returns 比较键
+ */
 export function diffPathKey(path: string): string {
-  if (/^[a-z]+:\/\//i.test(path)) return path
-  const normalized = path.replace(/\\/g, '/')
-  return /^[a-z]:\//i.test(normalized) ? normalized.toLowerCase() : normalized
+  return pathKeyFor(path, false)
 }
 
 /** @public @author ddj 2026年10月26号 @param path Current editor file. @param page Authoritative metadata, including decided paths. @returns Whether legacy actions must be hidden for this file. */

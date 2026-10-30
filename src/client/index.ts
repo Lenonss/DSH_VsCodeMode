@@ -15,6 +15,7 @@
  */
 import React from 'react'
 import './styles/editor.css'
+import './styles/quickmenu.css'
 import { EditorView } from './ui/EditorView.js'
 import { DiffBadge } from './ui/DiffBadge.js'
 import { PerfSizeBadge } from './ui/PerfSizeBadge.js'
@@ -43,6 +44,12 @@ import { SideEditorTab } from './ui/SideEditorTab.js'
 import { OfficialSideTab } from './ui/OfficialSideTab.js'
 import { createClaimRouter } from './ui/ClaimRouter.js'
 import { createAddToConversation } from './addToConversation.js'
+import { createMenuStore } from './quickMenuStore.js'
+import { QuickMenuLauncher } from './ui/QuickMenuLauncher.js'
+import type { QuickMenuHost, QuickSendResult } from './quickMenuHost.js'
+import type { RuleListSnapshot } from '../shared/quickMenu.js'
+import type { SkillCatalog } from '../shared/skillCatalog.js'
+import { toastDom } from './externalOpen.js'
 import { createSidebarPanelRegistry } from './sidebar/registry.js'
 import { createFilePanel } from './sidebar/panels/index.js'
 import { createSearchPanel } from './sidebar/panels/index.js'
@@ -284,6 +291,144 @@ export async function apply(ctx: any): Promise<void> {
   let claimDisposer: (() => void) | null = null
   /** 「添加到对话」动作集：编辑区/Tab 右键菜单注入文件引用与代码块（conversation 服务缺失时各动作安全降级）。 */
   const addToConversation = createAddToConversation(ctx)
+
+  /**
+   * 读取规则列表（rules.list；失败抛错，由快捷菜单按「未校验」降级）。
+   * @author ddj 2026年10月30号
+   * @returns 用户规则 + 项目规则
+   */
+  const loadRules = async (): Promise<RuleListSnapshot> => {
+    const result = await rpc('rules.list', {})
+    if (!result.ok) throw new Error(result.error)
+    return { user: result.user, projects: result.projects }
+  }
+
+  /**
+   * 会话技能枚举服务（remote.skills 动态注入；旧版 DSH 无该服务时保持 null = 「未校验」）。
+   * @author ddj 2026年10月30号
+   */
+  let skillEnumerator: { list?: (req: { sessionId: string }) => Promise<{ skills?: Array<{ name?: string }> }> } | null = null
+
+  /**
+   * 读取会话可见技能名（服务不可用时返回 null，界面按「未校验」处理）。
+   * @author ddj 2026年10月30号
+   * @param sessionId 会话 id
+   * @returns 技能名清单或 null
+   */
+  const loadSkillNames = async (sessionId: string): Promise<string[] | null> => {
+    const list = skillEnumerator?.list
+    if (typeof list !== 'function') return null
+    const result = await list.call(skillEnumerator, { sessionId })
+    // remote 命名空间返回 Typert 信封 { ok, value }，旧版也可能直接给裸值，两种都吃。
+    const payload = (result as { value?: { skills?: Array<{ name?: string }> } }).value ?? (result as { skills?: Array<{ name?: string }> })
+    const names = (payload?.skills ?? []).map((entry) => entry.name).filter((name): name is string => typeof name === 'string')
+    return names
+  }
+
+  /**
+   * 读取技能候选（全局技能 + 当前工作区技能；只读枚举，失败返回 null）。
+   * @author ddj 2026年10月30号
+   * @param cwd 目标工作区（缺省取当前会话作用域）
+   * @returns 技能候选快照；host 无该 RPC 或读取失败时为 null
+   */
+  const loadSkillCatalog = async (cwd?: string): Promise<SkillCatalog | null> => {
+    const target = cwd ?? readSessionScope(ctx).cwd
+    try {
+      const result = await rpc('skills.list', target ? { cwd: target } : {})
+      if (!result.ok) return null
+      return {
+        user: result.user,
+        project: result.project,
+        ...(result.projectRoot ? { projectRoot: result.projectRoot } : {}),
+      }
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * 确保存在可写入的会话（无会话时新建独立会话）。
+   * @author ddj 2026年10月30号
+   * @returns 会话 id 或错误文案
+   */
+  const ensureSession = async (): Promise<{ id: string } | { error: string }> => {
+    const scope = readSessionScope(ctx)
+    if (scope.sessionId) return { id: scope.sessionId }
+    const draft = await addToConversation.startDraftSession(scope.cwd)
+    if (!draft.ok || !draft.id) return { error: '当前没有可用会话，新建会话也失败了' }
+    return { id: draft.id }
+  }
+
+  /**
+   * 发送快捷菜单文本（优先发到当前会话，会话忙碌时如实回报）。
+   * @author ddj 2026年10月30号
+   * @param text 合成后的消息文本
+   * @returns 是否发送成功
+   */
+  const sendQuickText = async (text: string): Promise<QuickSendResult> => {
+    const session = await ensureSession()
+    if ('error' in session) return { ok: false, message: session.error }
+    const sent = await addToConversation.sendTask(session.id, text)
+    return sent ? { ok: true } : { ok: false, message: '发送被拒绝（会话可能正忙，稍后再点）' }
+  }
+
+  /**
+   * 只把快捷菜单文本填入输入框。
+   * @author ddj 2026年10月30号
+   * @param text 合成后的消息文本
+   * @returns 是否填入成功
+   */
+  const fillQuickText = async (text: string): Promise<QuickSendResult> => {
+    const session = await ensureSession()
+    if ('error' in session) return { ok: false, message: session.error }
+    const outcome = await addToConversation.appendText(session.id, text)
+    if (outcome === 'ok' || outcome === 'busy') return { ok: true }
+    return { ok: false, message: '写入输入框失败（' + outcome + '），请重试' }
+  }
+
+  /** 快捷菜单宿主桥接：菜单组件不直接摸 ctx，规则/技能/发送/工作区都从这里注入。 */
+  const quickMenuHost: QuickMenuHost = {
+    store: createMenuStore({
+      rules: loadRules,
+      skills: loadSkillNames,
+      scope: () => {
+        const scope = readSessionScope(ctx)
+        return { sessionId: scope.sessionId, cwd: scope.cwd }
+      },
+    }),
+    scope: () => {
+      const scope = readSessionScope(ctx)
+      return { sessionId: scope.sessionId, cwd: scope.cwd }
+    },
+    send: sendQuickText,
+    fill: fillQuickText,
+    rules: loadRules,
+    skills: async () => {
+      const scope = readSessionScope(ctx)
+      return scope.sessionId ? loadSkillNames(scope.sessionId) : null
+    },
+    skillCatalog: loadSkillCatalog,
+    readRule: async (binding) => {
+      const result = await rpc('rules.read', {
+        scope: binding.scope,
+        file: binding.file,
+        ...(binding.workspacePath ? { workspacePath: binding.workspacePath } : {}),
+        ...(binding.origin ? { origin: binding.origin } : {}),
+      })
+      if (!result.ok) throw new Error(result.error)
+      return result.content
+    },
+    workspaces: () => (workspaces?.list.getSnapshot().items ?? []).map((item: { path: string; title: string }) => ({ path: item.path, title: item.title })),
+    notify: (message: string) => { toastDom(message) },
+  }
+
+  // 技能枚举是可选服务：按需动态注入，缺失时不影响悬浮按钮与其余功能（旧版 DSH 自然降级）。
+  if (typeof ctx.inject === 'function') {
+    ctx.inject(['remote.skills'], (scope: { remote?: { skills?: typeof skillEnumerator } }) => {
+      skillEnumerator = scope.remote?.skills ?? null
+      void quickMenuHost.store.refreshBindings(true)
+    })
+  }
 
   /**
    * Build applicable client diagnostics from live installation state.
@@ -695,6 +840,27 @@ export async function apply(ctx: any): Promise<void> {
     id: 'edrv-plugin-status',
     order: 40,
   }, (props: unknown) => React.createElement(PluginDetailSection, Object.assign({}, props)))
+
+  // 快捷菜单悬浮按钮：挂在 shell.overlay（全框浮层，层本身 click-through，条目自己接管指针）。
+  // 旧版 DSH 没有该槽时 slots.inject 会一直等待而不报错——按钮自然不出现即为「不支持」，
+  // 因此这里不做版本号判断，只按能力探测。
+  ctx.effect(() => {
+    const dispose = registerSlotSafely(ctx, {
+      name: 'shell.overlay',
+      id: 'edrv-quick-menu',
+      order: 120,
+      label: '快捷菜单',
+    }, () => React.createElement(QuickMenuLauncher, { host: quickMenuHost }))
+    return () => {
+      dispose?.()
+      void quickMenuHost.store.flushLauncher()
+    }
+  }, 'vscode-mode: quick menu launcher')
+
+  // 切换会话/工作区后重算绑定状态（规则与技能都跟会话可见性有关）
+  ctx.effect(() => subscribeScope(ctx, () => {
+    void quickMenuHost.store.refreshBindings(true)
+  }), 'vscode-mode: quick menu scope refresh')
 
   // 卸载收尾（G4，DSH 0.1.6-alpha.2 起支持运行时卸载/重载）：
   // 注销挂在存活的 window.monaco 上的全部 Monaco provider 并复位模块状态。

@@ -76,7 +76,12 @@ CREATE TABLE IF NOT EXISTS pending_history (
   state TEXT NOT NULL DEFAULT 'applied');
 `
 
-/** v1 历史表补 state 列（rebuild 成本高于一次 ALTER）。 */
+/**
+ * @author ddj 2026年10月29号
+ * @description: v1 历史表补 state 列（rebuild 成本高于一次 ALTER）。
+ * @param db 已打开的工作区库
+ * @returns 无
+ */
 function migrateHistory(db: DatabaseSync): void {
   const columns = db.prepare('PRAGMA table_info(pending_history)').all() as Row[]
   if (columns.some((column) => column.name === 'state')) return

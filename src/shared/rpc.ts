@@ -16,7 +16,9 @@ import type { McpSessionStatus, MpcConfig, MpcProject, MpcProjectSaveInput, MpcS
 import type { CompatReport, DevFormInfo } from './compat.js'
 import type { ShellIntegrationStatus, UnityListPayload, UnityProjectEntry } from './integration.js'
 import type { RuleInfo, RuleProject, RuleRefInput, RuleSaveInput } from './rules.js'
+import type { SkillCatalog } from './skillCatalog.js'
 import type { SnippetEntry, SnippetInfo, SnippetProject, SnippetRefInput, SnippetSaveInput } from './snippets.js'
+import type { QuickMenuDoc } from './quickMenu.js'
 import type { LspCompletionItem, LspCompletionList, LspEnvInstallState, LspExtInfo, LspExtUpdate, LspHover, LspLocation, LspMarketItem, LspPosition, LspSemanticTokens, LspServerStatus, LspSignatureHelp, LspSymbol } from './lsp.js'
 import type { AiConfigPatch, AiConfigView, AiDirectoryView, AiInlineRequest, AiInlineResult } from './ai.js'
 import type { SvnAction, SvnAiPlan, SvnChangeEntry, SvnConflictArtifact, SvnDiffRevResult, SvnIgnoreItem, SvnLogEntry, SvnRemoteOutdatedEntry, SvnStatusPayload, SvnSumEntry, SvnUpdatePoll, SvnUpdateResult, SvnUpdateState } from './svn.js'
@@ -491,11 +493,15 @@ export interface RpcRequestMap {
   'rules.save': RuleSaveInput
   'rules.remove': RuleRefInput
   'rules.toggle': RuleRefInput & { enabled: boolean }
+  'skills.list': { cwd?: string }
   'snippets.list': {}
   'snippets.read': SnippetRefInput
   'snippets.save': SnippetSaveInput
   'snippets.remove': SnippetRefInput
   'snippets.entries': { sessionId?: string }
+  'quickMenu.get': {}
+  'quickMenu.save': { doc: QuickMenuDoc; baseRevision: number }
+  'quickMenu.launcher': { x: number | null; y: number | null }
   'svn.status': { sessionId?: string; force?: boolean }
   'svn.changes': { sessionId?: string; force?: boolean }
   'svn.explorerStatus': { sessionId?: string; force?: boolean }
@@ -672,11 +678,15 @@ export interface RpcOkMap {
   'rules.save': { rule: RuleInfo }
   'rules.remove': object
   'rules.toggle': { rule: RuleInfo }
+  'skills.list': SkillCatalog
   'snippets.list': { user: SnippetInfo[]; projects: SnippetProject[] }
   'snippets.read': { content: string }
   'snippets.save': { file: SnippetInfo }
   'snippets.remove': object
   'snippets.entries': { entries: SnippetEntry[] }
+  'quickMenu.get': { doc: QuickMenuDoc; warning?: string }
+  'quickMenu.save': { doc: QuickMenuDoc }
+  'quickMenu.launcher': { doc: QuickMenuDoc }
   'svn.status': SvnStatusPayload
   'svn.changes': { wcRoot: string; entries: SvnChangeEntry[]; truncated: boolean }
   'svn.explorerStatus': { entries: SvnChangeEntry[]; truncated: boolean; prefix: string }

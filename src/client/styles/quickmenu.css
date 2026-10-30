@@ -1,0 +1,1049 @@
+/* dsh-vscode-mode — 快捷菜单（悬浮按钮 + SAO 风格多列级联菜单 + 配置弹窗）
+ * 作者 ddj 2026年10月30号
+ *
+ * 浮层约定：根节点带 data-edrv-view（editor.css 的浮层样式同款作用域），
+ * 颜色全部走 DSH 设计令牌并带浅色兜底，避免深/浅主题下不可读。
+ *
+ * 设计取向：整个菜单只花一次「亮色」——当前行的 2px 强调条与悬浮按钮的强调色；
+ * 其余全部收成中性灰阶与发丝线，靠层级、间距和一处滑入动效表达结奏，
+ * 不做每行图标、不做渐变装饰、不做逐卡片阴影。
+ */
+
+/* ── 令牌 ─────────────────────────────────────────────────── */
+/* 定义在 [data-edrv-view] 上：菜单（portal 到 body 的独立根）与 ModalShell 弹窗
+ * 各自是不同根节点，令牌若只挂在菜单根上，弹窗里的按钮/芯片会取不到颜色。 */
+[data-edrv-view] {
+  --qm-surface: var(--dsw-alias-bg-overlay, #ffffff);
+  --qm-sunken: var(--dsw-alias-bg-layer-1, #f4f7fa);
+  --qm-ink: var(--dsw-alias-label-primary, #1f2933);
+  --qm-ink-2: var(--dsw-alias-label-secondary, #55616e);
+  --qm-ink-3: var(--dsw-alias-label-tertiary, #8a95a1);
+  --qm-line: var(--dsw-alias-border-l2, #d8dfe6);
+  --qm-accent: var(--dsw-alias-brand-primary, #2f6fed);
+  --qm-accent-soft: var(--dsw-alias-interactive-bg-hover, rgba(47, 111, 237, .1));
+  --qm-hover: var(--dsw-alias-interactive-bg-hover, rgba(31, 41, 51, .06));
+  --qm-warn: var(--dsw-alias-state-warn-primary, #cf8b1f);
+  --qm-danger: var(--dsw-alias-state-error-primary, #d64545);
+  --qm-radius: 10px;
+  --qm-row: 34px;
+  --qm-elev:
+    0 12px 30px -12px rgba(16, 24, 40, .3),
+    0 2px 6px -2px rgba(16, 24, 40, .12);
+}
+
+/* 根层：铺满浮层、默认点击穿透；z-index 要压过同槽位的常驻浮层（如音乐条），否则菜单被盖住 */
+[data-edrv-view].edrv-qm-root {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 60;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+/* ── 悬浮按钮 ─────────────────────────────────────────────── */
+[data-edrv-view] .edrv-qm-launcher {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+  border: 1px solid var(--qm-line);
+  background: var(--qm-surface);
+  color: var(--qm-accent);
+  box-shadow: 0 1px 2px rgba(16, 24, 40, .12);
+  pointer-events: auto;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+  transition: transform .14s cubic-bezier(.2, .8, .3, 1), box-shadow .14s ease, border-color .14s ease;
+}
+
+[data-edrv-view] .edrv-qm-launcher:hover {
+  transform: translateY(-1px);
+  border-color: var(--qm-accent);
+  box-shadow: 0 4px 14px -4px rgba(16, 24, 40, .3), 0 0 0 3px var(--qm-accent-soft);
+}
+
+[data-edrv-view] .edrv-qm-launcher:active {
+  transform: scale(.96);
+}
+
+[data-edrv-view] .edrv-qm-launcher--drag {
+  cursor: grabbing;
+  transform: scale(1.04);
+  box-shadow: 0 8px 20px -6px rgba(16, 24, 40, .38);
+}
+
+[data-edrv-view] .edrv-qm-launcher--open {
+  border-color: var(--qm-accent);
+  background: var(--qm-accent);
+  color: #fff;
+  box-shadow: 0 0 0 3px var(--qm-accent-soft);
+}
+
+/* 隐藏态：半透明小圆点（仍可拖动/点开，防止关掉后无处恢复） */
+[data-edrv-view] .edrv-qm-launcher--mini {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border-color: transparent;
+  opacity: .4;
+  box-shadow: none;
+  transition: opacity .14s ease, transform .14s ease;
+}
+
+[data-edrv-view] .edrv-qm-launcher--mini:hover {
+  opacity: .9;
+  transform: scale(1.2);
+  box-shadow: none;
+}
+
+[data-edrv-view] .edrv-qm-launcher svg {
+  width: 19px;
+  height: auto;
+  display: block;
+  pointer-events: none;
+}
+
+/* ── 菜单容器与列 ─────────────────────────────────────────── */
+[data-edrv-view] .edrv-qm-menu {
+  position: absolute;
+  pointer-events: auto;
+}
+
+/* 菜单本体（portal 到 body）：铺满视口的穿透层，层级高于输入框卡片与其它浮层条目 */
+[data-edrv-view].edrv-qm-menu {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 150;
+}
+
+[data-edrv-view] .edrv-qm-col {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  width: 220px;
+  box-sizing: border-box;
+  pointer-events: auto;
+  border-radius: var(--qm-radius);
+  border: 1px solid var(--qm-line);
+  background: var(--qm-surface);
+  box-shadow: var(--qm-elev);
+  overflow: hidden;
+  animation: edrv-qm-col-in .14s cubic-bezier(.2, .8, .3, 1);
+}
+
+@keyframes edrv-qm-col-in {
+  from { opacity: 0; transform: translateX(-6px); }
+  to { opacity: 1; transform: none; }
+}
+
+[data-edrv-view] .edrv-qm-scroll {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 8px 7px;
+  scrollbar-width: none;
+}
+
+/* 上下渐隐只在内容确实超出列高时启用（短列被遮掉会看不清） */
+[data-edrv-view] .edrv-qm-scroll--fade {
+  mask-image: linear-gradient(to bottom, transparent 0, #000 36px, #000 calc(100% - 36px), transparent 100%);
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 36px, #000 calc(100% - 36px), transparent 100%);
+}
+
+[data-edrv-view] .edrv-qm-scroll::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+[data-edrv-view] .edrv-qm-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+/* ── 行 ──────────────────────────────────────────────────── */
+[data-edrv-view] .edrv-qm-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  height: var(--qm-row);
+  min-height: var(--qm-row);
+  box-sizing: border-box;
+  padding: 0 7px 0 10px;
+  border-radius: 7px;
+  color: var(--qm-ink);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  user-select: none;
+  transform-origin: center center;
+  transition: background .1s ease, color .1s ease;
+}
+
+[data-edrv-view] .edrv-qm-row:hover,
+[data-edrv-view] .edrv-qm-row--active {
+  background: var(--qm-hover);
+}
+
+/* 唯一的强调色落点：当前行左缘的短竖条 */
+[data-edrv-view] .edrv-qm-row--active::before {
+  content: '';
+  position: absolute;
+  left: 3px;
+  top: 50%;
+  width: 2px;
+  height: 15px;
+  margin-top: -7.5px;
+  border-radius: 2px;
+  background: var(--qm-accent);
+}
+
+[data-edrv-view] .edrv-qm-row:focus-visible,
+[data-edrv-view] .edrv-qm-launcher:focus-visible,
+[data-edrv-view] .edrv-qm-foot:focus-visible,
+[data-edrv-view] .edrv-qm-btn:focus-visible,
+[data-edrv-view] .edrv-qm-input:focus-visible,
+[data-edrv-view] .edrv-qm-textarea:focus-visible,
+[data-edrv-view] .edrv-qm-select:focus-visible,
+[data-edrv-view] .edrv-qm-chip:focus-visible {
+  outline: 2px solid var(--qm-accent);
+  outline-offset: 1px;
+}
+
+[data-edrv-view] .edrv-qm-row-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 组行只留一枚折角箭头，文字「组」属于冗余信息 */
+[data-edrv-view] .edrv-qm-row-chevron {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  color: var(--qm-ink-3);
+  transition: color .1s ease, transform .12s ease;
+}
+
+[data-edrv-view] .edrv-qm-row-chevron svg {
+  width: 12px;
+  height: 12px;
+  display: block;
+}
+
+[data-edrv-view] .edrv-qm-row--group:hover .edrv-qm-row-chevron,
+[data-edrv-view] .edrv-qm-row--group.edrv-qm-row--active .edrv-qm-row-chevron {
+  color: var(--qm-accent);
+  transform: translateX(1px);
+}
+
+[data-edrv-view] .edrv-qm-row-kind {
+  flex: 0 0 auto;
+  color: var(--qm-ink-3);
+  font-size: 10px;
+  font-weight: 400;
+}
+
+[data-edrv-view] .edrv-qm-row-badge {
+  flex: 0 0 auto;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--qm-warn);
+}
+
+[data-edrv-view] .edrv-qm-row-badge--error {
+  background: var(--qm-danger);
+}
+
+/* 行尾「⋯」：占位常驻，避免悬停时行内容左右跳动 */
+[data-edrv-view] .edrv-qm-row-more {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--qm-ink-3);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  opacity: 0;
+  transition: opacity .1s ease, background .1s ease, color .1s ease;
+}
+
+[data-edrv-view] .edrv-qm-row:hover .edrv-qm-row-more,
+[data-edrv-view] .edrv-qm-row--active .edrv-qm-row-more,
+[data-edrv-view] .edrv-qm-row-more:focus-visible {
+  opacity: 1;
+}
+
+[data-edrv-view] .edrv-qm-row-more:hover {
+  background: var(--qm-surface);
+  color: var(--qm-accent);
+}
+
+[data-edrv-view] .edrv-qm-row--add {
+  margin-top: 5px;
+  border: 1px dashed var(--qm-line);
+  color: var(--qm-ink-2);
+  font-size: 11.5px;
+  font-weight: 400;
+  justify-content: center;
+}
+
+[data-edrv-view] .edrv-qm-row--add:hover {
+  border-color: var(--qm-accent);
+  color: var(--qm-accent);
+  background: var(--qm-accent-soft);
+}
+
+/* ── 底部固定栏（菜单设置） ──────────────────────────────── */
+[data-edrv-view] .edrv-qm-foot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 32px;
+  padding: 0 10px;
+  border-top: 1px solid var(--qm-line);
+  background: var(--qm-sunken);
+  color: var(--qm-ink-2);
+  font-size: 11.5px;
+  cursor: pointer;
+  user-select: none;
+  transition: color .1s ease, background .1s ease;
+}
+
+[data-edrv-view] .edrv-qm-foot:hover {
+  color: var(--qm-accent);
+  background: var(--qm-hover);
+}
+
+[data-edrv-view] .edrv-qm-foot-icon {
+  display: flex;
+  align-items: center;
+}
+
+[data-edrv-view] .edrv-qm-foot-icon svg {
+  width: 13px;
+  height: 13px;
+  display: block;
+}
+
+/* ── 空态：邀请而不是气氛 ────────────────────────────────── */
+[data-edrv-view] .edrv-qm-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 14px 10px 12px;
+  text-align: center;
+  color: var(--qm-ink-3);
+  font-size: 11px;
+  font-weight: 400;
+}
+
+[data-edrv-view] .edrv-qm-empty-title {
+  color: var(--qm-ink-2);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+[data-edrv-view] .edrv-qm-empty .edrv-qm-btn {
+  margin-top: 7px;
+}
+
+/* ── 弹窗表单 ────────────────────────────────────────────── */
+[data-edrv-view] .edrv-qm-dialog {
+  width: min(620px, calc(100vw - 48px));
+  max-height: min(84vh, 720px);
+  box-sizing: border-box;
+  /* 复位 .vsm-mcp-dialog 的整卡内边距（本弹窗自带 头/体/脚 三段布局） */
+  padding: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* 固定头：长表单滚动时仍知道在编辑哪一项 */
+[data-edrv-view] .edrv-qm-head {
+  flex: 0 0 auto;
+  padding: 14px 16px 12px;
+  border-bottom: 1px solid var(--qm-line);
+}
+
+[data-edrv-view] .edrv-qm-head-title {
+  color: var(--qm-ink);
+  font-size: 14px;
+  font-weight: 650;
+  line-height: 1.35;
+}
+
+[data-edrv-view] .edrv-qm-head-sub {
+  margin-top: 3px;
+  color: var(--qm-ink-3);
+  font-size: 11px;
+  font-weight: 400;
+}
+
+[data-edrv-view] .edrv-qm-sep {
+  height: 1px;
+  margin: 2px 0;
+  background: var(--qm-line);
+  opacity: .75;
+}
+
+[data-edrv-view] .edrv-qm-dialog-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 14px 16px;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+[data-edrv-view] .edrv-qm-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  /* 抵消 .vsm-mcp-dialog label 的 12px 上下外边距（与 body 的 gap 重复） */
+  margin: 0;
+}
+
+[data-edrv-view] .edrv-qm-field-label {
+  color: var(--qm-ink-2);
+  font-size: 11px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+[data-edrv-view] .edrv-qm-field-hint {
+  color: var(--qm-ink-3);
+  font-size: 10px;
+  font-weight: 400;
+}
+
+/* 标签行：标签在左、紧凑控件（分段）在右，避免控件挤成两行 */
+[data-edrv-view] .edrv-qm-field-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 18px;
+}
+
+/* 分组区块：只用标题左侧的强调条分隔，不堆卡片、不加阴影 */
+[data-edrv-view] .edrv-qm-section {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+[data-edrv-view] .edrv-qm-section-head {
+  position: relative;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding-left: 9px;
+}
+
+[data-edrv-view] .edrv-qm-section-head::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 3px;
+  bottom: 3px;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--qm-accent);
+}
+
+[data-edrv-view] .edrv-qm-section-title {
+  color: var(--qm-ink);
+  font-size: 11.5px;
+  font-weight: 650;
+}
+
+[data-edrv-view] .edrv-qm-section-hint {
+  color: var(--qm-ink-3);
+  font-size: 10px;
+  font-weight: 400;
+}
+
+[data-edrv-view] .edrv-qm-section-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* 开关行：左侧标题与说明，右侧滑动开关 */
+[data-edrv-view] .edrv-qm-switch-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+[data-edrv-view] .edrv-qm-switch-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+[data-edrv-view] .edrv-qm-switch {
+  position: relative;
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  width: 34px;
+  height: 19px;
+  padding: 0;
+  border: 1px solid var(--qm-line);
+  border-radius: 999px;
+  background: var(--qm-sunken);
+  cursor: pointer;
+  transition: background .12s ease, border-color .12s ease;
+}
+
+[data-edrv-view] .edrv-qm-switch-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: var(--dsw-alias-bg-base, #fff);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, .18);
+  transition: transform .12s ease;
+}
+
+[data-edrv-view] .edrv-qm-switch--on {
+  border-color: var(--qm-accent);
+  background: var(--qm-accent);
+}
+
+[data-edrv-view] .edrv-qm-switch--on .edrv-qm-switch-knob {
+  transform: translateX(15px);
+}
+
+[data-edrv-view] .edrv-qm-switch:focus-visible {
+  outline: 2px solid var(--qm-accent);
+  outline-offset: 2px;
+}
+
+[data-edrv-view] .edrv-qm-switch:disabled {
+  opacity: .5;
+  cursor: not-allowed;
+}
+
+/* 字段里的按钮按内容宽度靠左，不拉满整行 */
+[data-edrv-view] .edrv-qm-field > .edrv-qm-btn {
+  align-self: flex-start;
+}
+
+[data-edrv-view] .edrv-qm-input,
+[data-edrv-view] .edrv-qm-textarea,
+[data-edrv-view] .edrv-qm-select {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--qm-line);
+  border-radius: 7px;
+  background: var(--dsw-alias-bg-base, #fff);
+  color: var(--qm-ink);
+  font: inherit;
+  padding: 6px 9px;
+  transition: border-color .1s ease, box-shadow .1s ease;
+}
+
+[data-edrv-view] .edrv-qm-input:focus,
+[data-edrv-view] .edrv-qm-textarea:focus,
+[data-edrv-view] .edrv-qm-select:focus {
+  outline: none;
+  border-color: var(--qm-accent);
+  box-shadow: 0 0 0 3px var(--qm-accent-soft);
+}
+
+[data-edrv-view] .edrv-qm-textarea {
+  min-height: 96px;
+  resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 11.5px;
+  line-height: 1.55;
+}
+
+[data-edrv-view] .edrv-qm-input:disabled,
+[data-edrv-view] .edrv-qm-select:disabled {
+  background: var(--qm-sunken);
+  color: var(--qm-ink-3);
+  cursor: not-allowed;
+}
+
+[data-edrv-view] .edrv-qm-row2 {
+  display: flex;
+  gap: 10px;
+}
+
+[data-edrv-view] .edrv-qm-row2 > * {
+  flex: 1;
+  min-width: 0;
+}
+
+/* 分段控件：凹槽轨道 + 浮起选中块，比「整块填色」更克制 */
+[data-edrv-view] .edrv-qm-seg {
+  display: flex;
+  gap: 2px;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 2px;
+  border: 1px solid var(--qm-line);
+  border-radius: 7px;
+  background: var(--qm-sunken);
+}
+
+[data-edrv-view] .edrv-qm-seg-btn {
+  flex: 1 1 0;
+  min-width: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--qm-ink-2);
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  padding: 4px 8px;
+  cursor: pointer;
+  transition: background .1s ease, color .1s ease;
+}
+
+[data-edrv-view] .edrv-qm-seg-btn:hover {
+  color: var(--qm-ink);
+  background: var(--qm-hover);
+}
+
+[data-edrv-view] .edrv-qm-seg-btn--on {
+  color: var(--qm-accent);
+  background: var(--qm-surface);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, .08);
+}
+
+[data-edrv-view] .edrv-qm-seg-btn:focus-visible {
+  outline: 2px solid var(--qm-accent);
+  outline-offset: -2px;
+}
+
+[data-edrv-view] .edrv-qm-seg-btn:disabled {
+  opacity: .5;
+  cursor: not-allowed;
+}
+
+/* 放在标签行里的分段按内容宽度收起，不撑满整行 */
+[data-edrv-view] .edrv-qm-field-head .edrv-qm-seg {
+  width: auto;
+  flex: 0 0 auto;
+}
+
+[data-edrv-view] .edrv-qm-field-head .edrv-qm-seg-btn {
+  flex: 0 0 auto;
+  padding: 3px 9px;
+  font-size: 11px;
+}
+
+/* ── 下拉选择（技能 / 规则 / 工作区） ────────────────────── */
+[data-edrv-view] .edrv-qm-pick {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+[data-edrv-view] .edrv-qm-pick-trigger {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 30px;
+  padding: 5px 9px;
+  border: 1px solid var(--qm-line);
+  border-radius: 7px;
+  background: var(--dsw-alias-bg-base, #fff);
+  color: var(--qm-ink);
+  font: inherit;
+  font-size: 11.5px;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color .1s ease, box-shadow .1s ease;
+}
+
+[data-edrv-view] .edrv-qm-pick-trigger:hover {
+  border-color: var(--qm-accent);
+}
+
+[data-edrv-view] .edrv-qm-pick-trigger:focus-visible {
+  outline: none;
+  border-color: var(--qm-accent);
+  box-shadow: 0 0 0 3px var(--qm-accent-soft);
+}
+
+[data-edrv-view] .edrv-qm-pick-trigger--open {
+  border-color: var(--qm-accent);
+  box-shadow: 0 0 0 3px var(--qm-accent-soft);
+}
+
+[data-edrv-view] .edrv-qm-pick-trigger:disabled {
+  border-color: var(--qm-line);
+  background: var(--qm-sunken);
+  color: var(--qm-ink-3);
+  cursor: not-allowed;
+}
+
+[data-edrv-view] .edrv-qm-pick-summary {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+[data-edrv-view] .edrv-qm-pick-badge {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--qm-warn);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+[data-edrv-view] .edrv-qm-pick-caret {
+  flex: 0 0 auto;
+  width: 0;
+  height: 0;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 5px solid var(--qm-ink-3);
+  transition: transform .12s ease;
+}
+
+[data-edrv-view] .edrv-qm-pick-trigger--open .edrv-qm-pick-caret {
+  transform: rotate(180deg);
+}
+
+/* 弹层是 position: fixed + 视口坐标，不受弹窗滚动区裁剪 */
+[data-edrv-view] .edrv-qm-pick-panel {
+  position: fixed;
+  z-index: 260;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 5px;
+  border: 1px solid var(--qm-line);
+  border-radius: var(--qm-radius);
+  background: var(--qm-surface);
+  box-shadow: var(--qm-elev);
+  overflow: hidden;
+}
+
+[data-edrv-view] .edrv-qm-pick-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-height: 0;
+  overflow: auto;
+}
+
+[data-edrv-view] .edrv-qm-pick-group {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+[data-edrv-view] .edrv-qm-pick-group-title {
+  padding: 6px 7px 3px;
+  color: var(--qm-ink-3);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+[data-edrv-view] .edrv-qm-pick-option {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 5px 7px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--qm-ink);
+  font: inherit;
+  font-size: 11.5px;
+  text-align: left;
+  cursor: pointer;
+  transition: background .1s ease, color .1s ease;
+}
+
+[data-edrv-view] .edrv-qm-pick-option:hover {
+  background: var(--qm-hover);
+}
+
+[data-edrv-view] .edrv-qm-pick-option:focus-visible {
+  outline: 2px solid var(--qm-accent);
+  outline-offset: -2px;
+}
+
+[data-edrv-view] .edrv-qm-pick-option--on {
+  color: var(--qm-accent);
+  background: var(--qm-accent-soft);
+}
+
+[data-edrv-view] .edrv-qm-pick-check {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 13px;
+  height: 13px;
+  border: 1px solid var(--qm-line);
+  border-radius: 4px;
+  background: var(--dsw-alias-bg-base, #fff);
+  color: #fff;
+  font-size: 9px;
+  line-height: 1;
+}
+
+[data-edrv-view] .edrv-qm-pick-check--on {
+  border-color: var(--qm-accent);
+  background: var(--qm-accent);
+}
+
+[data-edrv-view] .edrv-qm-pick-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+[data-edrv-view] .edrv-qm-pick-hint {
+  flex: 0 0 auto;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--qm-ink-3);
+  font-size: 10px;
+}
+
+[data-edrv-view] .edrv-qm-pick-dot {
+  flex: 0 0 auto;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--qm-warn);
+}
+
+[data-edrv-view] .edrv-qm-pick-dot--error {
+  background: var(--qm-danger);
+}
+
+[data-edrv-view] .edrv-qm-pick-empty {
+  padding: 10px 8px;
+  color: var(--qm-ink-3);
+  font-size: 11px;
+  text-align: center;
+}
+
+[data-edrv-view] .edrv-qm-pick-more {
+  border: 1px dashed var(--qm-line);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--qm-ink-2);
+  font: inherit;
+  font-size: 11px;
+  padding: 5px 7px;
+  cursor: pointer;
+  text-align: center;
+}
+
+[data-edrv-view] .edrv-qm-pick-more:hover {
+  border-color: var(--qm-accent);
+  color: var(--qm-accent);
+  background: var(--qm-accent-soft);
+}
+
+[data-edrv-view] .edrv-qm-warn-list {
+  margin: 0;
+  padding-left: 16px;
+  color: var(--qm-warn);
+  font-size: 11px;
+}
+
+[data-edrv-view] .edrv-qm-error-list {
+  margin: 0;
+  padding-left: 16px;
+  color: var(--qm-danger);
+  font-size: 11px;
+}
+
+[data-edrv-view] .edrv-qm-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 11px 16px;
+  border-top: 1px solid var(--qm-line);
+  background: var(--qm-sunken);
+}
+
+[data-edrv-view] .edrv-qm-actions-grow {
+  flex: 1;
+}
+
+/* 按钮统一盒模型：固定高度 + 内容居中，同一行里的按钮才能等高对齐 */
+[data-edrv-view] .edrv-qm-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  box-sizing: border-box;
+  height: 28px;
+  padding: 0 12px;
+  border: 1px solid var(--qm-line);
+  border-radius: 7px;
+  background: var(--dsw-alias-bg-base, #fff);
+  color: var(--qm-ink);
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  user-select: none;
+  cursor: pointer;
+  transition: background .1s ease, border-color .1s ease, color .1s ease;
+}
+
+[data-edrv-view] .edrv-qm-btn--sm {
+  height: 24px;
+  padding: 0 9px;
+  font-size: 11px;
+}
+
+[data-edrv-view] .edrv-qm-btn:hover {
+  background: var(--qm-hover);
+}
+
+[data-edrv-view] .edrv-qm-btn--primary {
+  border-color: var(--qm-accent);
+  background: var(--qm-accent);
+  color: #fff;
+}
+
+[data-edrv-view] .edrv-qm-btn--primary:hover {
+  filter: brightness(1.06);
+  background: var(--qm-accent);
+}
+
+[data-edrv-view] .edrv-qm-btn--danger {
+  border-color: var(--qm-danger);
+  color: var(--qm-danger);
+}
+
+[data-edrv-view] .edrv-qm-btn:disabled {
+  opacity: .5;
+  cursor: not-allowed;
+}
+
+[data-edrv-view] .edrv-qm-btn:focus-visible {
+  outline: 2px solid var(--qm-accent);
+  outline-offset: 2px;
+}
+
+/* 按钮组：按内容宽度排布，不再等分拉满（导出/导入/重置宽度本就不同） */
+[data-edrv-view] .edrv-qm-btn-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+/* 同一行里的输入框与按钮 */
+[data-edrv-view] .edrv-qm-inline {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+[data-edrv-view] .edrv-qm-input--order {
+  width: 74px;
+  flex: 0 0 74px;
+}
+
+[data-edrv-view] .edrv-qm-row2 > .edrv-qm-field--narrow {
+  flex: 0 0 136px;
+}
+
+/* 悬浮按钮右键小菜单 */
+[data-edrv-view] .edrv-qm-context {
+  position: absolute;
+  min-width: 148px;
+  padding: 4px;
+  border-radius: 9px;
+  border: 1px solid var(--qm-line);
+  background: var(--qm-surface);
+  box-shadow: var(--qm-elev);
+  pointer-events: auto;
+}
+
+[data-edrv-view] .edrv-qm-context-item {
+  padding: 5px 9px;
+  border-radius: 6px;
+  cursor: pointer;
+  color: var(--qm-ink);
+  font-size: 12px;
+  white-space: nowrap;
+  transition: background .1s ease, color .1s ease;
+}
+
+[data-edrv-view] .edrv-qm-context-item:hover {
+  background: var(--qm-hover);
+}
+
+[data-edrv-view] .edrv-qm-context-item--danger {
+  color: var(--qm-danger);
+}
+
+[data-edrv-view] .edrv-qm-context-sep {
+  height: 1px;
+  margin: 4px 2px;
+  background: var(--qm-line);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-edrv-view] .edrv-qm-col { animation: none; }
+  [data-edrv-view] .edrv-qm-launcher,
+  [data-edrv-view] .edrv-qm-row,
+  [data-edrv-view] .edrv-qm-row-chevron { transition: none; }
+  [data-edrv-view] .edrv-qm-launcher:hover { transform: none; }
+}

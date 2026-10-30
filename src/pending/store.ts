@@ -21,7 +21,12 @@ import {
   readOp, saveBlocks, saveEntry, setHistoryState, writeOp,
 } from './persist.js'
 
-/** 统计一次差异的增删行数。 */
+/**
+ * @author ddj 2026年10月29号
+ * @description: 统计一次差异的增删行数；非文本差异统一记 0/0。
+ * @param entry 待审条目
+ * @returns 增删行数
+ */
 function countsOf(entry: PendingEntry): { added: number; deleted: number } {
   const diff = diffOf(entry)
   if (diff.kind !== 'text') return { added: 0, deleted: 0 }
@@ -225,11 +230,11 @@ export function writerFor(
     // 撤销「Revert 删除新建文件」时文件已不存在，只有显式允许重建才放行
     const recreate = allowCreate && current === null
     if (!recreate && current !== expected) return { ok: false, reason: 'diverged' }
-    const info = await fs.stat(target, signal).catch(() => undefined)
+    const currentStat = await fs.stat(target, signal).catch(() => undefined)
     try {
       // 第五个实参是沙箱策略；缺它时 provider 会以 FS_SANDBOX_DENIED 拒绝写入
       const written = await fs.writeText(
-        target, content ?? '', info ? { kind: 'replaceIfVersion', version: info.version } : undefined, signal, policy,
+        target, content ?? '', currentStat ? { kind: 'replaceIfVersion', version: currentStat.version } : undefined, signal, policy,
       )
       const readBack = await readText(fs, target)
       if ((content ?? '') !== (readBack ?? '')) return { ok: false, reason: 'read-back-mismatch' }
@@ -412,8 +417,8 @@ async function deleteTarget(fs: any, cwd: string, identity: string, signal?: Abo
   } catch {
     return { ok: false, reason: 'resolve-failed' }
   }
-  const info = await fs.stat(target, signal).catch(() => undefined)
-  if (!info) return { ok: true, content: null }
+  const currentStat = await fs.stat(target, signal).catch(() => undefined)
+  if (!currentStat) return { ok: true, content: null }
   const absolute = String(fs.processPath(target))
   if (!insideWorkspace(cwd, absolute)) return { ok: false, reason: 'outside-workspace' }
   try {

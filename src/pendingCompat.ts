@@ -5,6 +5,7 @@
  */
 import type { ReviewDetail, ReviewItem, ReviewPage } from './shared/review.js'
 import type { PendingDetail, PendingItem, PendingPage } from './shared/pendingReview.js'
+import { pathKeyFor } from './shared/pathKey.js'
 
 /** 进程内"已被待审接管"的路径集合；旧写入口守卫只读它，绝不碰数据库。 */
 const coveredPaths = new Set<string>()
@@ -30,18 +31,12 @@ function stableSeq(id: string): number {
 
 /**
  * @author ddj 2026年10月29号
- * @description: 统一路径比较口径，消除分隔符与 Windows 大小写差异；远端身份保留原大小写。
+ * @description: Host 侧的路径比较口径：远端身份保留大小写，其余按运行平台折叠。
  * @param path 路径
  * @returns 比较键
  */
 function pathKey(path: string): string {
-  const unified = path.replace(/\\/g, '/')
-  // 远端仓库身份区分大小写，折叠成小写会把 Host/Repo 与 host/repo 混成同一个文件。
-  if (/^[a-z]+:\/\//i.test(unified)) return unified
-  // 盘符路径天生大小写不敏感（与宿主平台无关，客户端 diffPathKey 同口径）；
-  // POSIX 路径在 POSIX 上区分大小写，不能折叠。
-  if (/^[a-z]:\//i.test(unified)) return unified.toLowerCase()
-  return process.platform === 'win32' ? unified.toLowerCase() : unified
+  return pathKeyFor(path, process.platform === 'win32')
 }
 
 /**

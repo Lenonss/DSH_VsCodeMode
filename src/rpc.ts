@@ -34,7 +34,9 @@ import type { ContentSearcher } from './search/content.js'
 import { newContentSearcher } from './search/content.js'
 import { restoreFile, revertCall, revertHunk, revertHunks, type Result } from './revert.js'
 import { rulesList, rulesRead, rulesRemove, rulesSave, rulesToggle } from './rules.js'
+import { listSkillCatalog } from './skillCatalog.js'
 import { isSnippetFilePath, snippetsEntries, snippetsList, snippetsRead, snippetsRemove, snippetsSave } from './snippets.js'
+import { patchLauncher, readQuickMenu, saveQuickMenu } from './quickMenu.js'
 import { runtimeOf } from './mcpRuntime.js'
 import { listMcp, refreshMcp, removeMcp, saveMcp, toggleMcp } from './mcp.js'
 import { listProjects, projectRefresh, projectRemove, projectSave, projectToggle, mcpSnapshot } from './mcpProject.js'
@@ -1565,6 +1567,14 @@ export function buildHandlers(
         return { ok: false, error: '切换规则失败：' + String(error) }
       }
     },
+    'skills.list': async (args) => {
+      try {
+        // 只读枚举：不做 workspace 注册校验（读盘无副作用），cwd 由客户端按会话作用域传入
+        return { ok: true, ...(await listSkillCatalog(args?.cwd)) }
+      } catch (error) {
+        return { ok: false, error: '读取技能候选失败：' + String(error) }
+      }
+    },
     'snippets.list': async () => {
       try {
         return { ok: true, ...(await snippetsList(ctx)) }
@@ -1602,6 +1612,33 @@ export function buildHandlers(
         return { ok: true, ...(await snippetsEntries(ctx, cwd)) }
       } catch (error) {
         return { ok: false, error: '读取代码片段条目失败：' + String(error) }
+      }
+    },
+    'quickMenu.get': async () => {
+      try {
+        const state = await readQuickMenu()
+        return { ok: true, doc: state.doc, warning: state.warning }
+      } catch (error) {
+        return { ok: false, error: '读取快捷菜单失败：' + String(error) }
+      }
+    },
+    'quickMenu.save': async (args) => {
+      try {
+        const result = await saveQuickMenu(args.doc, args.baseRevision)
+        // 冲突时只回错误文案：客户端收到后重拉最新文档，避免用旧版本覆盖别人的写入
+        if (!result.ok) return { ok: false, error: result.error }
+        return { ok: true, doc: result.doc }
+      } catch (error) {
+        return { ok: false, error: '保存快捷菜单失败：' + String(error) }
+      }
+    },
+    'quickMenu.launcher': async (args) => {
+      try {
+        const result = await patchLauncher({ x: args.x, y: args.y })
+        if (!result.ok) return { ok: false, error: result.error }
+        return { ok: true, doc: result.doc }
+      } catch (error) {
+        return { ok: false, error: '保存悬浮按钮位置失败：' + String(error) }
       }
     },
   }
