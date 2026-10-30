@@ -26,6 +26,7 @@ import { subscribeReview, refreshReview } from '../state/reviewFeed.js'
 import { runReviewBatch } from '../reviewBatch.js'
 import { ReviewAllConfirm } from './ReviewAllConfirm.js'
 import { reviewRegions } from '../../shared/reviewRegions.js'
+import { PENDING_PREFIX } from '../../shared/pendingReview.js'
 import { diffSummary, officialPath } from '../state/diffSummary.js'
 import { emitFileChanged, emitRefresh } from '../events.js'
 import { langOf, loadMonaco, snippetLanguageOf } from '../monaco/loader.js'
@@ -579,7 +580,15 @@ export function EditorView(props) {
   }, [sessionId, active, selectedReview])
   React.useEffect(() => {
     const controller = new AbortController()
-    if (!active || !review.page?.overview?.coveredPaths.some((path) => sameFile(path, active))) {
+    // 待审条目也走同一条行内差异通道：它由累计基线投影而来，形状与官方条目一致，
+    // 因此编辑器里天然就能画行内差异与 Keep/Undo 药丸，不必另开一个窄面板。
+    const pendingPath = (review.page?.items ?? [])
+      .filter((item) => String(item.id).startsWith(PENDING_PREFIX))
+      .map((item) => item.currentPath || item.path)
+      .find((path) => sameFile(path, active))
+    const coveredPath = review.page?.overview?.coveredPaths.find((path) => sameFile(path, active))
+    const reviewPath = coveredPath ?? pendingPath
+    if (!active || !reviewPath) {
       setOfficialDetail(null)
       setOfficialRecords([])
       return () => controller.abort()
@@ -588,7 +597,6 @@ export function EditorView(props) {
     async function loadReview() {
       try {
         // Tabs use workspace-relative paths; the metadata index owns the backend identity.
-        const reviewPath = review.page?.overview?.coveredPaths.find((path) => sameFile(path, active)) ?? active
         const page = await rpc('edrv.review.list', { sessionId, path: reviewPath }, controller.signal)
         if (controller.signal.aborted) return
         if (!page.ok) throw new Error(page.error)

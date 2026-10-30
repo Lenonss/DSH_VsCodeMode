@@ -163,6 +163,50 @@ Host 优先采集官方 `workspaceChanges` 的轮次净差异；旧版逐工具�
 > v0.20.1 已完成重启后真实 GUI 的文件/块级审查与安全拒绝验收。Keep All / Undo All
 > 已接入全部分页；批量 Undo 不是跨文件原子事务，遇冲突停止，已完成项不会自动恢复。
 
+### 6.1 累计基线待审（对齐 dsh-diff-approval）
+
+在保留现有面板的前提下，把待审内核换成**累计基线投影**：行为参考
+[dsh-diff-approval](https://github.com/9087/dsh-diff-approval)（基线
+`a661a7a31583057c8ba8bbeb73721a9b3ee0c57e`，MIT，Copyright (c) 2026 Wu Zhiwei），
+只借用语义与内核，不引入它的界面资产（Markdown 预览、并排视图、字体子集、悬浮卡片）。
+
+- **一条目一文件**：每路径只有一条待审条目，`oldText` 是最早基线、`newText` 是最新内容。
+  同文件多次写入按更新时间折叠，基线取较早来源、内容取较晚来源，`sessionIds` 取并集；
+  于是 A→B→C 显示 A→C，A→B→A 折叠归零（严格字节相等，不做 BOM/换行归一化）。
+- **创建身份**：`earlierVersion: 'none'` 表示基线是"文件不存在"。写入推进基线即结束创建
+  身份（转为 `'file'`），此后再 Revert 是写回而不是删除。
+- **判定粒度**：块、行区间、文件、全部。**Keep 只推进投影、零写盘**；Revert 才写回文件，
+  新建条目整条 Revert 等于删除该文件。块身份由当前差异现场推导，不依赖落库状态。
+- **判定安全**：Revert 走 `replaceIfVersion` 版本守卫并写后读回；内容与投影不一致、
+  条目已解决、行区间歧义时拒绝并给出原因码（`revision-mismatch` / `diverged` /
+  `settled` / `unknown-block` / `no-block` / `ambiguous-block`）。
+- **撤销/重做**：判定入 `pending_history`（游标模型，撤销后重做回到同一状态），
+  幂等由 `operationId` 保证；决策栈跨重启保留（上游只在面板打开期间保留）。
+- **差异来源**：`edit` / `write` 结果自带 before/after 直接采集；`str_replace_editor`
+  结果只有成功消息，靠 `fs/edit-intent`、`fs/write-intent` 在写前取预像、`fs/observed`
+  在写后取终像配对。可另外从版本库导入基线改动（git / svn / Perforce）。
+- **外部改动**：已入列路径被外部改写时，新内容被吸收为最新待审内容并标记分歧，
+  基线保持不动；文件缺失/读不到时条目转为 `missing`，不再参与写回。
+- **判定入口**：差异直接画在编辑器里，块级 Keep/Undo 用行内药丸；文件级 Keep/Undo
+  在差异栏上。详情面板与批注（含「让 AI 应答」）已移除——判定与保持/撤销只走这两处。
+
+与上游的有意偏差：
+
+| 项 | 上游 | 本插件 | 原因 |
+|---|---|---|---|
+| 条目键 | 全局裸路径 | 工作区 + 路径 | 多工作区同名文件不能互相覆盖 |
+| 文本存储 | 内存/全量 JSON | SQLite，有大小上限 | 大文件不拖垮 Host，超大只按时间戳比较 |
+| Revert 写回 | 无条件写 | 版本守卫 + 写后读回 | provider 不具备跨进程原子 CAS |
+| 撤销栈 | 仅面板打开期间 | 持久化到 SQLite | 重启后仍可撤销上次决定 |
+| 界面 | 自带整套 UI | 复用现有面板 | 保留本插件视觉与交互 |
+| Perforce | 支持 | 支持，但只有假 shell 单测 | 本机无 p4 客户端，无法真机验证 |
+| 新建文件 Revert | 删除文件 | 删除文件（直接 `unlink`） | fs 抽象没有删除动作，已限制在工作区内 |
+
+数据与迁移：新增 `pending_*` 表，`SCHEMA_VERSION` 递增并用 `PRAGMA table_info` 判缺列后
+`ALTER TABLE`，既有 `review_*` 事实表一概不动；首次改动前写 `.before-pending.bak` 备份；
+路径被待审投影接管后，旧 sidecar 写入口（`edrv.accept` / `edrv.reject` / `edrv.decideBatch`
+/ `edrv.missingDecide` 等）直接拒绝，避免双权威。
+
 ### 7. Monaco 离线分发
 
 `assets/vendor/monaco` AMD 构建随包发布，经 `/edrv/vendor/*` 前缀路由全离线可用。
@@ -477,7 +521,8 @@ DSH 每次启动监听随机端口，`http://127.0.0.1:<port>` 就是浏览器 o
 
 官方 `dsh plugin` 方式，三选一。下面以 `web` profile 为例；Desktop 或其他命名
 profile 请替换为实际目标，不要把示例目录当成当前运行 profile。升级前可阅读
-**v0.21.4** 的任务发送结果分类与诚实草稿降级：只有明确 accepted 才等待分析方案；unknown/submitted/cancelled 不另填草稿或重发，安全降级只填实际当前会话草稿并提示手动发送。旧 boolean 接口保留，legacy true 不等于受理。开发 link 客户端 rev458288ddb012 的真实公开入口与目标受理已验；完整 SVN 分析/方案投递因 `SetNamedSecurityInfoW failed (Win32 5)` 未完成，用户仅本批接受此缺口，不代表 Host 整体升级或当前实例已安装 npm 0.21.4。见 [0.21.4 发布说明](docs/release-0.21.4.md)。以下保留历史版本事实：
+**v0.22.0** 的累计基线待审（非 UI 能力对齐 dsh-diff-approval）：同一文件的多次编辑折叠成一条待审、基线保留最早内容，A→B→C 显示 A→C、A→B→A 自然归零；Keep 只推进基线不改磁盘，Revert 走版本守卫写回并读回校验，撤销/重做用游标模型跨重启保留；新增 `str_replace_editor` 预像配对、`fs/observed` 终像、已入列路径的外部改动吸收与缺失/不可读生命周期、git/svn/Perforce 基线导入，以及旧 sidecar 写入口对已接管路径的服务端拒绝。差异仍在编辑器内行内展示、块级 Keep/Undo 用药丸，文件级在差异栏；详情面板与批注（含「让 AI 应答」）本版移除。验收边界：p4 仅有假 shell 单测（本机无 Perforce 客户端），「让 AI 应答」随批注一并下线故不再验证；本版未在宿主上重启验收 GUI 全流程，见 [0.22.0 发布说明](docs/release-0.22.0.md)。以下保留历史版本事实：
+**v0.21.4** 的任务发送结果分类与诚实草稿降级：只有明确 accepted 才等待分析方案；unknown/submitted/cancelled 不另填草稿或重发，安全降级只填实际当前会话草稿并提示手动发送。旧 boolean 接口保留，legacy true 不等于受理。开发 link 客户端 rev458288ddb012 的真实公开入口与目标受理已验；完整 SVN 分析/方案投递因 `SetNamedSecurityInfoW failed (Win32 5)` 未完成，用户仅本批接受此缺口，不代表 Host 整体升级或当前实例已安装 npm 0.21.4。见 [0.21.4 发布说明](docs/release-0.21.4.md)。保留以下历史版本事实：
 **v0.21.3** 的 MCP 初始化失败结果与安全收尾解耦：已进入 startup 的调用者在失败或截止时间到达时及时收到拒绝，不再等待旧资源收尾；旧 work/close 未确认完成前仍占冷启动名额、阻止同 key 重建，确认收尾后才开始冷却。首次偶发超时根因仍未知，排队和其他屏障仍可能无界；本版当前 Host/GUI 未部署未验证，用户仅本批接受官方实装隔离模块与 JS 套件替代验收，见 [0.21.3 发布说明](docs/release-0.21.3.md)。官方 bridge 隔离 fixture 同步迁移到当前公开 native 执行器及批调用契约，不代表生产执行器故障修复。以下为历史版本事实，不代表本版现场验收：
 **v0.21.2** 的新版 DSH 会话 Controller 与 MCP 公开工具目录适配：任务发送按目标会话持有生命周期，受理不明时不跨通道重发；文件范围引用的剪贴板与降级文本保留行区间；MCP 初始化失败增加脱敏持久化诊断。当前 Web Host 已完成真实 CodeGraph 调用，但首次连接偶发超时根因尚未证实，不宣称已修复，见 [0.21.2 发布说明](docs/release-0.21.2.md)。保留以下历史版本能力与验收边界：
 **v0.21.1** 修复缺失历史文件：按完整快照显示整文件删除，Keep 保留删除、Undo 安全恢复快照，预览只读且拒绝覆盖重新出现的文件；真实 GUI 验收缺口已明确保留，见 [0.21.1 发布说明](docs/release-0.21.1.md)。保留 **v0.21.0** 新增 XLSX 基础编辑与浏览器导出副本，原件不自动写回，高级应用通过官方 Host 打开；官方差异定位统一 BOM 与 LF/CRLF/混合行尾口径，并区分内容缺失和多处命中。定位修复不扩展 CRLF patch Undo 能力，目标官方记录 ↑/↓ 的真实点击验收仍保留缺口。保留 **v0.20.5** 跨 DSH 实例只读互通——桌面端与 Web 端各自运行独立宿主时，官方审查列表/详情与工作区只读接口改按持久化会话头的 cwd 解析，另一实例创建的会话也能只读打开官方差异栏，写入类接口仍要求本端活跃会话。保留 **v0.20.4** 统一两套差异栏外观——非官方记录栏角标由内部术语「侧车记录」改为「历史改动」，悬停说明 Keep 只标记已看过、不改写磁盘，Undo 逐项校验后写回，两者都不影响官方审查；官方元数据不可用时给出可读原因与重试按钮，不再静默降级；「会话没在当前端激活」由红色告警改为中性说明。保留 v0.20.3 修复官方差异全部无法定位时差异栏无提示、上下箭头静默禁用（显示「无可跳转」与失效原因，Keep 说明只标记已采纳、不改写磁盘，会话缺失等宿主错误改为可读提示）、v0.20.2 的 MCP 状态告警收敛与原生确认弹窗，以及 v0.20.1 的文件内差异展示、块级/文件级安全审查和跨分页批量操作。升级后重启 DSH 并刷新页面；持久化与回退边界见 [0.20.0 发布说明](docs/release-0.20.0.md)；从 0.14.2 或更旧版本升级还须阅读
@@ -485,13 +530,13 @@ profile 请替换为实际目标，不要把示例目录当成当前运行 profi
 
 ```bash
 # ① Git 安装（clone + prepare 构建；推荐打固定 tag）
-dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.21.4
+dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.22.0
 
 # ② npm 注册表（发布到 npm 后）
-dsh plugin --profile web add dsh-vscode-mode@0.21.4
+dsh plugin --profile web add dsh-vscode-mode@0.22.0
 
 # ③ GitHub Release tgz 直装（Release asset 可用后）
-dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.21.4/dsh-vscode-mode-0.21.4.tgz
+dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.22.0/dsh-vscode-mode-0.22.0.tgz
 ```
 
 > **DSH 版本政策（0.17.0 起）**：六项 DSH peer 仍统一声明为 `*`，另以
@@ -832,6 +877,7 @@ Keep All / Undo All 却是亮的。修复：单文件 Keep / Undo 覆盖冲突�
 完整变更见 [GitHub Releases](https://github.com/Lenonss/DSH_VsCodeMode/releases)。
 近期关键版本：
 
+- **v0.22.0**：新增累计基线待审——同文件多次编辑折叠成一条、基线保留最早内容（A→B→C 显示 A→C、A→B→A 归零）；Keep 只推进基线不改磁盘，Revert 带版本守卫写回并读回，撤销/重做游标模型跨重启保留；补 `str_replace_editor` 预像配对、外部改动吸收与缺失生命周期、git/svn/Perforce 基线导入、旧入口服务端拒绝。差异仍在编辑器内行内展示，详情面板与批注（含「让 AI 应答」）移除。p4 仅假 shell 单测（本机无 Perforce 客户端），GUI 全流程未重启验收；发布不自动部署，升级后重启 DSH 并刷新页面。见 [发布说明](docs/release-0.22.0.md)。
 - **v0.21.4**：区分任务明确受理、拒绝、不明、仅提交与取消；只有 accepted 开始等待，unknown/submitted/cancelled 不另填草稿、重试或轮询。安全降级只填实际当前会话草稿并提示手动发送，缺详细 API 明确本次未自动发送；旧 boolean 兼容但 true 不等于受理。真实开发客户端公开按钮→目标受理已验，完整 SVN 分析/方案投递因 Win32 5 未验，用户仅本批接受；Host 未重启，不自动部署。见 [发布说明](docs/release-0.21.4.md)。
 - **v0.21.3**：MCP 初始化失败时分离调用者结果与安全收尾，已进入 startup 的调用者及时收到失败；旧 work/close 未完成仍占槽并阻止同 key 重建，清理失败不开放替代连接，收尾完成才开始冷却。不宣称解决首次偶发超时、gamma 排队或整体流程有界。当前 Host/GUI 未部署未验证，用户仅本批接受替代验收；不自动部署或重启。见 [发布说明](docs/release-0.21.3.md)。
 - **v0.21.2**：适配新版 DSH Session Controller 与 MCP 公开工具目录；固定目标任务发送持有会话直到完成或卸载，受理不明时不跨通道重发。范围文件引用的模型文本、剪贴板与纯文本降级保持一致。MCP 初始化失败记录阶段、耗时和脱敏错误链；迁移官方 native/PTC 执行器集成测试并增加可选真实 CodeGraph stdio 验证。当前 Web Host 真实工具调用已通过，首次连接偶发超时根因仍未证实；不自动部署或重启。见 [发布说明](docs/release-0.21.2.md)。

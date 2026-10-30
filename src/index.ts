@@ -3,6 +3,9 @@ import { registerRoutes } from './routes.js'
 import { captureToolResult } from './capture.js'
 import { installCapture } from './officialCapture.js'
 import { installEvidence } from './reviewCapture.js'
+import { installPendingCapture } from './pending/capture.js'
+import { recordWrite } from './pending/store.js'
+import { trackPendingCover } from './pendingCompat.js'
 import { closeArchiveDbs } from './archiveDb.js'
 import { handleRpc, integrationBaseUrlOf } from './rpc.js'
 import { newSearcher } from './search/orchestrator.js'
@@ -71,6 +74,11 @@ function createRuntime(ctx: Ctx, config: unknown) {
 function attachRuntime(ctx: Ctx, runtime: Runtime): void {
   const evidence = installEvidence(ctx)
   const stopCapture = installCapture(ctx, (cwd, snapshot) => { evidence.persist(cwd, snapshot); return true })
+  // 待审累计基线：只有写后内容确实变化才落库，异常一律不打断用户工具调用
+  const pending = installPendingCapture(ctx, (write) => {
+    try { trackPendingCover(write.cwd, write.path, true) } catch { /* 内存登记失败不阻断采集 */ }
+    try { recordWrite(write) } catch (error) { log.warn('待审差异落库失败：' + String(error)) }
+  })
   /** @author ddj 2026年09月28号 @param exec Tool execution. @param result Tool result. */
   function onResult(exec: unknown, result: unknown): void {
     void captureToolResult(ctx, runtime.registry, exec, result)
@@ -90,6 +98,7 @@ function attachRuntime(ctx: Ctx, runtime: Runtime): void {
   async function cleanup(): Promise<void> {
     await stopCapture()
     evidence.dispose()
+    pending.dispose()
     runtime.fileVersions.dispose()
     closeArchiveDbs()
     disposeAllServers()

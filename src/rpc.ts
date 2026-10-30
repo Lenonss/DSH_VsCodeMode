@@ -60,7 +60,9 @@ import type { FileVersions } from './fileVersions.js'
 import { settingsDocPath } from './settingsDocPath.js'
 import { createTextPages } from './textPages.js'
 import { reviewHandlers } from './reviewRpc.js'
-import { fileAbsent, missingReview, missingDecide } from './missingReview.js'
+import { pendingHandlers } from './pendingRpc.js'
+import { fileAbsent, missingReview, missingDecide, missingPath } from './missingReview.js'
+import { pendingCovers } from './pendingCompat.js'
 
 /** Process-local cursor signer; reads must stay on the Host filesystem capability. */
 const readTextPage = createTextPages()
@@ -101,6 +103,19 @@ function recView(record: DiffRecord, ws: RemoteWs | null = null): RecordView {
     at: record.at,
     ...(ws ? { displayPath: remoteDisplayOf(record.path, ws) ?? undefined } : {}),
   }
+}
+
+/**
+ * 旧写入口守卫：路径已由待审累计基线接管时一律拒绝，避免两套权威同时写同一文件。
+ * @author ddj 2026年10月29号
+ * @param cwd 工作区
+ * @param path 请求涉及的路径（可为空表示无法定位）
+ * @returns 拒绝原因，未接管时为 null
+ */
+function legacyBlocked(cwd: string, path: string | undefined): string | null {
+  if (!path) return null
+  if (!pendingCovers(cwd, path)) return null
+  return '该文件已由待审累计基线接管，请使用面板 Keep/Revert（edrv.review.decide）'
 }
 
 /** 会话/工作区公共前置：返回 {session,cwd} 或错误文案。 */
@@ -600,6 +615,7 @@ export function buildHandlers(
     // edrv.dap.* 由 createDapRpc 提供（调试会话单例），这里并入。
     ...((dapHandlers ?? {}) as RpcHandlerMap),
     ...(reviewHandlers(ctx, registry) as RpcHandlerMap),
+    ...(pendingHandlers(ctx, registry) as RpcHandlerMap),
     'edrv.list': async (args) => {
       // #region debug log
       const start = performance.now()
@@ -688,6 +704,8 @@ export function buildHandlers(
       const sc = await requireSession(ctx, args.sessionId)
       if ('err' in sc) return { ok: false, error: sc.err }
       const bucket = await bucketOf(registry, ctx, sc.cwd)
+      const blocked = legacyBlocked(sc.cwd, bucket.get(args.callId)?.path)
+      if (blocked) return { ok: false, error: blocked }
       const results = await applyDecisions(ctx, sc.session, sc.cwd, bucket, [{ callId: args.callId, scope: args.scope, hunkIndex: args.hunkIndex, decision: 'accepted' }])
       const item = results[0]
       if (!item?.ok) return { ok: false, error: item?.error ?? '操作失败' }
@@ -697,6 +715,8 @@ export function buildHandlers(
       const sc = await requireSession(ctx, args.sessionId)
       if ('err' in sc) return { ok: false, error: sc.err }
       const bucket = await bucketOf(registry, ctx, sc.cwd)
+      const blocked = legacyBlocked(sc.cwd, bucket.get(args.callId)?.path)
+      if (blocked) return { ok: false, error: blocked }
       const results = await applyDecisions(ctx, sc.session, sc.cwd, bucket, [{ callId: args.callId, scope: args.scope, hunkIndex: args.hunkIndex, decision: 'rejected' }])
       const item = results[0]
       if (!item?.ok) return { ok: false, error: item?.error ?? '操作失败' }
@@ -705,6 +725,8 @@ export function buildHandlers(
     'edrv.missingReview': async (args) => {
       const sc = await requireSession(ctx, args.sessionId)
       if ('err' in sc) return { ok: false, error: sc.err }
+      const blocked = legacyBlocked(sc.cwd, args.path)
+      if (blocked) return { ok: false, error: blocked }
       try {
         const bucket = await bucketOf(registry, ctx, sc.cwd)
         if (!await fileAbsent(ctx, sc.cwd, args.path)) return { ok: true, review: null }
@@ -714,6 +736,8 @@ export function buildHandlers(
     'edrv.missingDecide': async (args) => {
       const sc = await requireSession(ctx, args.sessionId)
       if ('err' in sc) return { ok: false, error: sc.err }
+      const blocked = legacyBlocked(sc.cwd, missingPath(args.token))
+      if (blocked) return { ok: false, error: blocked }
       try {
         const bucket = await bucketOf(registry, ctx, sc.cwd)
         return { ok: true, callIds: await missingDecide(ctx, sc.session, sc.cwd, bucket, args.token, args.operationId, args.undo === true) }
@@ -723,7 +747,10 @@ export function buildHandlers(
       const sc = await requireSession(ctx, args.sessionId)
       if ('err' in sc) return { ok: false, error: sc.err }
       const bucket = await bucketOf(registry, ctx, sc.cwd)
-      const results = await applyDecisions(ctx, sc.session, sc.cwd, bucket, Array.isArray(args.items) ? args.items : [])
+      const items = Array.isArray(args.items) ? args.items : []
+      const blocked = items.map((item) => legacyBlocked(sc.cwd, bucket.get(item.callId)?.path)).find((reason) => reason !== null)
+      if (blocked) return { ok: false, error: blocked }
+      const results = await applyDecisions(ctx, sc.session, sc.cwd, bucket, items)
       return { ok: true, results }
     },
     /** @author ddj 2026年10月22号 @param args Read-only request. @returns Bounded official range read, or unsupported on older providers; never bypasses Host IO. */

@@ -26,6 +26,10 @@ import { appUrl } from './appUrl.js'
 import type { LoggerLevel } from './logger.js'
 import type { SvnViewRequest, SvnViewPayload } from './svnExplorer.js'
 import type { DecideReview, ReviewDetail, ReviewPage, ReviewRequest } from './review.js'
+import type {
+  PendingDecide, PendingDetail, PendingHistoryMove, PendingImport,
+  PendingItem, PendingPage, PendingRemove, PendingRequest,
+} from './pendingReview.js'
 
 /** webServer 精确路由。 */
 export const RPC_PATH = '/edrv/rpc'
@@ -372,6 +376,13 @@ export interface RpcRequestMap {
   'edrv.review.list': ReviewRequest & { cursor?: number; history?: boolean; path?: string }
   'edrv.review.detail': ReviewRequest & { id: string }
   'edrv.review.decide': DecideReview
+  'edrv.pending.list': PendingRequest
+  'edrv.pending.detail': PendingRequest & { id: string }
+  'edrv.pending.decide': PendingDecide
+  'edrv.pending.remove': PendingRemove
+  'edrv.pending.refresh': PendingRequest & { id: string }
+  'edrv.pending.history': PendingHistoryMove
+  'edrv.pending.import': PendingImport
   'edrv.list': { sessionId?: string; callIds?: string[]; skipStale?: boolean }
   'edrv.accept': { sessionId?: string; callId: string; scope?: RpcScope; hunkIndex?: number }
   'edrv.reject': { sessionId?: string; callId: string; scope?: RpcScope; hunkIndex?: number }
@@ -546,6 +557,13 @@ export interface RpcOkMap {
   'edrv.review.list': { page: ReviewPage }
   'edrv.review.detail': { detail: ReviewDetail }
   'edrv.review.decide': { revision: number }
+  'edrv.pending.list': { page: PendingPage }
+  'edrv.pending.detail': { detail: PendingDetail }
+  'edrv.pending.decide': { item: PendingItem; wrote: boolean }
+  'edrv.pending.remove': { removed: boolean }
+  'edrv.pending.refresh': { item: PendingItem }
+  'edrv.pending.history': { item: PendingItem; wrote: boolean }
+  'edrv.pending.import': { imported: number; changes: number }
   'edrv.list': { records: RecordView[] }
   'edrv.accept': { record: RecordView }
   'edrv.reject': { record: RecordView }

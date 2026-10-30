@@ -207,6 +207,9 @@ export function reviewPage(cwd: string, cursor = 0, history = false, path?: stri
 
 /** @public @author ddj 2026年10月26号 @param cwd Migrated workspace. @param path Legacy write target. @returns Whether any official version owns the file, including decided history. */
 export function hasOfficial(cwd: string, path: string): boolean {
+  // 防御：解析结果若被误当成路径传进来（不透明对象），按「无官方记录」处理，
+  // 否则 SQLite 会把对象当命名参数绑定，抛出与真实原因无关的错误。
+  if (typeof path !== 'string') return false
   const db = dbFor(cwd)
   // A read guard must not acquire a migration write lock on legacy-only databases.
   if (!db.prepare("SELECT 1 FROM sqlite_master WHERE name='review_files' AND type='table'").get()) return false

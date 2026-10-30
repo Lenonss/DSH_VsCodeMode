@@ -19,13 +19,15 @@ describe('official review in existing UI', () => {
     }))
     expect(html).toContain('data-edrv-diff-source="official"')
     expect(html).toContain('2 条官方待审记录')
-    expect(html).toContain('展开差异')
+    // 详情面板已移除：栏上不再有展开入口
+    expect(html).not.toContain('展开差异')
     expect(html).toContain('当前文件与可信快照不匹配')
     expect(html).toContain('role="alert"')
     expect(html).toContain('>Keep</button>')
     expect(html).toMatch(/class="[^"]*edrv-review-undo[^"]*"[^>]*disabled=""/)
     expect(html).toContain('aria-label="文件差异审查"')
-    expect(html).toContain('aria-label="选择官方差异记录"')
+    // 轮次选择器随详情面板一起移除
+    expect(html).not.toContain('aria-label="选择官方差异记录"')
     expect(html).not.toContain('<select')
     expect(html).not.toContain('edrv-pill-keep')
     expect(html).toContain('Keep All')
@@ -62,7 +64,8 @@ describe('official review in existing UI', () => {
     expect(html).toContain('11 / 12')
     expect(html).toContain('>Keep</button>')
     expect(html).toContain('>Undo</button>')
-    expect(html).toContain('展开差异')
+    // 详情面板已移除：栏上不再有展开入口
+    expect(html).not.toContain('展开差异')
     expect(html).not.toContain('edrv-pill-keep')
   })
   it('会话未激活提示用中性样式，不用红色告警', () => {

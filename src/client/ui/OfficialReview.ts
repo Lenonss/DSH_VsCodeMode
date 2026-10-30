@@ -3,6 +3,7 @@ import React from 'react'
 import { rpc } from '../rpc.js'
 import { openEditorView } from '../events.js'
 import { refreshReview } from '../state/reviewFeed.js'
+import { PENDING_PREFIX } from '../../shared/pendingReview.js'
 import type { ReviewDetail, ReviewItem, ReviewPage } from '../../shared/review.js'
 const h = React.createElement
 /** @private @author ddj 2026年10月26号 @param props Latest first-page metadata. @returns Paginated rows independent of expanded historical patch. */
@@ -37,18 +38,27 @@ export function ReviewLedger(props: { sessionId: string; first: ReviewPage | nul
       else setError(result.error)
     } catch (cause) { if (!controller.signal.aborted) setError(String(cause)) }
   }
+  const gaps = page?.gaps ?? []
   return h('div', { style: { marginTop: 8 } },
     h('label', null, h('input', { type: 'checkbox', checked: history, onChange: () => { setHistory(!history); setCursor(0) } }), '显示已处理及被替换的历史'),
-    page?.gaps.map((gap) => h('div', { key: `${gap.sessionId}:${gap.seq}`, role: 'status' }, `轮次 ${gap.turn} 采集不完整：${gap.error}`)),
     error ? h('div', { role: 'alert' }, error) : null,
     !page ? h('p', { role: 'status' }, '正在读取官方审查记录…') : null,
     page && !page.items.length ? h('p', null, history ? '暂无已落盘历史。' : '没有待处理的官方记录；可切换查看历史。') : null,
     h('div', { style: { maxHeight: 210, overflow: 'auto' } }, page?.items.map((item) => h('button', {
       key: item.id, type: 'button', onClick: () => { void select(item) },
-      style: { display: 'block', width: '100%', textAlign: 'left', padding: '6px 4px' },
-    }, `轮次 ${item.turn} · ${item.display}  +${item.added} −${item.deleted} · ${item.decision}${item.current ? '' : '（已被同轮新版本替换）'}`))),
+      title: item.currentPath || item.path,
+      style: { display: 'block', width: '100%', textAlign: 'left', padding: '6px 4px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
+    }, item.id.startsWith(PENDING_PREFIX)
+      ? `【待审】${item.display}  +${item.added} −${item.deleted} · ${item.decision}${item.kind === 'oversized' ? ' · 过大' : ''}`
+      : `轮次 ${item.turn} · ${item.display}  +${item.added} −${item.deleted} · ${item.decision}${item.current ? '' : '（已被同轮新版本替换）'}`))),
     cursor > 0 ? h('button', { type: 'button', onClick: () => setCursor(Math.max(0, cursor - 50)) }, '上一页') : null,
     page?.nextCursor !== null && page?.nextCursor !== undefined ? h('button', { type: 'button', onClick: () => setCursor(page.nextCursor!) }, '下一页') : null,
+    // 采集缺口是诊断信息，排在条目之后折叠起来：放最前面会把真正要点的待审条目挤出可视区。
+    gaps.length
+      ? h('details', { key: 'gaps', style: { marginTop: 6 } },
+        h('summary', { style: { cursor: 'pointer', fontSize: 11 } }, `采集不完整 ${gaps.length} 条（诊断信息）`),
+        gaps.map((gap) => h('div', { key: `${gap.sessionId}:${gap.seq}`, role: 'status', style: { fontSize: 11 } }, `轮次 ${gap.turn} 采集不完整：${gap.error}`)))
+      : null,
     detail ? h(PatchDetail, { key: detail.item.id, sessionId: props.sessionId, detail, onChanged: () => { setDetail(null); refreshReview(props.sessionId) } }) : null)
 }
 

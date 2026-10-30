@@ -62,7 +62,6 @@ export interface SidecarBarProps {
 export function SidecarDiffBar(props: SidecarBarProps): React.ReactElement {
   const pendingRegions = props.pendingRegions ?? []
   const staleRegions = props.staleRegions ?? []
-  const [expanded, setExpanded] = React.useState(false)
   const [menu, setMenu] = React.useState<'more' | null>(null)
   const name = String(props.activePath || '').split(/[\\/]/).pop() || '当前文件'
   const count = pendingRegions.length
@@ -84,25 +83,6 @@ export function SidecarDiffBar(props: SidecarBarProps): React.ReactElement {
   }
 
   const moreTrigger = <Button size="sm" variant="ghost" className="edrv-review-icon" aria-label="更多审查操作" title="更多审查操作" aria-haspopup="menu" aria-expanded={menu === 'more'} onClick={() => setMenu(menu === 'more' ? null : 'more')}>{barIcon('more')}</Button>
-
-  const body = expanded
-    ? <div className="edrv-review-body">
-        {pendingRegions.map((region) => {
-          const key = callIdAttr(region.callId, region.idx)
-          return <div key={key} className="edrv-diffrow" data-edrv-hunk={key} title={'跳转到 L' + (region.start ?? '?')} onClick={() => props.onJump?.(region)}>
-            <span className="edrv-diffrow-l">{'L' + (region.start ?? '?') + '-' + (region.end ?? '?')}</span>
-            {(region.oldLines?.length ?? 0) > 0 ? <span className="edrv-diffrow-o">{'-' + (region.oldLines?.length ?? 0)}</span> : null}
-            {(region.newLines?.length ?? 0) > 0 ? <span className="edrv-diffrow-n">{'+' + (region.newLines?.length ?? 0)}</span> : null}
-            {region.create ? <span className="edrv-diffrow-tag">新建</span> : null}
-          </div>
-        })}
-        {staleRegions.map((region) => <div key={'stale' + callIdAttr(region.callId, region.idx)} className="edrv-diffrow edrv-diffrow-stale" title="差异无法定位（文件可能已被手动修改）">
-          <span className="edrv-diffrow-l">{'L' + (region.start ?? '?') + ' 无法定位'}</span>
-          <span className="edrv-diffrow-tag">冲突/需刷新</span>
-          <span className="edrv-diffrow-tag">{badgeOf(region.status ?? '')}</span>
-        </div>)}
-      </div>
-    : null
 
   return <div className="edrv-diffbar edrv-diffbar-dock edrv-reviewbar" data-edrv-diffbox="1" data-edrv-diff-source="sidecar" role="region" aria-label="文件差异审查">
     <ReviewAllRow
@@ -141,7 +121,6 @@ export function SidecarDiffBar(props: SidecarBarProps): React.ReactElement {
       <div className="edrv-review-actions">
         <Button size="sm" variant="ghost" className="edrv-review-undo" icon={barIcon('undo')} onClick={props.onUndoFile} disabled={!canDecide} title={props.missingDeletion ? '恢复展示的完整历史快照（不会覆盖重新出现的文件）' : SIDECAR_UNDO_TITLE}>Undo</Button>
         <Button size="sm" variant="primary" className="edrv-review-keep" icon={barIcon('check')} onClick={props.onAcceptFile} disabled={!canDecide} title={props.missingDeletion ? '保持文件删除并结清覆盖的待审历史记录，不写文件' : SIDECAR_KEEP_TITLE}>Keep</Button>
-        <Button size="sm" variant="ghost" className="edrv-review-details" onClick={() => setExpanded(!expanded)} aria-expanded={expanded} aria-label={expanded ? '收起差异' : '展开差异'} title={expanded ? '收起差异' : '展开差异'}>详情{barIcon(expanded ? 'up' : 'down')}</Button>
         <Menu open={menu === 'more'} anchor={moreTrigger} items={[{ id: 'pending', label: '差异总览' }, { id: 'archive', label: '归档 / 历史' }, { id: 'rollback', label: '回滚当前文件' }, { id: 'refresh', label: '刷新' }]} onSelect={(id: string) => {
           if (id === 'rollback') { setMenu(null); props.onRollback?.(); return }
           if (id === 'refresh') { setMenu(null); props.onRefresh?.(); return }
@@ -151,6 +130,5 @@ export function SidecarDiffBar(props: SidecarBarProps): React.ReactElement {
     </div>
     {view.notice ? <div className={view.noticeTone === 'warn' ? 'edrv-review-notice edrv-review-notice-warn' : 'edrv-review-notice'} role="status">{view.notice}</div> : null}
     {props.reviewError ? <div className={props.reviewErrorTone === 'info' ? 'edrv-review-notice' : 'edrv-review-notice edrv-review-error'} role={props.reviewErrorTone === 'info' ? 'status' : 'alert'}>{props.reviewError}</div> : null}
-    {body}
   </div>
 }

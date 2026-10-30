@@ -106,7 +106,7 @@ export function DiffLauncher(props) {
   }, [tab, sessionId, source])
 
   let body
-  const legacyFiles = sum.pendingFiles.filter((file) => file.sourceKind !== 'official')
+  const legacyFiles = sum.pendingFiles.filter((file) => file.sourceKind === 'legacy')
   if (source === 'official') {
     body = React.createElement(React.Fragment, null,
       React.createElement('div', { className: 'edrv-search-empty' }, '官方轮次净差异 · 原始历史只读；编辑按钮打开当前文件，保存不代表已审。'),

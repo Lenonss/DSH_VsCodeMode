@@ -78,6 +78,25 @@ export async function resolveTargetIn(ctx: Ctx, cwd: string, path: string): Prom
   return fs.resolve(path, cwd ? { cwd } : {})
 }
 
+/**
+ * 把解析结果还原成宿主路径字符串。
+ * 官方 provider 的 resolve 返回不透明 FsTarget，而多数调用点按字符串使用；
+ * 直接把对象当路径传下去会落进 SQL 绑定或 path.resolve，报出与真实原因无关的错误。
+ * @author ddj 2026年10月30号
+ * @param ctx DSH 上下文
+ * @param target resolve 的返回值：宿主路径字符串或 FsTarget
+ * @returns 宿主路径字符串；无法还原时返回空串
+ */
+export function targetPathOf(ctx: Ctx, target: unknown): string {
+  if (typeof target === 'string') return target
+  const fs = ctx.get('fs')
+  if (typeof fs?.processPath !== 'function') return ''
+  try {
+    const resolved = fs.processPath(target as never)
+    return typeof resolved === 'string' && resolved !== '[object Object]' ? resolved : ''
+  } catch { return '' }
+}
+
 /** 读取工作区主 sidecar 文本（缺失/失败 → null）。 */
 async function readSidecarText(ctx: Ctx, cwd: string | null): Promise<string | null> {
   const fs = ctx.get('fs')
