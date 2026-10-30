@@ -11,8 +11,13 @@ describe('pendingSamePath', () => {
     expect(pendingSamePath('D:\\Work\\demo\\src\\a.ts', 'D:\\Work\\demo\\src\\a.ts')).toBe(true)
   })
 
-  it('分隔符与 Windows 大小写差异不影响判定', () => {
+  it('分隔符与盘符大小写差异不影响判定', () => {
+    // 反斜杠与正斜杠只是字形差异
+    expect(pendingSamePath('D:\\Work\\demo\\src\\a.ts', 'D:/Work/demo/src/a.ts')).toBe(true)
+    // 盘符路径天生大小写不敏感，与宿主平台无关（客户端 diffPathKey 同口径）
     expect(pendingSamePath('D:\\Work\\demo\\src\\a.ts', 'd:/work/demo/src/a.ts')).toBe(true)
+    // POSIX 绝对路径不折叠大小写差异，跟随宿主文件系统语义
+    expect(pendingSamePath('/Work/demo/a.ts', '/work/demo/a.ts')).toBe(process.platform === 'win32')
   })
 
   it('相对路径能匹配绝对路径的尾部', () => {

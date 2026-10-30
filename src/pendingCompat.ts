@@ -38,6 +38,9 @@ function pathKey(path: string): string {
   const unified = path.replace(/\\/g, '/')
   // 远端仓库身份区分大小写，折叠成小写会把 Host/Repo 与 host/repo 混成同一个文件。
   if (/^[a-z]+:\/\//i.test(unified)) return unified
+  // 盘符路径天生大小写不敏感（与宿主平台无关，客户端 diffPathKey 同口径）；
+  // POSIX 路径在 POSIX 上区分大小写，不能折叠。
+  if (/^[a-z]:\//i.test(unified)) return unified.toLowerCase()
   return process.platform === 'win32' ? unified.toLowerCase() : unified
 }
 
