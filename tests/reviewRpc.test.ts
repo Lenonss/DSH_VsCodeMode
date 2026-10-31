@@ -3,9 +3,16 @@ import { reviewHandlers } from '../src/reviewRpc.js'
 import type { Ctx } from '../src/store.js'
 import { reviewPage, reviewDetail, decideReview } from '../src/reviewDb.js'
 import { undoReview } from '../src/reviewUndo.js'
-import type { ReviewItem, ReviewPage } from '../src/shared/review.js'
+import { loadPage } from '../src/pending/store.js'
+import type { PendingItem, PendingPage } from '../src/shared/pendingReview.js'
+import type { ReviewDetail, ReviewItem, ReviewPage } from '../src/shared/review.js'
 vi.mock('../src/reviewUndo.js', () => ({ undoReview: vi.fn() }))
 vi.mock('../src/reviewDb.js', () => ({ reviewPage: vi.fn(), reviewDetail: vi.fn(), decideReview: vi.fn() }))
+vi.mock('../src/pending/store.js', () => ({
+  loadPage: vi.fn(() => ({ items: [], pending: 0, nextCursor: null, gaps: [] })),
+  loadDetail: vi.fn(() => null),
+  applyDecide: vi.fn(),
+}))
 
 describe('official review workspace boundary', () => {
   it('rejects unknown sessions before accessing any database', async () => {
@@ -40,7 +47,7 @@ describe('official review workspace boundary', () => {
     expect(await handlers['edrv.review.decide']!({ ...request, decision: 'rejected' })).toEqual({ ok: false, error: conflict })
   })
 
-  it('crosses Host instances for reads only: persisted sessions resolve through sessionQuery', async () => {
+  it('crosses Host instances for reads and Keep: persisted sessions may accept, never undo or judge pending', async () => {
     const query = { filterSessions: async () => [{ header: { id: 'remote', cwd: '/remote-repo' } }] }
     const ctx = {
       get: (name: string) => (name === 'sessionQuery' ? query : name === 'sessions' ? { get: () => undefined } : undefined),
@@ -54,11 +61,55 @@ describe('official review workspace boundary', () => {
     expect(await handlers['edrv.review.detail']!({ sessionId: 'remote', id: 'remote-id' }))
       .toEqual({ ok: false, error: '官方审查记录不存在' })
     expect(reviewDetail).toHaveBeenLastCalledWith('/remote-repo', 'remote-id')
-    // 写类操作仍要求 live 会话：另一端不得并发写同一工作区审查库
-    await expect(handlers['edrv.review.decide']!({
-      sessionId: 'remote', id: 'remote-id', seq: 1, revision: 1, operationId: 'operation', decision: 'accepted',
-    })).rejects.toThrow('会话不存在')
-    expect(decideReview).not.toHaveBeenCalledWith('/remote-repo', expect.anything())
+
+    // Keep 只写共享审查库（CAS + 幂等键）：冷读端可执行，写入仍由数据库版本校验兜底
+    const accept = { sessionId: 'remote', id: 'remote-id', seq: 1, revision: 1, operationId: 'operation', decision: 'accepted' as const }
+    vi.mocked(decideReview).mockReturnValue({ revision: 2 })
+    expect(await handlers['edrv.review.decide']!(accept)).toEqual({ ok: true, revision: 2 })
+    expect(decideReview).toHaveBeenLastCalledWith('/remote-repo', accept)
+
+    // Undo 要写回源文件并校验证据，仍要求本端活跃会话
+    vi.mocked(undoReview).mockClear()
+    const undo = await handlers['edrv.review.decide']!({ ...accept, decision: 'rejected' })
+    expect(undo.ok).toBe(false)
+    expect((undo as { error: string }).error).toContain('活跃的会话')
+    expect(undoReview).not.toHaveBeenCalled()
+
+    // 待审条目判定写本机待审库，冷端会与另一端 agent 抢写，故一律拒绝
+    const pending = await handlers['edrv.review.decide']!({ ...accept, id: 'pending:1' })
+    expect(pending.ok).toBe(false)
+    expect((pending as { error: string }).error).toContain('待审条目')
+  })
+
+  it('reports cold-end capabilities: Keep stays open, Undo closes with the cross-instance reason', async () => {
+    const record = {
+      item: row(1), diff: {}, capturedAt: '', blocks: [],
+      capability: { keep: true, undo: true, reason: 'Undo 将校验原始字节后写回' },
+    } as unknown as ReviewDetail
+    const query = { filterSessions: async () => [{ header: { id: 'remote', cwd: '/remote-repo' } }] }
+    const cold = {
+      get: (name: string) => (name === 'sessionQuery' ? query : name === 'sessions' ? { get: () => undefined } : undefined),
+    } as unknown as Ctx
+    vi.mocked(reviewDetail).mockReturnValue(record)
+    const coldRead = await reviewHandlers(cold, new Map([['/remote-repo', new Map()]]))['edrv.review.detail']!({ sessionId: 'remote', id: '1' })
+    expect((coldRead as { detail: ReviewDetail }).detail.capability)
+      .toEqual({ keep: true, undo: false, reason: expect.stringContaining('另一端'), live: false })
+
+    const liveRead = await reviewHandlers(snapshotCtx(), new Map([['/current', new Map()]]))['edrv.review.detail']!({ sessionId: 'view', id: '1' })
+    expect((liveRead as { detail: ReviewDetail }).detail.capability)
+      .toEqual({ keep: true, undo: true, reason: 'Undo 将校验原始字节后写回', live: true })
+  })
+
+  it('drops settled pending projections so the official record stays the review target', async () => {
+    const handlers = reviewHandlers(snapshotCtx(), new Map([['/current', new Map()]]))
+    const settled = { id: 'pending:/current/file1', path: '/current/file1', settled: true, added: 0, deleted: 0 } as unknown as PendingItem
+    const live = { id: 'pending:/current/file2', path: '/current/file2', settled: false, added: 1, deleted: 0 } as unknown as PendingItem
+    vi.mocked(loadPage).mockReturnValueOnce({ items: [settled, live], pending: 1, nextCursor: null, gaps: [] } as unknown as PendingPage)
+    vi.mocked(reviewPage).mockReturnValue({ items: [row(1)], pending: 1, gaps: [], nextCursor: null })
+
+    const listed = await handlers['edrv.review.list']!({ sessionId: 'view', path: '/current/file1' })
+    const ids = (listed as { page: ReviewPage }).page.items.map((item) => item.id)
+    expect(ids).toEqual(['1'])
   })
 })
 

@@ -56,7 +56,8 @@ export interface ReviewDetail {
   diff: OfficialDiff
   capturedAt: string
   blocks: import('./reviewRegions.js').ReviewBlockState[]
-  capability: { keep: boolean; undo: boolean; reason: string }
+  /** live 缺省视为未知：只有 host 明确给出 false 时才代表会话不在本端活跃。 */
+  capability: { keep: boolean; undo: boolean; reason: string; live?: boolean }
 }
 export interface CaptureGap {
   sessionId: string

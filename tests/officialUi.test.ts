@@ -37,6 +37,14 @@ describe('official review in existing UI', () => {
     expect(html).toContain('0 / 1')
     expect(html).not.toContain('data-edrv-hunk')
   })
+  it('never reports a pending-file count before the official metadata lands', () => {
+    const html = renderToStaticMarkup(React.createElement(DiffBox, {
+      sessionId: 'view', activePath: '/a.lua', fileTotal: null,
+      pendingRegions: [{ callId: 'legacy', idx: 0 }], allPendingCount: 0,
+    }))
+    expect(html).toContain('<strong>—</strong>')
+    expect(html).not.toContain('0 / 0')
+  })
   it('existing launcher defaults to official history and keeps the old records behind an explicit source switch', () => {
     const html = renderToStaticMarkup(React.createElement(DiffLauncher, {
       sessionId: 'view', sum: { files: [], pendingFiles: [], totalFiles: 0 }, tab: 'archive',

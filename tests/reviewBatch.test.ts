@@ -60,4 +60,21 @@ describe('workspace official bulk actions', () => {
     port.decide = vi.fn(async () => { expired = true; return { ok: true, revision: 2 } })
     expect(await runReviewBatch(port, true)).toMatchObject({ completed: 1, error: '会话已切换' })
   })
+  it('keeps official records even when the session lives on the other end', async () => {
+    const port = fixture(2)
+    port.detail = vi.fn(async (id) => ({ item: item(Number(id)), capturedAt: '', capability: { keep: true, undo: false, reason: '跨端', live: false } } as ReviewDetail))
+    expect(await runReviewBatch(port, false)).toMatchObject({ completed: 2, error: '' })
+  })
+  it('aborts a cold-end batch that contains pending projections before any decision', async () => {
+    const port = fixture(2)
+    const items = [{ ...item(0), id: 'pending:0' }, item(1)]
+    port.snapshot = vi.fn(async () => ({ items, pending: 2, nextCursor: null, gaps: [] }))
+    port.detail = vi.fn(async (id) => ({
+      item: items.find((entry) => entry.id === id)!, capturedAt: '', capability: { keep: false, undo: false, reason: '跨端', live: false },
+    } as ReviewDetail))
+    const result = await runReviewBatch(port, false)
+    expect(result).toMatchObject({ completed: 0, total: 2 })
+    expect(result.error).toContain('待审条目')
+    expect(port.decide).not.toHaveBeenCalled()
+  })
 })

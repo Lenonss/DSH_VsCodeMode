@@ -9,9 +9,18 @@ import { PENDING_PREFIX, mergedPage, pendingDetailOf, pendingItemOf, pendingSame
 import { bucketOf, resolveScope, sessionOf } from './registry.js'
 import type { Registry } from './registry.js'
 import type { Ctx } from './store.js'
+import { log } from './log.js'
 
 /** 批量写入快照的硬上限：待审积压超过它说明状态异常，宁可拒绝也不做无界写循环。 */
 const BATCH_LIMIT = 2000
+
+/** 冷端 Undo 说明：Undo 会校验证据并写回源文件，只能在持有该会话的那一端执行。 */
+const UNDO_NEEDS_LIVE = 'Undo 需要在本端活跃的会话上执行：该会话当前在另一端（Web / 桌面）激活。'
+  + 'Keep 不受影响，可在任一端执行；或在本端打开该会话后重试。'
+
+/** 冷端待审判定说明：待审库是按工作区的本地存储，判定需要与正在编辑的那一端保持一致。 */
+const PENDING_NEEDS_LIVE = '待审条目的判定需要在本端活跃的会话上执行：该会话当前在另一端激活，'
+  + '请在那一端处理，或在本端打开该会话后重试。'
 
 /**
  * @private
@@ -55,20 +64,52 @@ function batchSnapshot(cwd: string, pending: PendingPage): { ok: true; page: Rev
  * @returns 审查相关处理器表
  */
 export function reviewHandlers(ctx: Ctx, registry: Registry): Partial<RpcHandlerMap> {
-  /** @private @author ddj 2026年10月28号 @param sessionId 请求作用域 @returns 已迁移工作区（允许跨实例冷读） */
-  async function workspace(sessionId: string): Promise<string> {
+  /**
+   * @private
+   * @author ddj 2026年10月31号
+   * @description: 解析会话作用域，并标明本端是否持有该会话的活跃实例。
+   * 工作区一律由 host 解析，绝不采信调用方 cwd；冷读作用域只带 cwd，不带会话实例。
+   * @param sessionId 请求作用域
+   * @returns 已迁移工作区与活跃标记
+   * @throws 会话不存在、会话无工作区或活跃库迁移未完成
+   */
+  async function scopeOf(sessionId: string): Promise<{ cwd: string; live: boolean }> {
     const scope = await resolveScope(ctx, sessionId)
     if ('err' in scope) throw new Error('会话不存在或没有工作区')
+
     await bucketOf(registry, ctx, scope.cwd)
-    return scope.cwd
+    return { cwd: scope.cwd, live: !!scope.session }
   }
 
-  /** @private @author ddj 2026年10月28号 @param sessionId 请求作用域 @returns 本端 live 会话的工作区；冷读作用域一律拒绝写入 */
-  async function liveWorkspace(sessionId: string): Promise<string> {
-    const scope = await resolveScope(ctx, sessionId)
-    if ('err' in scope || !scope.session) throw new Error('会话不存在或没有工作区')
-    await bucketOf(registry, ctx, scope.cwd)
-    return scope.cwd
+  /**
+   * @private
+   * @author ddj 2026年10月31号
+   * @description: 本端是否持有该会话的活跃实例（纯诊断用，不解析工作区）。
+   * @param sessionId 请求作用域
+   * @returns 本端加载了该会话时为 true
+   */
+  function liveOf(sessionId: string): boolean {
+    return !!sessionOf(ctx, sessionId)
+  }
+
+  /**
+   * @private
+   * @author ddj 2026年10月31号
+   * @description: 按本端是否活跃覆写面板能力位。活跃端保持数据库结论；
+   * 冷端关闭依赖会话的操作（Undo、待审判定）并给出跨端原因，Keep 仍按数据库结论放行。
+   * @param capability 数据库推导的能力位
+   * @param live 本端是否持有活跃会话
+   * @param pending 是否为待审投影条目
+   * @returns 面板可用的能力位
+   */
+  function liveCapabilityOf(
+    capability: { keep: boolean; undo: boolean; reason: string },
+    live: boolean,
+    pending: boolean,
+  ): { keep: boolean; undo: boolean; reason: string; live: boolean } {
+    if (live) return { ...capability, live: true }
+    if (pending) return { keep: false, undo: false, reason: PENDING_NEEDS_LIVE, live: false }
+    return { ...capability, undo: false, live: false, reason: capability.undo ? UNDO_NEEDS_LIVE : capability.reason }
   }
 
   /**
@@ -81,13 +122,19 @@ export function reviewHandlers(ctx: Ctx, registry: Registry): Partial<RpcHandler
    * @returns 待审页（失败为空页）
    */
   function pendingPageOf(cwd: string, sessionId: string): PendingPage {
-    try { return loadPage(cwd, sessionId) }
-    catch { return { items: [], pending: 0, nextCursor: null, gaps: [] } }
+    try {
+      const page = loadPage(cwd, sessionId)
+      // 已结算（老文本与新文本一致）的投影没有净变化可审：留着会顶掉同路径的官方待审记录，
+      // 让差异栏选中一条 Keep 不可用的条目，表现为「按钮亮着却点不动」。
+      return page.items.some((item) => item.settled === true)
+        ? { ...page, items: page.items.filter((item) => item.settled !== true) }
+        : page
+    } catch { return { items: [], pending: 0, nextCursor: null, gaps: [] } }
   }
 
   return {
     'edrv.review.list': async (args) => {
-      const cwd = await workspace(args.sessionId)
+      const { cwd } = await scopeOf(args.sessionId)
       // 批量通道要的是一次性完整快照：分页口径的 pending 只是页内展示计数，不能当完整性不变式
       if (args.all && !args.history && args.path === undefined) {
         return batchSnapshot(cwd, pendingPageOf(cwd, args.sessionId))
@@ -106,43 +153,69 @@ export function reviewHandlers(ctx: Ctx, registry: Registry): Partial<RpcHandler
         return { ok: true, page: { ...official, items: [...own, ...history] } }
       }
       // 待审投影就位后由它承接被覆盖路径，官方旧行让位，同一路径只保留一个权威
-      return { ok: true, page: mergedPage(official, pending, cwd) }
+      const merged = mergedPage(official, pending, cwd)
+      log.debug(`[review] list live=${liveOf(args.sessionId) ? 1 : 0} path=${args.path ?? '(all)'}`
+        + ` items=${merged.items.length} pending=${merged.pending} covered=${merged.overview?.coveredPaths.length ?? -1}`)
+      return { ok: true, page: merged }
     },
     'edrv.review.detail': async (args) => {
-      const cwd = await workspace(args.sessionId)
+      const scope = await scopeOf(args.sessionId)
+      const cwd = scope.cwd
       if (args.id.startsWith(PENDING_PREFIX)) {
         const detail = loadDetail(cwd, args.id.slice(PENDING_PREFIX.length))
         if (!detail) return { ok: false, error: '待审条目不存在' }
-        return { ok: true, detail: pendingDetailOf(detail, new Date(detail.item.updatedAt).toISOString(), cwd) }
+
+        const mapped = pendingDetailOf(detail, new Date(detail.item.updatedAt).toISOString(), cwd)
+        // 待审判定走本地待审库，跨端会与另一端 agent 的写入抢同一份 JSON，故冷端一律关闭
+        return { ok: true, detail: { ...mapped, capability: liveCapabilityOf(mapped.capability, scope.live, true) } }
       }
+
       const detail = reviewDetail(cwd, args.id)
-      return detail ? { ok: true, detail } : { ok: false, error: '官方审查记录不存在' }
+      if (!detail) {
+        log.debug(`[review] detail live=${scope.live ? 1 : 0} id=${args.id} found=0`)
+        return { ok: false, error: '官方审查记录不存在' }
+      }
+      // Keep 只写共享库，冷端放行；Undo 依赖会话证据与源文件写回，冷端关闭
+      const capability = liveCapabilityOf(detail.capability, scope.live, false)
+      log.debug(`[review] detail live=${scope.live ? 1 : 0} id=${args.id} found=1`
+        + ` keep=${capability.keep ? 1 : 0} undo=${capability.undo ? 1 : 0}`)
+      return { ok: true, detail: { ...detail, capability } }
     },
     'edrv.review.decide': async (args) => {
-      // 写类操作要求 live 会话：避免两端并发写同一工作区审查库，回滚也依赖本端会话内容
-      const cwd = await liveWorkspace(args.sessionId)
-      if (args.id.startsWith(PENDING_PREFIX)) {
-        // 待审条目走累计基线：Keep 零写盘，Revert 写回并读回校验
-        const result = await applyDecide(ctx.get('fs'), cwd, {
-          sessionId: args.sessionId,
-          id: args.id.slice(PENDING_PREFIX.length),
-          revision: args.revision,
-          operationId: args.operationId,
-          decision: args.decision,
-          scope: args.scope === 'hunk' ? 'block' : 'file',
-          ...(args.blockId === undefined ? {} : { blockId: args.blockId }),
-        })
-        if (!result.ok) return { ok: false, error: result.reason }
-        return { ok: true, revision: result.flags.revision }
-      }
+      // Keep 只写共享审查库（CAS + operationId 幂等 + WAL），冷端也放行；
+      // Undo 与待审判定依赖本端会话内容或本地待审库，冷端返回可读原因而不是 500。
       try {
-        const result = args.decision === 'rejected'
-          ? await undoReview(ctx, sessionOf(ctx, args.sessionId), cwd, args)
-          : decideReview(cwd, args)
+        const scope = await scopeOf(args.sessionId)
+        if (args.id.startsWith(PENDING_PREFIX)) {
+          if (!scope.live) return { ok: false, error: PENDING_NEEDS_LIVE }
+          // 待审条目走累计基线：Keep 零写盘，Revert 写回并读回校验
+          const result = await applyDecide(ctx.get('fs'), scope.cwd, {
+            sessionId: args.sessionId,
+            id: args.id.slice(PENDING_PREFIX.length),
+            revision: args.revision,
+            operationId: args.operationId,
+            decision: args.decision,
+            scope: args.scope === 'hunk' ? 'block' : 'file',
+            ...(args.blockId === undefined ? {} : { blockId: args.blockId }),
+          })
+          if (!result.ok) return { ok: false, error: result.reason }
+          return { ok: true, revision: result.flags.revision }
+        }
+
+        if (args.decision === 'rejected') {
+          if (!scope.live) return { ok: false, error: UNDO_NEEDS_LIVE }
+          const result = await undoReview(ctx, sessionOf(ctx, args.sessionId), scope.cwd, args)
+          return { ok: true, ...result }
+        }
+
+        const result = decideReview(scope.cwd, args)
+        if (!scope.live) log.info(`[review] 冷端 Keep 官方记录 ${args.id}`)
         return { ok: true, ...result }
       } catch (error) {
         // Guard failures are review results, not transport failures: preserve their reason.
-        return { ok: false, error: error instanceof Error ? error.message : String(error) }
+        const message = error instanceof Error ? error.message : String(error)
+        log.warn(`[review] decide 失败 id=${args.id} decision=${args.decision}: ${message}`)
+        return { ok: false, error: message }
       }
     },
   }

@@ -1,5 +1,6 @@
 /** Official bulk decisions use persisted metadata, never the visible history page. @author ddj 2026年10月27号 */
 import type { ReviewDetail, ReviewItem, ReviewPage, ReviewResult } from '../shared/review.js'
+import { PENDING_PREFIX } from '../shared/pendingReview.js'
 
 export interface BatchPort {
   snapshot: () => Promise<ReviewPage>
@@ -41,6 +42,10 @@ export async function runReviewBatch(port: BatchPort, reject: boolean): Promise<
     for (const item of items) {
       port.guard()
       const detail = await port.detail(item.id)
+      // 待审条目判定要在会话活跃的一端做：冷端能力位已关闭，这里给出比「版本变化」更准确的原因
+      if (detail.capability.live === false && item.id.startsWith(PENDING_PREFIX)) {
+        throw new Error(`${item.display}：待审条目需要在会话活跃的一端判定，请先在那一端处理或在本端打开该会话`)
+      }
       if (!detail.item.current || detail.item.seq !== item.seq || detail.item.revision !== item.revision
         || !detail.capability.keep) throw new Error(`${item.display}：审查版本变化，请刷新后重试`)
       if (reject && !detail.capability.undo) throw new Error(`${item.display}：${detail.capability.reason}`)

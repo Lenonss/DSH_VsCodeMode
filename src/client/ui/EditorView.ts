@@ -569,6 +569,8 @@ export function EditorView(props) {
   }, [records, active, cwd, review.page])
 
   const reviewOpsRef = React.useRef(new Map())
+  // 已自动结案的记录 id：防止「改动已不在文件中」的记录在刷新期间被反复提交判定
+  const settledRef = React.useRef(new Set())
   const [officialDetail, setOfficialDetail] = React.useState(null)
   const [officialRecords, setOfficialRecords] = React.useState([])
   const [selectedReview, setSelectedReview] = React.useState(null)
@@ -588,6 +590,9 @@ export function EditorView(props) {
       .find((path) => sameFile(path, active))
     const coveredPath = review.page?.overview?.coveredPaths.find((path) => sameFile(path, active))
     const reviewPath = coveredPath ?? pendingPath
+    dbg(sessionId, `[DEBUG reviewPath] active=${active ?? '(null)'} covered=${coveredPath ?? '(none)'}`
+      + ` pending=${pendingPath ?? '(none)'} coveredCount=${review.page?.overview?.coveredPaths.length ?? -1}`
+      + ` items=${review.page?.items?.length ?? -1} overview=${review.page?.overview ? 1 : 0}`)
     if (!active || !reviewPath) {
       setOfficialDetail(null)
       setOfficialRecords([])
@@ -601,9 +606,15 @@ export function EditorView(props) {
         if (controller.signal.aborted) return
         if (!page.ok) throw new Error(page.error)
         const selected = page.page.items.find((item) => item.id === selectedReview) ?? page.page.items[0]
+        dbg(sessionId, `[DEBUG reviewList] path=${reviewPath} items=${page.page.items.length}`
+          + ` waiting=${page.page.pending} selected=${selected?.id ?? '(none)'}`)
         if (!selected) { setOfficialRecords([]); setOfficialDetail(null); return }
         const result = await rpc('edrv.review.detail', { sessionId, id: selected.id }, controller.signal)
         if (controller.signal.aborted) return
+        dbg(sessionId, `[DEBUG reviewDetail] id=${selected.id} ok=${result.ok ? 1 : 0}`
+          + ` keep=${result.ok ? (result.detail.capability?.keep === true ? 1 : 0) : '-'}`
+          + ` live=${result.ok ? String(result.detail.capability?.live) : '-'}`
+          + ` err=${result.ok ? '' : String(result.error).slice(0, 120)}`)
         if (!result.ok) throw new Error(result.error)
         setOfficialRecords((previous) => JSON.stringify(previous) === JSON.stringify(page.page.items) ? previous : page.page.items)
         setOfficialDetail((previous) => JSON.stringify(previous) === JSON.stringify(result.detail) ? previous : result.detail)
@@ -672,6 +683,15 @@ export function EditorView(props) {
   const noBlocks = !!officialDetail && (officialDetail.diff.kind !== 'text' || officialDetail.diff.hunks.length === 0)
   // 单文件 Keep/Undo 的作用域：可定位差异 + 无法定位的冲突差异（后者否则永久留在待处理列表）
   const decideRegions = React.useMemo(() => [...pendingRegions, ...staleRegions], [pendingRegions, staleRegions])
+  // 记录的改动已全部不在当前文件中时没有可见差异可审：自动结案，不再让「改动已失效」占用差异栏。
+  React.useEffect(() => {
+    if (!officialDetail || contentReady !== true || batchBusyRef.current) return
+    if (pendingRegions.length > 0 || staleRegions.length === 0) return
+    if (noBlocks || officialDetail.capability?.keep !== true) return
+    if (dirtyRef.current[active]) return
+
+    void settleInvisibleRecord(officialDetail)
+  }, [officialDetail, contentReady, pendingRegions, staleRegions, noBlocks, active])
   hoverRegionsRef.current = pendingRegions
   // 行 → 差异区域 映射（hover O(1) 命中；每行归属其区域）
   const lineRegionMap = React.useMemo(() => {
@@ -3303,33 +3323,84 @@ export function EditorView(props) {
    */
   const itemOf = (r, reject) => ({ callId: r.callId, scope: r.create ? 'call' : 'hunk', hunkIndex: r.idx, decision: reject ? 'rejected' : 'accepted' })
 
+  /**
+   * @private
+   * @author ddj 2026年10月31号
+   * @description: 提交一条官方记录的判定；operationId 按决策键复用，网络重试保持幂等。
+   * @param detail 目标记录（含冻结的 seq / revision）
+   * @param reject true=Undo
+   * @param blockId 可选的连续块；缺省为整文件
+   * @returns 成功返回提交结果，失败抛出 host 给出的原因
+   */
+  async function submitOfficialDecision(detail, reject, blockId) {
+    const source = detail.item
+    const opKey = JSON.stringify([sessionId, source.id, source.seq, source.revision, blockId, reject])
+    let operationId = reviewOpsRef.current.get(opKey)
+    if (!operationId) { operationId = crypto.randomUUID(); reviewOpsRef.current.set(opKey, operationId) }
+
+    const result = await rpc('edrv.review.decide', { sessionId, id: source.id, seq: source.seq,
+      revision: source.revision, operationId, scope: blockId ? 'hunk' : 'file', blockId,
+      decision: reject ? 'rejected' : 'accepted' })
+    if (!result.ok) throw new Error(result.error)
+
+    reviewOpsRef.current.delete(opKey)
+    return result
+  }
+
+  /**
+   * @private
+   * @author ddj 2026年10月31号
+   * @description: 结案一条改动已不在当前文件中的官方记录：等价于 Keep（只标记已采纳，不改写磁盘）。
+   * 这类记录没有可见差异可审，留在差异栏只会让用户去处理一个不存在的东西。
+   * @param detail 待结案的记录
+   */
+  async function settleInvisibleRecord(detail) {
+    if (batchBusyRef.current) return
+
+    const settled = settledRef.current
+    if (settled.has(detail.item.id)) return
+    settled.add(detail.item.id)
+
+    batchBusyRef.current = true
+    try {
+      await submitOfficialDecision(detail, false)
+      refreshReview(sessionId)
+    } catch (cause) {
+      // 结案失败不打扰用户：记录仍留在待审列表，下次打开该文件再试
+      settled.delete(detail.item.id)
+      dbg(sessionId, `[DEBUG settleInvisible] id=${detail.item.id} err=${String(cause).slice(0, 160)}`)
+    } finally { batchBusyRef.current = false }
+  }
+
   /** @private @author ddj 2026年10月27号 @param reject Undo instead of Keep. @param blockId Optional contiguous block. @returns Persisted decision result; never reloads over a dirty buffer. */
   async function decideOfficial(reject, blockId) {
-    if (!officialDetail || batchBusyRef.current) return false
+    dbg(sessionId, `[DEBUG decideOfficial] reject=${reject ? 1 : 0} detail=${officialDetail ? 1 : 0}`
+      + ` busy=${batchBusyRef.current ? 1 : 0} active=${active ?? '(null)'}`)
+    if (!officialDetail || batchBusyRef.current) {
+      // 详情缺失时按钮仍可点（能力位来自列表数据），必须给可读原因而不是静默返回
+      if (!officialDetail && !batchBusyRef.current) setError('官方差异详情尚未加载完成，请稍后重试；若一直如此，请切换文件或刷新页面。')
+      return false
+    }
     if (reject && (dirtyRef.current[active] || savingRef.current.has(active) || saveTimerRef.current.isPending())) {
       setError('存在未保存或正在保存的修改，请等待完成后重试'); return false
     }
     batchBusyRef.current = true
-    const source = officialDetail.item
+    const detail = officialDetail
     const undoPath = active
     const undoModel = editorRef.current?.getModel?.()
     const undoVersion = undoModel?.getVersionId?.()
-    const opKey = JSON.stringify([sessionId, source.id, source.seq, source.revision, blockId, reject])
-    let operationId = reviewOpsRef.current.get(opKey)
-    if (!operationId) { operationId = crypto.randomUUID(); reviewOpsRef.current.set(opKey, operationId) }
     try {
-      const result = await rpc('edrv.review.decide', { sessionId, id: source.id, seq: source.seq,
-        revision: source.revision, operationId, scope: blockId ? 'hunk' : 'file', blockId,
-        decision: reject ? 'rejected' : 'accepted' })
-      if (!result.ok) throw new Error(result.error)
-      reviewOpsRef.current.delete(opKey)
+      await submitOfficialDecision(detail, reject, blockId)
       if (reject && activeRef.current === undoPath && !dirtyRef.current[undoPath]
         && !savingRef.current.has(undoPath) && undoModel?.getVersionId?.() === undoVersion) reloadFile(true)
       else if (reject) setError('Undo 已完成，编辑器在等待期间变化；未覆盖当前缓冲区，请核对磁盘后刷新')
       refreshReview(sessionId)
       setStatus(reject ? '已 Undo 选中差异' : '已 Keep 选中差异')
       return true
-    } catch (cause) { setError(String(cause)); return false }
+    } catch (cause) {
+      dbg(sessionId, `[DEBUG decideOfficialFail] id=${detail.item.id} reject=${reject ? 1 : 0} err=${String(cause).slice(0, 160)}`)
+      setError(String(cause)); return false
+    }
     finally { batchBusyRef.current = false }
   }
 
@@ -3466,10 +3537,26 @@ export function EditorView(props) {
     return operationId
   }
 
+  /**
+   * @private
+   * @author ddj 2026年10月31号
+   * @description: 批量操作要求官方待审列表已就绪；切换会话后列表还在载入时，
+   * 先触发一次刷新并给出可读提示，而不是直接报错中止（用户看到红色「尚未就绪」会以为功能坏了）。
+   * @param action 面向用户的动作名
+   * @returns 列表已就绪时为 true
+   */
+  function reviewReadyForBatch(action) {
+    if (review.page?.overview) return true
+
+    refreshReview(sessionId)
+    setStatus(`官方待审列表正在载入，载入完成后请再次点击${action}`)
+    return false
+  }
+
   /** @private @author ddj 2026年10月27号 @param reject Undo or Keep all workspace pending records, including previous rounds. @returns Explicit partial results; legacy proceeds only when official stage fully succeeds. */
   async function actReviewAll(reject) {
     if (batchBusyRef.current) return
-    if (!review.page?.overview) { setError('官方待审列表尚未就绪，未执行批量操作'); return }
+    if (!reviewReadyForBatch(reject ? 'Undo All' : 'Keep All')) return
     if (!sum.pendingFiles.length) return
     const token = reviewLifeRef.current
     const undoPath = activeRef.current
@@ -3504,7 +3591,7 @@ export function EditorView(props) {
   /** @private @author ddj 2026年10月27号 @param reject Whether to undo pending files. @description Open a DSH confirmation without starting any mutations. */
   function askReviewAll(reject) {
     if (batchBusyRef.current || !sum.pendingFiles.length) return
-    if (!review.page?.overview) { setError('官方待审列表尚未就绪，未执行批量操作'); return }
+    if (!reviewReadyForBatch(reject ? 'Undo All' : 'Keep All')) return
     setReviewAllPrompt({ reject, count: sum.pendingFiles.length, token: reviewLifeRef.current })
   }
 
@@ -4697,6 +4784,9 @@ export function EditorView(props) {
   const sessionDown = isSessionMissingError(rawReviewError)
   const reviewErrorTone = sessionDown ? 'info' : 'error'
   const reviewErrorText = !rawReviewError ? undefined : sessionDown ? SESSION_DOWN_NOTICE : sessionErrorText(rawReviewError)
+  // 官方元数据未到位且没有报错 = 首次载入中：此时还不知道哪些历史记录会被官方通道接管，
+  // 直接按历史记录报数会在每次重启时闪出几十个「待处理文件」，故先显示占位、批量也先不放开。
+  const reviewLoading = review.page === null && !review.error
   const buildDockSnapshot = () => ({
     mode: editorDockMode(active),
     missingDeletion: !!missingNow,
@@ -4718,7 +4808,7 @@ export function EditorView(props) {
     onUndoFile: undoFile,
     onAcceptAllFiles: acceptAllFiles,
     onUndoAllFiles: undoAllFiles,
-    allPendingCount: allPending.length + (review.page?.pending ?? 0),
+    allPendingCount: reviewLoading ? 0 : allPending.length + (review.page?.pending ?? 0),
     reviewBatchBusy,
     batchUnavailable: !review.page?.overview ? '官方待审列表尚未就绪' : undefined,
     onRollback: rollbackFile,
@@ -4732,7 +4822,7 @@ export function EditorView(props) {
     contentReady,
     diffTotal: displayDiffTotal(contentReady, pendingRegions.length, sum.files.find((file) => sameFile(file.path, active))?.pending ?? 0),
     fileIdx,
-    fileTotal: sum.pendingFiles.length,
+    fileTotal: reviewLoading ? null : sum.pendingFiles.length,
     onPrevDiff: () => gotoDiff(-1),
     onNextDiff: () => gotoDiff(1),
     onPrevFile: () => gotoFile(-1),

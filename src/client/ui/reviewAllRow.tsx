@@ -5,8 +5,8 @@ import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
 export interface ReviewAllRowProps {
   /** 当前文件序号（1 基，0 表示未定位） */
   current: number
-  /** 差异文件总数 */
-  total: number
+  /** 差异文件总数；null 表示官方元数据尚未就绪、归属还分不清，显示占位而不报个数 */
+  total: number | null
   /** 批量操作进行中 */
   busy?: boolean
   /** 批量不可用原因（悬浮提示） */
@@ -34,12 +34,13 @@ export interface ReviewAllRowProps {
  * @returns 持久化的全工作区控制条
  */
 export function ReviewAllRow(props: ReviewAllRowProps): React.ReactElement {
-  const total = props.total ?? 0
+  const known = typeof props.total === 'number'
+  const total = known ? props.total as number : 0
   const current = total && props.current > 0 ? props.current : 0
   const disabled = props.busy || !!props.unavailable || !props.pending
 
   return <div className="edrv-review-global" role="group" aria-label="全部待审文件">
-    <Button size="sm" variant="ghost" className="edrv-review-total" onClick={props.onOpen} title="打开当前工作区全部待审差异文件">差异文件 <strong>{current} / {total}</strong></Button>
+    <Button size="sm" variant="ghost" className="edrv-review-total" onClick={props.onOpen} title="打开当前工作区全部待审差异文件">差异文件 <strong>{known ? `${current} / ${total}` : '—'}</strong></Button>
     <span className="edrv-review-all-actions">
       <Button size="sm" variant="ghost" onClick={props.onKeepAll} disabled={disabled || !props.onKeepAll} title={props.unavailable || props.keepTitle || 'Keep 当前工作区全部待审文件'}>Keep All</Button>
       <Button size="sm" variant="ghost" className="edrv-review-undo" onClick={props.onUndoAll} disabled={disabled || !props.onUndoAll} title={props.unavailable || props.undoTitle || 'Undo 当前工作区全部待审文件'}>Undo All</Button>

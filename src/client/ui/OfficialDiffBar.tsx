@@ -15,7 +15,8 @@ export interface OfficialBarProps {
   diffIdx?: number
   /** 编辑器内容是否就绪；未就绪时不得断言差异失效 */
   contentReady?: boolean
-  fileTotal?: number
+  /** 待审文件总数；null 表示官方元数据尚未就绪，栏内显示占位 */
+  fileTotal?: number | null
   fileIdx?: number
   allPendingCount?: number
   reviewBatchBusy?: boolean
@@ -51,6 +52,20 @@ export function barIcon(mark: Mark): React.ReactElement {
   return <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={marks[mark]} /></svg>
 }
 
+/**
+ * @private
+ * @author ddj 2026年10月31号
+ * @description: Keep 按钮提示。会话不在本端活跃时 Keep 仍可执行（只写共享审查库），
+ * 提示里补一句说明，免得用户把它当成跨端不可用的按钮。
+ * @param hint 差异栏给出的 Keep 说明
+ * @param live 会话是否在本端活跃
+ * @returns 按钮 title 文本
+ */
+function keepTitle(hint: string, live: boolean): string {
+  if (live) return hint
+  return `${hint}（会话在另一端激活：Keep 写入共享审查库，仍可执行）`
+}
+
 /** @public @author ddj 2026年10月27号 @param props Existing review callbacks and immutable record metadata. @returns Responsive review toolbar; no disk or decision side effects until an explicit action. */
 export function OfficialDiffBar(props: OfficialBarProps): React.ReactElement {
   const { official, pendingRegions = [], staleRegions = [], diffIdx = 0 } = props
@@ -75,7 +90,7 @@ export function OfficialDiffBar(props: OfficialBarProps): React.ReactElement {
 
   return <div className="edrv-diffbar edrv-diffbar-dock edrv-reviewbar" data-edrv-diffbox="1" data-edrv-diff-source="official" role="region" aria-label="文件差异审查">
     <ReviewAllRow
-      total={props.fileTotal ?? 0}
+      total={props.fileTotal ?? null}
       current={(props.fileTotal ?? 0) && (props.fileIdx ?? -1) >= 0 ? (props.fileIdx ?? 0) + 1 : 0}
       busy={props.reviewBatchBusy}
       unavailable={props.batchUnavailable}
@@ -104,7 +119,7 @@ export function OfficialDiffBar(props: OfficialBarProps): React.ReactElement {
       </div>
       <div className="edrv-review-actions">
         <Button size="sm" variant="ghost" className="edrv-review-undo" icon={barIcon('undo')} onClick={props.onUndoFile} disabled={props.reviewBatchBusy || !detail?.capability.undo} title={detail?.capability.reason}>Undo</Button>
-        <Button size="sm" variant="primary" className="edrv-review-keep" icon={barIcon('check')} onClick={props.onAcceptFile} disabled={props.reviewBatchBusy || !detail?.capability.keep} title={detail?.capability.keep ? view.keepHint : detail?.capability.reason}>Keep</Button>
+        <Button size="sm" variant="primary" className="edrv-review-keep" icon={barIcon('check')} onClick={props.onAcceptFile} disabled={props.reviewBatchBusy || !detail?.capability.keep} title={detail?.capability.keep ? keepTitle(view.keepHint, detail.capability.live !== false) : detail?.capability.reason}>Keep</Button>
         <Menu open={menu === 'more'} anchor={moreTrigger} items={[{ id: 'pending', label: '差异总览' }, { id: 'archive', label: '归档 / 历史' }]} onSelect={openOverview} onClose={closeMenu} side="top" align="end" portal compact autoFocus />
       </div>
     </div>

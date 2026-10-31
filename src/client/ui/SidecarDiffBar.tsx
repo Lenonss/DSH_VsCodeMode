@@ -29,7 +29,8 @@ export interface SidecarBarProps {
   /** 编辑器内容是否就绪；未就绪时不得断言差异失效 */
   contentReady?: boolean
   fileIdx?: number
-  fileTotal?: number
+  /** 待审文件总数；null 表示官方元数据尚未就绪，栏内显示占位 */
+  fileTotal?: number | null
   allPendingCount?: number
   reviewBatchBusy?: boolean
   /** 官方元数据通道失败时的可操作提示 */
@@ -86,7 +87,7 @@ export function SidecarDiffBar(props: SidecarBarProps): React.ReactElement {
 
   return <div className="edrv-diffbar edrv-diffbar-dock edrv-reviewbar" data-edrv-diffbox="1" data-edrv-diff-source="sidecar" role="region" aria-label="文件差异审查">
     <ReviewAllRow
-      total={props.fileTotal ?? 0}
+      total={props.fileTotal ?? null}
       current={(props.fileTotal ?? 0) && (props.fileIdx ?? -1) >= 0 ? (props.fileIdx ?? 0) + 1 : 0}
       busy={busy}
       pending={props.allPendingCount}
