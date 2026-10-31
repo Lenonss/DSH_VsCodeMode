@@ -73,4 +73,12 @@ describe('actual editor receipt bridge', () => {
     finishOpen(peekOpen('session-a')!.requestId, false, 'model load failed')
     expect(await result).toBe(false)
   })
+
+  it('honours an explicit receipt deadline for opportunistic opens', async () => {
+    const result = requestOpen(null, undefined, undefined, 'session-a', { timeoutMs: 500 })
+    expect(peekOpen('session-a')).toBeDefined()
+    vi.advanceTimersByTime(500)
+    expect(await result).toBe(false)
+    expect(vi.getTimerCount()).toBe(0)
+  })
 })

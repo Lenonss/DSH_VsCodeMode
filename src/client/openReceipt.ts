@@ -4,7 +4,7 @@ import { createRequestId } from './requestId.js'
 import type { PlanDocument } from './planState.js'
 
 export interface EditorRequest { requestId: string; sessionId: string; path: string | null; line?: number; column?: number; preview?: boolean; plan?: PlanDocument }
-export interface OpenOptions { preview?: boolean; plan?: PlanDocument; signal?: AbortSignal }
+export interface OpenOptions { preview?: boolean; plan?: PlanDocument; signal?: AbortSignal; timeoutMs?: number }
 interface Waiter { request: EditorRequest; finish: (success: boolean) => void; claimed?: boolean }
 const waiters = new Map<string, Waiter>()
 
@@ -37,7 +37,7 @@ export function finishOpen(requestId: string, success: boolean, error?: string):
  * @param line Optional target line.
  * @param column Optional target column.
  * @param sessionId Owning session, required for routing.
- * @param options Explicit preview, read-only plan document and optional cancellation signal.
+ * @param options Explicit preview, read-only plan document, cancellation signal and receipt deadline.
  * @returns Actual completion; timeout and disposal are false.
  */
 export function requestOpen(path: string | null, line?: number, column?: number, sessionId = '', options: OpenOptions = {}): Promise<boolean> {
@@ -60,7 +60,7 @@ export function requestOpen(path: string | null, line?: number, column?: number,
     function abort(): void { finish(false) }
     options.signal?.addEventListener('abort', abort, { once: true })
     waiters.set(request.requestId, { request, finish })
-    timer = setTimeout(() => finish(false), 20_000)
+    timer = setTimeout(() => finish(false), options.timeoutMs ?? 20_000)
     openEditorView(null)
     window.dispatchEvent(new CustomEvent('edrv:open-request', { detail: request }))
   })

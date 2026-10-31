@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { clearPlanState, createPlanFeed, isPlanAddress, isPlanPath, planDocument, type PlanEntry, type PlanWindow } from '../src/client/planState.js'
+import { cachedPlan, clearPlanState, createPlanFeed, isPlanAddress, isPlanPath, planDocument, rememberPlan, type PlanEntry, type PlanWindow } from '../src/client/planState.js'
 afterEach(clearPlanState)
 /** @private @author ddj 2026年10月08号 @param seq Sequence. @param type Event kind. @param data Payload. @returns Durable event entry. */
 function entry(seq: number, type: string, data: unknown): PlanEntry { return { type: 'event', event: { type, seq, data } } }
@@ -69,5 +69,23 @@ describe('live-only plan feed', () => {
     const submission = entry(1, 'tool/call', { callId: 'plan', name: 'exit_plan_mode', arguments: JSON.stringify({ plan: '# 执行计划\n步骤' }) })
     expect(feed.consume(windowOf(1, [submission]))).toEqual([{ plan: { address: 'dsh-resource://plan/s/plan', markdown: '# 执行计划\n步骤', title: '执行计划' } }])
     expect(feed.consume(windowOf(2, [result(2, 'plan')]))).toEqual([])
+  })
+})
+
+describe('plan document cache', () => {
+  it('remembers live submissions so a later click reuses them', () => {
+    const feed = createPlanFeed('s', '/work')
+    feed.consume(windowOf(0, [], 'replace'))
+    feed.consume(windowOf(1, [entry(1, 'tool/call', { callId: 'plan', name: 'exit_plan_mode', arguments: JSON.stringify({ plan: '# 执行计划\n步骤' }) })]))
+    expect(cachedPlan('dsh-resource://plan/s/plan')).toEqual({ address: 'dsh-resource://plan/s/plan', markdown: '# 执行计划\n步骤', title: '执行计划' })
+    expect(cachedPlan('dsh-resource://plan/s/other')).toBeUndefined()
+    clearPlanState()
+    expect(cachedPlan('dsh-resource://plan/s/plan')).toBeUndefined()
+  })
+  it('ignores identities and payloads that are not complete plan documents', () => {
+    rememberPlan({ address: 'dsh-resource://plan/s/%ZZ', markdown: '# 计划', title: '计划' })
+    rememberPlan({ address: 'dsh-resource://plan/s/c', markdown: 'partial', title: 'partial' })
+    expect(cachedPlan('dsh-resource://plan/s/%ZZ')).toBeUndefined()
+    expect(cachedPlan('dsh-resource://plan/s/c')).toBeUndefined()
   })
 })

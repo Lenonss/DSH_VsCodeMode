@@ -4,6 +4,8 @@ export interface PlanOpen { path?: string; plan?: PlanDocument }
 export interface PlanEntry { type?: string; event: { type: string; seq?: number; data: unknown } }
 export interface PlanWindow { revision: number; entries: readonly PlanEntry[]; change: { kind: string; entries?: readonly PlanEntry[] } }
 const associated = new Map<string, Set<string>>()
+/** 地址 → 已解析计划正文（只留内存，供后续点击省掉一次资源解析）。 */
+const documents = new Map<string, PlanDocument>()
 
 /** @private @author ddj 2026年10月08号 @param value JSON candidate. @returns Object or empty record. */
 function record(value: unknown): Record<string, unknown> {
@@ -59,8 +61,24 @@ function associate(sessionId: string, path: string, cwd: string): void {
   associated.set(sessionId, paths)
   if (associated.size > 32) associated.delete(associated.keys().next().value!)
 }
+/** @public @author ddj 2026年10月31号
+ * 记住一份已解析计划，供「查看全文」时免去资源解析。
+ * @param plan 已解析计划。
+ * @returns 无；只缓存合法地址与正文，超过上限按插入序淘汰。
+ */
+export function rememberPlan(plan: PlanDocument): void {
+  const valid = planDocument(plan.address, plan)
+  if (valid === undefined) return
+
+  documents.set(valid.address, valid)
+  if (documents.size > 64) documents.delete(documents.keys().next().value!)
+}
+
+/** @public @author ddj 2026年10月31号 @param address 官方资源地址。 @returns 已缓存的计划正文。 */
+export function cachedPlan(address: string): PlanDocument | undefined { return documents.get(address) }
+
 /** @public @author ddj 2026年10月08号 Clear associations when the plugin unloads. */
-export function clearPlanState(): void { associated.clear() }
+export function clearPlanState(): void { associated.clear(); documents.clear() }
 
 /** @public @author ddj 2026年10月08号
  * Reduce only live append deltas; hydration, pagination, reconnect and duplicate sequences never open plans.
@@ -91,7 +109,7 @@ export function createPlanFeed(sessionId: string, cwd = '') {
       if (event.type === 'tool/result') return undefined
       const address = 'dsh-resource://plan/' + encodeURIComponent(sessionId) + '/' + encodeURIComponent(id)
       const plan = planDocument(address, { markdown: call.args.plan })
-      if (plan) { remember(id); return { plan } }
+      if (plan) { rememberPlan(plan); remember(id); return { plan } }
       return undefined
     }
     if (!settled || !['write', 'edit'].includes(call.name) || typeof call.args.file_path !== 'string') return undefined

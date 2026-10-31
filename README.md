@@ -533,13 +533,13 @@ profile 请替换为实际目标，不要把示例目录当成当前运行 profi
 
 ```bash
 # ① Git 安装（clone + prepare 构建；推荐打固定 tag）
-dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.23.1
+dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.23.4
 
 # ② npm 注册表（发布到 npm 后）
-dsh plugin --profile web add dsh-vscode-mode@0.23.1
+dsh plugin --profile web add dsh-vscode-mode@0.23.4
 
 # ③ GitHub Release tgz 直装（Release asset 可用后）
-dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.23.1/dsh-vscode-mode-0.23.1.tgz
+dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.23.4/dsh-vscode-mode-0.23.4.tgz
 ```
 
 > **DSH 版本政策（0.17.0 起）**：六项 DSH peer 仍统一声明为 `*`，另以
@@ -880,6 +880,7 @@ Keep All / Undo All 却是亮的。修复：单文件 Keep / Undo 覆盖冲突�
 完整变更见 [GitHub Releases](https://github.com/Lenonss/DSH_VsCodeMode/releases)。
 近期关键版本：
 
+- **v0.23.4**：修复桌面端点计划卡「查看全文」会先闪开一页官方计划预览、随即自动关闭。根因：官方卡片走 `ctx.sidebarRight.openResource(planAddress(callId))`，而本插件以 extension 优先级认领了 `dsh-resource://plan/**` 与 `dsh-resource://plan-review/**`，于是侧栏先按本插件类型建出一个页签（正文「正在打开计划预览…」），挂载后才把计划转进「文件编辑」、再把这个页签关掉——用户看到的就是这次建而即关。现由新增 `src/client/planDirect.ts` 在装配期包装 `sidebarRight.openResource`：只接管「2 段计划地址 + 会话为在屏会话」，正文依次取回顾卡片的 `params.planReview`、插件侧地址→正文缓存、可选 `resources.source()` 资源流（上限 1.5s），拿到正文后经 `requestOpen(..., { preview: true })` 直通本插件编辑器的只读计划页签，不再创建侧栏页签；非计划地址、跨会话与 subagent 5 段地址、正文不可得、编辑器 5s 未回执、以及服务对象只读导致包装赋值失败，一律回落原生 `openResource`，原「认领 + 挂载后转移」链路保留为后备。`openReceipt` 新增可选 `timeoutMs`，`planState` 新增有界（64 条）地址→正文缓存并由 live `exit_plan_mode` 写入。验证：typecheck 0 error；`tests/planDirect.test.ts`（新增 9 例）、`tests/planBridge.test.ts`（13）、`tests/planState.test.ts`（10）、`tests/openReceipt.test.ts`（9）四套 41/41；`npm run build` 双 bundle 通过（含客户端产物完整性校验）；浏览器确认新 bundle 已加载且 Console 无「计划直通装配失败」；GUI 点按由用户在本机 Web 端手动复验后发布。见 [发布说明](docs/release-0.23.4.md)。
 - **v0.23.3**：修复 issue #13（已删除文件的差异条目把人卡死）与 #12（重启后成串「采集不完整」）。①文件在磁盘上被删掉时，客户端申请整文件删除预览被「已有官方审查记录」拒绝，而拒绝只是一条普通 `Error`，于是落到通用加载失败分支——「文件加载失败：…」+ 进度钉在 0%、重试同错、标签页关不掉；`edrv.review.detail` 还把 Undo 不可用解释成「缺少可验证的原始字节」，而真实原因是文件已不在。现缺失文件预览的可预期拒绝带稳定码（`official-covered` / `official-decided` / `no-records` / `no-evidence` / `too-large`），客户端据此显示「文件已在磁盘删除（· 有官方待审改动）」终态：标题 + 原因 + 重试 / 关闭标签页，不再画 0% 进度条；官方待审记录在磁盘已删除时给出「Keep 按删除结案、Undo 需要读写该文件」的准确原因（Keep 语义不变，仍只写共享审查库），记录都已结案时提示可直接关闭；`!review` 的磁盘状态抖动改为最多重读 2 次后给终态，消除缺失↔重现的无限递归。v0.22.0 起 `hasOfficial()` 已用 `typeof path !== 'string'` 守卫堵掉把不透明 FsTarget 绑进 SQL 导致的 `Unknown named parameter 'targetKey'`，本版不再复现。②官方 `workspace/changes` 的 summary 只存在宿主内存里，插件启动补采原先无条件把历史事件全部入队，重启后每一轮都必然抛「summary 已失效或尚不可用」并写成不可修复的 `gap`（面板成串「轮次 N 采集不完整」）；现补采先 `summary()` 探测再入队，失效事件只记一条汇总日志。验证：typecheck 与基线同为 37 个既有错误（`fflate/browser` 依赖缺失）、零新增；定向单测 111/111（含新增 `tests/deletedFileReview.test.ts` 5 例与 `tests/officialBackfill.test.ts` 2 例）、EditorView 相关 82/82；`npm run build` 四个 bundle 通过。见 [发布说明](docs/release-0.23.3.md)。
 - **v0.23.2**：修复 Keep 在非活跃端（桌面端）点了没反应，两处成因。①`edrv.review.decide` 原先一律要求本端活跃会话，而能力位只按审查库推导，会话在另一实例时按钮亮着、点击后抛错被兜底成 HTTP 500。现按写入副作用区分：官方记录 Keep 只写共享审查库（`BEGIN IMMEDIATE` + 幂等键 + 版本 CAS），冷端放行；官方 Undo（校验证据并写回源文件）与待审投影条目（本机 JSON 无跨进程锁）仍限活跃端，返回可读跨端原因而非 500；详情新增 `capability.live`，冷端禁用 Undo 并说明、Keep 提示补「写入共享审查库，仍可执行」。②已结算待审投影的 `capability.keep` 恒为假，却因排在 `items[0]`、同路径官方待审行被历史过滤，把官方记录挤出差异栏（表现为「待审 0」+Keep 禁用+点击无反应）；现 `pendingPageOf()` 剔除已结算投影，官方记录重新成为审查目标。另详情未加载时点 Keep 不再静默失败；打开文件时若某条官方记录的改动已全部不在当前文件中（无可定位差异且缓冲区干净），自动按 Keep 结案（只标记不写盘），差异栏不再显示「本记录 N 处改动均已不在当前文件中」；官方元数据首次载入期间差异栏显示 `—` 而非按历史记录报数，重启瞬间不再闪出几十条假待审。验证：typecheck 0 error、目标单测 57/57、build 通过、真实审查库探针确认首条回到官方记录且 `capability={keep:true,undo:true,live:true}`；桌面端 GUI 点按验收因重启后恢复的是另一个会话未完成，缺口保留。发布不自动部署，升级后重启 DSH 并刷新页面。见 [发布说明](docs/release-0.23.2.md)。
 - **v0.23.1**：修复 Keep All / Undo All 在待审超过一页时必定中止——批量按钮原先复用分页接口并把每页的展示用计数当全量总数校验，官方待审 150 条时先报「待审记录在分页期间变化」或最终报「待审记录数量不完整」，实际 0 项被决策。现改为一次性完整快照（`edrv.review.list` 新增 `all: true`，服务端循环取全并与历史改动投影去重，`nextCursor: null`、`pending` 为真实总数），客户端单次取快照、校验唯一且仍待审后逐项决策；超过 2000 条明确拒绝并提示分批，途中变化仍整批中止不部分写入。差异栏浏览仍走原分页接口。本版未在重启后的 GUI 点按验证，缺口保留；发布不自动部署，升级后重启 DSH 并刷新页面。见 [发布说明](docs/release-0.23.1.md)。

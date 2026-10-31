@@ -26,7 +26,8 @@ function harness() {
   let body: any
   const offType = vi.fn(), offBody = vi.fn()
   const register = vi.fn(() => offType)
-  const service = { openTab: vi.fn(), openResource: vi.fn() }
+  const original = vi.fn()
+  const service = { openTab: vi.fn(), openResource: original }
   const services: Record<string, unknown> = {
     uiSession: { current: scope }, sessions: { list, binding: () => ({ eventSource: feed }) },
     sidebarRightTabs: { register }, sidebarRight: service,
@@ -35,7 +36,7 @@ function harness() {
     inject: (_name: string, fn: () => unknown) => fn(),
     register: (_spec: object, render: unknown) => { body = render; return offBody },
   } }
-  return { ctx, scope, feed, list, services, service, register, offType, offBody, body: () => body }
+  return { ctx, scope, feed, list, services, service, original, register, offType, offBody, body: () => body }
 }
 /** @private @author ddj 2026年10月08号 @param revision Revision. @param id Call id. @returns Successful live plan file write. */
 function written(revision: number, id: string): PlanWindow {
@@ -126,7 +127,7 @@ describe('official plan resource transfer', () => {
     const cleanup = hooks.effects[0]()
     expect(vi.mocked(requestOpen).mock.calls[0][4]!.plan!.title).toBe('待审批')
     tree.children[1].props.onClick()
-    expect(h.service.openResource).toHaveBeenCalledWith('dsh-resource://plan-review/s/r', { kind: 'plan', params })
+    expect(h.original).toHaveBeenCalledWith('dsh-resource://plan-review/s/r', { kind: 'plan', params })
     expect(close).toHaveBeenCalledOnce()
     if (typeof cleanup === 'function') cleanup()
     off()
@@ -160,6 +161,36 @@ describe('official plan resource transfer', () => {
     complete(true)
     await Promise.resolve()
     expect(close).toHaveBeenCalledOnce()
+    off()
+  })
+})
+
+describe('direct plan routing', () => {
+  it('wraps the official resource entry and restores it on disposal', () => {
+    const h = harness()
+    const off = installPlanBridge(h.ctx, vi.fn())
+    expect(h.service.openResource).not.toBe(h.original)
+    off()
+    expect(h.service.openResource).toBe(h.original)
+  })
+  it('opens review plans in the editor without creating a sidebar tab', () => {
+    const h = harness()
+    const off = installPlanBridge(h.ctx, vi.fn())
+    h.service.openResource('dsh-resource://plan-review/s/r', { kind: 'plan', params: { planReview: { markdown: '# 待审批\n正文' } } })
+    expect(h.original).not.toHaveBeenCalled()
+    expect(h.service.openTab).not.toHaveBeenCalled()
+    expect(requestOpen).toHaveBeenCalledWith(null, undefined, undefined, 's',
+      expect.objectContaining({ preview: true, plan: expect.objectContaining({ address: 'dsh-resource://plan-review/s/r', title: '待审批' }) }))
+    off()
+  })
+  it('keeps the manual native fallback outside the wrapper', () => {
+    const h = harness(), close = vi.fn()
+    const off = installPlanBridge(h.ctx, vi.fn())
+    const params = { planReview: { markdown: '# 待审批\n完整计划' } }
+    const tree = h.body()({ sessionId: 's', useTabInfo: () => ({ tab: { navigation: { address: 'dsh-resource://plan-review/s/r', revision: 1, params }, actions: { close } } }), useResource: () => ({ status: 'none' }) })
+    hooks.effects[0]()
+    tree.children[1].props.onClick()
+    expect(h.original).toHaveBeenCalledOnce()
     off()
   })
 })

@@ -2,6 +2,7 @@
 import React from 'react'
 import { requestOpen } from './openReceipt.js'
 import { createPlanFeed, clearPlanState, isPlanAddress, planDocument, type PlanWindow, type PlanOpen } from './planState.js'
+import { installPlanDirect, optionalService, type PlanOpenOptions } from './planDirect.js'
 import { detectOfficial, OFFICIAL_SLOT_NAME, type OfficialSidebar } from './officialSidebar.js'
 import { readSessionScope, subscribeScope } from './sessionScope.js'
 import { log } from './log.js'
@@ -22,16 +23,12 @@ const CLAIM_ID = 'dsh-vscode-mode/plan'
 const CLAIM_KIND = 'edrvPlan'
 const EMPTY_RESOURCE = { status: 'none' }
 
-/** @private @author ddj 2026年10月08号 @param ctx Optional context. @param name Service name. @returns Service or undefined without gating plugin activation. */
-function optional(ctx: PlanContext, name: string): unknown {
-  try { return ctx.get(name) } catch { return undefined }
-}
 /** @private @author ddj 2026年10月08号 @param tab Current tab. @returns Native plan fallback options, preserving transient review parameters. */
 function nativeOptions(tab: PlanTab | undefined): { kind: string; params?: unknown } {
   return { kind: 'plan', params: tab?.navigation?.params }
 }
-/** @private @author ddj 2026年10月08号 @param ctx Optional context. @param official Sidebar services. @returns Transfer component with native fallback and cancellable receipts. */
-function planRouter(ctx: PlanContext, official: OfficialSidebar) {
+/** @private @author ddj 2026年10月08号 @param ctx Optional context. @param official Sidebar services. @param native Official openResource bypass. @returns Transfer component with native fallback and cancellable receipts. */
+function planRouter(ctx: PlanContext, official: OfficialSidebar, native: (address: string, options?: PlanOpenOptions) => void) {
   const transfers = new Map<string, { controller: AbortController; sessionId: string }>()
   /** @private @author ddj 2026年10月08号 @param all Plugin disposal. Cancel scope-stale transfers, not transfers merely hidden by the editor mount. */
   function cancel(all = false): void {
@@ -60,7 +57,7 @@ function planRouter(ctx: PlanContext, official: OfficialSidebar) {
     function openNative(): void {
       if (typeof official.service.openResource !== 'function') return
       try {
-        official.service.openResource(address, nativeOptions(tab))
+        native(address, nativeOptions(tab))
         tab?.actions?.close?.()
       } catch (error) { log.warn('计划官方查看器回退失败：' + String(error)) }
     }
@@ -99,11 +96,12 @@ function registerPlan(ctx: PlanContext, official: OfficialSidebar): () => void {
     patterns: ['dsh-resource://plan/**', 'dsh-resource://plan-review/**'],
     canOpen: isPlanAddress, title: () => '计划预览',
   })
-  const router = planRouter(ctx, official)
+  const direct = installPlanDirect(ctx, official.service)
+  const router = planRouter(ctx, official, direct.native)
   try {
     const offBody = ctx.slots.inject(OFFICIAL_SLOT_NAME, () => ctx.slots.register({ name: OFFICIAL_SLOT_NAME, key: CLAIM_ID }, router.body))
-    return () => { router.dispose(); if (typeof offBody === 'function') offBody(); offType() }
-  } catch (error) { router.dispose(); offType(); throw error }
+    return () => { direct.dispose(); router.dispose(); if (typeof offBody === 'function') offBody(); offType() }
+  } catch (error) { direct.dispose(); router.dispose(); offType(); throw error }
 }
 /** @private @author ddj 2026年10月08号 @param ctx Context. @returns Current-session feed subscription, cancelling pending opens on scope change. */
 function watchPlans(ctx: PlanContext): () => void {
@@ -116,7 +114,7 @@ function watchPlans(ctx: PlanContext): () => void {
   /** @private @author ddj 2026年10月08号 @param id Owning session. @returns Valid borrowed feed, or undefined on older/incompatible services. */
   function sourceOf(id: string): EventSource | undefined {
     try {
-      const sessions = optional(ctx, 'sessions') as Sessions | undefined
+      const sessions = optionalService(ctx, 'sessions') as Sessions | undefined
       if (!id || typeof sessions?.binding !== 'function') return undefined
       const feed = sessions.binding(id)?.eventSource
       return typeof feed?.getSnapshot === 'function' && typeof feed.subscribe === 'function' ? feed : undefined
