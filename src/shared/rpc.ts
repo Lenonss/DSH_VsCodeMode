@@ -375,7 +375,7 @@ export interface UiStatePatchInput {
 
 /** 每个方法的请求参数（sessionId 为公共可选字段）。 */
 export interface RpcRequestMap {
-  'edrv.review.list': ReviewRequest & { cursor?: number; history?: boolean; path?: string }
+  'edrv.review.list': ReviewRequest & { cursor?: number; history?: boolean; path?: string; all?: boolean }
   'edrv.review.detail': ReviewRequest & { id: string }
   'edrv.review.decide': DecideReview
   'edrv.pending.list': PendingRequest

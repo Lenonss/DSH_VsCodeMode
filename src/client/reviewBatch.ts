@@ -2,7 +2,7 @@
 import type { ReviewDetail, ReviewItem, ReviewPage, ReviewResult } from '../shared/review.js'
 
 export interface BatchPort {
-  list: (cursor?: number) => Promise<ReviewPage>
+  snapshot: () => Promise<ReviewPage>
   detail: (id: string) => Promise<ReviewDetail>
   decide: (detail: ReviewDetail, reject: boolean, operationId: string) => Promise<ReviewResult<{ revision: number }>>
   guard: () => void
@@ -10,27 +10,23 @@ export interface BatchPort {
 }
 export interface BatchResult { completed: number; total: number; paths: string[]; error: string }
 
-/** @public @author ddj 2026年10月27号 @param port Authenticated RPC adapter. @returns Frozen complete pending set; aborts before any decision if pagination shifts. @throws Incomplete or changing pages. */
-export async function loadPending(port: Pick<BatchPort, 'list'>): Promise<ReviewItem[]> {
-  const items: ReviewItem[] = []
+/**
+ * @public
+ * @author ddj 2026年10月31号
+ * @description: 取一次完整待审快照。分页计数只用于展示，批量写入必须一次取全，避免把页内数字当成总数。
+ * @param port 已鉴权的 RPC 适配器
+ * @returns 冻结的完整待审集；任何不一致都在首个写入前中止
+ * @throws 快照重复、版本已变或数量不完整
+ */
+export async function loadPending(port: Pick<BatchPort, 'snapshot'>): Promise<ReviewItem[]> {
+  const page = await port.snapshot()
   const seen = new Set<string>()
-  const cursors = new Set<number>()
-  let cursor: number | undefined
-  let expected: number | undefined
-  do {
-    const page = await port.list(cursor)
-    expected ??= page.pending
-    if (page.pending !== expected) throw new Error('待审记录在分页期间变化，请刷新后重试')
-    for (const item of page.items) {
-      if (seen.has(item.id) || !item.current || item.decision !== 'pending') throw new Error('待审分页发生重复或版本变化，请刷新后重试')
-      seen.add(item.id); items.push(item)
-    }
-    if (page.nextCursor === null) break
-    if (cursors.has(page.nextCursor) || page.items.length === 0) throw new Error('待审分页未完整返回，请刷新后重试')
-    cursor = page.nextCursor; cursors.add(cursor)
-  } while (true)
-  if (items.length !== expected) throw new Error('待审记录数量不完整，未执行批量操作')
-  return items
+  for (const item of page.items) {
+    if (seen.has(item.id) || !item.current || item.decision !== 'pending') throw new Error('待审快照发生重复或版本变化，请刷新后重试')
+    seen.add(item.id)
+  }
+  if (page.nextCursor !== null || page.items.length !== page.pending) throw new Error('待审记录数量不完整，未执行批量操作')
+  return page.items
 }
 
 /** @public @author ddj 2026年10月27号 @param port Guarded existing per-file decision adapter. @param reject Undo instead of Keep. @returns Precise partial result; Undo stops at first conflict, never claims atomic multi-file rollback. */

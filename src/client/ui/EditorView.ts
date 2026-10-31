@@ -3479,7 +3479,11 @@ export function EditorView(props) {
     setStatus(reject ? '正在检查并 Undo 全部待审记录…' : '正在 Keep 全部待审记录…')
     try {
       const result = await runReviewBatch({
-        list: async (cursor) => { const res = await rpc('edrv.review.list', { sessionId, cursor }); if (!res.ok) throw new Error(res.error); return res.page },
+        snapshot: async () => {
+          const res = await rpc('edrv.review.list', { sessionId, all: true })
+          if (!res.ok) throw new Error(res.error)
+          return res.page
+        },
         detail: async (id) => { const res = await rpc('edrv.review.detail', { sessionId, id }); if (!res.ok) throw new Error(res.error); return res.detail },
         decide: (detail, undo, operationId) => rpc('edrv.review.decide', { sessionId, id: detail.item.id, seq: detail.item.seq, revision: detail.item.revision, operationId, scope: 'file', decision: undo ? 'rejected' : 'accepted' }),
         guard: () => guardReviewAll(reject, token), operation: batchOperation,

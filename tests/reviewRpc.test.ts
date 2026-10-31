@@ -3,6 +3,7 @@ import { reviewHandlers } from '../src/reviewRpc.js'
 import type { Ctx } from '../src/store.js'
 import { reviewPage, reviewDetail, decideReview } from '../src/reviewDb.js'
 import { undoReview } from '../src/reviewUndo.js'
+import type { ReviewItem, ReviewPage } from '../src/shared/review.js'
 vi.mock('../src/reviewUndo.js', () => ({ undoReview: vi.fn() }))
 vi.mock('../src/reviewDb.js', () => ({ reviewPage: vi.fn(), reviewDetail: vi.fn(), decideReview: vi.fn() }))
 
@@ -58,5 +59,36 @@ describe('official review workspace boundary', () => {
       sessionId: 'remote', id: 'remote-id', seq: 1, revision: 1, operationId: 'operation', decision: 'accepted',
     })).rejects.toThrow('会话不存在')
     expect(decideReview).not.toHaveBeenCalledWith('/remote-repo', expect.anything())
+  })
+})
+
+/** @private @author ddj 2026年10月31号 @param index Record identity. @returns Minimal official pending row. */
+function row(index: number): ReviewItem {
+  return { id: String(index), current: true, decision: 'pending', revision: 1, seq: index, display: `file${index}`, path: `/current/file${index}`, currentPath: `/current/file${index}` } as ReviewItem
+}
+/** @private @author ddj 2026年10月31号 @returns Live session context bound to /current. */
+function snapshotCtx(): Ctx {
+  return {
+    get: (name: string) => (name === 'sessions' ? { get: () => ({ id: 'view', header: { cwd: '/current' } }) }
+      : name === 'workingDirectory' ? { get: () => '/current' } : undefined),
+  } as unknown as Ctx
+}
+describe('bulk review snapshot', () => {
+  it('pages the official store once and reports items and pending from the same snapshot', async () => {
+    const handlers = reviewHandlers(snapshotCtx(), new Map([['/current', new Map()]]))
+    vi.mocked(reviewPage).mockClear().mockReturnValueOnce({ items: [row(1), row(2)], pending: 3, gaps: [], nextCursor: 50 })
+      .mockReturnValue({ items: [row(3)], pending: 3, gaps: [], nextCursor: null })
+    const listed = await handlers['edrv.review.list']!({ sessionId: 'view', all: true })
+    expect(listed).toMatchObject({ ok: true, page: { pending: 3, nextCursor: null } })
+    const page = (listed as { page: ReviewPage }).page
+    expect(page.items.map((entry) => entry.id)).toEqual(['1', '2', '3'])
+    expect(reviewPage).toHaveBeenLastCalledWith('/current', 50)
+  })
+  it('refuses an oversized pending backlog instead of starting unbounded writes', async () => {
+    const handlers = reviewHandlers(snapshotCtx(), new Map([['/current', new Map()]]))
+    vi.mocked(reviewPage).mockReset().mockReturnValue({ items: [], pending: 2001, gaps: [], nextCursor: null })
+    const listed = await handlers['edrv.review.list']!({ sessionId: 'view', all: true })
+    expect(listed).toMatchObject({ ok: false })
+    expect((listed as { error: string }).error).toContain('上限 2000')
   })
 })

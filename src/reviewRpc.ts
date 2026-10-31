@@ -1,5 +1,6 @@
 /** Session-scoped official review RPC. @author ddj 2026年10月26号 */
 import type { RpcHandlerMap } from './shared/rpc.js'
+import type { ReviewItem, ReviewPage } from './shared/review.js'
 import type { PendingPage } from './shared/pendingReview.js'
 import { decideReview, reviewDetail, reviewPage } from './reviewDb.js'
 import { undoReview } from './reviewUndo.js'
@@ -8,6 +9,41 @@ import { PENDING_PREFIX, mergedPage, pendingDetailOf, pendingItemOf, pendingSame
 import { bucketOf, resolveScope, sessionOf } from './registry.js'
 import type { Registry } from './registry.js'
 import type { Ctx } from './store.js'
+
+/** 批量写入快照的硬上限：待审积压超过它说明状态异常，宁可拒绝也不做无界写循环。 */
+const BATCH_LIMIT = 2000
+
+/**
+ * @private
+ * @author ddj 2026年10月31号
+ * @description: 批量写入用的一次性完整快照。合并口径与列表一致（待审投影优先、同路径官方旧行让位），
+ * 但一次取全，且 items 与 pending 同源，客户端才能把它当成写前不变式。
+ * @param cwd 工作区
+ * @param pending 该会话可见的待审页
+ * @returns 完整快照；待审积压超过上限或分页期间数量漂移时返回错误
+ */
+function batchSnapshot(cwd: string, pending: PendingPage): { ok: true; page: ReviewPage } | { ok: false; error: string } {
+  const first = reviewPage(cwd)
+  if (first.pending > BATCH_LIMIT) return { ok: false, error: `待审记录过多（${first.pending} 条，上限 ${BATCH_LIMIT}），请先分批处理后重试` }
+
+  const official: ReviewItem[] = []
+  let page: ReviewPage | undefined = first
+  while (page) {
+    for (const item of page.items) if (item.current && item.decision === 'pending') official.push(item)
+    page = page.nextCursor === null ? undefined : reviewPage(cwd, page.nextCursor)
+  }
+  // 分页期间有记录被判定掉：数量对不上就不给客户端一份半截快照
+  if (official.length !== first.pending) return { ok: false, error: '待审记录数量不完整，未执行批量操作' }
+
+  // 待审投影已接管的路径，官方旧行必须让位，否则同一文件会被批量写两次
+  const live = pending.items.filter((item) => !item.settled)
+  const kept = official.filter((row) => !live.some((entry) => pendingSamePath(entry.path, row.currentPath) || pendingSamePath(entry.path, row.path)))
+  const items = [...live.map((entry) => pendingItemOf(entry, cwd)), ...kept]
+  return {
+    ok: true,
+    page: { items, pending: items.length, nextCursor: null, gaps: first.gaps, ...(first.overview ? { overview: first.overview } : {}) },
+  }
+}
 
 /**
  * @public
@@ -52,6 +88,10 @@ export function reviewHandlers(ctx: Ctx, registry: Registry): Partial<RpcHandler
   return {
     'edrv.review.list': async (args) => {
       const cwd = await workspace(args.sessionId)
+      // 批量通道要的是一次性完整快照：分页口径的 pending 只是页内展示计数，不能当完整性不变式
+      if (args.all && !args.history && args.path === undefined) {
+        return batchSnapshot(cwd, pendingPageOf(cwd, args.sessionId))
+      }
       const official = reviewPage(cwd, args.cursor, args.history, args.path)
       const pending = pendingPageOf(cwd, args.sessionId)
       // 历史快照只属于官方通道；待审条目没有轮次历史，混进去会造出假的「轮次 0」。

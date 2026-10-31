@@ -521,6 +521,7 @@ DSH 每次启动监听随机端口，`http://127.0.0.1:<port>` 就是浏览器 o
 
 官方 `dsh plugin` 方式，三选一。下面以 `web` profile 为例；Desktop 或其他命名
 profile 请替换为实际目标，不要把示例目录当成当前运行 profile。升级前可阅读
+**v0.23.1** 修复「Keep All / Undo All」在工作区待审超过一页时必定中止：批量按钮原先复用官方审查的分页接口逐页取待审条目，并把每页返回的展示用计数当成全量总数校验，因此官方待审超过 50 条（本仓库常态约 150 条）时会先报「待审记录在分页期间变化」或最终报「待审记录数量不完整」，实际一条都不会被决策（已完成 0 项）。现在批量操作改走一次性完整快照——`edrv.review.list` 新增 `all: true` 参数，服务端循环分页取全官方待审行，与工作区历史改动投影按路径去重后返回 `nextCursor: null` 与真实总数（`pending`），客户端单次取快照、校验条目唯一且仍为待审后才逐项决策；快照总量超过 2000 条时明确拒绝并提示分批处理，条目在决策途中变化则继续整批中止、不做部分写入。差异栏的日常浏览仍走原分页接口，展示行为不变。本版修复只经单测与真实审查库只读核对，未在重启后的 GUI 上点按批量按钮验证，缺口保留，见 [0.23.1 发布说明](docs/release-0.23.1.md)。以下保留历史版本事实：
 **v0.23.0** 的快捷菜单：编辑器内一个可拖动悬浮按钮，点开是自定义菜单树（组 / 按钮，最多 5 层），按钮可携带提示词并直接发送给 AI 或只填入输入框；配置存于 `<DSH_HOME>/dsh-vscode-mode/data/quick-menu.json`，带 `revision` 乐观锁与损坏降级；节点可限定生效工作区（默认全部），按钮可绑定技能与规则，发送时按当前会话可见性校验后只拼装通过的绑定。新增 `skills.list` 只读 RPC 枚举「全局技能 + 当前工作区技能」作为候选，配置界面的工作区、技能、规则全部改为下拉弹层/多选下拉，菜单设置重排为四段并统一按钮盒模型（修掉「导入 JSON」下移不居中）。本版**未做 GUI 真机验收**（本机 pnpm store 损坏、插件未部署），缺口已获用户接受，见 [0.23.0 发布说明](docs/release-0.23.0.md)。以下保留历史版本事实：
 **v0.22.0** 的累计基线待审（非 UI 能力对齐 dsh-diff-approval）：同一文件的多次编辑折叠成一条待审、基线保留最早内容，A→B→C 显示 A→C、A→B→A 自然归零；Keep 只推进基线不改磁盘，Revert 走版本守卫写回并读回校验，撤销/重做用游标模型跨重启保留；新增 `str_replace_editor` 预像配对、`fs/observed` 终像、已入列路径的外部改动吸收与缺失/不可读生命周期、git/svn/Perforce 基线导入，以及旧 sidecar 写入口对已接管路径的服务端拒绝。差异仍在编辑器内行内展示、块级 Keep/Undo 用药丸，文件级在差异栏；详情面板与批注（含「让 AI 应答」）本版移除。验收边界：p4 仅有假 shell 单测（本机无 Perforce 客户端），「让 AI 应答」随批注一并下线故不再验证；本版未在宿主上重启验收 GUI 全流程，见 [0.22.0 发布说明](docs/release-0.22.0.md)。以下保留历史版本事实：
 **v0.21.4** 的任务发送结果分类与诚实草稿降级：只有明确 accepted 才等待分析方案；unknown/submitted/cancelled 不另填草稿或重发，安全降级只填实际当前会话草稿并提示手动发送。旧 boolean 接口保留，legacy true 不等于受理。开发 link 客户端 rev458288ddb012 的真实公开入口与目标受理已验；完整 SVN 分析/方案投递因 `SetNamedSecurityInfoW failed (Win32 5)` 未完成，用户仅本批接受此缺口，不代表 Host 整体升级或当前实例已安装 npm 0.21.4。见 [0.21.4 发布说明](docs/release-0.21.4.md)。保留以下历史版本事实：
@@ -531,13 +532,13 @@ profile 请替换为实际目标，不要把示例目录当成当前运行 profi
 
 ```bash
 # ① Git 安装（clone + prepare 构建；推荐打固定 tag）
-dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.23.0
+dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.23.1
 
 # ② npm 注册表（发布到 npm 后）
-dsh plugin --profile web add dsh-vscode-mode@0.23.0
+dsh plugin --profile web add dsh-vscode-mode@0.23.1
 
 # ③ GitHub Release tgz 直装（Release asset 可用后）
-dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.23.0/dsh-vscode-mode-0.23.0.tgz
+dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.23.1/dsh-vscode-mode-0.23.1.tgz
 ```
 
 > **DSH 版本政策（0.17.0 起）**：六项 DSH peer 仍统一声明为 `*`，另以
@@ -878,6 +879,7 @@ Keep All / Undo All 却是亮的。修复：单文件 Keep / Undo 覆盖冲突�
 完整变更见 [GitHub Releases](https://github.com/Lenonss/DSH_VsCodeMode/releases)。
 近期关键版本：
 
+- **v0.23.1**：修复 Keep All / Undo All 在待审超过一页时必定中止——批量按钮原先复用分页接口并把每页的展示用计数当全量总数校验，官方待审 150 条时先报「待审记录在分页期间变化」或最终报「待审记录数量不完整」，实际 0 项被决策。现改为一次性完整快照（`edrv.review.list` 新增 `all: true`，服务端循环取全并与历史改动投影去重，`nextCursor: null`、`pending` 为真实总数），客户端单次取快照、校验唯一且仍待审后逐项决策；超过 2000 条明确拒绝并提示分批，途中变化仍整批中止不部分写入。差异栏浏览仍走原分页接口。本版未在重启后的 GUI 点按验证，缺口保留；发布不自动部署，升级后重启 DSH 并刷新页面。见 [发布说明](docs/release-0.23.1.md)。
 - **v0.23.0**：新增快捷菜单——可拖动悬浮按钮 + 自定义菜单树（组/按钮，最多 5 层），按钮携带提示词并「直接发送给 AI」或「只填入输入框」；配置存 `<DSH_HOME>/dsh-vscode-mode/data/quick-menu.json`，带 `revision` 乐观锁、冲突重拉不覆盖、损坏降级。节点可限定工作区（默认全部、子节点继承），按钮可绑定技能与规则，发送时按会话可见性校验后只拼装通过的绑定（规则支持引用/内联）。新增 `skills.list` 只读 RPC 枚举全局技能 + 当前工作区技能；配置界面工作区改下拉弹层、技能/规则改分组多选下拉并移除手输技能名，菜单设置重排四段、统一按钮盒模型并修掉「导入 JSON」下移不居中。本版 GUI 未真机验收（pnpm store 损坏、插件未部署），缺口已获用户接受；发布不自动部署，升级后重启 DSH 并刷新页面。见 [发布说明](docs/release-0.23.0.md)。
 - **v0.22.0**：新增累计基线待审——同文件多次编辑折叠成一条、基线保留最早内容（A→B→C 显示 A→C、A→B→A 归零）；Keep 只推进基线不改磁盘，Revert 带版本守卫写回并读回，撤销/重做游标模型跨重启保留；补 `str_replace_editor` 预像配对、外部改动吸收与缺失生命周期、git/svn/Perforce 基线导入、旧入口服务端拒绝。差异仍在编辑器内行内展示，详情面板与批注（含「让 AI 应答」）移除。p4 仅假 shell 单测（本机无 Perforce 客户端），GUI 全流程未重启验收；发布不自动部署，升级后重启 DSH 并刷新页面。见 [发布说明](docs/release-0.22.0.md)。
 - **v0.21.4**：区分任务明确受理、拒绝、不明、仅提交与取消；只有 accepted 开始等待，unknown/submitted/cancelled 不另填草稿、重试或轮询。安全降级只填实际当前会话草稿并提示手动发送，缺详细 API 明确本次未自动发送；旧 boolean 兼容但 true 不等于受理。真实开发客户端公开按钮→目标受理已验，完整 SVN 分析/方案投递因 Win32 5 未验，用户仅本批接受；Host 未重启，不自动部署。见 [发布说明](docs/release-0.21.4.md)。
