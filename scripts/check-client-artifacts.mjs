@@ -24,25 +24,28 @@ function registration(source, filename) {
 function platformSeeds() {
   const react = { memo: (component) => component, forwardRef: (component) => component,
     createContext: () => ({ Provider() {}, Consumer() {} }), Component: class {}, PureComponent: class {} }
-  return { react, 'react-dom': {}, 'react-dom/client': {}, '@deepseek-ai/dsh-client-ui-primitives': {} }
+  return { react, 'react/jsx-runtime': {}, 'react-dom': {}, 'react-dom/client': {}, '@deepseek-ai/dsh-client-ui-primitives': {} }
 }
 
 /** @private @author ddj 2026年10月22号 @param source JavaScript source. @param name Filename. @param allowed Permitted externals. @returns Reject unsupported executable imports, ignoring comments and literals. */
 function verifySyntax(source, name, allowed) {
   const ast = ts.createSourceFile(name, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS)
   assert.equal(ast.parseDiagnostics.length, 0, `${name}: malformed JavaScript`)
-  /** @private @author ddj 2026年10月22号 @param node Parsed syntax node. @returns Validate executable import and external calls recursively. */
-  function visit(node) {
+  /** @private @author ddj 2026年10月22号 @param node Parsed syntax node. @param guarded Inside a try block whose failure the module absorbs. @returns Validate executable import and unguarded external calls recursively. */
+  function visit(node, guarded) {
     assert.ok(!ts.isImportDeclaration(node) && !ts.isExportDeclaration(node), `${name}: bare ESM is unsupported`)
+    // 只有 try 之外的 require 才在载入瞬间抛错；try 内的 Node 探测
+    // （如 lodash _nodeUtil 的 require("util")）由模块自身兜底，不算外部漂移。
+    const inGuard = guarded === true || ts.isTryStatement(node)
     if (ts.isCallExpression(node)) {
       assert.notEqual(node.expression.kind, ts.SyntaxKind.ImportKeyword, `${name}: native ESM dynamic import is unsupported`)
-      if (ts.isIdentifier(node.expression) && node.expression.text === 'require') {
+      if (!inGuard && ts.isIdentifier(node.expression) && node.expression.text === 'require') {
         const specifier = node.arguments[0]
         assert.ok(specifier && ts.isStringLiteral(specifier), `${name}: computed require is unsupported`)
         assert.ok(allowed.has(specifier.text), `${name}: unexpected external ${specifier.text}`)
       }
     }
-    ts.forEachChild(node, visit)
+    ts.forEachChild(node, (child) => visit(child, inGuard))
   }
   visit(ast)
 }

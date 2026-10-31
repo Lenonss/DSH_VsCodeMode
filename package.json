@@ -84,7 +84,7 @@
     "vitest": "^3.2.4"
   },
   "scripts": {
-    "build": "tsdown",
+    "build": "tsdown && node scripts/check-client-artifacts.mjs lib",
     "build:client": "tsdown",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run && node --test tests/nativeOpen.test.mjs",
