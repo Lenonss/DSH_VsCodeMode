@@ -205,6 +205,29 @@ export function reviewPage(cwd: string, cursor = 0, history = false, path?: stri
 
 }
 
+/**
+ * @public
+ * @author ddj 2026年10月31号
+ * @description: 该文件是否还有未处理的官方待审改动。缺失文件预览据此区分「需要去差异栏 Keep 结案」
+ * 与「记录都已处理、可直接关闭标签页」，避免已结案的删除文件继续提示待审。
+ * @param cwd Migrated workspace
+ * @param path Host path of the file
+ * @returns 存在未决官方记录时为 true
+ */
+export function officialPending(cwd: string, path: string): boolean {
+  if (typeof path !== 'string') return false
+  const db = dbFor(cwd)
+  if (!db.prepare("SELECT 1 FROM sqlite_master WHERE name='review_files' AND type='table'").get()) return false
+  // Windows 盘符路径按「反斜杠折成正斜杠 + 折大小写」比较（与 hasOfficial 的 SQL 归一化等价）；
+  // 其余平台按身份精确比较，别把大小写不同的两个文件当成同一个。
+  if (path.length > 1 && path[1] === ':') {
+    const folded = path.split(String.fromCharCode(92)).join('/').toLowerCase()
+    return !!db.prepare("SELECT 1 FROM review_files WHERE current=1 AND decision='pending'"
+      + " AND lower(replace(identity,char(92),'/'))=? LIMIT 1").get(folded)
+  }
+  return !!db.prepare("SELECT 1 FROM review_files WHERE current=1 AND decision='pending' AND identity=? LIMIT 1").get(path)
+}
+
 /** @public @author ddj 2026年10月26号 @param cwd Migrated workspace. @param path Legacy write target. @returns Whether any official version owns the file, including decided history. */
 export function hasOfficial(cwd: string, path: string): boolean {
   // 防御：解析结果若被误当成路径传进来（不透明对象），按「无官方记录」处理，

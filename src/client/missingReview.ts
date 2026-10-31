@@ -1,6 +1,30 @@
 import type { MissingReview } from '../shared/types.js'
 import { splitLines } from '../shared/diff.js'
 
+/** 缺失文件终态：文件已在磁盘删除，且没有可展示的整文件预览。 */
+export interface GoneState {
+  title: string
+  message: string
+  /** 该文件还有官方待审改动：Keep 可在差异栏结案，Undo 不可用。 */
+  official: boolean
+}
+
+/**
+ * @public
+ * @author ddj 2026年10月31号
+ * @description: 把 missingReview 的失败归并成「文件已删除」终态。只有确认删除的拒绝码才是终态；
+ * 会话缺失、权限、文件重新出现等失败返回 null，调用方继续走通用加载失败（可重试、保留跨端提示）。
+ * @param failure RPC 失败结果（error 必填，code 可选）
+ * @returns 终态信息或 null
+ */
+export function goneStateOf(failure: { error?: unknown; code?: unknown } | null | undefined): GoneState | null {
+  const code = failure?.code
+  const official = code === 'official-covered'
+  if (!official && code !== 'official-decided' && code !== 'no-records' && code !== 'no-evidence' && code !== 'too-large') return null
+  const message = String(failure?.error ?? '文件已在磁盘删除').replace(/^Error:\s*/, '')
+  return { title: official ? '文件已在磁盘删除 · 有官方待审改动' : '文件已在磁盘删除', message, official }
+}
+
 /** @public @author ddj 2026年10月28号 @param review Frozen complete snapshot. @returns One whole-file deletion, including empty files; no invented current lines. */
 export function missingRegion(review: MissingReview) {
   return {

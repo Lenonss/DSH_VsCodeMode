@@ -736,10 +736,13 @@ export interface RpcOkMap {
   'edrv.uiState.set': object
 }
 
+/** 缺失文件预览的稳定拒绝码：客户端据此显示「已删除」终态，而不是把错误原文当加载失败重试。 */
+export type MissingRefusal = 'official-covered' | 'official-decided' | 'no-records' | 'no-evidence' | 'too-large'
+
 /** 统一响应：{ok:true, ...payload} 或 {ok:false, error}。 */
 export type RpcResult<M extends RpcMethod> =
   | ({ ok: true } & RpcOkMap[M])
-  | { ok: false; error: string; code?: 'file-too-large' | 'file-missing'; reason?: Extract<import('./textPages.js').TextPageResult, { ok: false }>['reason'] }
+  | { ok: false; error: string; code?: 'file-too-large' | 'file-missing' | MissingRefusal; reason?: Extract<import('./textPages.js').TextPageResult, { ok: false }>['reason'] }
 
 /** 每个方法的 handler 签名（host 分发表与 client 类型检查共用）。 */
 export type RpcHandler<M extends RpcMethod> = (

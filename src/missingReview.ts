@@ -2,9 +2,10 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { resolve } from 'node:path'
 import type { DiffRecord, MissingReview } from './shared/types.js'
+import type { MissingRefusal } from './shared/rpc.js'
 import type { Ctx, Session } from './store.js'
 import { archiveRecords, policyOf, READ_CAP, resolveTargetIn, targetPathOf } from './store.js'
-import { hasOfficial } from './reviewDb.js'
+import { hasOfficial, officialPending } from './reviewDb.js'
 import { recordResolved } from './model.js'
 
 interface FrozenReview {
@@ -17,6 +18,32 @@ interface FrozenReview {
 }
 const frozen = new Map<string, FrozenReview>()
 const locks = new Set<string>()
+
+/**
+ * @public
+ * @author ddj 2026年10月31号
+ * @description: 给缺失文件预览的可预期拒绝挂稳定错误码。客户端据此显示终态说明，
+ * 而不是把内部错误原文当「加载失败」反复重试；也不让上游把 SQLite 报错原文透给编辑器。
+ * @param code 稳定错误码（official-covered / no-records / no-evidence / too-large）
+ * @param message 可读原因
+ * @returns 带 code 的 Error
+ */
+export function refusal(code: MissingRefusal, message: string): Error {
+  return Object.assign(new Error(message), { code })
+}
+
+/**
+ * @public
+ * @author ddj 2026年10月31号
+ * @description: 从任意错误里取回缺失文件预览的稳定拒绝码；不是本模块抛出的错误一律返回 undefined。
+ * @param error 捕获到的错误
+ * @returns 稳定拒绝码或 undefined
+ */
+export function refusalCodeOf(error: unknown): MissingRefusal | undefined {
+  const code = (error as { code?: unknown } | null)?.code
+  return code === 'official-covered' || code === 'official-decided' || code === 'no-records'
+    || code === 'no-evidence' || code === 'too-large' ? code : undefined
+}
 
 /** @private @author ddj 2026年10月28号 @param target Resolved absolute path. @returns Platform file identity. */
 function fileKey(target: string): string {
@@ -67,13 +94,25 @@ export async function missingReview(ctx: Ctx, session: Session, cwd: string, buc
   // 解析结果可能是不透明 FsTarget，凡按路径字符串使用的分支都必须先还原。
   const abs = targetPathOf(ctx, target)
   if (!abs) throw new Error('无法解析目标文件路径')
-  if (hasOfficial(cwd, path) || hasOfficial(cwd, abs)) throw new Error('该文件已有官方审查记录，请使用官方审查入口')
+  // 官方记录覆盖该文件时不再给整文件删除预览：删除内容只能用差异栏的 Keep 结案，
+  // 但必须带稳定错误码，客户端才能显示「已删除」终态而不是卡在加载失败。
+  if (hasOfficial(cwd, path) || hasOfficial(cwd, abs)) {
+    if (!officialPending(cwd, abs) && !officialPending(cwd, path)) {
+      throw refusal('official-decided', '该文件已在磁盘删除，官方审查记录均已处理：可直接关闭该标签页')
+    }
+    throw refusal('official-covered', '该文件已有官方审查记录（磁盘上已删除）：请在差异栏对该待审条目执行 Keep 结案；'
+      + '整文件删除预览只适用于待审历史记录')
+  }
   if (!await fileAbsent(ctx, cwd, abs)) throw new Error('文件已重新出现，请刷新')
   const records = await fileRecords(ctx, cwd, bucket, abs)
   const latest = records.at(-1)
-  if (!records.some((record) => !record.archived && !recordResolved(record))) throw new Error('没有待审历史记录')
-  if (!latest || typeof latest.after !== 'string') throw new Error('缺少可靠的完整历史快照，无法展示或恢复；不会用局部差异拼接文件')
-  if (Buffer.byteLength(latest.after, 'utf8') > READ_CAP) throw new Error('历史快照过大，无法整文件预览')
+  if (!records.some((record) => !record.archived && !recordResolved(record))) {
+    throw refusal('no-records', '磁盘上已没有该文件，且没有待审历史记录：可直接关闭该标签页')
+  }
+  if (!latest || typeof latest.after !== 'string') {
+    throw refusal('no-evidence', '磁盘上已没有该文件，且缺少可靠的完整历史快照，无法展示或恢复；不会用局部差异拼接文件')
+  }
+  if (Buffer.byteLength(latest.after, 'utf8') > READ_CAP) throw refusal('too-large', '磁盘上已没有该文件，且历史快照过大，无法整文件预览')
 
   for (const [token, item] of frozen) if (item.expires < Date.now()) frozen.delete(token)
   if (frozen.size >= 256) throw new Error('缺失文件预览过多，请稍后重试')

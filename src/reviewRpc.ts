@@ -1,6 +1,6 @@
 /** Session-scoped official review RPC. @author ddj 2026年10月26号 */
 import type { RpcHandlerMap } from './shared/rpc.js'
-import type { ReviewItem, ReviewPage } from './shared/review.js'
+import type { ReviewDetail, ReviewItem, ReviewPage } from './shared/review.js'
 import type { PendingPage } from './shared/pendingReview.js'
 import { decideReview, reviewDetail, reviewPage } from './reviewDb.js'
 import { undoReview } from './reviewUndo.js'
@@ -8,6 +8,7 @@ import { applyDecide, loadDetail, loadPage } from './pending/store.js'
 import { PENDING_PREFIX, mergedPage, pendingDetailOf, pendingItemOf, pendingSamePath } from './pendingCompat.js'
 import { bucketOf, resolveScope, sessionOf } from './registry.js'
 import type { Registry } from './registry.js'
+import { resolveTargetIn } from './store.js'
 import type { Ctx } from './store.js'
 import { log } from './log.js'
 
@@ -52,6 +53,35 @@ function batchSnapshot(cwd: string, pending: PendingPage): { ok: true; page: Rev
     ok: true,
     page: { items, pending: items.length, nextCursor: null, gaps: first.gaps, ...(first.overview ? { overview: first.overview } : {}) },
   }
+}
+
+/**
+ * @private
+ * @author ddj 2026年10月31号
+ * @description: 文件已在磁盘删除时修正官方记录的能力说明。Keep 只写审查库、仍可结案，
+ * Undo 需要读写源文件、必然不可用：把「缺少原始字节」这种误导性原因换成可执行说明。
+ * 只改文案与 undo 位，不参与判定写入。
+ * @param ctx Host 能力
+ * @param cwd 工作区
+ * @param detail 官方记录详情
+ * @param capability 已按冷/热端调整过的能力
+ * @returns 修正后的能力；无法确认删除时原样返回
+ */
+async function absenceCapability(ctx: Ctx, cwd: string, detail: ReviewDetail, capability: ReviewDetail['capability']): Promise<ReviewDetail['capability']> {
+  if (!capability.keep) return capability
+  // 记录本身就是删除（after=false）：Undo 要整文件内容，官方差异只有片段
+  if (detail.diff.kind === 'text' && !detail.diff.after) {
+    return { ...capability, undo: false, reason: '该记录删除了这个文件：Keep 按删除结案；Undo 需要完整文件内容，官方差异只有片段，不可用。' }
+  }
+
+  // 文件已被删除时，Undo 的失败原因是「文件不在」，不是「缺少原始字节」：先查磁盘再谈证据
+  const fs = ctx.get('fs')
+  if (!fs) return capability
+  try {
+    const target = await resolveTargetIn(ctx, cwd, detail.item.currentPath)
+    if (await fs.stat(target)) return capability
+  } catch { return capability }
+  return { ...capability, undo: false, reason: '文件已在磁盘删除：Keep 按删除结案；Undo 需要读写该文件，当前不可用。' }
 }
 
 /**
@@ -176,7 +206,7 @@ export function reviewHandlers(ctx: Ctx, registry: Registry): Partial<RpcHandler
         return { ok: false, error: '官方审查记录不存在' }
       }
       // Keep 只写共享库，冷端放行；Undo 依赖会话证据与源文件写回，冷端关闭
-      const capability = liveCapabilityOf(detail.capability, scope.live, false)
+      const capability = await absenceCapability(ctx, cwd, detail, liveCapabilityOf(detail.capability, scope.live, false))
       log.debug(`[review] detail live=${scope.live ? 1 : 0} id=${args.id} found=1`
         + ` keep=${capability.keep ? 1 : 0} undo=${capability.undo ? 1 : 0}`)
       return { ok: true, detail: { ...detail, capability } }

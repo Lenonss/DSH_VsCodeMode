@@ -62,7 +62,7 @@ import { applyOfficial, editorFont, registerThemes, themeNameOf } from '../monac
 import { createDiffRenderer } from '../monaco/diffRender.js'
 import { ST, callIdAttr, noopHunk, summarize } from '../state/records.js'
 import { diffRegions } from '../state/regions.js'
-import { missingBatch, missingRegion } from '../missingReview.js'
+import { goneStateOf, missingBatch, missingRegion } from '../missingReview.js'
 import { QuickOpen } from './QuickOpen.js'
 import { attachHorizontalWheel } from './horizontalWheel.js'
 import { CommandPalette } from './CommandPalette.js'
@@ -343,6 +343,11 @@ export function EditorView(props) {
   const aiStatusTimer = React.useRef(null)
   const [error, setError] = React.useState(null)
   const [loadError, setLoadError] = React.useState(null)
+  // 缺失文件的终态：{ path, sessionId, title, message, official }。
+  // 与 loadError 区分开——加载失败可以重试，磁盘删除是终态，不能一直卡在进度条 0%。
+  const [goneFile, setGoneFile] = React.useState(null)
+  const missingReadRef = React.useRef(new Map()) // path → 已重读次数（防 文件缺失↔重现 抖动死循环）
+  const goneNow = goneFile && goneFile.path === active && goneFile.sessionId === sessionId ? goneFile : null
   const [largeCandidate, setLargeCandidate] = React.useState(null)
   const [pagedFile, setPagedFile] = React.useState(null)
   const [pageChanged, setPageChanged] = React.useState(null)
@@ -1173,17 +1178,49 @@ export function EditorView(props) {
    * @param force 强制走 RPC（reloadFile 用，跳过 model 复用）
    * @param version 已知磁盘版本（缺省走 RPC 返回值）
    */
-  /** @private @author ddj 2026年10月28号 @param path Missing text file. @param sid Owning session. @param seq Loader generation. @sideEffects Loads deletion evidence without creating or saving the file. */
+  /**
+   * 把「文件已在磁盘删除」记成终态面板：不占进度条、不反复重试，并允许直接关闭页签。
+   * 只有确认删除的原因才走终态；会话/权限类失败仍回退通用加载失败，保留跨端提示。
+   * @private @author ddj 2026年10月31号
+   * @param path 目标文件
+   * @param sid 会话 id
+   * @param seq 加载序号（过期响应丢弃）
+   * @param failure 宿主拒绝原因（可带稳定 code）
+   */
+  function settleGone(path, sid, seq, failure) {
+    if (!loadCurrent(path, seq)) return
+    const error = failure && typeof failure === 'object' ? failure : { error: failure }
+    const gone = goneStateOf(error)
+      ?? (error.deleted === true ? { title: '文件已在磁盘删除', official: false, message: String(error.error ?? '') } : null)
+    if (!gone) { failLoad(path, sid, seq, String(error.error ?? error)); return }
+    stampLoad(path, sid, seq, gone.message)
+    setLoadError(null)
+    setError(null)
+    setGoneFile({ ...gone, path, sessionId: sid })
+    setStatus(gone.official ? '文件已删除 · 差异栏可 Keep 结案' : '文件已删除')
+  }
+
+  /** @private @author ddj 2026年10月28号 / 2026年10月31号 @param path Missing text file. @param sid Owning session. @param seq Loader generation. @sideEffects Loads deletion evidence without creating or saving the file. */
   async function loadMissing(path, sid, seq) {
     try {
       const result = await rpc('edrv.missingReview', { sessionId: sid, path })
       if (!loadCurrent(path, seq)) return
-      if (!result.ok) { failLoad(path, sid, seq, result.error); return }
-      if (!result.review) { loadContent(path, sid, true); return }
+      if (!result.ok) { settleGone(path, sid, seq, result); return }
+      if (!result.review) {
+        // 宿主观测到文件仍在磁盘（与读取时的 file-missing 竞态）：重读一次即可；
+        // 同一文件反复抖动时收尾为终态，绝不再递归重读。
+        const attempts = (missingReadRef.current.get(path) ?? 0) + 1
+        missingReadRef.current.set(path, attempts)
+        if (attempts <= 2) { loadContent(path, sid, true); return }
+        settleGone(path, sid, seq, { deleted: true, error: '文件状态在磁盘上反复变化，请稍后重试，或关闭该标签页' })
+        return
+      }
+      missingReadRef.current.delete(path)
       if (dirtyRef.current[path] || savingRef.current.has(path)) { failLoad(path, sid, seq, '文件已删除，但有未保存编辑；请先处理本地缓冲'); return }
       const preview = { ...result.review, sessionId: sid, keepId: crypto.randomUUID(), undoId: crypto.randomUUID() }
       missingRef.current.set(path, preview)
       setMissingPreview(preview)
+      setGoneFile(null)
       setContent('')
       setContentPath(path)
       setLoadError(null)
@@ -1198,6 +1235,7 @@ export function EditorView(props) {
     const seq = ++loadSeqRef.current
     setReceiptLoad({ path, cwd, sessionId: sid, sequence: seq, status: 'loading' })
     setLoadError(null)
+    setGoneFile(null)
     setLargeCandidate(null)
     setPagedFile(null)
     setPageChanged(null)
@@ -4668,6 +4706,25 @@ export function EditorView(props) {
     React.createElement('div', { className: 'edrv-loading-percent' }, Math.round(progress) + '%'),
     retry ? React.createElement('button', { className: 'edrv-pill edrv-pill-ghost', onClick: retry }, '重试') : null)
 
+  /**
+   * 渲染缺失文件终态面板：说明 + 重试 + 关闭页签（不显示进度条，避免卡在 0%）。
+   * @private @author ddj 2026年10月31号
+   * @param gone 终态信息
+   * @param retry 重新读取回调
+   * @param close 关闭该标签页回调
+   * @returns 终态面板 React 元素
+   */
+  const goneBody = (gone, retry, close) => React.createElement('div', { className: 'edrv-empty edrv-loading', 'aria-live': 'polite', role: 'status' },
+    React.createElement('div', { className: 'edrv-loading-title' }, gone.title),
+    React.createElement('div', { style: { fontSize: 12, maxWidth: 460, lineHeight: 1.6 } }, gone.message),
+    gone.official
+      ? React.createElement('div', { style: { fontSize: 12, maxWidth: 460, lineHeight: 1.6, opacity: 0.8 } },
+        '待审改动在差异栏：Keep 保留删除结果并结案；Undo 需要该文件的原始内容，磁盘已删除时不可用。')
+      : null,
+    React.createElement('div', { style: { display: 'flex', gap: 8 } },
+      React.createElement('button', { className: 'edrv-pill edrv-pill-ghost', onClick: retry }, '重试'),
+      React.createElement('button', { className: 'edrv-pill edrv-pill-ghost', onClick: close }, '关闭标签页')))
+
   let body
   if (activePlan) {
     const labels = PLAN_MD_LABELS
@@ -4696,6 +4753,12 @@ export function EditorView(props) {
     body = React.createElement('div', { className: 'edrv-empty' },
       React.createElement('div', null, '暂无打开的文件'),
       React.createElement('div', { style: { fontSize: 12 } }, '使用右上搜索框 (' + (chordOf('edrv.quickOpen') ?? 'Ctrl+P') + ') 打开工作区文件；' + (chordOf('edrv.showCommands') ?? 'Ctrl+Shift+P') + ' 打开命令栏；agent 修改文件后顶部会出现差异角标'))
+  } else if (goneNow) {
+    // 终态：文件已在磁盘删除且没有可用预览。不再显示 0% 进度条，也不无限重试。
+    body = goneBody(goneNow, () => {
+      missingReadRef.current.delete(goneNow.path)
+      loadContent(active, sessionId, true)
+    }, () => { void closeTab(goneNow.path) })
   } else if (content === null && loadError && isSessionMissingError(loadError)) {
     // 跨端会话缺失：终态提示而非加载失败卡死（会话仅在一端激活，本端 RPC 均被拒）
     body = React.createElement('div', { className: 'edrv-empty edrv-loading', 'aria-live': 'polite' },

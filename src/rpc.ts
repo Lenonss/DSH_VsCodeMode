@@ -63,7 +63,7 @@ import { settingsDocPath } from './settingsDocPath.js'
 import { createTextPages } from './textPages.js'
 import { reviewHandlers } from './reviewRpc.js'
 import { pendingHandlers } from './pendingRpc.js'
-import { fileAbsent, missingReview, missingDecide, missingPath } from './missingReview.js'
+import { fileAbsent, missingReview, missingDecide, missingPath, refusalCodeOf } from './missingReview.js'
 import { pendingCovers } from './pendingCompat.js'
 
 /** Process-local cursor signer; reads must stay on the Host filesystem capability. */
@@ -733,7 +733,11 @@ export function buildHandlers(
         const bucket = await bucketOf(registry, ctx, sc.cwd)
         if (!await fileAbsent(ctx, sc.cwd, args.path)) return { ok: true, review: null }
         return { ok: true, review: await missingReview(ctx, sc.session, sc.cwd, bucket, args.path) }
-      } catch (error) { return { ok: false, error: String(error) } }
+      } catch (error) {
+        // 可预期的拒绝带稳定错误码：客户端据此显示「已删除」终态，而不是把错误原文当加载失败重试
+        const code = refusalCodeOf(error)
+        return { ok: false, error: String(error), ...(code ? { code } : {}) }
+      }
     },
     'edrv.missingDecide': async (args) => {
       const sc = await requireSession(ctx, args.sessionId)

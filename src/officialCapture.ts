@@ -184,6 +184,11 @@ export function installCapture(ctx: Ctx, onSnapshot?: (cwd: string, snapshot: Re
       log.warn('官方历史补采不可用：缺少 sessionQuery；后续实时事件仍会采集')
       return
     }
+    const source = ctx.get('workspaceChanges')
+    if (!source?.summary) {
+      log.warn('官方历史补采不可用：缺少 workspaceChanges；后续实时事件仍会采集')
+      return
+    }
     try {
       // Repair durable history independently: official summaries do not survive Host restart.
       // Each saved snapshot resolves against its own cwd, not the current session directory.
@@ -193,11 +198,17 @@ export function installCapture(ctx: Ctx, onSnapshot?: (cwd: string, snapshot: Re
       }
       // Semantic search omits structural events; only the raw metadata list contains workspace/changes.
       const events = await query.listEvents(session.id)
+      let expired = 0
       for (const event of events) {
         if (event.type !== 'workspace/changes' || event.seq < (session.inheritedEventCount ?? 0)) continue
+        // Official summaries live only in Host memory, so a restart makes every
+        // historical event unreadable. Probe before enqueue: queueing them records
+        // one durable gap per turn that can never be repaired or replayed.
+        if (!source.summary(session.id, event.seq)) { expired += 1; continue }
         const window = await query.readEvent({ sessionId: session.id, seq: event.seq })
         collector.enqueue(session, window.target)
       }
+      if (expired) log.info(`官方历史补采跳过 ${expired} 轮已失效事件：官方 summary 不跨宿主重启保留，实时事件照常采集`)
     } catch (error) { log.warn('官方历史补采失败：' + String(error)) }
   }
 }
