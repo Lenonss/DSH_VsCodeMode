@@ -1,12 +1,33 @@
 # dsh-vscode-mode
 
+[![npm version](https://img.shields.io/npm/v/dsh-vscode-mode?logo=npm&label=npm)](https://www.npmjs.com/package/dsh-vscode-mode)
+[![GitHub release](https://img.shields.io/github/v/release/Lenonss/DSH_VsCodeMode?label=release)](https://github.com/Lenonss/DSH_VsCodeMode/releases)
+[![CI](https://github.com/Lenonss/DSH_VsCodeMode/actions/workflows/ci.yml/badge.svg)](https://github.com/Lenonss/DSH_VsCodeMode/actions/workflows/ci.yml)
+[![license](https://img.shields.io/github/license/Lenonss/DSH_VsCodeMode)](LICENSE)
+
 > DSH 上的**类 VSCode 编码体验**：Monaco 文件编辑器 + Agent 差异审查 + LSP 智能。
 > 由 `@dsh-external/dsh-edit-review` 重构而来。
+
+![同屏工作台：中央 AI 对话、右侧 Monaco 编辑器与底部差异操作条](docs/screenshots/workbench.png)
 
 - 📝 **同屏编辑**：DSH 0.1.5+ 官方右侧 Sidebar，AI 对话与文件编辑同屏
 - 🔍 **差异审查**：Keep / Undo / 回滚 / 归档，状态持久化重启不丢
 - 🧠 **LSP 智能**：转到定义 / 查找引用 / Peek 多结果选择 / 智能补全（注释索引）/ 签名帮助
+- 🐞 **断点调试**：DAP 桥通用化，行内断点、`.dsh/launch.json`、四段调试面板
 - ⌨️ **命令面板**：`Ctrl+Shift+P`，19 条命令开箱即用，可编程扩展
+
+**安装**：`npm i dsh-vscode-mode`（需 DSH 0.1.5+，装完重启 DSH）→ 详见[安装](#安装)。
+
+**能力速览**
+
+| 场景 | 你能得到什么 |
+| --- | --- |
+| 同屏编码 | 中央对话 + 右侧 Monaco，官方 Sidebar 多标签 / 分栏 / 浮出 / 全屏 |
+| 审改动 | 行内红绿差异、累计基线待审、Keep / Undo / 回滚 / 归档，重启不丢 |
+| 懂代码 | LSP：定义 / 引用 / Peek / 补全 / 签名帮助，按文件语言自动选后端 |
+| 调问题 | DAP：断点、调用堆栈、变量、监视、调试控制台 REPL（Lua attach / .NET） |
+| 管文件 | 活动栏 + 资源管理器 + 右键菜单 + 工作区搜索 + SVN 状态徽标 |
+| 看文档 | Markdown 预览、PDF 注释编辑、Excel 基础编辑与只读数据预览 |
 
 ## 目录
 
@@ -336,7 +357,7 @@ DSH 启动回放 `~/.dsh/sessions` 全部会话（V8 展开约 10×，可能 OOM
 - 治理原则：存量靠归档、增量靠压缩调优 + 短会话习惯 + 体积指示器；packChunks
   （chunk 打包存储）为 DSH 默认开启，无需再配置。
 
-### 14. 外部改动自动同步（即将发布）
+### 14. 外部改动自动同步（v0.4.4）
 
 磁盘文件被外部改动（其他编辑器 / Unity / 脚本 / agent 工具 / 同步盘）后自动
 跟进，不必手点 ⟳：
@@ -453,7 +474,7 @@ TortoiseSVN（`TortoiseProc.exe`）仅作 Windows 过渡增强：自研能力覆
 
 > 说明：`plans/`（含对标蓝图与实测结论）为本地开发资料，不入库。
 
-### 17. 断点调试（DAP，开发中）
+### 17. 断点调试（DAP，v0.6.0）
 
 编辑器内断点调试（DAP 桥通用化：适配器由扩展清单 `contributes.debuggers` 驱动，
 不限定语言；Lua 链路复用已装 emmylua 扩展适配器，**零游戏侧改动**）：
@@ -520,16 +541,10 @@ DSH 每次启动监听随机端口，`http://127.0.0.1:<port>` 就是浏览器 o
 ## 安装
 
 官方 `dsh plugin` 方式，三选一。下面以 `web` profile 为例；Desktop 或其他命名
-profile 请替换为实际目标，不要把示例目录当成当前运行 profile。升级前可阅读
-**v0.23.2** 修复 Keep 在非活跃端（桌面端）点了没反应，共两处成因。①权限：`edrv.review.decide` 原先一律要求本端活跃会话，而同端详情接口的 `capability.keep` 只按审查库推导，于是会话在另一实例时按钮亮着、点击后抛错并被兜底成 HTTP 500「DSH 请求失败（HTTP 500）」。现按写入副作用区分——官方记录 Keep 只写共享审查库（`BEGIN IMMEDIATE` + operationId 幂等 + `id/seq/revision/current/decision` CAS，库为每工作区 SQLite 且 `WAL + busy_timeout=2000`），冷端放行；官方 Undo 需校验会话证据并写回源文件、待审投影条目写本机待审 JSON（无跨进程锁），两者仍限本端活跃会话，并返回可读的跨端原因而非 500。详情响应新增 `capability.live`，冷端差异栏禁用 Undo 并给出跨端说明、Keep 提示补一句「写入共享审查库，仍可执行」，批量预检对冷端待审条目给出准确原因。②选中目标：已结算（`oldText === newText`，累计净变化为零）的待审投影 `capability` 恒为不可 Keep，但单文件通道把它排在官方记录之前、客户端取 `items[0]`，同路径官方待审行又被历史过滤掉，于是差异栏「待审 0」、Keep 禁用、点击无反应。现 `pendingPageOf()` 在交给官方审查通道前剔除已结算投影，官方待审记录重新成为审查目标。另外详情未加载时点 Keep 不再静默返回，改为可读提示；打开文件时若某条官方记录的改动已全部不在当前文件中（无可定位差异且缓冲区干净），自动按 Keep 结案（只标记不写盘），差异栏不再显示「本记录 N 处改动均已不在当前文件中」这类失效叙事；官方元数据首次载入期间差异栏显示 `—` 而不是按历史记录报数，避免重启瞬间闪出几十条假待审。验证：typecheck 0 error、目标单测 57/57、`pnpm build` 通过，并用真实工作区审查库探针确认差异栏首条已回到官方记录且 `capability={keep:true,undo:true,live:true}`；桌面端 GUI 点按验收因 App 重启后恢复的是另一个会话而未完成，缺口保留，见 [0.23.2 发布说明](docs/release-0.23.2.md)。以下保留历史版本事实：
-**v0.23.1** 修复「Keep All / Undo All」在工作区待审超过一页时必定中止：批量按钮原先复用官方审查的分页接口逐页取待审条目，并把每页返回的展示用计数当成全量总数校验，因此官方待审超过 50 条（本仓库常态约 150 条）时会先报「待审记录在分页期间变化」或最终报「待审记录数量不完整」，实际一条都不会被决策（已完成 0 项）。现在批量操作改走一次性完整快照——`edrv.review.list` 新增 `all: true` 参数，服务端循环分页取全官方待审行，与工作区历史改动投影按路径去重后返回 `nextCursor: null` 与真实总数（`pending`），客户端单次取快照、校验条目唯一且仍为待审后才逐项决策；快照总量超过 2000 条时明确拒绝并提示分批处理，条目在决策途中变化则继续整批中止、不做部分写入。差异栏的日常浏览仍走原分页接口，展示行为不变。本版修复只经单测与真实审查库只读核对，未在重启后的 GUI 上点按批量按钮验证，缺口保留，见 [0.23.1 发布说明](docs/release-0.23.1.md)。以下保留历史版本事实：
-**v0.23.0** 的快捷菜单：编辑器内一个可拖动悬浮按钮，点开是自定义菜单树（组 / 按钮，最多 5 层），按钮可携带提示词并直接发送给 AI 或只填入输入框；配置存于 `<DSH_HOME>/dsh-vscode-mode/data/quick-menu.json`，带 `revision` 乐观锁与损坏降级；节点可限定生效工作区（默认全部），按钮可绑定技能与规则，发送时按当前会话可见性校验后只拼装通过的绑定。新增 `skills.list` 只读 RPC 枚举「全局技能 + 当前工作区技能」作为候选，配置界面的工作区、技能、规则全部改为下拉弹层/多选下拉，菜单设置重排为四段并统一按钮盒模型（修掉「导入 JSON」下移不居中）。本版**未做 GUI 真机验收**（本机 pnpm store 损坏、插件未部署），缺口已获用户接受，见 [0.23.0 发布说明](docs/release-0.23.0.md)。以下保留历史版本事实：
-**v0.22.0** 的累计基线待审（非 UI 能力对齐 dsh-diff-approval）：同一文件的多次编辑折叠成一条待审、基线保留最早内容，A→B→C 显示 A→C、A→B→A 自然归零；Keep 只推进基线不改磁盘，Revert 走版本守卫写回并读回校验，撤销/重做用游标模型跨重启保留；新增 `str_replace_editor` 预像配对、`fs/observed` 终像、已入列路径的外部改动吸收与缺失/不可读生命周期、git/svn/Perforce 基线导入，以及旧 sidecar 写入口对已接管路径的服务端拒绝。差异仍在编辑器内行内展示、块级 Keep/Undo 用药丸，文件级在差异栏；详情面板与批注（含「让 AI 应答」）本版移除。验收边界：p4 仅有假 shell 单测（本机无 Perforce 客户端），「让 AI 应答」随批注一并下线故不再验证；本版未在宿主上重启验收 GUI 全流程，见 [0.22.0 发布说明](docs/release-0.22.0.md)。以下保留历史版本事实：
-**v0.21.4** 的任务发送结果分类与诚实草稿降级：只有明确 accepted 才等待分析方案；unknown/submitted/cancelled 不另填草稿或重发，安全降级只填实际当前会话草稿并提示手动发送。旧 boolean 接口保留，legacy true 不等于受理。开发 link 客户端 rev458288ddb012 的真实公开入口与目标受理已验；完整 SVN 分析/方案投递因 `SetNamedSecurityInfoW failed (Win32 5)` 未完成，用户仅本批接受此缺口，不代表 Host 整体升级或当前实例已安装 npm 0.21.4。见 [0.21.4 发布说明](docs/release-0.21.4.md)。保留以下历史版本事实：
-**v0.21.3** 的 MCP 初始化失败结果与安全收尾解耦：已进入 startup 的调用者在失败或截止时间到达时及时收到拒绝，不再等待旧资源收尾；旧 work/close 未确认完成前仍占冷启动名额、阻止同 key 重建，确认收尾后才开始冷却。首次偶发超时根因仍未知，排队和其他屏障仍可能无界；本版当前 Host/GUI 未部署未验证，用户仅本批接受官方实装隔离模块与 JS 套件替代验收，见 [0.21.3 发布说明](docs/release-0.21.3.md)。官方 bridge 隔离 fixture 同步迁移到当前公开 native 执行器及批调用契约，不代表生产执行器故障修复。以下为历史版本事实，不代表本版现场验收：
-**v0.21.2** 的新版 DSH 会话 Controller 与 MCP 公开工具目录适配：任务发送按目标会话持有生命周期，受理不明时不跨通道重发；文件范围引用的剪贴板与降级文本保留行区间；MCP 初始化失败增加脱敏持久化诊断。当前 Web Host 已完成真实 CodeGraph 调用，但首次连接偶发超时根因尚未证实，不宣称已修复，见 [0.21.2 发布说明](docs/release-0.21.2.md)。保留以下历史版本能力与验收边界：
-**v0.21.1** 修复缺失历史文件：按完整快照显示整文件删除，Keep 保留删除、Undo 安全恢复快照，预览只读且拒绝覆盖重新出现的文件；真实 GUI 验收缺口已明确保留，见 [0.21.1 发布说明](docs/release-0.21.1.md)。保留 **v0.21.0** 新增 XLSX 基础编辑与浏览器导出副本，原件不自动写回，高级应用通过官方 Host 打开；官方差异定位统一 BOM 与 LF/CRLF/混合行尾口径，并区分内容缺失和多处命中。定位修复不扩展 CRLF patch Undo 能力，目标官方记录 ↑/↓ 的真实点击验收仍保留缺口。保留 **v0.20.5** 跨 DSH 实例只读互通——桌面端与 Web 端各自运行独立宿主时，官方审查列表/详情与工作区只读接口改按持久化会话头的 cwd 解析，另一实例创建的会话也能只读打开官方差异栏，写入类接口仍要求本端活跃会话。保留 **v0.20.4** 统一两套差异栏外观——非官方记录栏角标由内部术语「侧车记录」改为「历史改动」，悬停说明 Keep 只标记已看过、不改写磁盘，Undo 逐项校验后写回，两者都不影响官方审查；官方元数据不可用时给出可读原因与重试按钮，不再静默降级；「会话没在当前端激活」由红色告警改为中性说明。保留 v0.20.3 修复官方差异全部无法定位时差异栏无提示、上下箭头静默禁用（显示「无可跳转」与失效原因，Keep 说明只标记已采纳、不改写磁盘，会话缺失等宿主错误改为可读提示）、v0.20.2 的 MCP 状态告警收敛与原生确认弹窗，以及 v0.20.1 的文件内差异展示、块级/文件级安全审查和跨分页批量操作。升级后重启 DSH 并刷新页面；持久化与回退边界见 [0.20.0 发布说明](docs/release-0.20.0.md)；从 0.14.2 或更旧版本升级还须阅读
-[0.14.3 数据迁移与回退说明](docs/release-0.14.3.md)。
+profile 请替换为实际目标，不要把示例目录当成当前运行 profile。
+
+> **升级须知**：近期版本的修复要点、验收缺口与回退边界见[更新日志](#更新日志)；
+> 从 0.14.2 或更旧版本升级还须阅读[0.14.3 数据迁移与回退说明](docs/release-0.14.3.md)。
 
 ```bash
 # ① Git 安装（clone + prepare 构建；推荐打固定 tag）
@@ -666,15 +681,29 @@ v0.13.1 起插件不再自建录键界面（原独立「快捷键」设置页与
 
 ## 截图
 
-![侧边栏编辑形态：AI 对话与文件编辑同屏](docs/screenshots/img1.png)
+> 以下截图取自 v0.23.5 的真实运行界面（DSH Web GUI + dsh-vscode-mode 右侧栏）。
 
-> 右侧栏（DSH 0.1.5+ 官方 Sidebar / 旧版 betterSidebar）内的 Monaco 文件编辑器
-> 与中央 AI 对话同屏；差异条统一挂在对话输入框上方的原生 dock（编辑器未打开 =
-> 「差异 N 个文件 · 查看下一个」，打开后 = 完整 Keep / Undo 操作条）。
+### 同屏工作台
 
-![文件编辑与差异审查界面（二）](docs/screenshots/img2.png)
+![同屏工作台：中央 AI 对话、右侧 Monaco 编辑器与底部差异操作条](docs/screenshots/workbench.png)
 
-![文件编辑与差异审查界面（三）](docs/screenshots/img3.png)
+> AI 对话（中央）与 Monaco 文件编辑器（右侧官方 Sidebar）同屏；页签带差异角标，
+> 底部原生 dock 汇总「差异 N 个文件」并提供 Keep All / Undo All。编辑器打开时
+> 面板区可收起（`Ctrl+B` 切换，图标列常显），把宽度全部让给代码。
+
+### 命令面板
+
+![命令面板：Ctrl+Shift+P 列出视图 / 文件 / 导航 / 语言智能 / 代码片段 / 编辑 / 调试命令](docs/screenshots/command-palette.png)
+
+> `Ctrl+Shift+P` 打开命令面板，命令按类别分组并支持模糊搜索；命令既可来自扩展清单
+> 注册，也可由插件通过 `edrv.executeCommand` 编程调用。
+
+### 差异审查
+
+![差异审查：资源管理器文件树、编辑器行内差异与差异操作条](docs/screenshots/diff-review.png)
+
+> 资源管理器展开工作区文件树（带差异角标），编辑器用行内红绿高亮展示 Agent 改动，
+> 底部 dock 可逐文件切换、Keep / Undo，并提示当前记录还有几个待审文件。
 
 ## 开发
 
@@ -878,9 +907,22 @@ Keep All / Undo All 却是亮的。修复：单文件 Keep / Undo 覆盖冲突�
 ## 更新日志
 
 完整变更见 [GitHub Releases](https://github.com/Lenonss/DSH_VsCodeMode/releases)。
-近期关键版本：
 
-- **v0.23.5**：修复差异栏把同一文件算成两条（差异文件数偏大）。待审条目存的是写入时的相对路径，官方导航用绝对身份，而 `mergedPage()` 与 `diffSummary` 的去重都只按 path 建覆盖集，相对路径的待审行压不掉绝对身份的官方行，于是同一文件同时留下待审行与官方汇总行；现两侧覆盖集都补入条目身份（与官方 identity 同源）。另修复本会话新建的文件被渲染成一堆修改块：累计基线保留「最早内容」，新建文件首次采集时磁盘已有会话自己的中间产物，基线因此非空，「新增 516 行」被切成若干 `-`/`+` 混合块，与官方整文件新增（`before=false`、`oldLines=0`）口径相反；现按每个文件在该会话内最早的官方记录判定整文件新增，命中时待审侧基线置空，列表与详情只出一块全加差异、增删计数等于整文件行数，`addedFiles()` 查询失败则回退旧口径。验证：typecheck 0 error；全量单测通过；`npm run build` 通过；本版未做 GUI 点按验收（缺口保留）。见 [0.23.5 发布说明](docs/release-0.23.5.md)。- **v0.23.4**：修复桌面端点计划卡「查看全文」会先闪开一页官方计划预览、随即自动关闭。根因：官方卡片走 `ctx.sidebarRight.openResource(planAddress(callId))`，而本插件以 extension 优先级认领了 `dsh-resource://plan/**` 与 `dsh-resource://plan-review/**`，于是侧栏先按本插件类型建出一个页签（正文「正在打开计划预览…」），挂载后才把计划转进「文件编辑」、再把这个页签关掉——用户看到的就是这次建而即关。现由新增 `src/client/planDirect.ts` 在装配期包装 `sidebarRight.openResource`：只接管「2 段计划地址 + 会话为在屏会话」，正文依次取回顾卡片的 `params.planReview`、插件侧地址→正文缓存、可选 `resources.source()` 资源流（上限 1.5s），拿到正文后经 `requestOpen(..., { preview: true })` 直通本插件编辑器的只读计划页签，不再创建侧栏页签；非计划地址、跨会话与 subagent 5 段地址、正文不可得、编辑器 5s 未回执、以及服务对象只读导致包装赋值失败，一律回落原生 `openResource`，原「认领 + 挂载后转移」链路保留为后备。`openReceipt` 新增可选 `timeoutMs`，`planState` 新增有界（64 条）地址→正文缓存并由 live `exit_plan_mode` 写入。验证：typecheck 0 error；`tests/planDirect.test.ts`（新增 9 例）、`tests/planBridge.test.ts`（13）、`tests/planState.test.ts`（10）、`tests/openReceipt.test.ts`（9）四套 41/41；`npm run build` 双 bundle 通过（含客户端产物完整性校验）；浏览器确认新 bundle 已加载且 Console 无「计划直通装配失败」；GUI 点按由用户在本机 Web 端手动复验后发布。见 [发布说明](docs/release-0.23.4.md)。
+| 版本 | 要点 |
+| --- | --- |
+| v0.23.5 | 同一文件不再算成两条差异；新建文件按整文件新增渲染 |
+| v0.23.4 | 计划卡「查看全文」直通编辑器，不再闪一下再关 |
+| v0.23.3 | 已删除文件的差异条目不再卡死；重启后不再成串「采集不完整」 |
+| v0.23.2 | 桌面端 Keep 点了没反应的问题修复 |
+| v0.23.1 | Keep All / Undo All 在待审超过一页时不再中止 |
+| v0.23.0 | 快捷菜单：可拖动悬浮按钮 + 自定义菜单树 |
+
+<details>
+<summary>完整版本记录（v0.23.5 → v0.1.5x，点击展开）</summary>
+
+
+- **v0.23.5**：修复差异栏把同一文件算成两条（差异文件数偏大）。待审条目存的是写入时的相对路径，官方导航用绝对身份，而 `mergedPage()` 与 `diffSummary` 的去重都只按 path 建覆盖集，相对路径的待审行压不掉绝对身份的官方行，于是同一文件同时留下待审行与官方汇总行；现两侧覆盖集都补入条目身份（与官方 identity 同源）。另修复本会话新建的文件被渲染成一堆修改块：累计基线保留「最早内容」，新建文件首次采集时磁盘已有会话自己的中间产物，基线因此非空，「新增 516 行」被切成若干 `-`/`+` 混合块，与官方整文件新增（`before=false`、`oldLines=0`）口径相反；现按每个文件在该会话内最早的官方记录判定整文件新增，命中时待审侧基线置空，列表与详情只出一块全加差异、增删计数等于整文件行数，`addedFiles()` 查询失败则回退旧口径。验证：typecheck 0 error；全量单测通过；`npm run build` 通过；本版未做 GUI 点按验收（缺口保留）。见 [0.23.5 发布说明](docs/release-0.23.5.md)。
+- **v0.23.4**：修复桌面端点计划卡「查看全文」会先闪开一页官方计划预览、随即自动关闭。根因：官方卡片走 `ctx.sidebarRight.openResource(planAddress(callId))`，而本插件以 extension 优先级认领了 `dsh-resource://plan/**` 与 `dsh-resource://plan-review/**`，于是侧栏先按本插件类型建出一个页签（正文「正在打开计划预览…」），挂载后才把计划转进「文件编辑」、再把这个页签关掉——用户看到的就是这次建而即关。现由新增 `src/client/planDirect.ts` 在装配期包装 `sidebarRight.openResource`：只接管「2 段计划地址 + 会话为在屏会话」，正文依次取回顾卡片的 `params.planReview`、插件侧地址→正文缓存、可选 `resources.source()` 资源流（上限 1.5s），拿到正文后经 `requestOpen(..., { preview: true })` 直通本插件编辑器的只读计划页签，不再创建侧栏页签；非计划地址、跨会话与 subagent 5 段地址、正文不可得、编辑器 5s 未回执、以及服务对象只读导致包装赋值失败，一律回落原生 `openResource`，原「认领 + 挂载后转移」链路保留为后备。`openReceipt` 新增可选 `timeoutMs`，`planState` 新增有界（64 条）地址→正文缓存并由 live `exit_plan_mode` 写入。验证：typecheck 0 error；`tests/planDirect.test.ts`（新增 9 例）、`tests/planBridge.test.ts`（13）、`tests/planState.test.ts`（10）、`tests/openReceipt.test.ts`（9）四套 41/41；`npm run build` 双 bundle 通过（含客户端产物完整性校验）；浏览器确认新 bundle 已加载且 Console 无「计划直通装配失败」；GUI 点按由用户在本机 Web 端手动复验后发布。见 [发布说明](docs/release-0.23.4.md)。
 - **v0.23.3**：修复 issue #13（已删除文件的差异条目把人卡死）与 #12（重启后成串「采集不完整」）。①文件在磁盘上被删掉时，客户端申请整文件删除预览被「已有官方审查记录」拒绝，而拒绝只是一条普通 `Error`，于是落到通用加载失败分支——「文件加载失败：…」+ 进度钉在 0%、重试同错、标签页关不掉；`edrv.review.detail` 还把 Undo 不可用解释成「缺少可验证的原始字节」，而真实原因是文件已不在。现缺失文件预览的可预期拒绝带稳定码（`official-covered` / `official-decided` / `no-records` / `no-evidence` / `too-large`），客户端据此显示「文件已在磁盘删除（· 有官方待审改动）」终态：标题 + 原因 + 重试 / 关闭标签页，不再画 0% 进度条；官方待审记录在磁盘已删除时给出「Keep 按删除结案、Undo 需要读写该文件」的准确原因（Keep 语义不变，仍只写共享审查库），记录都已结案时提示可直接关闭；`!review` 的磁盘状态抖动改为最多重读 2 次后给终态，消除缺失↔重现的无限递归。v0.22.0 起 `hasOfficial()` 已用 `typeof path !== 'string'` 守卫堵掉把不透明 FsTarget 绑进 SQL 导致的 `Unknown named parameter 'targetKey'`，本版不再复现。②官方 `workspace/changes` 的 summary 只存在宿主内存里，插件启动补采原先无条件把历史事件全部入队，重启后每一轮都必然抛「summary 已失效或尚不可用」并写成不可修复的 `gap`（面板成串「轮次 N 采集不完整」）；现补采先 `summary()` 探测再入队，失效事件只记一条汇总日志。验证：typecheck 与基线同为 37 个既有错误（`fflate/browser` 依赖缺失）、零新增；定向单测 111/111（含新增 `tests/deletedFileReview.test.ts` 5 例与 `tests/officialBackfill.test.ts` 2 例）、EditorView 相关 82/82；`npm run build` 四个 bundle 通过。见 [发布说明](docs/release-0.23.3.md)。
 - **v0.23.2**：修复 Keep 在非活跃端（桌面端）点了没反应，两处成因。①`edrv.review.decide` 原先一律要求本端活跃会话，而能力位只按审查库推导，会话在另一实例时按钮亮着、点击后抛错被兜底成 HTTP 500。现按写入副作用区分：官方记录 Keep 只写共享审查库（`BEGIN IMMEDIATE` + 幂等键 + 版本 CAS），冷端放行；官方 Undo（校验证据并写回源文件）与待审投影条目（本机 JSON 无跨进程锁）仍限活跃端，返回可读跨端原因而非 500；详情新增 `capability.live`，冷端禁用 Undo 并说明、Keep 提示补「写入共享审查库，仍可执行」。②已结算待审投影的 `capability.keep` 恒为假，却因排在 `items[0]`、同路径官方待审行被历史过滤，把官方记录挤出差异栏（表现为「待审 0」+Keep 禁用+点击无反应）；现 `pendingPageOf()` 剔除已结算投影，官方记录重新成为审查目标。另详情未加载时点 Keep 不再静默失败；打开文件时若某条官方记录的改动已全部不在当前文件中（无可定位差异且缓冲区干净），自动按 Keep 结案（只标记不写盘），差异栏不再显示「本记录 N 处改动均已不在当前文件中」；官方元数据首次载入期间差异栏显示 `—` 而非按历史记录报数，重启瞬间不再闪出几十条假待审。验证：typecheck 0 error、目标单测 57/57、build 通过、真实审查库探针确认首条回到官方记录且 `capability={keep:true,undo:true,live:true}`；桌面端 GUI 点按验收因重启后恢复的是另一个会话未完成，缺口保留。发布不自动部署，升级后重启 DSH 并刷新页面。见 [发布说明](docs/release-0.23.2.md)。
 - **v0.23.1**：修复 Keep All / Undo All 在待审超过一页时必定中止——批量按钮原先复用分页接口并把每页的展示用计数当全量总数校验，官方待审 150 条时先报「待审记录在分页期间变化」或最终报「待审记录数量不完整」，实际 0 项被决策。现改为一次性完整快照（`edrv.review.list` 新增 `all: true`，服务端循环取全并与历史改动投影去重，`nextCursor: null`、`pending` 为真实总数），客户端单次取快照、校验唯一且仍待审后逐项决策；超过 2000 条明确拒绝并提示分批，途中变化仍整批中止不部分写入。差异栏浏览仍走原分页接口。本版未在重启后的 GUI 点按验证，缺口保留；发布不自动部署，升级后重启 DSH 并刷新页面。见 [发布说明](docs/release-0.23.1.md)。
@@ -1057,8 +1099,10 @@ Keep All / Undo All 却是亮的。修复：单文件 Keep / Undo 覆盖冲突�
   多选比较 / 区间 / Stop on copy / Include merged revisions / Statistics）、
   并排差异（基线 / 版本间 / 与工作副本）、诊断日志查看器。
 - **v0.4.x**：LSP 与 Monaco 系列修复（见[常见问题](#常见问题)）；外部改动自动
-  同步即将发布。
+  同步（v0.4.4）。
 - **v0.3.x**：命令栏（v0.2.0）→ 代码片段 / 快捷引用（v0.3.0）→ 插件技能组
   （v0.3.3）。
 - **v0.1.5x**：官方侧边栏形态（v0.1.60 推荐）、PDF 浏览编辑（v0.1.55）、
   系统集成（v0.1.53）、规则管理（v0.1.49 / 50）。
+
+</details>
