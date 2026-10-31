@@ -208,6 +208,31 @@ export function reviewPage(cwd: string, cursor = 0, history = false, path?: stri
 /**
  * @public
  * @author ddj 2026年10月31号
+ * @description: 该会话里由官方记录判为「整文件新增」的文件身份集合。待审条目命中时基线要置空：
+ * 文件是本会话新建的，累计基线只是会话自己的中间产物，拿它做旧侧会把新增文件渲染成一堆修改块。
+ * @param cwd 迁移后的工作区
+ * @param sessionId 会话
+ * @returns 整文件新增的文件身份集合
+ */
+export function addedFiles(cwd: string, sessionId: string): Set<string> {
+  try {
+    const db = dbFor(cwd)
+    if (!db.prepare("SELECT 1 FROM sqlite_master WHERE name='review_files' AND type='table'").get()) return new Set()
+    // 先按会话收窄再取每个文件最早的那条官方记录：首个块是整文件新增（before=false）才说明文件
+    // 由本次会话创建，后续修改块不能反过来把新建成改写成「有旧基线的修改」。
+    const rows = db.prepare(`SELECT identity FROM (SELECT identity,
+      json_extract(diff,'$.before') AS before, ROW_NUMBER() OVER (PARTITION BY identity ORDER BY turn, seq) AS rank
+      FROM review_files WHERE session_id=?) WHERE rank=1 AND before=0`).all(sessionId) as Row[]
+    return new Set(rows.map((row) => String(row.identity)))
+  } catch {
+    // 判定失败只退回旧的累计基线口径，不影响列表与详情可用
+    return new Set()
+  }
+}
+
+/**
+ * @public
+ * @author ddj 2026年10月31号
  * @description: 该文件是否还有未处理的官方待审改动。缺失文件预览据此区分「需要去差异栏 Keep 结案」
  * 与「记录都已处理、可直接关闭标签页」，避免已结案的删除文件继续提示待审。
  * @param cwd Migrated workspace

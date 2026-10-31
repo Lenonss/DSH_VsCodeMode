@@ -25,10 +25,11 @@ import {
  * @author ddj 2026年10月29号
  * @description: 统计一次差异的增删行数；非文本差异统一记 0/0。
  * @param entry 待审条目
+ * @param baselineEmpty 基线置空（新建文件按全量新增计）
  * @returns 增删行数
  */
-function countsOf(entry: PendingEntry): { added: number; deleted: number } {
-  const diff = diffOf(entry)
+function countsOf(entry: PendingEntry, baselineEmpty = false): { added: number; deleted: number } {
+  const diff = diffOf(entry, baselineEmpty)
   if (diff.kind !== 'text') return { added: 0, deleted: 0 }
   let added = 0
   let deleted = 0
@@ -93,11 +94,12 @@ export function foldWrite(stored: StoredEntry | undefined, write: PendingWrite):
  * @author ddj 2026年10月29号
  * @description: 条目转列表投影，已解决条目仍保留但不可再决定。
  * @param stored 条目与标记
+ * @param baselineEmpty 基线置空（新建文件按全量新增计）
  * @returns 列表项
  */
-export function itemOf(stored: StoredEntry): PendingItem {
+export function itemOf(stored: StoredEntry, baselineEmpty = false): PendingItem {
   const { entry, flags } = stored
-  const counts = countsOf(entry)
+  const counts = countsOf(entry, baselineEmpty)
   const item: PendingItem = {
     id: entry.id,
     path: entry.path,
@@ -123,12 +125,13 @@ export function itemOf(stored: StoredEntry): PendingItem {
  * @description: 读一页待审条目，按更新时间升序；会话过滤走血缘集合。
  * @param cwd 工作区
  * @param sessionId 当前会话
+ * @param wholeAdd 本次会话新建的文件身份集合，命中时基线置空
  * @returns 列表
  */
-export function loadPage(cwd: string, sessionId?: string): PendingPage {
+export function loadPage(cwd: string, sessionId?: string, wholeAdd?: ReadonlySet<string>): PendingPage {
   const all = loadEntries(cwd)
   const visible = sessionId ? all.filter((stored) => stored.entry.sessionIds.includes(sessionId)) : all
-  const items = visible.map(itemOf)
+  const items = visible.map((stored) => itemOf(stored, wholeAdd?.has(stored.entry.id) === true))
   const gaps: string[] = []
   for (const stored of visible) {
     if (stored.flags.oversized) gaps.push(`${stored.entry.path}: 文本超出上限，仅保留标记`)
@@ -141,14 +144,15 @@ export function loadPage(cwd: string, sessionId?: string): PendingPage {
  * @description: 读单条详情，包含可交给现有面板渲染的差异与块决定。
  * @param cwd 工作区
  * @param id 条目身份
+ * @param baselineEmpty 基线置空（新建文件按全量新增渲染）
  * @returns 详情，条目不存在时 null
  */
-export function loadDetail(cwd: string, id: string): PendingDetail | null {
+export function loadDetail(cwd: string, id: string, baselineEmpty = false): PendingDetail | null {
   const stored = loadEntries(cwd).find((item) => item.entry.id === id)
   if (!stored) return null
-  const diff = diffOf(stored.entry)
+  const diff = diffOf(stored.entry, baselineEmpty)
   return {
-    item: itemOf(stored),
+    item: itemOf(stored, baselineEmpty),
     diff,
     blocks: blockStatesOf(stored.entry),
     capability: capabilityOf(stored.entry, stored.flags),

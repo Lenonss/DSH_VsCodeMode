@@ -206,8 +206,15 @@ export function capabilityOf(entry: PendingEntry, flags: PendingFlags): { keep: 
  * @author ddj 2026年10月29号
  * @description: 供详情接口复用的差异构造。
  * @param entry 待审条目
+ * @param baselineEmpty 基线置空：文件由本次会话新建，旧基线只是会话自己的中间产物
  * @returns 官方差异
  */
-export function diffOf(entry: PendingEntry): OfficialDiff {
-  return textDiff(entry.path, entry.path, entry.oldText, entry.newText)
+export function diffOf(entry: PendingEntry, baselineEmpty = false): OfficialDiff {
+  if (!baselineEmpty) return textDiff(entry.path, entry.path, entry.oldText, entry.newText)
+  // 空基线在按行切分时会留下一个空行，差异里会多出一条「删空行」；新增文件应当只有新增行，
+  // 与官方整文件新增块（oldLines=0、全是 + 行）保持同一形状。
+  if (entry.newText === '') return textDiff(entry.path, entry.path, '', '')
+  const diff = textDiff(entry.path, entry.path, '', entry.newText)
+  if (diff.kind !== 'text') return diff
+  return { ...diff, hunks: diff.hunks.map((hunk) => ({ ...hunk, oldLines: 0, lines: hunk.lines.filter((line) => line !== '-') })) }
 }

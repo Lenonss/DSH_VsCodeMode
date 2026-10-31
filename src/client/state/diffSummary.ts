@@ -44,7 +44,11 @@ function pendingRowsOf(page: ReviewPage | null): { rows: DiffFile[]; covered: Se
   for (const item of page?.items ?? []) {
     if (!item.id.startsWith(PENDING_PREFIX)) continue
     const path = item.currentPath || item.path
+    // 待审条目的 path 取自写入时的原始写法（agent 常用工作区相对路径），官方导航用的却是绝对身份：
+    // 只按 path 建覆盖集时，同一文件的官方汇总行不会被压掉，差异栏把 3 个文件算成 6 条。
+    // 身份（id 去掉待审前缀）与官方 identity 同源，必须一起入集。
     covered.add(diffPathKey(path))
+    covered.add(diffPathKey(item.id.slice(PENDING_PREFIX.length)))
     rows.push({
       path,
       label: item.display || path,

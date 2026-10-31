@@ -8,6 +8,7 @@ import { readText } from './pending/capture.js'
 import { pendingRawId, trackPendingCover } from './pendingCompat.js'
 import { loadEntries, saveEntry } from './pending/persist.js'
 import { applyDecide, importFromVcs, itemOf, loadDetail, loadPage, refreshed, removeEntry, undoDecide } from './pending/store.js'
+import { addedFiles } from './reviewDb.js'
 import type { ShellLike } from './pending/vcs.js'
 import type { Ctx } from './store.js'
 import { policyOf } from './store.js'
@@ -82,14 +83,16 @@ function readHandlers(kit: ScopeKit): Partial<RpcHandlerMap> {
   return {
     'edrv.pending.list': async (args: PendingRequest) => {
       const cwd = await kit.read(args.sessionId)
-      const page = loadPage(cwd, args.sessionId)
+      // 与官方入口同口径：本会话新建的文件基线置空，列表里的增删行数才等于整文件行数
+      const page = loadPage(cwd, args.sessionId, addedFiles(cwd, args.sessionId))
       // 列表即登记接管关系；旧写入口守卫之后只读内存集合，不再产生数据库读
       for (const item of page.items) trackPendingCover(cwd, item.path, true)
       return { ok: true, page }
     },
     'edrv.pending.detail': async (args: PendingRequest & { id: string }) => {
       const cwd = await kit.read(args.sessionId)
-      const detail = loadDetail(cwd, pendingRawId(args.id))
+      const rawId = pendingRawId(args.id)
+      const detail = loadDetail(cwd, rawId, addedFiles(cwd, args.sessionId).has(rawId))
       return detail ? { ok: true, detail } : { ok: false, error: '待审条目不存在' }
     },
   }

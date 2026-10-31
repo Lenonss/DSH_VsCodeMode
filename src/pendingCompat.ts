@@ -171,7 +171,13 @@ export function pendingCovers(cwd: string, path: string): boolean {
  * @returns 合并后的页
  */
 export function mergedPage(official: ReviewPage, pending: PendingPage, cwd?: string): ReviewPage {
-  const covered = new Set(pending.items.map((item) => pathKey(item.path)))
+  const covered = new Set<string>()
+  for (const item of pending.items) {
+    // 待审条目的 path 是写入时的原始写法（常为工作区相对路径），官方条目用绝对身份：
+    // 只按 path 建覆盖集时同一文件会同时留下待审行与官方行，差异栏把一份改动算成两条。
+    covered.add(pathKey(item.path))
+    covered.add(pathKey(item.id))
+  }
   const kept = official.items.filter((item) => !covered.has(pathKey(item.currentPath)) && !covered.has(pathKey(item.path)))
   const items = [...pending.items.map((item) => pendingItemOf(item, cwd)), ...kept]
   return {

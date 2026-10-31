@@ -190,6 +190,40 @@ describe('待审投影真实往返', () => {
     expect(merged.pending).toBe(1)
   })
 
+  it('待审条目的相对 path 与官方绝对身份同指一个文件时，官方旧行仍让位', async () => {
+    const file = join(workspace, 'compat-rel.ts')
+    await writeFile(file, 'B', 'utf8')
+    recordWrite({ ...write(file, 'A', 'B', 1), path: 'compat-rel.ts' })
+    const pending = loadPage(workspace, 's1')
+    expect(pending.items[0]!.path).toBe('compat-rel.ts')
+    const official = {
+      items: [{
+        id: '8', sessionId: 's1', turn: 1, seq: 1, path: file, currentPath: file, display: file,
+        added: 1, deleted: 1, kind: 'text' as const, decision: 'pending' as const, revision: 0, current: true,
+      }],
+      pending: 1, nextCursor: null, gaps: [],
+    }
+    const merged = mergedPage(official, pending)
+    expect(merged.items).toHaveLength(1)
+    expect(merged.items[0]!.id.startsWith(PENDING_PREFIX)).toBe(true)
+  })
+
+  it('新建文件按整文件新增渲染：基线置空后只剩一块全加差异', async () => {
+    const file = join(workspace, 'fresh.ts')
+    await writeFile(file, 'A\nB\nC\nD', 'utf8')
+    // 首次采集时磁盘已有内容（会话自己的中间产物），累计基线因此不是空的
+    recordWrite(write(file, 'A\nB\nC', 'A\nB\nC\nD', 1))
+    const [item] = loadPage(workspace, 's1').items
+    expect(item!.added).toBe(1)
+    expect(item!.deleted).toBe(0)
+    const detail = loadDetail(workspace, item!.id, true)
+    expect(detail!.diff.hunks).toHaveLength(1)
+    // 基线为空时整文件都是新增，块里不允许再出现删除行
+    expect(detail!.diff.hunks[0]!.lines.some((line) => line.startsWith('-'))).toBe(false)
+    expect(detail!.item.deleted).toBe(0)
+    expect(detail!.item.added).toBe(4)
+  })
+
   it('旧写入口守卫：登记后拒绝、注销后放行，且不读数据库', () => {
     const cwd = join(workspace, 'w')
     const covered = join(cwd, 'guard.ts')

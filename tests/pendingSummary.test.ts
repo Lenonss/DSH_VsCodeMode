@@ -55,6 +55,16 @@ describe('diffSummary 待审口径', () => {
     expect(summary.files.filter((file) => file.path === target)).toHaveLength(1)
   })
 
+  it('待审行是相对路径、官方行是绝对身份时，同一文件仍只算一次', () => {
+    // 生产里待审条目存的是写入时的相对写法，官方导航用绝对身份：只按 path 建覆盖集会把一份改动算成两条
+    const page = pageOf()
+    page.items = [{ ...page.items[0]!, path: 'src/a.ts', currentPath: 'src/a.ts' }]
+    const summary = diffSummary([], page)
+    expect(summary.files).toHaveLength(1)
+    expect(summary.files[0]!.sourceKind).toBe('pending')
+    expect(summary.totalFiles).toBe(1)
+  })
+
   it('无待审时保持原口径：官方汇总行照常出现', () => {
     const page = pageOf()
     page.items = []

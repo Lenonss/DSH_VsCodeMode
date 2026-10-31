@@ -2,7 +2,7 @@
 import type { RpcHandlerMap } from './shared/rpc.js'
 import type { ReviewDetail, ReviewItem, ReviewPage } from './shared/review.js'
 import type { PendingPage } from './shared/pendingReview.js'
-import { decideReview, reviewDetail, reviewPage } from './reviewDb.js'
+import { addedFiles, decideReview, reviewDetail, reviewPage } from './reviewDb.js'
 import { undoReview } from './reviewUndo.js'
 import { applyDecide, loadDetail, loadPage } from './pending/store.js'
 import { PENDING_PREFIX, mergedPage, pendingDetailOf, pendingItemOf, pendingSamePath } from './pendingCompat.js'
@@ -153,7 +153,9 @@ export function reviewHandlers(ctx: Ctx, registry: Registry): Partial<RpcHandler
    */
   function pendingPageOf(cwd: string, sessionId: string): PendingPage {
     try {
-      const page = loadPage(cwd, sessionId)
+      // 本会话新建的文件由官方首个块判为整文件新增，待审基线必须跟着置空：
+      // 否则同一次新建会同时存在「官方说全加 516 行」与「待审说改 8 处」两套相反口径。
+      const page = loadPage(cwd, sessionId, addedFiles(cwd, sessionId))
       // 已结算（老文本与新文本一致）的投影没有净变化可审：留着会顶掉同路径的官方待审记录，
       // 让差异栏选中一条 Keep 不可用的条目，表现为「按钮亮着却点不动」。
       return page.items.some((item) => item.settled === true)
@@ -192,7 +194,9 @@ export function reviewHandlers(ctx: Ctx, registry: Registry): Partial<RpcHandler
       const scope = await scopeOf(args.sessionId)
       const cwd = scope.cwd
       if (args.id.startsWith(PENDING_PREFIX)) {
-        const detail = loadDetail(cwd, args.id.slice(PENDING_PREFIX.length))
+        const entryId = args.id.slice(PENDING_PREFIX.length)
+        // 详情侧与列表侧必须同一口径：整文件新增的文件用空基线渲染，差异块才是全绿一整块
+        const detail = loadDetail(cwd, entryId, addedFiles(cwd, args.sessionId).has(entryId))
         if (!detail) return { ok: false, error: '待审条目不存在' }
 
         const mapped = pendingDetailOf(detail, new Date(detail.item.updatedAt).toISOString(), cwd)
