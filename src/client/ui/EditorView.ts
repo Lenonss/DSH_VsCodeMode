@@ -46,6 +46,7 @@ import { base64ToBytes, bytesToBase64, isPdfPath } from '../pdfPreview.js'
 import { inNativePath, tryNativeOpen } from '../nativeOpenStore.js'
 import { clearPendingNav, putPendingNav, readPendingNav } from '../pendingNav.js'
 import { readBinaryPreview } from '../../shared/rpc.js'
+import { monacoHint } from '../loadFailure.js'
 import {
   clearBaseline,
   clearReadVersion,
@@ -4747,7 +4748,7 @@ export function EditorView(props) {
   } else if (monacoErr) {
     body = React.createElement('div', { className: 'edrv-empty' },
       React.createElement('div', null, 'Monaco 编辑器加载失败：' + String(monacoErr)),
-      React.createElement('div', { style: { fontSize: 11 } }, '请确认插件包 assets/vendor/monaco 完整（/edrv/vendor 路由可达）'),
+      React.createElement('div', { style: { fontSize: 11 } }, monacoHint(String(monacoErr))),
       React.createElement('button', { className: 'edrv-pill edrv-pill-ghost', onClick: () => { setMonacoErr(null); setLoadStage({ progress: 0, message: '准备重试 Monaco…' }) } }, '重试'))
   } else if (!active) {
     body = React.createElement('div', { className: 'edrv-empty' },

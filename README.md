@@ -538,6 +538,30 @@ DSH 每次启动监听随机端口，`http://127.0.0.1:<port>` 就是浏览器 o
   `DSH_HOME/dsh-vscode-mode/logs/debug.<hashOf(cwd)>.log`（无会话期诊断落在
   `debug.<hashOf('ui-state')>.log`）。
 
+### 19. 远程访问兼容（经第三方远程访问插件访问）
+
+宿主 `/edrv/*` 的准入是 `connection.requestRejection()`，**Host 围栏优先于登录态**：
+只认 loopback、监听 bind IP 与 `trustedHosts`。远程设备访问时 `Host` 不符即 403，
+与是否已经登录无关（401 才是登录失效）。第三方远程访问插件
+（`@linxin666/dsh-remote-web-ui` 等）把 `/api/`、`/sidebar/`、`/git/`、`/pet/` 改写到它的
+`/remote` 通道，`/edrv/` 不在白名单内，所以文件管理器 RPC 与 Monaco 静态资源全部直连
+宿主被拒。
+
+本插件按「通道前缀」适配（`src/shared/remoteChannel.ts`）：
+
+- **判定**：远程通道在 `<head>` 解析期安装座位对象 `__DSH_REMOTE_CHANNEL_BOOT__`；
+  存在即认为本页经远程通道访问，前缀取 `/remote`，否则为空串。
+- **覆盖**：`/edrv/rpc`（业务 RPC 与二进制预览）、Monaco 的 `loader.js` / AMD 模块 /
+  `editor.main.css` / codicon 字体 / 语言 Worker（随 `paths.vs` 继承）、pdf.js 的
+  worker 与 cmaps、`/edrv/assets/*` 图片全部走 `transportUrl()`，`appUrl()` 继续负责
+  应用 base 与桌面 `dsh-app://` 协议，不硬编码主机或端口。
+- **为什么不是 `/api/edrv`**：远程插件的补丁只改 fetch / EventSource / WebSocket 与
+  `<img|script|iframe>.src`，`<link rel=stylesheet>`、CSS `url()`、`new Worker`、
+  ESM `import` 都不经过补丁；服务端 `/remote/<内部路径>` 才是覆盖全资源类型的正式通道。
+- **安全与兼容**：不新增路由、不改 `admitRoute`、不公开任何静态资源；`/remote` 门禁
+  仍要求已配对设备（其设备 cookie 同源携带），转发到回环后本插件的权限校验照常执行；
+  本地与桌面入口保持 `/edrv/*` 原样，未装远程插件时行为不变。
+
 ## 安装
 
 官方 `dsh plugin` 方式，三选一。下面以 `web` profile 为例；Desktop 或其他命名
@@ -548,13 +572,13 @@ profile 请替换为实际目标，不要把示例目录当成当前运行 profi
 
 ```bash
 # ① Git 安装（clone + prepare 构建；推荐打固定 tag）
-dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.23.5
+dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.24.0
 
 # ② npm 注册表（发布到 npm 后）
-dsh plugin --profile web add dsh-vscode-mode@0.23.5
+dsh plugin --profile web add dsh-vscode-mode@0.24.0
 
 # ③ GitHub Release tgz 直装（Release asset 可用后）
-dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.23.5/dsh-vscode-mode-0.23.5.tgz
+dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.24.0/dsh-vscode-mode-0.24.0.tgz
 ```
 
 > **DSH 版本政策（0.17.0 起）**：六项 DSH peer 仍统一声明为 `*`，另以
@@ -749,7 +773,7 @@ Desktop 应沿用当前 `dsh-app:` 应用上下文，不拼接固定 `localhost`
 ```
 src/
 ├── index.ts          Host 入口：name/inject/apply（薄装配，含兼容性报告启动日志）
-├── shared/           ★ 双面契约（禁 node/react）：types/rpc/compat/mcp
+├── shared/           ★ 双面契约（禁 node/react）：types/rpc/compat/mcp + remoteChannel（远程通道前缀）
 ├── compat.ts         ★ Host 兼容层：外部插件探测、路由/重复装配护栏、兼容性报告
 ├── devForm.ts        Host 开发形态管理：link:/junction 切换（RPC vscode.devForm*）
 ├── model.ts          Host 纯域逻辑（可单测）：normalize/markDecision/summary/批次/归档
@@ -904,12 +928,37 @@ Keep All / Undo All 却是亮的。修复：单文件 Keep / Undo 覆盖冲突�
 技能名必须 kebab-case + `dsh-vscodemode-` 前缀（下划线非法），frontmatter 用
 官方字段名（见[特性 12](#12-插件自带技能组v033)）。
 
+**8. 远程访问时文件管理器报「DSH 拒绝了当前页面的访问」、编辑器报「Monaco loader 加载失败」**
+
+根因：宿主的 `/edrv/*` 路由准入走 `connection.requestRejection()`，其中 **Host 围栏
+（`isTrustedApiRequest`）先于任何登录态校验**——只放行 loopback / 监听 bind IP /
+声明过的 `trustedHosts`。手机、平板或隧道域名访问时 `Host` 既不是 loopback 也不在
+白名单，因此**登录态再有效也一律 403**（`401` 才是登录失效）。远程访问插件
+（`@linxin666/dsh-remote-web-ui`）只把 `/api/`、`/sidebar/`、`/git/`、`/pet/` 改写到
+它自己的 `/remote` 通道，`/edrv/` 不在其中，于是 RPC、Monaco 的 loader/AMD 模块/CSS/
+字体/Worker、pdf.js、预览图片全部直连宿主被拒。
+
+修复（**纯客户端**，宿主路由与鉴权零改动）：远程通道在 `<head>` 解析期会
+安装 `window.__DSH_REMOTE_CHANNEL_BOOT__` 座位对象；检测到它时，插件把所有内部地址
+（`/edrv/rpc`、`/edrv/vendor/*`、`/edrv/assets/*`）**统一前缀成 `/remote/edrv/...`**，
+由远程插件的服务端 catch-all 代理回环转发——该代理带同源设备 cookie 并换用进程内凭据
+重发到 `127.0.0.1`，于是我们的 Host 围栏与登录校验**照常执行且通过**；任何子资源类型
+（`<link>`、CSS `url()`、`new Worker`、ESM `import`）都覆盖，不依赖主线程 fetch 补丁。
+本地页面、桌面 `dsh-app://`、未装远程插件时前缀为空，行为与之前完全一致。
+
+- 未做也不建议：把所有 `/edrv/` 硬改成 `/api/edrv/`（补丁不覆盖 `link.href`/Worker/模块
+  import，会留下半成品）；公开 vendor 路由；要求手工配 `trustedHosts`。
+- 诊断：加载失败会先 HEAD 探测真实状态码再给结论——403 指「宿主拒绝了当前页面」、
+  401 指登录态失效、404 指资源缺失、0 指请求没到宿主；远程通道 403 若是设备未配对，
+  会直接提示「远程访问设备尚未配对」。
+
 ## 更新日志
 
 完整变更见 [GitHub Releases](https://github.com/Lenonss/DSH_VsCodeMode/releases)。
 
 | 版本 | 要点 |
 | --- | --- |
+| v0.24.0 | 经第三方远程访问插件时，文件管理器与 Monaco 恢复可用；加载失败提示按状态区分 |
 | v0.23.5 | 同一文件不再算成两条差异；新建文件按整文件新增渲染 |
 | v0.23.4 | 计划卡「查看全文」直通编辑器，不再闪一下再关 |
 | v0.23.3 | 已删除文件的差异条目不再卡死；重启后不再成串「采集不完整」 |
@@ -918,9 +967,10 @@ Keep All / Undo All 却是亮的。修复：单文件 Keep / Undo 覆盖冲突�
 | v0.23.0 | 快捷菜单：可拖动悬浮按钮 + 自定义菜单树 |
 
 <details>
-<summary>完整版本记录（v0.23.5 → v0.1.5x，点击展开）</summary>
+<summary>完整版本记录（v0.24.0 → v0.1.5x，点击展开）</summary>
 
 
+- **v0.24.0**：修复经第三方远程访问插件（如 `@linxin666/dsh-remote-web-ui`）访问 DSH Web GUI 时，文件管理器报「DSH 拒绝了当前页面的访问」、编辑器报「Monaco loader 加载失败」。根因在宿主准入顺序：`connection.requestRejection()` 先用 `isTrustedApiRequest` 判 Host/Origin，不属于回环、监听地址或 `trustedHosts` 就**直接 403**，根本不看登录态（401 才是认证失败），而本插件的 `/edrv/rpc` 与 `/edrv/vendor/**` 都不在远程插件的改写白名单里，于是 RPC、Monaco 的脚本/CSS/字体/Worker、pdf.js 模块 import 与角标图片全部直连宿主被拒。现按远程通道选路径前缀：`window.__DSH_REMOTE_CHANNEL_BOOT__` 存在（远程插件在 `<head>` 解析期安装的座位对象）时，所有插件内部路径改挂其已接管的 `/remote` catch-all（`/remote/edrv/...`），本地与桌面入口保持 `/edrv/...` 原样。新增 `src/shared/remoteChannel.ts`（`channelPrefix` / `transportPath` / `transportUrl`，仍经 `appUrl` 继承应用基址与 `dsh-app:`），RPC、二进制预览、Monaco 基址、pdf.js 基址与角标图片统一走它；**服务端零改动**，不新增路由、不取消鉴权、不读也不写任何凭据，`/remote` 门禁仍要求已配对设备。另新增 `src/client/loadFailure.ts`：加载失败先 HEAD 探测真实状态，403（Host 围栏）/401（登录失效）/404（资源或路由缺失）/0（请求未到达宿主）分别给不同提示，且只带 pathname 与状态码；设备未配对（403 `code:'unpaired'`）直接提示去配对，不再把所有 Monaco 失败都说成「检查资源是否完整」。验证：typecheck 0 error；全量 284 文件、3691 通过 + 22 跳过；`node --test tests/nativeOpen.test.mjs` 9/9；build 四 bundle 通过；本机 GUI 全链 200 并确认无 cookie 仍 401；远程通道用本地回环代理复刻转发语义后，138/138 请求落 `/remote/edrv/…`、目录/读/写/保存与 Monaco+Worker 全部通；**真机 + 真插件的配对门禁与 TLS 未验收（缺口保留）**。见 [0.24.0 发布说明](docs/release-0.24.0.md)。
 - **v0.23.5**：修复差异栏把同一文件算成两条（差异文件数偏大）。待审条目存的是写入时的相对路径，官方导航用绝对身份，而 `mergedPage()` 与 `diffSummary` 的去重都只按 path 建覆盖集，相对路径的待审行压不掉绝对身份的官方行，于是同一文件同时留下待审行与官方汇总行；现两侧覆盖集都补入条目身份（与官方 identity 同源）。另修复本会话新建的文件被渲染成一堆修改块：累计基线保留「最早内容」，新建文件首次采集时磁盘已有会话自己的中间产物，基线因此非空，「新增 516 行」被切成若干 `-`/`+` 混合块，与官方整文件新增（`before=false`、`oldLines=0`）口径相反；现按每个文件在该会话内最早的官方记录判定整文件新增，命中时待审侧基线置空，列表与详情只出一块全加差异、增删计数等于整文件行数，`addedFiles()` 查询失败则回退旧口径。验证：typecheck 0 error；全量单测通过；`npm run build` 通过；本版未做 GUI 点按验收（缺口保留）。见 [0.23.5 发布说明](docs/release-0.23.5.md)。
 - **v0.23.4**：修复桌面端点计划卡「查看全文」会先闪开一页官方计划预览、随即自动关闭。根因：官方卡片走 `ctx.sidebarRight.openResource(planAddress(callId))`，而本插件以 extension 优先级认领了 `dsh-resource://plan/**` 与 `dsh-resource://plan-review/**`，于是侧栏先按本插件类型建出一个页签（正文「正在打开计划预览…」），挂载后才把计划转进「文件编辑」、再把这个页签关掉——用户看到的就是这次建而即关。现由新增 `src/client/planDirect.ts` 在装配期包装 `sidebarRight.openResource`：只接管「2 段计划地址 + 会话为在屏会话」，正文依次取回顾卡片的 `params.planReview`、插件侧地址→正文缓存、可选 `resources.source()` 资源流（上限 1.5s），拿到正文后经 `requestOpen(..., { preview: true })` 直通本插件编辑器的只读计划页签，不再创建侧栏页签；非计划地址、跨会话与 subagent 5 段地址、正文不可得、编辑器 5s 未回执、以及服务对象只读导致包装赋值失败，一律回落原生 `openResource`，原「认领 + 挂载后转移」链路保留为后备。`openReceipt` 新增可选 `timeoutMs`，`planState` 新增有界（64 条）地址→正文缓存并由 live `exit_plan_mode` 写入。验证：typecheck 0 error；`tests/planDirect.test.ts`（新增 9 例）、`tests/planBridge.test.ts`（13）、`tests/planState.test.ts`（10）、`tests/openReceipt.test.ts`（9）四套 41/41；`npm run build` 双 bundle 通过（含客户端产物完整性校验）；浏览器确认新 bundle 已加载且 Console 无「计划直通装配失败」；GUI 点按由用户在本机 Web 端手动复验后发布。见 [发布说明](docs/release-0.23.4.md)。
 - **v0.23.3**：修复 issue #13（已删除文件的差异条目把人卡死）与 #12（重启后成串「采集不完整」）。①文件在磁盘上被删掉时，客户端申请整文件删除预览被「已有官方审查记录」拒绝，而拒绝只是一条普通 `Error`，于是落到通用加载失败分支——「文件加载失败：…」+ 进度钉在 0%、重试同错、标签页关不掉；`edrv.review.detail` 还把 Undo 不可用解释成「缺少可验证的原始字节」，而真实原因是文件已不在。现缺失文件预览的可预期拒绝带稳定码（`official-covered` / `official-decided` / `no-records` / `no-evidence` / `too-large`），客户端据此显示「文件已在磁盘删除（· 有官方待审改动）」终态：标题 + 原因 + 重试 / 关闭标签页，不再画 0% 进度条；官方待审记录在磁盘已删除时给出「Keep 按删除结案、Undo 需要读写该文件」的准确原因（Keep 语义不变，仍只写共享审查库），记录都已结案时提示可直接关闭；`!review` 的磁盘状态抖动改为最多重读 2 次后给终态，消除缺失↔重现的无限递归。v0.22.0 起 `hasOfficial()` 已用 `typeof path !== 'string'` 守卫堵掉把不透明 FsTarget 绑进 SQL 导致的 `Unknown named parameter 'targetKey'`，本版不再复现。②官方 `workspace/changes` 的 summary 只存在宿主内存里，插件启动补采原先无条件把历史事件全部入队，重启后每一轮都必然抛「summary 已失效或尚不可用」并写成不可修复的 `gap`（面板成串「轮次 N 采集不完整」）；现补采先 `summary()` 探测再入队，失效事件只记一条汇总日志。验证：typecheck 与基线同为 37 个既有错误（`fflate/browser` 依赖缺失）、零新增；定向单测 111/111（含新增 `tests/deletedFileReview.test.ts` 5 例与 `tests/officialBackfill.test.ts` 2 例）、EditorView 相关 82/82；`npm run build` 四个 bundle 通过。见 [发布说明](docs/release-0.23.3.md)。

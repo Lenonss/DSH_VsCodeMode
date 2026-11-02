@@ -5,7 +5,7 @@
  * 作者 ddj 2026-08-20
  */
 import React from 'react'
-import { appUrl } from '../../shared/appUrl.js'
+import { transportUrl } from '../../shared/remoteChannel.js'
 import { openEditorView, emitShowLauncher } from '../events.js'
 import { diffSummary } from '../state/diffSummary.js'
 import { subscribeReview } from '../state/reviewFeed.js'
@@ -44,6 +44,6 @@ export function DiffBadge(props) {
     title: '差异审查：' + n + ' 个待处理文件；点击查看总览与历史',
     style: { position: 'relative', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 30, height: 30, padding: 0, background: 'transparent', border: 'none', borderRadius: 6, cursor: 'pointer' },
   },
-    React.createElement('img', { src: appUrl('/edrv/assets/compare-select.png'), alt: '差异', style: { width: 22, height: 22, display: 'block' } }),
+    React.createElement('img', { src: transportUrl('/edrv/assets/compare-select.png'), alt: '差异', style: { width: 22, height: 22, display: 'block' } }),
     React.createElement('span', { style: { position: 'absolute', top: 1, right: 0, minWidth: 15, height: 15, padding: '0 3px', borderRadius: 8, background: 'var(--dsw-alias-state-warn-primary,#d97706)', color: '#fff', fontSize: 10, lineHeight: '15px', textAlign: 'center', fontWeight: 700, boxSizing: 'border-box' } }, String(n)))
 }

@@ -7,10 +7,11 @@
  * 作者 ddj 2026-09-22
  */
 
-import { appUrl } from '../../shared/appUrl.js'
+import { transportUrl } from '../../shared/remoteChannel.js'
+import { loadFailureText, probeStatus } from '../loadFailure.js'
 
-/** vendor 根，保留官方桌面协议及反向代理前缀。 */
-export const PDFJS_BASE = appUrl('/edrv/vendor/pdfjs')
+/** vendor 根，保留官方桌面协议、反向代理前缀与远程访问通道前缀。 */
+export const PDFJS_BASE = transportUrl('/edrv/vendor/pdfjs')
 /** pdf.js Worker 地址（GlobalWorkerOptions.workerSrc）。 */
 export const PDFJS_WORKER_SRC = PDFJS_BASE + '/build/pdf.worker.mjs'
 /** CJK 字符映射目录（中文 PDF 渲染必需，尾斜杠固定）。 */
@@ -76,7 +77,12 @@ export function loadPdfjs() {
         'document.querySelector("script[data-edrv-pdfjs-loader]")?.dispatchEvent(new Event("edrv-pdfjs-ready"));'
       s.dataset.edrvPdfjsLoader = '1'
       s.onload = boot
-      s.onerror = () => fail(new Error('pdf.js loader 脚本加载失败（检查 assets/vendor/pdfjs 完整 / /edrv/vendor 路由可达）'))
+      s.onerror = async () => {
+        // 探测真实状态码：403（Host 围栏）/401/404/网络错误各自给不同排查方向
+        const moduleUrl = PDFJS_BASE + '/build/pdf.mjs'
+        const status = await probeStatus(moduleUrl)
+        fail(new Error(loadFailureText('pdf.js 模块加载失败', moduleUrl, status)))
+      }
       document.head.appendChild(s)
     })
   }

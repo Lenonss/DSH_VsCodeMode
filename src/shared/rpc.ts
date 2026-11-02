@@ -24,7 +24,7 @@ import type { AiConfigPatch, AiConfigView, AiDirectoryView, AiInlineRequest, AiI
 import type { SvnAction, SvnAiPlan, SvnChangeEntry, SvnConflictArtifact, SvnDiffRevResult, SvnIgnoreItem, SvnLogEntry, SvnRemoteOutdatedEntry, SvnStatusPayload, SvnSumEntry, SvnUpdatePoll, SvnUpdateResult, SvnUpdateState } from './svn.js'
 import type { DapAction, DapAdapterInfo, DapBreakpointAck, DapBreakpointInput, DapConfigSnippet, DapConfigSource, DapDebugConfig, DapFrameView, DapPhase, DapPollResult, DapProcessInfo, DapScopeView, DapVariableView } from './dap.js'
 import { DAP_ACTIONS } from './dap.js'
-import { appUrl } from './appUrl.js'
+import { transportUrl } from './remoteChannel.js'
 import type { LoggerLevel } from './logger.js'
 import type { SvnViewRequest, SvnViewPayload } from './svnExplorer.js'
 import type { DecideReview, ReviewDetail, ReviewPage, ReviewRequest } from './review.js'
@@ -153,7 +153,7 @@ export async function readBinaryPreview(
  */
 async function tryBinaryRead(args: RpcRequestMap['edrv.readBinary']): Promise<PreviewRead | null> {
   try {
-    const res = await fetch(appUrl(RPC_PATH), {
+    const res = await fetch(transportUrl(RPC_PATH), {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ method: 'edrv.readBinary', args }),

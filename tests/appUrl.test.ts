@@ -38,6 +38,18 @@ describe('RPC transport', () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('private diagnostics', { status })))
     await expect(rpc('mcp.list', {})).rejects.toThrow(/DSH|请求/)
   })
+  it('posts through the remote channel prefix on a remote page', async () => {
+    vi.stubGlobal('window', { __DSH_REMOTE_CHANNEL_BOOT__: {} })
+    vi.stubGlobal('document', { baseURI: 'dsh-app://app/' })
+    const fetcher = vi.fn(async () => Response.json({ ok: true, servers: [] }))
+    vi.stubGlobal('fetch', fetcher)
+    await expect(rpc('mcp.list', {})).resolves.toEqual({ ok: true, servers: [] })
+    expect(fetcher).toHaveBeenCalledWith('dsh-app://app/remote/edrv/rpc', expect.objectContaining({ method: 'POST' }))
+  })
+  it('names an unpaired remote device on the channel 403', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ result: { ok: false, error: { code: 'unpaired' } } }, { status: 403 })))
+    await expect(rpc('mcp.list', {})).rejects.toThrow('配对')
+  })
   it('rejects HTML and malformed response envelopes', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('<html>proxy</html>', { headers: { 'content-type': 'text/html' } })))
     await expect(rpc('mcp.list', {})).rejects.toThrow('非 JSON')

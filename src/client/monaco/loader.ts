@@ -6,9 +6,10 @@
  */
 import { applyOfficial, registerThemes } from './theme.js'
 
-import { appUrl } from '../../shared/appUrl.js'
+import { transportUrl } from '../../shared/remoteChannel.js'
+import { loadFailureText, probeStatus } from '../loadFailure.js'
 
-export const MONACO_BASE = appUrl('/edrv/vendor/monaco/vs')
+export const MONACO_BASE = transportUrl('/edrv/vendor/monaco/vs')
 let monacoPromise = null
 let monacoStage = { phase: 'idle', progress: 0, message: '准备加载 Monaco…' }
 const stageListeners = new Set()
@@ -154,10 +155,12 @@ export function loadMonaco(onProgress) {
         s.src = MONACO_BASE + '/loader.js'
         s.dataset.edrvMonacoLoader = '1'
         s.onload = boot
-        s.onerror = (event) => {
-          // 保留首次失败真实原因（网络/HTTP 层事件），不让后续 TypeError 覆盖
-          const hint = event && event.type ? '（' + event.type + '）' : ''
-          fail(new Error('Monaco loader 加载失败' + hint))
+        s.onerror = async () => {
+          // 保留首次失败真实原因（网络/HTTP 层），不让后续 TypeError 覆盖；
+          // 探测真实状态码，把 403（Host 围栏）/401/404/网络错误区分开，避免一律提示「资源不完整」
+          const loaderUrl = MONACO_BASE + '/loader.js'
+          const status = await probeStatus(loaderUrl)
+          fail(new Error(loadFailureText('Monaco loader 加载失败', loaderUrl, status)))
         }
         hideNodeGlobals()
         document.head.appendChild(s)

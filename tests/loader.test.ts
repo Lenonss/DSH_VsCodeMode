@@ -212,4 +212,32 @@ describe('monaco loader（issue #3 回归）', () => {
     scripts[0].onload?.()
     await expect(second).resolves.toBeDefined()
   })
+
+  it('远程通道页面：loader 与 require.config 都挂在 /remote 前缀下', async () => {
+    const { dom, scripts } = makeDom()
+    vi.stubGlobal('document', dom)
+    const requireFn = makeRequire(true)
+    // 远程访问插件在 <head> 解析期安装的 seat：本页所有内部路径都要经 /remote 通道
+    vi.stubGlobal('window', { require: requireFn, monaco: { editor: {} }, __DSH_REMOTE_CHANNEL_BOOT__: {} })
+    const { loadMonaco } = await import('../src/client/monaco/loader.js')
+    const promise = loadMonaco(() => {})
+    const script = scripts[0]
+    expect(script.src).toBe('/remote/edrv/vendor/monaco/vs/loader.js')
+    script.onload?.()
+    await expect(promise).resolves.toBeDefined()
+    // worker/CSS 由 paths.vs 派生：前缀在这里注入一次即可覆盖全链
+    expect(requireFn.config).toHaveBeenCalledWith({ paths: { vs: '/remote/edrv/vendor/monaco/vs' } })
+  })
+
+  it('onerror 时探测真实状态码：403 报宿主围栏而非「资源不完整」', async () => {
+    const { dom, scripts } = makeDom()
+    vi.stubGlobal('document', dom)
+    vi.stubGlobal('window', { require: undefined })
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 403 })))
+    const { loadMonaco } = await import('../src/client/monaco/loader.js')
+    const promise = loadMonaco(() => {})
+    scripts[0].onerror?.({ type: 'error' })
+    await expect(promise).rejects.toThrow(/403/)
+    await expect(promise).rejects.toThrow(/Host/)
+  })
 })
