@@ -5,7 +5,7 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
 
 # dsh-vscode-mode 开发/发布经验集（自我更新型技能）
 
-> updated: 2026-10-28 · 维护者：ddj（AI 会话按文末协议更新，保持精炼、去重）
+> updated: 2026-11-02 · 维护者：ddj（AI 会话按文末协议更新，保持精炼、去重）
 > **发布时先读「发布流程」与「失败恢复」**；下方实录是历史证据，不授权当前重跑发布、改 tag 或部署。冲突旧口径以更新后的规则为准。
 - 2026-10-19 实录（v0.17.0 发布：DSH 0.2.1 吸收——locale 元数据 meta 化、engines.dsh、workingDirectory 投影跟随 cd、
   会话级 recordsFeed 轮询收敛、ctx.locale 接入、plugins.detail.section；基线 v0.16.0 @ `8b79f8f`）：
@@ -449,6 +449,29 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
   host `revertHunk` 定位失败返回 `stale:true` 并由 `applyDecisions` 按「已回滚」记账（不写文件、状态栏提示「N 处已不存在于文件」）。
 - 2026-09-15 事实：同一文件被连续/并发 edit 后，先前的 pending 记录会整批变成 conflict（before/after 链断裂、当前内容不等于任一快照）——这是正常现象而非 bug；
   判别某条记录是否真过时：逐条比对 hunk `newText` 在当前内容里的 `indexOf`（原始 + 归一化两种口径），全为 -1 即确属「已被后续修改覆盖」。
+
+## 远程访问（经第三方远程插件，如 @linxin666/dsh-remote-web-ui）
+
+- 2026-11-02 事实（v0.24.0）：**远程页面 403 不是登录问题**。宿主
+  `connection.requestRejection()` 里 `if (!this.isTrusted(request)) return { rejection: 403 }`
+  先于一切身份校验，`isTrustedApiRequest` 只认回环 / 监听 bind 地址 / `trustedHosts`，
+  于是 LAN IP 或隧道域名来的请求**一律 403**（401 才是登录态失效）。插件自有路由 `/edrv/*`
+  不在远程插件的改写白名单（`/api/`、`/sidebar/`、`/git/`、`/pet/`）内就全部直连被拒，
+  文件管理器与 Monaco 同时挂。
+- 2026-11-02 事实（适配口径）：远程插件的客户端补丁**只**覆盖 fetch / EventSource / WebSocket
+  与 `<img|script|iframe>.src`；`link.href`、CSS `url()`、`new Worker`、ESM `import` 都不在其中。
+  服务端 `/remote/<任意内部路径>` 才是 catch-all（同源设备 cookie + 回环重发 + 进程内凭据，
+  **任何子资源类型都可达**）。因此适配 = `window.__DSH_REMOTE_CHANNEL_BOOT__`（远程插件在
+  `<head>` 解析期安装的座位**对象**）存在时，把插件内部路径整体加 `/remote` 前缀
+  （`src/shared/remoteChannel.ts` 的 `transportUrl`，仍经 `appUrl` 继承应用基址与 `dsh-app:`），
+  本地/桌面保持 `/edrv`。**别改注册 `/api/edrv` 双挂载**：link/CSS/Worker/import 覆盖不到，
+  只会做出「看起来能用」的半残版本；也别公开 vendor 路由或要求用户配 `trustedHosts`。
+- 2026-11-02 事实（诊断）：加载失败先 `HEAD` 探测真实状态再给文案，403（Host 围栏）/
+  401（登录失效）/404（资源或路由缺失）/0（请求未到达宿主）四类分开，只看 `onerror`
+  或统一写「检查资源是否完整」会把网络/鉴权问题误报成资源缺失（`src/client/loadFailure.ts`）。
+- 2026-11-02 事实：该代理的响应头白名单只放行 content-type / content-length /
+  content-disposition / cache-control / etag / last-modified → 自定义 `x-edrv-mime` / `x-edrv-size` /
+  `x-edrv-version` 会被丢掉，远程下二进制预览回退 base64（功能可用、体积偏大）；要直出需远程插件放行这三个头。
 
 ## 开发/部署形态切换（profile 安装形态）
 
