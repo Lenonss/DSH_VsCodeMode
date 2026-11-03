@@ -6,8 +6,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { closeArchiveDbs, migrateActive } from '../src/archiveDb.js'
 import { archiveDbFile } from '../src/paths.js'
-import { applyDecide, loadDetail, loadPage, recordWrite, removeEntry, undoDecide } from '../src/pending/store.js'
-import { PENDING_PREFIX, mergedPage, pendingCovers, pendingDetailOf, pendingRawId, trackPendingCover } from '../src/pendingCompat.js'
+import { applyDecide, keepAll, loadDetail, loadPage, recordWrite, removeEntry, undoDecide } from '../src/pending/store.js'
+import { PENDING_PREFIX, mergedPage, pendingCoverOwner, pendingCovers, pendingDetailOf, pendingRawId, setPendingCovers, trackPendingCover } from '../src/pendingCompat.js'
 
 let home = ''
 let workspace = ''
@@ -235,6 +235,34 @@ describe('待审投影真实往返', () => {
     expect(pendingCovers(cwd, covered)).toBe(false)
   })
 
+  it('旧写入口守卫按会话隔离：登记给会话 A 不拦会话 B', () => {
+    const cwd = join(workspace, 'w2')
+    const covered = join(cwd, 'scope.ts')
+    trackPendingCover(cwd, covered, true, 'sA')
+    // 会话 A 看得见这条待审 → 旧入口必须拦；会话 B 列表里没有它 → 不能拦，否则拦得住却看不见
+    expect(pendingCovers(cwd, covered, 'sA')).toBe(true)
+    expect(pendingCovers(cwd, covered, 'sB')).toBe(false)
+    // 不给会话时按全工作区并集判定，保持旧调用点语义
+    expect(pendingCovers(cwd, covered)).toBe(true)
+    trackPendingCover(cwd, covered, false, 'sA')
+    expect(pendingCovers(cwd, covered, 'sA')).toBe(false)
+  })
+
+  it('整集重建：setPendingCovers 覆盖该会话旧登记，其他会话不受影响', () => {
+    const cwd = join(workspace, 'w3')
+    const keep = join(cwd, 'keep.ts')
+    const drop = join(cwd, 'drop.ts')
+    trackPendingCover(cwd, keep, true, 'sA')
+    trackPendingCover(cwd, drop, true, 'sA')
+    trackPendingCover(cwd, drop, true, 'sB')
+    setPendingCovers(cwd, 'sA', [keep])
+    expect(pendingCovers(cwd, keep, 'sA')).toBe(true)
+    // 条目被移除/结案后登记必须自动失效，不能把旧入口永久封死
+    expect(pendingCovers(cwd, drop, 'sA')).toBe(false)
+    expect(pendingCovers(cwd, drop, 'sB')).toBe(true)
+    expect(pendingCoverOwner(cwd, keep)).toBe('sA')
+  })
+
   it('撤销 Keep：条目回到未决且不写盘', async () => {
     const file = join(workspace, 'undo-keep.ts')
     await writeFile(file, 'B', 'utf8')
@@ -340,5 +368,33 @@ describe('待审投影真实往返', () => {
     expect(mapped.capability.keep).toBe(true)
     expect(mapped.capability.undo).toBe(true)
     expect(mapped.diff).toMatchObject({ kind: 'text' })
+  })
+
+  it('批量 Keep 一次读完条目、零写盘推进基线，未知条目只跳过自己', async () => {
+    const first = join(workspace, 'bulk-a.ts')
+    const second = join(workspace, 'bulk-b.ts')
+    await writeFile(first, 'after-a', 'utf8')
+    await writeFile(second, 'after-b', 'utf8')
+    recordWrite(write(first, 'before-a', 'after-a', 1))
+    recordWrite(write(second, 'before-b', 'after-b', 2))
+    const items = loadPage(workspace, 's1').items
+
+    const outcome = await keepAll(workspace, [
+      ...items.map((item) => ({ id: item.id, display: item.display, operationId: `bulk-${item.id}` })),
+      { id: 'gone', display: 'gone.ts', operationId: 'bulk-gone' },
+    ])
+    expect(outcome.kept).toHaveLength(2)
+    expect(outcome.skipped).toEqual([{ id: 'gone', display: 'gone.ts', reason: '待审条目不存在' }])
+    // Keep 零写盘：磁盘仍是采集到的最新内容
+    expect(await readFile(first, 'utf8')).toBe('after-a')
+    expect(await readFile(second, 'utf8')).toBe('after-b')
+    // 基线追平内容后条目结案：列表不再有待审，单条也没有 Keep 能力
+    expect(loadPage(workspace, 's1').pending).toBe(0)
+    expect(loadDetail(workspace, items[0]!.id)!.capability.keep).toBe(false)
+
+    // 重跑是幂等无操作，不再产生新的历史记录
+    const again = await keepAll(workspace, items.map((item) => ({ id: item.id, display: item.display, operationId: `bulk-again-${item.id}` })))
+    expect(again.kept).toHaveLength(2)
+    expect(again.skipped).toEqual([])
   })
 })

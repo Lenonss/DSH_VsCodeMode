@@ -94,3 +94,24 @@ export interface DecideReview extends ReviewRequest {
   decision: 'accepted' | 'rejected'
 }
 export type ReviewResult<T> = ({ ok: true } & T) | { ok: false; error: string }
+/** 批量 Keep 的一条目标：seq/revision 只参与操作幂等与审计，写入条件以库内此刻状态为准。 */
+export interface KeepAllItem {
+  id: string
+  display: string
+  seq: number
+  revision: number
+}
+/** 批量 Keep 中被跳过的条目：跳过不是失败，条目仍留在待审列表里。 */
+export interface KeepAllSkip {
+  id: string
+  display: string
+  reason: string
+}
+/** 批量 Keep 的结果：completed/paths 只计真正落库的条目，error 只记录段级异常。 */
+export interface KeepAllResult {
+  completed: number
+  total: number
+  paths: string[]
+  skipped: KeepAllSkip[]
+  error: string
+}

@@ -578,13 +578,13 @@ profile 请替换为实际目标，不要把示例目录当成当前运行 profi
 
 ```bash
 # ① Git 安装（clone + prepare 构建；推荐打固定 tag）
-dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.25.1
+dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.26.0
 
 # ② npm 注册表（发布到 npm 后）
-dsh plugin --profile web add dsh-vscode-mode@0.25.1
+dsh plugin --profile web add dsh-vscode-mode@0.26.0
 
 # ③ GitHub Release tgz 直装（Release asset 可用后）
-dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.25.1/dsh-vscode-mode-0.25.1.tgz
+dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.26.0/dsh-vscode-mode-0.26.0.tgz
 ```
 
 > **DSH 版本政策（0.17.0 起）**：六项 DSH peer 仍统一声明为 `*`，另以
@@ -964,6 +964,7 @@ Keep All / Undo All 却是亮的。修复：单文件 Keep / Undo 覆盖冲突�
 
 | 版本 | 要点 |
 | --- | --- |
+| v0.26.0 | Keep All 改为单次批量（不再因单条过期/冷端条目整批中止，2N+1 次往返降到 2 次）；差异审查旧通道遗留清理：待审接管的旧记录自动结案、守卫改会话作用域、失败原因不再被通用文案吞掉 |
 | v0.25.1 | 下载到本机支持选择保存文件夹（目录选择器），按工作区相对路径写入 |
 | v0.25.0 | 资源管理器右键「下载到本机」：远程访问时把工作区文件拉回浏览器所在机器 |
 | v0.24.0 | 经第三方远程访问插件时，文件管理器与 Monaco 恢复可用；加载失败提示按状态区分 |
@@ -975,8 +976,9 @@ Keep All / Undo All 却是亮的。修复：单文件 Keep / Undo 覆盖冲突�
 | v0.23.0 | 快捷菜单：可拖动悬浮按钮 + 自定义菜单树 |
 
 <details>
-<summary>完整版本记录（v0.25.1 → v0.1.5x，点击展开）</summary>
+<summary>完整版本记录（v0.26.0 → v0.1.5x，点击展开）</summary>
 
+- **v0.26.0**：Keep All 从「逐条预检 + 逐条决策」改为**一次批量**，并且不再被单条基线问题整批阻断。原因有两层：一是往返次数与数据量——原实现先取一次快照，再为每条待审记录调一次 `edrv.review.detail`（每条带完整 diff 过桥）与一次 `edrv.review.decide`，一次 Keep All 等于 `2N + 1` 次 RPC；待审投影侧每条 detail/decide 内部又先 `loadEntries(cwd)` 把整表 old_text/new_text 全文读进内存再线性查找，N 条即 O(N²) 全文读。二是「一票否决」——预检期任一条处于冷端（会话在另一端活跃）、revision/seq 漂移、`settled`、`oversized`、有尚待核对的 Undo，或执行期任一条 decide 失败，整批立刻中止、其余一条不动。现新增宿主 RPC `edrv.review.keepAll`（只做 Keep）：一次 `BEGIN IMMEDIATE` 内逐条 CAS，写入条件取**库内当前 revision**而非客户端快照值，因此快照漂移不再等于失败；`operationId = sha256(batchId|id|seq)` 保证同批重放幂等；不能保留的条目（冷端待审、已结案、`prepared` Undo、超限文本）只写进 `skipped` 并附原因，段级异常只写 `result.error`，另一段照常完成；超过 2000 条与原分页上限一致地拒绝。待审投影侧新增 `store.keepAll`：一次 `loadEntries` + 逐条 `decide`（Keep 零写盘）+ `persist.saveDecisions` 单事务带 revision CAS 落库，落库冲突只把该条移入 skipped；`saveEntry`/`saveBlocks`/`pushHistory` 抽出 `upsertEntry`/`writeBlocks`/`insertHistory` 共用，单条路径行为不变。客户端新增 `src/client/reviewKeepAll.ts`：guard → 快照（校验失败自动重试一次，自愈分页漂移）→ 一次批量 → 再 guard，正常仅 **2 次 RPC**。界面：状态栏「Keep All：已保留 X / Y，跳过 Z 条」，跳过明细用轻提示列前 3 条（`display：原因`）并汇总余量，跳过不算错误、条目仍留在列表可逐条处理；确认弹窗补一句跳过说明并保留「不改写文件」语义。**Undo All 完全不变**（仍逐条预检能力、遇冲突立即停止、精确报告已完成项），因为它会改写磁盘。验证：typecheck 0 error；定向单测 8 文件 67 例全过（`reviewKeepAll` 新增 7、`reviewDb` 12、`pendingStore` 20、`reviewRpc` 10 及 `reviewBatch`/`reviewAllConfirm`/`reviewFeed`/`reviewFlow`）；新用例覆盖一次快照+一次批量、漂移重试一次、guard 先于快照、过期 revision 仍接受、同批重放幂等、`prepared` Undo 只挡自己、冷端官方照常完成而待审只 skip、空列表与超 2000 条拒绝。同版另一组修复针对差异审查的旧通道遗留问题（用户实报「Keep 了为什么还要被拦」与「1 处差异处理失败」）：①被待审累计基线接管的路径，其旧 sidecar 记录由 host 自动结案（`retireCovered`，归档原因「已由待审累计基线接管，旧工具记录不再单独决策」），编辑器与差异列表不再渲染这些「看得见、点不动」的旧 hunk；②`legacyBlocked` 守卫改为**会话作用域**——只有本会话可见的待审接管才拦旧写入口，别的会话持有接管时本会话放行，消除「拦得住、看不见」的死锁；③客户端不再用「1 处差异处理失败（可能已被后续修改影响）」覆盖 host 真实原因，按 `error` 原样展示，会话未激活时改为「Keep/Undo 没有执行（记录未改动），在会话里发一条消息激活后重试」；④「历史改动」通道 Keep 成功后的状态文案改为「已标记为看过（未改动文件）」。覆盖登记同步改为按会话登记 + 整集重建（`trackPendingCover(cwd,path,covered,sessionId?)`/`setPendingCovers`/`pendingCovers(cwd,path,sessionId?)`），旧 2 参调用仍走工作区集合。验证：typecheck 0 error、全量 293 文件 3754 通过 + 22 跳过（`tests/dapFakeAdapter` 首发抖动，隔离重跑 7/7 绿）、build 四 bundle 通过；现场验收：live 会话下 `edrv.accept` 与 `edrv.decideBatch` 对受管路径返回守卫文案且零写盘、重启后自动结案已产生 895 批次 / 1096 条归档、被接管文件在差异栏只剩「待审」徽标而无「历史改动」。GUI 点按验收需重启 DSH 部署本版，本次未做；真实大工作区耗时未实测，速度结论来自 RPC 次数与数据层复杂度。见 [0.26.0 发布说明](docs/release-0.26.0.md)。
 - **v0.25.1**：下载到本机支持选择保存位置——点「下载」先弹系统目录选择器（File System Access API：Chrome/Edge、https 或 localhost 安全上下文），选一次目标文件夹后，文件按**工作区相对路径**逐个写入（文件夹下载自动建子目录，仍不打包）。用户取消选择则整批中止并提示「已取消下载」；Firefox/Safari、局域网 http、或目录写入权限被拒时自动回落浏览器默认下载目录，并分别提示具体原因，不静默改语义。确认框底栏按钮改为「选择位置并下载 N 个文件」并加一行说明；选择器在用户手势的同步栈内触发，不依赖额外点击。验证：typecheck 0 error；全量 288 文件、3733 通过 + 22 跳过；build 四 bundle 通过；本机冒烟覆盖 4 条分支（取消 / 拒绝授权回落 / 选中目录按 `tests/officialBackfill.test.ts` 相对路径写 4328 B / 文件夹流程写 `.codegraph/.gitignore` 229 B）。见 [0.25.1 发布说明](docs/release-0.25.1.md)。
 - **v0.25.0**：新增远程下载——经远程访问插件打开 DSH 时，工作区文件原本只能到远端机器上自己下载再传回，现在资源管理器右键菜单新增「下载到本机」（仅远程访问页可见，本机回环不出现）：文件右键直接下载原文件；文件夹与根空白区弹出确认框，按需懒加载展开目录树、逐级勾选文件后逐个下载原文件（不打包）。取字节复用既有链路（`edrv.readBinary` 二进制直出，远程代理剥掉 `x-edrv-*` 时自动回落 `edrv.read` 的 base64 分支），点选的文件名与远端一致，超过 32MB 的文件在弹窗内标明并禁用、不静默失败；确认框复用 `ModalShell`（自动满足 `data-edrv-view` 浮层契约与 z-index 阶梯），目录整行可展开、点文件名也能勾选、加载失败行带重试。可见性判据与 v0.24.0 的远程通道同源（`src/shared/remoteChannel.ts` 新增 `isRemoteChannel()`，即 `channelPrefix()` 非空），非远程页面完全不出现该条目、打开菜单也不发请求。不新增 host 路由、不改鉴权、不动既有导出实现。验证：typecheck 0 error；全量 287 文件、3715 通过 + 22 跳过；`node --test tests/nativeOpen.test.mjs` 9/9；build 四 bundle 通过；本机 GUI 注入远程座位后冒烟：菜单出现且位置正确、单文件下载落盘名正确、根/文件夹弹窗展开 105 行、单选 1 / 全选已展开 82 / 清空 0、勾选 2 个文件逐个下载成功（`edrv.readBinary` ×2），干净刷新后控制台无新增报错；**真实远程设备（真插件 + 真配对）未验收，缺口保留**。见 [0.25.0 发布说明](docs/release-0.25.0.md)。
 

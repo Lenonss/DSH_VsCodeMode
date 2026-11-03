@@ -285,6 +285,38 @@ export function reviewDetail(cwd: string, id: string): ReviewDetail | null {
         : '该记录缺少可验证的原始字节或受控写回能力；仍可显示差异和 Keep，不能猜测历史全文执行 Undo。' } }
 }
 
+/**
+ * @private
+ * @author ddj 2026年11月03号
+ * @description: 把一个文件的待处理差异块整体置为目标决策，块级判定仍走 changeBlocks 的 hunk 分支。
+ * @param db 判定事务连接
+ * @param id 文件身份
+ * @param decision 目标决策
+ * @returns 无
+ */
+function markBlocks(db: DatabaseSync, id: string, decision: DecideReview['decision']): void {
+  db.prepare("UPDATE review_blocks SET decision=? WHERE file_id=? AND decision='pending'").run(decision, id)
+}
+
+/**
+ * @private
+ * @author ddj 2026年11月03号
+ * @description: 按块决定聚合回写文件决定：仍含 pending 即 pending，多值即 mixed，单一值取该值。
+ * @param db 判定事务连接
+ * @param id 文件身份
+ * @param fallback 没有任何块时的兜底决策
+ * @returns 无
+ */
+function aggregateDecision(db: DatabaseSync, id: string, fallback: string): void {
+  const states = db.prepare('SELECT DISTINCT decision FROM review_blocks WHERE file_id=?').all(id) as Row[]
+  const decisions = states.map((row) => String(row.decision))
+  let aggregate = fallback
+  if (decisions.includes('pending')) aggregate = 'pending'
+  else if (decisions.length > 1) aggregate = 'mixed'
+  else if (decisions.length === 1) aggregate = decisions[0]
+  db.prepare('UPDATE review_files SET decision=? WHERE id=?').run(aggregate, id)
+}
+
 /** @public @author ddj 2026年10月27号 @param db Active decision transaction. @param request File or block action. Updates aggregate without losing mixed decisions. @throws Invalid or already-decided block. */
 export function changeBlocks(db: DatabaseSync, request: DecideReview): void {
   if (request.scope === 'hunk') {
@@ -292,15 +324,9 @@ export function changeBlocks(db: DatabaseSync, request: DecideReview): void {
       .run(request.decision, request.id, request.blockId ?? '')
     if (changed.changes !== 1) throw new Error('差异块不存在或已处理')
   } else {
-    db.prepare("UPDATE review_blocks SET decision=? WHERE file_id=? AND decision='pending'").run(request.decision, request.id)
+    markBlocks(db, request.id, request.decision)
   }
-  const states = db.prepare('SELECT DISTINCT decision FROM review_blocks WHERE file_id=?').all(request.id) as Row[]
-  const decisions = states.map((row) => String(row.decision))
-  let aggregate = request.decision as string
-  if (decisions.includes('pending')) aggregate = 'pending'
-  else if (decisions.length > 1) aggregate = 'mixed'
-  else if (decisions.length === 1) aggregate = decisions[0]
-  db.prepare('UPDATE review_files SET decision=? WHERE id=?').run(aggregate, request.id)
+  aggregateDecision(db, request.id, request.decision)
 }
 
 /** @public @author ddj 2026年10月26号 @param cwd Workspace. @param request Frozen identity/revision. @returns Idempotent decision; rejection never guesses a target. */
@@ -329,6 +355,91 @@ export function decideReview(cwd: string, request: DecideReview): { revision: nu
     db.prepare("INSERT INTO review_ops VALUES(?,?,'committed',?,NULL)").run(request.operationId, encoded, JSON.stringify(result))
     db.exec('COMMIT')
     return result
+  } catch (error) {
+    if (db.isTransaction) db.exec('ROLLBACK')
+    throw error
+  }
+}
+
+/** 官方批量 Keep 的一条目标：id/seq 参与幂等编码，revision 只用于审计。 */
+export interface OfficialKeepItem {
+  id: string
+  seq: number
+  revision: number
+  operationId: string
+}
+/** 官方批量 Keep 的结果；skipped 只记录条目级原因，段级异常由调用方捕获。 */
+export interface OfficialKeepOutcome {
+  paths: string[]
+  skipped: { id: string; reason: string }[]
+}
+
+/**
+ * @private
+ * @author ddj 2026年11月03号
+ * @description: 取当前仍待审的官方记录摘要，作为批量写入的权威依据（不用客户端快照值）。
+ * @param db 判定事务连接
+ * @returns id → 库内 seq/revision/identity
+ */
+function pendingRows(db: DatabaseSync): Map<string, { seq: number; revision: number; identity: string }> {
+  const rows = db.prepare("SELECT id,seq,revision,identity FROM review_files WHERE current=1 AND decision='pending'").all() as Row[]
+  const map = new Map<string, { seq: number; revision: number; identity: string }>()
+  for (const row of rows) map.set(String(row.id), { seq: Number(row.seq), revision: Number(row.revision), identity: String(row.identity) })
+  return map
+}
+
+/**
+ * @public
+ * @author ddj 2026年11月03号
+ * @description: 一次事务内批量保留官方待审记录。写入条件取库内当前 revision，客户端的 seq/revision 只用于派生操作号，
+ * 因此快照漂移不会让整批中止；已结案、有尚待核对 Undo、操作号冲突的条目只跳过自己。
+ * @param cwd 工作区
+ * @param items 待保留条目（含派生好的 operationId）
+ * @returns 成功保留的 identity 列表与跳过明细
+ * @throws 事务级异常（SQL/程序错误）整体回滚后抛出
+ */
+export function keepOfficialAll(cwd: string, items: OfficialKeepItem[]): OfficialKeepOutcome {
+  const db = reviewDb(cwd)
+  const rows = pendingRows(db)
+  const outcome: OfficialKeepOutcome = { paths: [], skipped: [] }
+  const keep = db.prepare(`UPDATE review_files SET decision='accepted',revision=revision+1
+    WHERE id=? AND seq=? AND revision=? AND current=1 AND decision='pending'`)
+  const prepared = db.prepare("SELECT 1 FROM review_ops WHERE state='prepared' AND json_extract(request,'$.id')=?")
+
+  db.exec('BEGIN IMMEDIATE')
+  try {
+    for (const item of items) {
+      const encoded = JSON.stringify({ id: item.id, seq: item.seq })
+      const previous = db.prepare('SELECT request,result FROM review_ops WHERE operation_id=?').get(item.operationId) as Row | undefined
+
+      // 同一批次重放（客户端重试）按操作号幂等返回，不重复推进 revision
+      if (previous) {
+        if (previous.request !== encoded || !previous.result) outcome.skipped.push({ id: item.id, reason: '该条目已由其他操作处理' })
+        else outcome.paths.push(String((JSON.parse(String(previous.result)) as { identity: string }).identity))
+        continue
+      }
+
+      const row = rows.get(item.id)
+      if (!row || prepared.get(item.id)) {
+        outcome.skipped.push({ id: item.id, reason: row ? '该文件有尚待核对的 Undo，暂不能 Keep' : '已结案或不再是待审记录' })
+        continue
+      }
+
+      // 权威条件用库内 revision：客户端没看见的中间版本也能安全保留，落笔后仍由 CAS 兜住并发
+      if (keep.run(item.id, row.seq, row.revision).changes !== 1) {
+        outcome.skipped.push({ id: item.id, reason: '审查版本冲突，请刷新后重试' })
+        continue
+      }
+
+      markBlocks(db, item.id, 'accepted')
+      aggregateDecision(db, item.id, 'accepted')
+      db.prepare("INSERT INTO review_ops VALUES(?,?,'committed',?,NULL)")
+        .run(item.operationId, encoded, JSON.stringify({ identity: row.identity }))
+      outcome.paths.push(row.identity)
+      rows.delete(item.id)
+    }
+    db.exec('COMMIT')
+    return outcome
   } catch (error) {
     if (db.isTransaction) db.exec('ROLLBACK')
     throw error

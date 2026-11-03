@@ -1,10 +1,11 @@
 /** Session-scoped official review RPC. @author ddj 2026年10月26号 */
+import { createHash } from 'node:crypto'
 import type { RpcHandlerMap } from './shared/rpc.js'
-import type { ReviewDetail, ReviewItem, ReviewPage } from './shared/review.js'
+import type { KeepAllItem, KeepAllResult, ReviewDetail, ReviewItem, ReviewPage } from './shared/review.js'
 import type { PendingPage } from './shared/pendingReview.js'
-import { addedFiles, decideReview, reviewDetail, reviewPage } from './reviewDb.js'
+import { addedFiles, decideReview, keepOfficialAll, reviewDetail, reviewPage } from './reviewDb.js'
 import { undoReview } from './reviewUndo.js'
-import { applyDecide, loadDetail, loadPage } from './pending/store.js'
+import { applyDecide, keepAll, loadDetail, loadPage } from './pending/store.js'
 import { PENDING_PREFIX, mergedPage, pendingDetailOf, pendingItemOf, pendingSamePath } from './pendingCompat.js'
 import { bucketOf, resolveScope, sessionOf } from './registry.js'
 import type { Registry } from './registry.js'
@@ -164,6 +165,88 @@ export function reviewHandlers(ctx: Ctx, registry: Registry): Partial<RpcHandler
     } catch { return { items: [], pending: 0, nextCursor: null, gaps: [] } }
   }
 
+  /**
+   * @private
+   * @author ddj 2026年11月03号
+   * @description: 按批次与条目派生幂等操作号：同一批次重放复用同一结果，不重复推进 revision。
+   * @param batchId 客户端批次身份
+   * @param id 条目身份
+   * @param seq 事件序号
+   * @returns 64 位 hex 操作号
+   */
+  function operationOf(batchId: string, id: string, seq: number): string {
+    return createHash('sha256').update(`${batchId}|${id}|${seq}`).digest('hex')
+  }
+
+  /**
+   * @private
+   * @author ddj 2026年11月03号
+   * @description: 取条目展示名，缺失时退回身份本身。
+   * @param items 本批条目
+   * @param id 条目身份
+   * @returns 展示名
+   */
+  function displayOf(items: KeepAllItem[], id: string): string {
+    return items.find((item) => item.id === id)?.display ?? id
+  }
+
+  /**
+   * @private
+   * @author ddj 2026年11月03号
+   * @description: 官方段的批量保留。段级异常只记进 result.error，不取消待审段。
+   * @param cwd 工作区
+   * @param batchId 批次身份
+   * @param items 官方条目
+   * @param result 汇总结果
+   * @returns 无
+   */
+  function keepOfficialStage(cwd: string, batchId: string, items: KeepAllItem[], result: KeepAllResult): void {
+    try {
+      const outcome = keepOfficialAll(cwd, items.map((item) => ({
+        id: item.id, seq: item.seq, revision: item.revision, operationId: operationOf(batchId, item.id, item.seq),
+      })))
+      result.completed += outcome.paths.length
+      result.paths.push(...outcome.paths)
+      for (const skip of outcome.skipped) result.skipped.push({ id: skip.id, display: displayOf(items, skip.id), reason: skip.reason })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      log.warn(`[review] keepAll 官方段失败: ${message}`)
+      if (!result.error) result.error = message
+    }
+  }
+
+  /**
+   * @private
+   * @author ddj 2026年11月03号
+   * @description: 待审段的批量保留。冷端只跳过待审条目（判定需要活跃会话），官方条目不受影响。
+   * @param scope 已解析作用域
+   * @param batchId 批次身份
+   * @param items 待审条目（带 pending 前缀）
+   * @param result 汇总结果
+   * @returns 无
+   */
+  async function keepPendingStage(
+    scope: { cwd: string; live: boolean }, batchId: string, items: KeepAllItem[], result: KeepAllResult,
+  ): Promise<void> {
+    if (!scope.live) {
+      for (const item of items) result.skipped.push({ id: item.id, display: item.display, reason: '待审条目需要在会话活跃的一端判定' })
+      return
+    }
+    const targets = items.map((item) => ({
+      id: item.id.slice(PENDING_PREFIX.length), display: item.display, operationId: operationOf(batchId, item.id, item.seq),
+    }))
+    try {
+      const outcome = await keepAll(scope.cwd, targets)
+      result.completed += outcome.kept.length
+      for (const entry of outcome.kept) result.paths.push(entry.path)
+      for (const skip of outcome.skipped) result.skipped.push({ id: PENDING_PREFIX + skip.id, display: skip.display, reason: skip.reason })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      log.warn(`[review] keepAll 待审段失败: ${message}`)
+      if (!result.error) result.error = message
+    }
+  }
+
   return {
     'edrv.review.list': async (args) => {
       const { cwd } = await scopeOf(args.sessionId)
@@ -249,6 +332,30 @@ export function reviewHandlers(ctx: Ctx, registry: Registry): Partial<RpcHandler
         // Guard failures are review results, not transport failures: preserve their reason.
         const message = error instanceof Error ? error.message : String(error)
         log.warn(`[review] decide 失败 id=${args.id} decision=${args.decision}: ${message}`)
+        return { ok: false, error: message }
+      }
+    },
+    'edrv.review.keepAll': async (args) => {
+      // 批量 Keep 只写共享审查库与待审库，不写源文件；冷端只影响待审条目，官方条目照常保留。
+      try {
+        const scope = await scopeOf(args.sessionId)
+        const items = Array.isArray(args.items) ? args.items : []
+        if (!items.length) return { ok: false, error: '没有可保留的待审记录' }
+        if (items.length > BATCH_LIMIT) {
+          return { ok: false, error: `待审记录过多（${items.length} 条，上限 ${BATCH_LIMIT}），请先分批处理后重试` }
+        }
+
+        const result: KeepAllResult = { completed: 0, total: items.length, paths: [], skipped: [], error: '' }
+        const official = items.filter((item) => !item.id.startsWith(PENDING_PREFIX))
+        const pending = items.filter((item) => item.id.startsWith(PENDING_PREFIX))
+        if (official.length) keepOfficialStage(scope.cwd, args.batchId, official, result)
+        if (pending.length) await keepPendingStage(scope, args.batchId, pending, result)
+        log.info(`[review] keepAll live=${scope.live ? 1 : 0} total=${result.total}`
+          + ` kept=${result.completed} skipped=${result.skipped.length}`)
+        return { ok: true, result }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        log.warn(`[review] keepAll 失败: ${message}`)
         return { ok: false, error: message }
       }
     },

@@ -1,17 +1,20 @@
 import { describe, expect, it, vi } from 'vitest'
 import { reviewHandlers } from '../src/reviewRpc.js'
 import type { Ctx } from '../src/store.js'
-import { reviewPage, reviewDetail, decideReview } from '../src/reviewDb.js'
+import { decideReview, keepOfficialAll, reviewDetail, reviewPage } from '../src/reviewDb.js'
 import { undoReview } from '../src/reviewUndo.js'
-import { loadPage } from '../src/pending/store.js'
+import { keepAll, loadPage } from '../src/pending/store.js'
 import type { PendingItem, PendingPage } from '../src/shared/pendingReview.js'
-import type { ReviewDetail, ReviewItem, ReviewPage } from '../src/shared/review.js'
+import type { KeepAllItem, KeepAllResult, ReviewDetail, ReviewItem, ReviewPage } from '../src/shared/review.js'
 vi.mock('../src/reviewUndo.js', () => ({ undoReview: vi.fn() }))
-vi.mock('../src/reviewDb.js', () => ({ reviewPage: vi.fn(), reviewDetail: vi.fn(), decideReview: vi.fn() }))
+vi.mock('../src/reviewDb.js', () => ({
+  reviewPage: vi.fn(), reviewDetail: vi.fn(), decideReview: vi.fn(), keepOfficialAll: vi.fn(), addedFiles: vi.fn(() => new Set()),
+}))
 vi.mock('../src/pending/store.js', () => ({
   loadPage: vi.fn(() => ({ items: [], pending: 0, nextCursor: null, gaps: [] })),
   loadDetail: vi.fn(() => null),
   applyDecide: vi.fn(),
+  keepAll: vi.fn(async () => ({ kept: [], skipped: [] })),
 }))
 
 describe('official review workspace boundary', () => {
@@ -141,5 +144,59 @@ describe('bulk review snapshot', () => {
     const listed = await handlers['edrv.review.list']!({ sessionId: 'view', all: true })
     expect(listed).toMatchObject({ ok: false })
     expect((listed as { error: string }).error).toContain('上限 2000')
+  })
+})
+
+describe('batch Keep across both stores', () => {
+  /** @private @author ddj 2026年11月03号 @param id 条目身份 @param display 展示名 @returns 批量目标 */
+  function target(id: string, display: string): KeepAllItem {
+    return { id, display, seq: 1, revision: 1 }
+  }
+
+  it('keeps official rows on a cold end and only skips pending projections', async () => {
+    const query = { filterSessions: async () => [{ header: { id: 'remote', cwd: '/remote-repo' } }] }
+    const cold = {
+      get: (name: string) => (name === 'sessionQuery' ? query : name === 'sessions' ? { get: () => undefined } : undefined),
+    } as unknown as Ctx
+    vi.mocked(keepOfficialAll).mockReturnValue({ paths: ['/remote-repo/a.lua'], skipped: [] })
+    const handlers = reviewHandlers(cold, new Map([['/remote-repo', new Map()]]))
+    const reply = await handlers['edrv.review.keepAll']!({
+      sessionId: 'remote', batchId: 'batch-1', items: [target('official-1', 'a.lua'), target('pending:7', 'b.lua')],
+    })
+    expect(reply.ok).toBe(true)
+    const result = (reply as { result: KeepAllResult }).result
+    expect(result).toMatchObject({ completed: 1, total: 2, paths: ['/remote-repo/a.lua'] })
+    expect(result.skipped).toEqual([{ id: 'pending:7', display: 'b.lua', reason: '待审条目需要在会话活跃的一端判定' }])
+    expect(keepAll).not.toHaveBeenCalled()
+    expect(keepOfficialAll).toHaveBeenCalledWith('/remote-repo', [
+      { id: 'official-1', seq: 1, revision: 1, operationId: expect.stringMatching(/^[0-9a-f]{64}$/) },
+    ])
+  })
+
+  it('keeps pending projections on the live end and reports conflicts as skips', async () => {
+    vi.mocked(keepOfficialAll).mockReturnValue({ paths: [], skipped: [] })
+    vi.mocked(keepAll).mockResolvedValueOnce({ kept: [{ id: '7', path: '/current/b.lua' }],
+      skipped: [{ id: '8', display: 'c.lua', reason: '待审条目已变化，请重试' }] })
+    const handlers = reviewHandlers(snapshotCtx(), new Map([['/current', new Map()]]))
+    const reply = await handlers['edrv.review.keepAll']!({
+      sessionId: 'view', batchId: 'batch-2', items: [target('pending:7', 'b.lua'), target('pending:8', 'c.lua')],
+    })
+    expect(reply).toMatchObject({ ok: true, result: { completed: 1, total: 2, error: '' } })
+    const result = (reply as { result: KeepAllResult }).result
+    expect(result.paths).toEqual(['/current/b.lua'])
+    expect(result.skipped).toEqual([{ id: 'pending:8', display: 'c.lua', reason: '待审条目已变化，请重试' }])
+    expect(vi.mocked(keepAll).mock.calls[0][1].map((item) => item.id)).toEqual(['7', '8'])
+  })
+
+  it('refuses an empty batch and a batch beyond the shared limit', async () => {
+    vi.mocked(keepOfficialAll).mockClear()
+    const handlers = reviewHandlers(snapshotCtx(), new Map([['/current', new Map()]]))
+    expect(await handlers['edrv.review.keepAll']!({ sessionId: 'view', batchId: 'empty', items: [] }))
+      .toMatchObject({ ok: false, error: '没有可保留的待审记录' })
+    const items = Array.from({ length: 2001 }, (_, index) => target(`official-${index}`, `f${index}`))
+    const oversized = await handlers['edrv.review.keepAll']!({ sessionId: 'view', batchId: 'big', items })
+    expect(oversized).toMatchObject({ ok: false })
+    expect((oversized as { error: string }).error).toContain('上限 2000')
+    expect(keepOfficialAll).not.toHaveBeenCalled()
   })
 })

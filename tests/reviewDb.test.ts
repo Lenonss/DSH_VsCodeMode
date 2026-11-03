@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { closeArchiveDbs, dbFor, migrateActive } from '../src/archiveDb.js'
-import { captureState, decideReview, repairPaths, reviewDb, reviewDetail, reviewPage, saveSnapshot } from '../src/reviewDb.js'
+import { captureState, decideReview, keepOfficialAll, repairPaths, reviewDb, reviewDetail, reviewPage, saveSnapshot } from '../src/reviewDb.js'
 import type { ReviewSnapshot } from '../src/shared/review.js'
 let home = '', previousHome: string | undefined
 const cwd = '/official-review-tests'
@@ -142,5 +142,35 @@ describe('official immutable ledger and decisions', () => {
     expect(() => reviewDb(other)).toThrow('先完成活跃库迁移')
     await expect(migrateActive(other, 'broken', async () => 'broken')).rejects.toThrow('损坏')
     expect(dbFor(other).prepare("SELECT name FROM sqlite_master WHERE name='review_files'").get()).toBeUndefined()
+  })
+  it('batch Keep accepts the whole list once, tolerates stale revisions and skips only closed or locked rows', () => {
+    const before = reviewPage(cwd)
+    const targets = before.items.filter((row) => row.current && row.decision === 'pending')
+    // 客户端 revision 故意全部是过期值：批量写入以库内当前状态为准
+    const items = targets.map((row, index) => ({ id: row.id, seq: row.seq, revision: 900 + index, operationId: `batch-keep-${index}` }))
+    const first = keepOfficialAll(cwd, items)
+    expect(first.skipped).toEqual([])
+    expect(first.paths).toHaveLength(targets.length)
+    expect(reviewPage(cwd).pending).toBe(before.pending - targets.length)
+
+    // 同一批次重放按操作号幂等，不再推进 revision
+    const replay = keepOfficialAll(cwd, items)
+    expect(replay.skipped).toEqual([])
+    expect(replay.paths).toEqual(first.paths)
+
+    const closed = keepOfficialAll(cwd, [{ ...items[0], operationId: 'batch-closed' }])
+    expect(closed.paths).toEqual([])
+    expect(closed.skipped[0].reason).toContain('已结案')
+
+    // 尚待核对的 Undo 只挡住它自己的文件
+    const stuck = reviewPage(cwd).items.find((row) => row.decision === 'pending')!
+    dbFor(cwd).prepare("INSERT INTO review_ops VALUES(?,?,'prepared',NULL,NULL)").run('undo-pending', JSON.stringify({ id: stuck.id }))
+    const blocked = keepOfficialAll(cwd, [
+      { id: stuck.id, seq: stuck.seq, revision: 0, operationId: 'batch-stuck' },
+      { id: 'missing', seq: 0, revision: 0, operationId: 'batch-missing' },
+    ])
+    expect(blocked.paths).toEqual([])
+    expect(blocked.skipped.map((row) => row.reason).join()).toContain('尚待核对')
+    expect(blocked.skipped.some((row) => row.reason.includes('不再是待审'))).toBe(true)
   })
 })

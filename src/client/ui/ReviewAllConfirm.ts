@@ -19,7 +19,7 @@ export function ReviewAllConfirm(props: ReviewAllProps): React.ReactElement {
   const action = props.reject ? 'Undo All' : 'Keep All'
   const warning = props.reject
     ? '撤销会改写磁盘；逐项安全校验，遇到冲突停止，已完成项不会自动恢复。'
-    : '只标记待审修改为保留，不改写文件。'
+    : '只标记待审修改为保留，不改写文件；个别条目若已变化或需在活跃端判定会被跳过并留在列表里，可逐个处理。'
   const footer = React.createElement(React.Fragment, null,
     React.createElement(Button, { variant: 'ghost', onClick: props.onCancel, autoFocus: true }, '取消'),
     React.createElement(Button, { variant: 'primary', onClick: props.onConfirm }, '确认 ' + action))

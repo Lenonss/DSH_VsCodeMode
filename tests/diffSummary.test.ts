@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { diffSummary, officialPath } from '../src/client/state/diffSummary.js'
+import { coveredPathKeys, diffPathKey, diffSummary, officialPath } from '../src/client/state/diffSummary.js'
 import type { ReviewPage } from '../src/shared/review.js'
 import type { RecordView } from '../src/shared/types.js'
 
@@ -25,5 +25,21 @@ describe('source-aware diff file projection', () => {
     expect(officialPath('c:/ws/DONE.lua', page)).toBe(true)
     expect(officialPath('ssh://host/A', { ...page, overview: { files: [], coveredPaths: ['ssh://host/a'] } })).toBe(false)
     expect(diffSummary([legacy('/old.lua')], null).files[0].sourceKind).toBe('legacy')
+  })
+  it('coveredPathKeys 同时覆盖官方汇总与待审条目，并把待审身份折算回路径', () => {
+    const pending = {
+      items: [{
+        id: 'pending:D:\\ws\\rel.lua', sessionId: 's1', turn: 1, seq: 2, path: 'rel.lua', currentPath: 'rel.lua',
+        display: 'rel.lua', added: 1, deleted: 0, kind: 'text' as const, decision: 'pending' as const,
+        revision: 1, current: true,
+      }],
+      pending: 1, nextCursor: null, gaps: [],
+    }
+    const keys = coveredPathKeys({ ...page, items: pending.items })
+    // 官方汇总的键原样保留；待审条目按 path 与身份各入一份（身份需剥掉待审前缀）
+    expect(keys.has(diffPathKey(page.overview.coveredPaths[0]))).toBe(true)
+    expect(keys.has(diffPathKey(pending.items[0].id.slice('pending:'.length)))).toBe(true)
+    expect(keys.has(diffPathKey('rel.lua'))).toBe(true)
+    expect(coveredPathKeys(null).size).toBe(0)
   })
 })

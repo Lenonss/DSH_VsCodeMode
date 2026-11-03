@@ -27,7 +27,7 @@ import { DAP_ACTIONS } from './dap.js'
 import { transportUrl } from './remoteChannel.js'
 import type { LoggerLevel } from './logger.js'
 import type { SvnViewRequest, SvnViewPayload } from './svnExplorer.js'
-import type { DecideReview, ReviewDetail, ReviewPage, ReviewRequest } from './review.js'
+import type { DecideReview, KeepAllItem, KeepAllResult, ReviewDetail, ReviewPage, ReviewRequest } from './review.js'
 import type {
   PendingDecide, PendingDetail, PendingHistoryMove, PendingImport,
   PendingItem, PendingPage, PendingRemove, PendingRequest,
@@ -378,6 +378,7 @@ export interface RpcRequestMap {
   'edrv.review.list': ReviewRequest & { cursor?: number; history?: boolean; path?: string; all?: boolean }
   'edrv.review.detail': ReviewRequest & { id: string }
   'edrv.review.decide': DecideReview
+  'edrv.review.keepAll': ReviewRequest & { batchId: string; items: KeepAllItem[] }
   'edrv.pending.list': PendingRequest
   'edrv.pending.detail': PendingRequest & { id: string }
   'edrv.pending.decide': PendingDecide
@@ -563,6 +564,7 @@ export interface RpcOkMap {
   'edrv.review.list': { page: ReviewPage }
   'edrv.review.detail': { detail: ReviewDetail }
   'edrv.review.decide': { revision: number }
+  'edrv.review.keepAll': { result: KeepAllResult }
   'edrv.pending.list': { page: PendingPage }
   'edrv.pending.detail': { detail: PendingDetail }
   'edrv.pending.decide': { item: PendingItem; wrote: boolean }

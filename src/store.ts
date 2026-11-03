@@ -11,6 +11,8 @@ import { SIDECAR, SIDECAR_ARCHIVE } from './paths.js'
 import { log } from './log.js'
 import { debugRecord } from './debugLog.js'
 import { activeReady, appendArchive, checkActiveSource, commitActive, committedRecord, migrateActive, restoreReverts, type ActiveChange } from './archiveDb.js'
+import { pendingSamePath } from './pendingCompat.js'
+import { loadEntries } from './pending/persist.js'
 
 export { SIDECAR, SIDECAR_ARCHIVE }
 export const READ_CAP = 8 * 1024 * 1024
@@ -301,6 +303,48 @@ export async function autoArchiveStale(ctx: Ctx, session: Session, cwd: string, 
     throw error
   }
   return stale.length
+}
+
+/**
+ * @public
+ * @author ddj 2026年11月3号
+ * 待审累计基线接管某路径后，旧 sidecar 记录不再有独立决策价值：标记 superseded 并归档，
+ * 连编辑器的行内 Keep/Undo 一起消失，彻底去掉"旧通道还能点、点了又被守卫拒绝"的双权威残留。
+ * 接管是文件级事实，按工作区全部待审条目判定，不跟随"本会话能否看见"漂移。
+ * @param ctx DSH 上下文
+ * @param session 当前会话
+ * @param cwd 工作区
+ * @param bucket 活跃记录桶
+ * @returns 本次结案记录数
+ * @throws 归档失败时恢复内存标志并透传错误
+ */
+export async function retireCovered(
+  ctx: Ctx, session: Session, cwd: string, bucket: Map<string, DiffRecord>,
+): Promise<number> {
+  const covers = loadEntries(cwd).flatMap((stored) => [stored.entry.path, stored.entry.id]).filter((path) => !!path)
+  if (!covers.length) return 0
+
+  const taken: DiffRecord[] = []
+  for (const rec of bucket.values()) {
+    if (rec.archived || rec.superseded === true) continue
+    if (covers.some((cover) => pendingSamePath(cover, rec.path))) taken.push(rec)
+  }
+  if (!taken.length) return 0
+
+  const original = taken.map((rec) => ({ rec, at: rec.at, superseded: rec.superseded }))
+  const at = new Date().toISOString()
+  for (const rec of taken) { rec.superseded = true; rec.at = at }
+  try {
+    await archiveRecords(ctx, session, cwd, bucket, taken, '已由待审累计基线接管，旧工具记录不再单独决策')
+  } catch (error) {
+    for (const item of original) {
+      if (item.rec.archived) continue
+      item.rec.superseded = item.superseded
+      item.rec.at = item.at
+    }
+    throw error
+  }
+  return taken.length
 }
 
 /**

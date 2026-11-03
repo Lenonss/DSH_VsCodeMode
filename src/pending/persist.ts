@@ -107,8 +107,20 @@ export function loadEntries(cwd: string): StoredEntry[] {
  * @returns 无
  */
 export function saveEntry(cwd: string, stored: StoredEntry): void {
+  upsertEntry(pendingDb(cwd), stored)
+}
+
+/**
+ * @private
+ * @author ddj 2026年11月03号
+ * @description: 在给定连接上写入或更新一条条目（含标记），供单条与批量两个入口复用。
+ * @param db 已迁移连接（可能已在事务中）
+ * @param stored 条目与标记
+ * @returns 无
+ */
+function upsertEntry(db: DatabaseSync, stored: StoredEntry): void {
   const { entry, flags } = stored
-  pendingDb(cwd).prepare(`INSERT INTO pending_entries
+  db.prepare(`INSERT INTO pending_entries
     (id,path,earlier,old_text,new_text,updated_at,unseen,missing,diverged,oversized,revision,session_id,session_ids,lineage)
     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     ON CONFLICT(id) DO UPDATE SET path=excluded.path,earlier=excluded.earlier,old_text=excluded.old_text,
@@ -165,14 +177,27 @@ export function saveBlocks(cwd: string, entryId: string, blocks: { id: string; d
   const db = pendingDb(cwd)
   db.exec('BEGIN IMMEDIATE')
   try {
-    db.prepare('DELETE FROM pending_blocks WHERE entry_id=?').run(entryId)
-    const insert = db.prepare('INSERT INTO pending_blocks VALUES(?,?,?)')
-    for (const block of blocks) insert.run(entryId, block.id, block.decision)
+    writeBlocks(db, entryId, blocks)
     db.exec('COMMIT')
   } catch (error) {
     if (db.isTransaction) db.exec('ROLLBACK')
     throw error
   }
+}
+
+/**
+ * @private
+ * @author ddj 2026年11月03号
+ * @description: 在给定连接上覆盖某条目的块决定集合，供单条与批量两个入口复用。
+ * @param db 已迁移连接（可能已在事务中）
+ * @param entryId 条目身份
+ * @param blocks 块决定
+ * @returns 无
+ */
+function writeBlocks(db: DatabaseSync, entryId: string, blocks: { id: string; decision: string }[]): void {
+  db.prepare('DELETE FROM pending_blocks WHERE entry_id=?').run(entryId)
+  const insert = db.prepare('INSERT INTO pending_blocks VALUES(?,?,?)')
+  for (const block of blocks) insert.run(entryId, block.id, block.decision)
 }
 
 
@@ -222,7 +247,21 @@ export function writeOp(
  * @returns 无
  */
 export function pushHistory(cwd: string, kind: string, entryId: string, snapshot: string, now: number): void {
-  const db = pendingDb(cwd)
+  insertHistory(pendingDb(cwd), kind, entryId, snapshot, now)
+}
+
+/**
+ * @private
+ * @author ddj 2026年11月03号
+ * @description: 在给定连接上追加撤销栈记录并截断重做分支，供单条与批量两个入口复用。
+ * @param db 已迁移连接（可能已在事务中）
+ * @param kind 操作种类
+ * @param entryId 涉及的条目
+ * @param snapshot 可重放快照
+ * @param now 时间
+ * @returns 无
+ */
+function insertHistory(db: DatabaseSync, kind: string, entryId: string, snapshot: string, now: number): void {
   db.prepare("DELETE FROM pending_history WHERE state='undone'").run()
   db.prepare("INSERT INTO pending_history(kind,entry_id,snapshot,created_at,state) VALUES(?,?,?,?,'applied')")
     .run(kind, entryId, snapshot, now)
@@ -325,5 +364,55 @@ function flagsOfRow(row: Row): PendingFlags {
     diverged: Number(row.diverged) === 1,
     oversized: Number(row.oversized) === 1,
     revision: Number(row.revision),
+  }
+}
+
+/** 批量 Keep 的一条落库记录：stored 提供 CAS 依据与撤销快照 before，next 是推进后的条目。 */
+export interface KeepRecord {
+  entryId: string
+  stored: StoredEntry
+  next: StoredEntry
+  blocks: { id: string; decision: string }[]
+  snapshot: string
+}
+
+/**
+ * @public
+ * @author ddj 2026年11月03号
+ * @description: 在一次事务内批量推进多条待审条目（批量 Keep 用）。每条按 revision 做 CAS，
+ * 只跳过冲突的那一条，不牵连整批；块决定与撤销快照与单条路径同口径。
+ * @param cwd 工作区
+ * @param records 待落库记录
+ * @returns 因版本已变被跳过的条目
+ * @throws 事务级异常（SQL/程序错误）整体回滚后抛出
+ */
+export function saveDecisions(cwd: string, records: KeepRecord[]): { id: string; reason: string }[] {
+  const db = pendingDb(cwd)
+  const skipped: { id: string; reason: string }[] = []
+  const advance = db.prepare(`UPDATE pending_entries SET path=?,earlier=?,old_text=?,new_text=?,updated_at=?,unseen=?,
+    missing=?,diverged=?,oversized=?,revision=?,session_id=?,session_ids=?,lineage=? WHERE id=? AND revision=?`)
+
+  db.exec('BEGIN IMMEDIATE')
+  try {
+    for (const record of records) {
+      const { entry, flags } = record.next
+      const expected = record.stored.flags.revision
+      const changed = advance.run(entry.path, entry.earlierVersion, entry.oldText, entry.newText, entry.updatedAt,
+        entry.unseen === true ? 1 : 0, flags.missing ? 1 : 0, flags.diverged ? 1 : 0, flags.oversized ? 1 : 0,
+        flags.revision, entry.sessionId, JSON.stringify(entry.sessionIds),
+        entry.lineage ? JSON.stringify(entry.lineage) : null, record.entryId, expected)
+      // 读条目到落库之间被别的决定推进过：只放弃这一条
+      if (changed.changes !== 1) {
+        skipped.push({ id: record.entryId, reason: '待审条目已变化，请重试' })
+        continue
+      }
+      writeBlocks(db, record.entryId, record.blocks)
+      insertHistory(db, 'decide', record.entryId, record.snapshot, Date.now())
+    }
+    db.exec('COMMIT')
+    return skipped
+  } catch (error) {
+    if (db.isTransaction) db.exec('ROLLBACK')
+    throw error
   }
 }

@@ -15,6 +15,7 @@ import {
   archiveRecords,
   archiveCanceled,
   autoArchiveStale,
+  retireCovered,
   policyOf,
   resolveTarget,
   resolveTargetIn,
@@ -108,15 +109,16 @@ function recView(record: DiffRecord, ws: RemoteWs | null = null): RecordView {
 }
 
 /**
- * 旧写入口守卫：路径已由待审累计基线接管时一律拒绝，避免两套权威同时写同一文件。
- * @author ddj 2026年10月29号
- * @param cwd 工作区
+ * 旧写入口守卫：本会话可见的待审累计基线接管了该路径时一律拒绝，避免两套权威同时写同一文件。
+ * 只按会话可见范围判定：别的会话在管、本会话看不见的条目不能拦人，否则用户无从处理。
+ * @author ddj 2026年11月3号
+ * @param sc 会话与工作区
  * @param path 请求涉及的路径（可为空表示无法定位）
  * @returns 拒绝原因，未接管时为 null
  */
-function legacyBlocked(cwd: string, path: string | undefined): string | null {
+function legacyBlocked(sc: { session: Session; cwd: string }, path: string | undefined): string | null {
   if (!path) return null
-  if (!pendingCovers(cwd, path)) return null
+  if (!pendingCovers(sc.cwd, path, sc.session.id)) return null
   return '该文件已由待审累计基线接管，请使用面板 Keep/Revert（edrv.review.decide）'
 }
 
@@ -645,6 +647,8 @@ export function buildHandlers(
           // #endregion
           await autoArchiveStale(ctx, sc.session, sc.cwd, bucket)
           await archiveCanceled(ctx, sc.session, sc.cwd, bucket)
+          // 已被待审累计基线接管的路径：旧记录直接结案归档，旧通道的 Keep/Undo 随之从界面消失
+          await retireCovered(ctx, sc.session, sc.cwd, bucket)
           // #region debug log
           staleMs = performance.now() - staleStart
           // #endregion
@@ -706,7 +710,7 @@ export function buildHandlers(
       const sc = await requireSession(ctx, args.sessionId)
       if ('err' in sc) return { ok: false, error: sc.err }
       const bucket = await bucketOf(registry, ctx, sc.cwd)
-      const blocked = legacyBlocked(sc.cwd, bucket.get(args.callId)?.path)
+      const blocked = legacyBlocked(sc, bucket.get(args.callId)?.path)
       if (blocked) return { ok: false, error: blocked }
       const results = await applyDecisions(ctx, sc.session, sc.cwd, bucket, [{ callId: args.callId, scope: args.scope, hunkIndex: args.hunkIndex, decision: 'accepted' }])
       const item = results[0]
@@ -717,7 +721,7 @@ export function buildHandlers(
       const sc = await requireSession(ctx, args.sessionId)
       if ('err' in sc) return { ok: false, error: sc.err }
       const bucket = await bucketOf(registry, ctx, sc.cwd)
-      const blocked = legacyBlocked(sc.cwd, bucket.get(args.callId)?.path)
+      const blocked = legacyBlocked(sc, bucket.get(args.callId)?.path)
       if (blocked) return { ok: false, error: blocked }
       const results = await applyDecisions(ctx, sc.session, sc.cwd, bucket, [{ callId: args.callId, scope: args.scope, hunkIndex: args.hunkIndex, decision: 'rejected' }])
       const item = results[0]
@@ -727,7 +731,7 @@ export function buildHandlers(
     'edrv.missingReview': async (args) => {
       const sc = await requireSession(ctx, args.sessionId)
       if ('err' in sc) return { ok: false, error: sc.err }
-      const blocked = legacyBlocked(sc.cwd, args.path)
+      const blocked = legacyBlocked(sc, args.path)
       if (blocked) return { ok: false, error: blocked }
       try {
         const bucket = await bucketOf(registry, ctx, sc.cwd)
@@ -742,7 +746,7 @@ export function buildHandlers(
     'edrv.missingDecide': async (args) => {
       const sc = await requireSession(ctx, args.sessionId)
       if ('err' in sc) return { ok: false, error: sc.err }
-      const blocked = legacyBlocked(sc.cwd, missingPath(args.token))
+      const blocked = legacyBlocked(sc, missingPath(args.token))
       if (blocked) return { ok: false, error: blocked }
       try {
         const bucket = await bucketOf(registry, ctx, sc.cwd)
@@ -754,7 +758,7 @@ export function buildHandlers(
       if ('err' in sc) return { ok: false, error: sc.err }
       const bucket = await bucketOf(registry, ctx, sc.cwd)
       const items = Array.isArray(args.items) ? args.items : []
-      const blocked = items.map((item) => legacyBlocked(sc.cwd, bucket.get(item.callId)?.path)).find((reason) => reason !== null)
+      const blocked = items.map((item) => legacyBlocked(sc, bucket.get(item.callId)?.path)).find((reason) => reason !== null)
       if (blocked) return { ok: false, error: blocked }
       const results = await applyDecisions(ctx, sc.session, sc.cwd, bucket, items)
       return { ok: true, results }

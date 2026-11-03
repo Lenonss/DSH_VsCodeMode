@@ -16,9 +16,10 @@ import { capabilityOf, decide, diffOf } from './decide.js'
 import { entryFromNew, isSettled, mergeEntries } from './kernel.js'
 import type { PendingEntry } from './kernel.js'
 import type { PendingFlags, StoredEntry } from './persist.js'
+import type { KeepRecord } from './persist.js'
 import {
   dropEntry, earliestUndone, latestApplied, loadBlocks, loadEntries, pushHistory,
-  readOp, saveBlocks, saveEntry, setHistoryState, writeOp,
+  readOp, saveBlocks, saveDecisions, saveEntry, setHistoryState, writeOp,
 } from './persist.js'
 
 /**
@@ -286,6 +287,80 @@ export async function applyDecide(
     after: { entry: outcome.entry, flags: outcome.flags, blocks: outcome.blocks as ReviewBlockState[] },
     wrote: outcome.wrote,
   }), Date.now())
+  return outcome
+}
+
+/** 批量 Keep 的目标条目：display 只用于回报，operationId 由 host 按批次派生。 */
+export interface PendingKeepTarget {
+  id: string
+  display: string
+  operationId: string
+}
+/** 批量 Keep 的结果：kept 是真正推进到保留态的条目，skipped 说明该条为什么没保留。 */
+export interface PendingKeepOutcome {
+  kept: { id: string; path: string }[]
+  skipped: { id: string; display: string; reason: string }[]
+}
+
+/**
+ * @public
+ * @author ddj 2026年11月03号
+ * @description: 一次读取全表后批量保留待审条目（Keep 不写盘）。写入用刚读到的最新 revision，
+ * 客户端快照漂移不会整批中止；单条 oversized、不存在或落库时被抢先推进只跳过自己。
+ * @param cwd 工作区
+ * @param items 待保留条目
+ * @returns 保留成功与跳过的明细
+ * @throws 待审库迁移未就绪等存储级异常
+ */
+export async function keepAll(cwd: string, items: PendingKeepTarget[]): Promise<PendingKeepOutcome> {
+  const stored = new Map(loadEntries(cwd).map((item) => [item.entry.id, item]))
+  const now = Date.now()
+  const outcome: PendingKeepOutcome = { kept: [], skipped: [] }
+  const records: KeepRecord[] = []
+
+  for (const item of items) {
+    const before = stored.get(item.id)
+    if (!before) {
+      outcome.skipped.push({ id: item.id, display: item.display, reason: '待审条目不存在' })
+      continue
+    }
+    if (before.flags.oversized) {
+      outcome.skipped.push({ id: item.id, display: item.display, reason: '文本超出上限，不能整文件保留' })
+      continue
+    }
+    // 已经是保留态：幂等无操作，仍算保留成功
+    if (isSettled(before.entry)) {
+      outcome.kept.push({ id: item.id, path: before.entry.path })
+      continue
+    }
+
+    const beforeBlocks = blockStatesOf(before.entry)
+    const outcomeOf = await decide({
+      request: { sessionId: before.entry.sessionId, id: item.id, revision: before.flags.revision,
+        operationId: item.operationId, decision: 'accepted', scope: 'file' },
+      entry: before.entry, flags: before.flags, blocks: beforeBlocks, now,
+      // Keep 永不写盘：真走到写回说明逻辑被改坏，宁可炸掉也不静默落盘
+      write: () => { throw new Error('批量 Keep 不写盘') },
+    })
+    if (!outcomeOf.ok) {
+      outcome.skipped.push({ id: item.id, display: item.display, reason: outcomeOf.reason })
+      continue
+    }
+    outcome.kept.push({ id: item.id, path: before.entry.path })
+    records.push({ entryId: item.id, stored: before, next: { entry: outcomeOf.entry, flags: outcomeOf.flags },
+      blocks: outcomeOf.blocks, snapshot: JSON.stringify({
+        before: { entry: before.entry, flags: before.flags, blocks: beforeBlocks },
+        after: { entry: outcomeOf.entry, flags: outcomeOf.flags, blocks: outcomeOf.blocks },
+        wrote: outcomeOf.wrote,
+      }) })
+  }
+
+  // 落库阶段被别的决定抢先推进的条目从 kept 挪到 skipped，如实反映磁盘状态
+  const displayOf = new Map(items.map((item) => [item.id, item.display]))
+  for (const conflict of saveDecisions(cwd, records)) {
+    outcome.kept = outcome.kept.filter((entry) => entry.id !== conflict.id)
+    outcome.skipped.push({ id: conflict.id, display: displayOf.get(conflict.id) ?? conflict.id, reason: conflict.reason })
+  }
   return outcome
 }
 

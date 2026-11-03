@@ -24,10 +24,12 @@ import { dbg, isDebug, rpc } from '../rpc.js'
 import { refreshFeed, subscribeErrors, subscribeRecords } from '../state/recordsFeed.js'
 import { subscribeReview, refreshReview } from '../state/reviewFeed.js'
 import { runReviewBatch } from '../reviewBatch.js'
+import { runKeepAll } from '../reviewKeepAll.js'
+import { toastDom } from '../externalOpen.js'
 import { ReviewAllConfirm } from './ReviewAllConfirm.js'
 import { reviewRegions } from '../../shared/reviewRegions.js'
 import { PENDING_PREFIX } from '../../shared/pendingReview.js'
-import { diffSummary, officialPath } from '../state/diffSummary.js'
+import { coveredPathKeys, diffPathKey, diffSummary } from '../state/diffSummary.js'
 import { emitFileChanged, emitRefresh } from '../events.js'
 import { langOf, loadMonaco, snippetLanguageOf } from '../monaco/loader.js'
 import { bindEditActions, runEditAction } from '../monaco/editActions.js'
@@ -134,7 +136,7 @@ import { clampToolbarPosition, loadToolbarPosition, saveToolbarPosition } from '
 import { editorModelPathOf } from '../dap/modelPath.js'
 import { dapTrace } from '../dap/trace.js'
 import { isSessionMissingError, sessionErrorText, sessionMissingDetail, sessionMissingTitle } from '../sessionError.js'
-import { officialDownView, SESSION_DOWN_NOTICE } from '../reviewBar.js'
+import { officialDownView, SESSION_DOWN_NOTICE, SIDECAR_KEEP_DONE } from '../reviewBar.js'
 
 /** 官方差异读取失败前缀：仅用于清理同源陈旧错误，不吞并保存类错误。@author ddj 2026年10月27号 */
 const REVIEW_LOAD_ERROR = '官方差异读取失败：'
@@ -565,14 +567,17 @@ export function EditorView(props) {
   layoutRef.current = layout
   if (!diffRendererRef.current) diffRendererRef.current = createDiffRenderer((sid, t) => dbg(sid, t))
 
+  // 已有权威通道（官方汇总 / 待审累计基线）在管的路径：旧工具记录不得再画出来，也不得被批量纳入
+  const coveredPaths = React.useMemo(() => coveredPathKeys(review.page), [review.page])
+
   const currentRecords = React.useMemo(() => {
     const list = []
     for (const rec of Object.values(records)) {
-      if (rec.archived === true || officialPath(rec.path, review.page)) continue
+      if (rec.archived === true || coveredPaths.has(diffPathKey(rec.path))) continue
       if (sameFile(rec.path, active)) list.push(rec)
     }
     return list
-  }, [records, active, cwd, review.page])
+  }, [records, active, cwd, coveredPaths])
 
   const reviewOpsRef = React.useRef(new Map())
   // 已自动结案的记录 id：防止「改动已不在文件中」的记录在刷新期间被反复提交判定
@@ -3315,8 +3320,10 @@ export function EditorView(props) {
       }
       // #endregion
       if (!res || !res.ok || !Array.isArray(res.results)) {
-        setError(res?.error ? String(res.error) : '批量处理失败')
-        return { ok: 0, fail: items.length, stale: 0 }
+        const failure = res?.error ? String(res.error) : '批量处理失败'
+        setError(failure)
+        // 真实原因要一路带到调用处：调用方按计数兜底会把 Host 原文盖掉，用户只看得到泛化文案
+        return { ok: 0, fail: items.length, stale: 0, error: failure }
       }
       let ok = 0
       let fail = 0
@@ -3336,8 +3343,9 @@ export function EditorView(props) {
       if (Object.keys(next).length) setRecords((prev) => Object.assign({}, prev, next))
       return { ok, fail, stale }
     }).catch((e) => {
-      setError('批量处理异常:' + String(e))
-      return { ok: 0, fail: items.length, stale: 0 }
+      const failure = '批量处理异常:' + String(e)
+      setError(failure)
+      return { ok: 0, fail: items.length, stale: 0, error: failure }
     })
   }
 
@@ -3470,6 +3478,33 @@ export function EditorView(props) {
     finally { batchBusyRef.current = false; if (lifetime?.live) setReviewBatchBusy(false) }
   }
 
+  /**
+   * 批量失败提示：Host 原文优先，只有拿不到原因时才按计数兜底。
+   * @author ddj 2026年11月3号
+   * @param result actMany 的结果
+   * @returns 提示文案；没有失败返回 null
+   */
+  const batchError = (result) => {
+    if (!result.error) return batchFailText(result)
+    // 会话没在当前端激活：写类 RPC 一律被 requireSession 拒绝（冷读列表却正常），
+    // 只把「会话不存在」原文丢给用户会像新故障，这里改说清「没执行、记录没动、怎么恢复」。
+    if (isSessionMissingError(result.error)) return '这个会话没在当前端激活，Keep/Undo 没有执行（记录未改动）；在会话里发一条消息激活后重试'
+    return result.error
+  }
+
+  /**
+   * 批量结果没有 Host 原文时的计数兜底文案。
+   * @author ddj 2026年11月3号
+   * @param result actMany 的结果
+   * @returns 提示文案；没有失败返回 null
+   */
+  const batchFailText = (result) => {
+    if (!result.fail) return null
+    return result.stale
+      ? `${result.fail} 处未处理（其中 ${result.stale} 处已不在文件中，只更新了记录），可刷新后重试`
+      : `${result.fail} 处未处理，可刷新后重试`
+  }
+
   const acceptFile = () => {
     if (missingNow && !officialDetail) return decideMissing(false)
     if (officialDetail) return decideOfficial(false)
@@ -3479,8 +3514,11 @@ export function EditorView(props) {
       batchBusyRef.current = false
       reloadFile(true)
       emitRefresh({ scope, paths: active ? [active] : undefined, kind: 'structure' })
-      setStatus(decideStatus('已采纳 ', result))
-      if (result.fail) setError(result.fail + ' 处差异处理失败（可能已被后续修改影响），可刷新后重试')
+      // 能走到这里的都是「历史改动」通道：Keep 只把记录标成已看过，不写盘，
+      // 用「已采纳」会让人以为文件被改过，这里必须换成准确措辞
+      setStatus(result.ok ? `${SIDECAR_KEEP_DONE}（${result.ok} 处）` : decideStatus('已采纳 ', result))
+      const message = batchError(result)
+      if (message) setError(message)
     }).catch(() => { batchBusyRef.current = false })
   }
   const undoFile = () => {
@@ -3493,7 +3531,8 @@ export function EditorView(props) {
       reloadFile(true)
       emitRefresh({ scope, paths: active ? [active] : undefined, kind: 'structure' })
       setStatus(decideStatus('已不采纳 ', result))
-      if (result.fail) setError(result.fail + ' 处差异处理失败（可能已被后续修改影响），可刷新后重试')
+      const message = batchError(result)
+      if (message) setError(message)
     }).catch(() => { batchBusyRef.current = false })
   }
 
@@ -3501,7 +3540,7 @@ export function EditorView(props) {
   const allPending = React.useMemo(() => {
     const out = []
     for (const rec of Object.values(records)) {
-      if (rec.superseded === true || officialPath(rec.path, review.page)) continue
+      if (rec.superseded === true || coveredPaths.has(diffPathKey(rec.path))) continue
       const perHunk = Array.isArray(rec.decisions?.perHunk) ? rec.decisions.perHunk : []
       const hunks = Array.isArray(rec.hunks) ? rec.hunks : []
       for (let i = 0; i < hunks.length; i++) {
@@ -3555,7 +3594,8 @@ export function EditorView(props) {
       if (reject || !missingNow) reloadFile(true)
       emitRefresh({ scope, paths, kind: 'structure' })
       setStatus(decideStatus(reject ? '已不采纳 ' : '已采纳 ', result) + `；删除文件 ${handled.size} 个`)
-      if (result.fail) setError(result.fail + ' 处差异处理失败，可刷新后重试')
+      const message = batchError(result)
+      if (message) setError(message)
     } catch (cause) { if (lifetime?.live) setError(String(cause)) }
     finally { batchBusyRef.current = false; if (lifetime?.live) refreshRecords() }
   }
@@ -3592,6 +3632,68 @@ export function EditorView(props) {
     return false
   }
 
+  /** @private @author ddj 2026年11月03号 @description 批量通道的一次性完整快照（分页口径的 pending 只是页内计数）。 @returns 完整待审页 */
+  async function batchSnapshot() {
+    const res = await rpc('edrv.review.list', { sessionId, all: true })
+    if (!res.ok) throw new Error(res.error)
+    return res.page
+  }
+
+  /** @private @author ddj 2026年11月03号 @param token 起批时的会话寿命 @returns 逐条 Undo 的精确部分完成（冲突处停止） */
+  function undoAllBatch(token) {
+    return runReviewBatch({
+      snapshot: batchSnapshot,
+      detail: async (id) => { const res = await rpc('edrv.review.detail', { sessionId, id }); if (!res.ok) throw new Error(res.error); return res.detail },
+      decide: (detail, undo, operationId) => rpc('edrv.review.decide', { sessionId, id: detail.item.id, seq: detail.item.seq, revision: detail.item.revision, operationId, scope: 'file', decision: undo ? 'rejected' : 'accepted' }),
+      guard: () => guardReviewAll(true, token), operation: batchOperation,
+    }, true)
+  }
+
+  /** @private @author ddj 2026年11月03号 @param token 起批时的会话寿命 @returns 一次 RPC 的批量 Keep 结果（跳过项不算失败） */
+  function keepAllBatch(token) {
+    return runKeepAll({
+      snapshot: batchSnapshot,
+      keepAll: (items, batchId) => rpc('edrv.review.keepAll', { sessionId, batchId, items }),
+      guard: () => guardReviewAll(false, token),
+    })
+  }
+
+  /**
+   * @private
+   * @author ddj 2026年11月03号
+   * @description: 批量结果落界面：刷新列表、状态栏计数；Keep 的跳过只做提示不当错误，
+   * Undo 保持「遇冲突停止」口径。
+   * @param result 批量结果
+   * @param reject 本次是 Undo 还是 Keep
+   * @param undoPath 起批时的活动文件
+   * @param undoModel 起批时的编辑器模型
+   * @param undoVersion 起批时的模型版本
+   * @returns 官方段是否完全成功（legacy 通道是否继续）
+   */
+  function finishReviewAll(result, reject, undoPath, undoModel, undoVersion) {
+    refreshReview(sessionId)
+    if (result.paths.length) emitRefresh({ scope, paths: result.paths, kind: 'structure' })
+    if (reject) {
+      if (result.paths.some((path) => sameFile(path, undoPath)) && activeRef.current === undoPath
+        && !dirtyRef.current[undoPath] && !savingRef.current.has(undoPath) && undoModel?.getVersionId?.() === undoVersion) reloadFile(true)
+      setStatus(`Undo All：官方记录已完成 ${result.completed} / ${result.total}`)
+      if (result.error) setError(`批量已停止，已完成 ${result.completed} 项，其余未处理。${result.error}`)
+      return !result.error
+    }
+
+    const skipped = result.skipped ?? []
+    setStatus(`Keep All：已保留 ${result.completed} / ${result.total}` + (skipped.length ? `，跳过 ${skipped.length} 条` : ''))
+    if (result.error) setError(`Keep All 未全部完成：${result.error}`)
+    if (skipped.length) toastDom(skippedTip(skipped))
+    return !result.error
+  }
+
+  /** @private @author ddj 2026年11月03号 @param skipped 被跳过的条目 @returns 最多 3 条、余量汇总的提示文案 */
+  function skippedTip(skipped) {
+    const head = skipped.slice(0, 3).map((item) => `${item.display}：${item.reason}`).join('；')
+    return skipped.length > 3 ? `${head}；等 ${skipped.length} 条` : head
+  }
+
   /** @private @author ddj 2026年10月27号 @param reject Undo or Keep all workspace pending records, including previous rounds. @returns Explicit partial results; legacy proceeds only when official stage fully succeeds. */
   async function actReviewAll(reject) {
     if (batchBusyRef.current) return
@@ -3604,23 +3706,9 @@ export function EditorView(props) {
     batchBusyRef.current = true; setReviewBatchBusy(true)
     setStatus(reject ? '正在检查并 Undo 全部待审记录…' : '正在 Keep 全部待审记录…')
     try {
-      const result = await runReviewBatch({
-        snapshot: async () => {
-          const res = await rpc('edrv.review.list', { sessionId, all: true })
-          if (!res.ok) throw new Error(res.error)
-          return res.page
-        },
-        detail: async (id) => { const res = await rpc('edrv.review.detail', { sessionId, id }); if (!res.ok) throw new Error(res.error); return res.detail },
-        decide: (detail, undo, operationId) => rpc('edrv.review.decide', { sessionId, id: detail.item.id, seq: detail.item.seq, revision: detail.item.revision, operationId, scope: 'file', decision: undo ? 'rejected' : 'accepted' }),
-        guard: () => guardReviewAll(reject, token), operation: batchOperation,
-      }, reject)
+      const result = reject ? await undoAllBatch(token) : await keepAllBatch(token)
       if (!token?.live) return
-      refreshReview(sessionId)
-      if (reject && result.paths.some((path) => sameFile(path, undoPath)) && activeRef.current === undoPath
-        && !dirtyRef.current[undoPath] && !savingRef.current.has(undoPath) && undoModel?.getVersionId?.() === undoVersion) reloadFile(true)
-      if (result.paths.length) emitRefresh({ scope, paths: result.paths, kind: 'structure' })
-      setStatus(`${reject ? 'Undo All' : 'Keep All'}：官方记录已完成 ${result.completed} / ${result.total}`)
-      if (result.error) { setError(`批量已停止，已完成 ${result.completed} 项，其余未处理。${result.error}`); return }
+      if (!finishReviewAll(result, reject, undoPath, undoModel, undoVersion)) return
       guardReviewAll(reject, token)
       // Official-owned paths are excluded from allPending; never run legacy writes for official history.
       if (allPending.length) { batchBusyRef.current = false; await actAllPending(reject) }

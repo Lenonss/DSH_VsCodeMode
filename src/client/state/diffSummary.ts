@@ -33,6 +33,39 @@ export function officialPath(path: string, page: ReviewPage | null): boolean {
 }
 
 /**
+ * @author ddj 2026年11月3号
+ * @description: 本页待审条目占用的路径键：路径本身与其身份各一份。
+ * @param page 审查页
+ * @returns 待审覆盖的路径键集合
+ */
+function pendingCoverKeys(page: ReviewPage | null): Set<string> {
+  const keys = new Set<string>()
+  for (const item of page?.items ?? []) {
+    if (!item.id.startsWith(PENDING_PREFIX)) continue
+    // 待审条目的 path 取自写入时的原始写法（agent 常用工作区相对路径），官方导航用的却是绝对身份：
+    // 只按 path 建覆盖集时，同一文件的官方汇总行不会被压掉，差异栏把 3 个文件算成 6 条。
+    // 身份（id 去掉待审前缀）与官方 identity 同源，必须一起入集。
+    keys.add(diffPathKey(item.currentPath || item.path))
+    keys.add(diffPathKey(item.id.slice(PENDING_PREFIX.length)))
+  }
+  return keys
+}
+
+/**
+ * @public
+ * @author ddj 2026年11月3号
+ * @description: 取本页"已有权威通道在管"的路径键：官方汇总覆盖集 + 待审条目。
+ * 编辑器与差异汇总必须同口径，否则同一改动在列表里被压掉、在编辑器里却仍然画得出来并可以点。
+ * @param page 审查页
+ * @returns 路径比较键集合
+ */
+export function coveredPathKeys(page: ReviewPage | null): Set<string> {
+  const keys = pendingCoverKeys(page)
+  for (const path of page?.overview?.coveredPaths ?? []) keys.add(diffPathKey(path))
+  return keys
+}
+
+/**
  * @author ddj 2026年10月30号
  * @description: 取出本页待审条目（id 带待审前缀）并折算成文件行。
  * @param page 审查页
@@ -40,15 +73,9 @@ export function officialPath(path: string, page: ReviewPage | null): boolean {
  */
 function pendingRowsOf(page: ReviewPage | null): { rows: DiffFile[]; covered: Set<string> } {
   const rows: DiffFile[] = []
-  const covered = new Set<string>()
   for (const item of page?.items ?? []) {
     if (!item.id.startsWith(PENDING_PREFIX)) continue
     const path = item.currentPath || item.path
-    // 待审条目的 path 取自写入时的原始写法（agent 常用工作区相对路径），官方导航用的却是绝对身份：
-    // 只按 path 建覆盖集时，同一文件的官方汇总行不会被压掉，差异栏把 3 个文件算成 6 条。
-    // 身份（id 去掉待审前缀）与官方 identity 同源，必须一起入集。
-    covered.add(diffPathKey(path))
-    covered.add(diffPathKey(item.id.slice(PENDING_PREFIX.length)))
     rows.push({
       path,
       label: item.display || path,
@@ -59,7 +86,7 @@ function pendingRowsOf(page: ReviewPage | null): { rows: DiffFile[]; covered: Se
       sourceKind: 'pending',
     })
   }
-  return { rows, covered }
+  return { rows, covered: pendingCoverKeys(page) }
 }
 
 /** @public @author ddj 2026年10月26号 @param records Tool-call history. @param page Official file navigation, never only its first 50 rows. @returns Pending first, then official; legacy paths remain explicitly labelled. */

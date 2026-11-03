@@ -30,7 +30,15 @@ export async function loadPending(port: Pick<BatchPort, 'snapshot'>): Promise<Re
   return page.items
 }
 
-/** @public @author ddj 2026年10月27号 @param port Guarded existing per-file decision adapter. @param reject Undo instead of Keep. @returns Precise partial result; Undo stops at first conflict, never claims atomic multi-file rollback. */
+/**
+ * @public
+ * @author ddj 2026年10月27号
+ * @description: 逐条决策引擎，现仅供 Undo All 使用（Keep 已改走 `reviewKeepAll.ts` 的宿主批量通道）；
+ * 保留 reject 形态以便对照既有契约与测试。
+ * @param port Guarded existing per-file decision adapter.
+ * @param reject Undo instead of Keep.
+ * @returns Precise partial result; Undo stops at first conflict, never claims atomic multi-file rollback.
+ */
 export async function runReviewBatch(port: BatchPort, reject: boolean): Promise<BatchResult> {
   const result: BatchResult = { completed: 0, total: 0, paths: [], error: '' }
   try {

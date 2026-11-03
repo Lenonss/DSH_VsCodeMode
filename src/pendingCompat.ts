@@ -7,8 +7,13 @@ import type { ReviewDetail, ReviewItem, ReviewPage } from './shared/review.js'
 import type { PendingDetail, PendingItem, PendingPage } from './shared/pendingReview.js'
 import { pathKeyFor } from './shared/pathKey.js'
 
-/** 进程内"已被待审接管"的路径集合；旧写入口守卫只读它，绝不碰数据库。 */
-const coveredPaths = new Set<string>()
+/**
+ * 进程内"已被待审接管"的路径集合；旧写入口守卫只读它，绝不碰数据库。
+ * 按会话登记：待审列表按会话可见，守卫必须同口径，否则会出现"拦得住、看不见"的死锁。
+ * 无会话归属的登记落在 workspace 集合（兼容只有工作区+路径的旧用法）。
+ */
+const coveredBySession = new Map<string, Set<string>>()
+const coveredWorkspace = new Set<string>()
 
 /** 待审条目在面板列表里的 id 前缀，用于把请求路由回待审内核。 */
 export { PENDING_PREFIX } from './shared/pendingReview.js'
@@ -138,28 +143,94 @@ export function pendingDetailOf(detail: PendingDetail, capturedAt: string, cwd?:
 }
 
 /**
- * @author ddj 2026年10月29号
+ * @author ddj 2026年11月3号
+ * @description: 覆盖登记键：工作区与路径各自归一化后再拼接，避免同一文件多种写法登记成两条。
+ * @param cwd 工作区
+ * @param path 路径
+ * @returns 覆盖登记键
+ */
+function coverKey(cwd: string, path: string): string {
+  return `${pathKey(cwd)}|${pathKey(path)}`
+}
+
+/**
+ * @author ddj 2026年11月3号
+ * @description: 取某会话的覆盖集合；首次登记时就地建集合，避免调用方判空。
+ * @param sessionId 会话 id
+ * @returns 该会话的覆盖键集合
+ */
+function sessionCovers(sessionId: string): Set<string> {
+  const existing = coveredBySession.get(sessionId)
+  if (existing) return existing
+  const created = new Set<string>()
+  coveredBySession.set(sessionId, created)
+  return created
+}
+
+/**
+ * @author ddj 2026年11月3号
  * @description: 记住/忘记"该路径由待审投影接管"。进程内集合，绝不在旧写入口上查库（避免撞上写事务锁）。
  * @param cwd 工作区
  * @param path 路径
  * @param covered 是否接管
+ * @param sessionId 会话 id；缺省落到无归属的工作区集合
  * @returns 无
  */
-export function trackPendingCover(cwd: string, path: string, covered: boolean): void {
-  const key = `${pathKey(cwd)}|${pathKey(path)}`
-  if (covered) coveredPaths.add(key)
-  else coveredPaths.delete(key)
+export function trackPendingCover(cwd: string, path: string, covered: boolean, sessionId?: string): void {
+  const key = coverKey(cwd, path)
+  const target = sessionId ? sessionCovers(sessionId) : coveredWorkspace
+  if (covered) target.add(key)
+  else target.delete(key)
+}
+
+/**
+ * @author ddj 2026年11月3号
+ * @description: 用一次列表结果整体重建某会话的接管集合：条目被移除或结案后自动失效，不再残留登记。
+ * @param cwd 工作区
+ * @param sessionId 会话 id
+ * @param paths 本会话当前可见的待审条目路径
+ * @returns 无
+ */
+export function setPendingCovers(cwd: string, sessionId: string, paths: readonly string[]): void {
+  const next = new Set<string>()
+  for (const path of paths) {
+    if (path) next.add(coverKey(cwd, path))
+  }
+  coveredBySession.set(sessionId, next)
+}
+
+/**
+ * @author ddj 2026年11月3号
+ * @description: 找出接管某路径的会话，用于把"谁在管"写进提示文案；仅读内存，不查库。
+ * @param cwd 工作区
+ * @param path 路径
+ * @returns 首个接管会话 id；无人接管返回 null
+ */
+export function pendingCoverOwner(cwd: string, path: string): string | null {
+  const key = coverKey(cwd, path)
+  for (const [sessionId, set] of coveredBySession) {
+    if (set.has(key)) return sessionId
+  }
+  return null
 }
 
 /**
  * @author ddj 2026年10月29号
  * @description: 判断某路径是否已由待审投影接管；仅读进程内集合，不产生任何 IO。
+ * 给 sessionId 时按该会话的可见范围判定（列表看不到的接管不拦旧入口），缺省按全工作区并集判定。
  * @param cwd 工作区
  * @param path 请求路径
+ * @param sessionId 会话 id；缺省按并集判定
  * @returns 是否已被接管
  */
-export function pendingCovers(cwd: string, path: string): boolean {
-  return coveredPaths.has(`${pathKey(cwd)}|${pathKey(path)}`)
+export function pendingCovers(cwd: string, path: string, sessionId?: string): boolean {
+  const key = coverKey(cwd, path)
+  if (coveredWorkspace.has(key)) return true
+  if (sessionId) return coveredBySession.get(sessionId)?.has(key) === true
+  for (const set of coveredBySession.values()) {
+    if (set.has(key)) return true
+  }
+  return false
 }
 
 /**

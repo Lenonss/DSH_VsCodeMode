@@ -5,7 +5,7 @@ import { resolveScope, sessionOf } from './registry.js'
 import type { Registry } from './registry.js'
 import { bucketOf } from './registry.js'
 import { readText } from './pending/capture.js'
-import { pendingRawId, trackPendingCover } from './pendingCompat.js'
+import { pendingRawId, setPendingCovers, trackPendingCover } from './pendingCompat.js'
 import { loadEntries, saveEntry } from './pending/persist.js'
 import { applyDecide, importFromVcs, itemOf, loadDetail, loadPage, refreshed, removeEntry, undoDecide } from './pending/store.js'
 import { addedFiles } from './reviewDb.js'
@@ -85,8 +85,8 @@ function readHandlers(kit: ScopeKit): Partial<RpcHandlerMap> {
       const cwd = await kit.read(args.sessionId)
       // 与官方入口同口径：本会话新建的文件基线置空，列表里的增删行数才等于整文件行数
       const page = loadPage(cwd, args.sessionId, addedFiles(cwd, args.sessionId))
-      // 列表即登记接管关系；旧写入口守卫之后只读内存集合，不再产生数据库读
-      for (const item of page.items) trackPendingCover(cwd, item.path, true)
+      // 列表即登记接管关系：整集重建本会话的登记，条目被移出列表后自动失效
+      setPendingCovers(cwd, args.sessionId, page.items.map((item) => item.path))
       return { ok: true, page }
     },
     'edrv.pending.detail': async (args: PendingRequest & { id: string }) => {
@@ -124,8 +124,8 @@ function decideHandlers(kit: ScopeKit): Partial<RpcHandlerMap> {
       const id = pendingRawId(args.id)
       const path = loadEntries(cwd).find((stored) => stored.entry.id === id)?.entry.path
       const removed = removeEntry(cwd, id, args.revision)
-      // 移除后该路径不再由待审投影接管，旧入口守卫随之放行
-      if (removed && path) trackPendingCover(cwd, path, false)
+      // 移除后该路径不再由待审投影接管，旧入口守卫随之放行（仅注销本会话的登记）
+      if (removed && path) trackPendingCover(cwd, path, false, args.sessionId)
       return { ok: true, removed }
     },
   }
@@ -168,7 +168,8 @@ function refreshHandlers(kit: ScopeKit): Partial<RpcHandlerMap> {
       try {
         const shell = shellOf(raw, policy)
         const result = await importFromVcs(shell, cwd, args.sessionId, { includeUntracked: args.includeUntracked, path: args.path })
-        for (const item of loadPage(cwd, args.sessionId).items) trackPendingCover(cwd, item.path, true)
+        const page = loadPage(cwd, args.sessionId)
+        setPendingCovers(cwd, args.sessionId, page.items.map((item) => item.path))
         return { ok: true, imported: result.imported, changes: result.changes }
       } catch (error) {
         return { ok: false, error: failureOf(error) }

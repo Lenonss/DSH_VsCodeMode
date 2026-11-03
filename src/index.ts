@@ -76,7 +76,7 @@ function attachRuntime(ctx: Ctx, runtime: Runtime): void {
   const stopCapture = installCapture(ctx, (cwd, snapshot) => { evidence.persist(cwd, snapshot); return true })
   // 待审累计基线：只有写后内容确实变化才落库，异常一律不打断用户工具调用
   const pending = installPending(ctx, (write) => {
-    try { trackPendingCover(write.cwd, write.path, true) } catch { /* 内存登记失败不阻断采集 */ }
+    try { trackPendingCover(write.cwd, write.path, true, write.sessionId) } catch { /* 内存登记失败不阻断采集 */ }
     try { recordWrite(write) } catch (error) { log.warn('待审差异落库失败：' + String(error)) }
   })
   /** @author ddj 2026年09月28号 @param exec Tool execution. @param result Tool result. */

@@ -126,6 +126,9 @@ export const SIDECAR_KEEP_TITLE = '标记这些历史改动为已看过：只改
 /** 非官方 Undo 的作用域说明：走原有回滚校验写回磁盘，但不影响官方记录。 */
 export const SIDECAR_UNDO_TITLE = '撤销这些历史改动（写回受回滚校验保护）：只影响这份历史记录，不影响官方审查。'
 
+/** 非官方 Keep 之后的完成态：该通道 Keep 不写盘，不能沿用「已采纳」这种会让人以为改过文件的措辞。 */
+export const SIDECAR_KEEP_DONE = '已标记为看过（未改动文件）'
+
 /** 当前端没有该会话时，差异栏里给中性说明而不是红色报错。 */
 export const SESSION_DOWN_NOTICE = '这个会话没在当前端激活，官方审查数据暂时读不到；下面的历史改动仍可查看、Keep、Undo。'
 
