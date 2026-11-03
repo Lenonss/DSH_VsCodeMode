@@ -16,6 +16,8 @@
 import { readBinaryPreview } from '../shared/rpc.js'
 import { baseNameOf } from '../shared/fsNames.js'
 import { rpc } from './rpc.js'
+import type { SaveFallback, SaveSink } from './downloadSink.js'
+import { pickSaveSink, writeFileToDir } from './downloadSink.js'
 import type { TreeMenuTarget } from './sidebar/contextMenu.js'
 import type { SidebarCtx } from './sidebar/types.js'
 import { openDownloader } from './ui/DownloadPicker.js'
@@ -41,6 +43,8 @@ export interface DownloadOpts {
   signal?: AbortSignal
   /** 每完成一个文件回调一次（done 含成功与失败）。 */
   onProgress?: (done: number, total: number, path: string) => void
+  /** 落盘去处；缺省按浏览器默认下载目录（`<a download>`）。 */
+  sink?: SaveSink
 }
 
 // --endregion
@@ -85,16 +89,20 @@ export async function fetchDownload(path: string, sessionId?: string): Promise<{
 }
 
 /**
- * 下载单个文件并交给浏览器落盘。
+ * 下载单个文件并落盘（所选目录则按相对路径写入，否则交给浏览器 `<a download>`）。
  * @author ddj 2026年11月03号
  * @param path 工作区相对路径
- * @param opts 会话 / 取消选项
+ * @param opts 会话 / 取消 / 落盘选项
  * @returns 路径与字节数
- * @throws 读取失败透传主机错误
+ * @throws 读取失败透传主机错误；目录写入失败透传底层错误
  */
 export async function downloadOne(path: string, opts: DownloadOpts = {}): Promise<DownloadedFile> {
   const file = await fetchDownload(path, opts.sessionId)
-  downloadBytes(file.bytes, baseNameOf(path) || 'download', file.mime)
+  if (opts.sink?.kind === 'dir') {
+    await writeFileToDir(opts.sink.dir, path, file.bytes)
+  } else {
+    downloadBytes(file.bytes, baseNameOf(path) || 'download', file.mime)
+  }
   return { path, size: file.size }
 }
 
@@ -148,20 +156,42 @@ export async function downloadTarget(target: TreeMenuTarget, ctx?: SidebarCtx): 
 }
 
 /**
- * 批量下载并统一反馈（开始一条、结束一条，避免逐文件刷屏）。
+ * 批量下载并统一反馈（先选保存目录，再逐文件落盘；开始一条、结束一条，避免逐文件刷屏）。
  * @author ddj 2026年11月03号
  * @param paths 勾选路径
  * @param ctx 面板上下文
+ * @sideEffects 弹出目录选择器；用户取消则整批中止
  */
 async function runBatch(paths: string[], ctx?: SidebarCtx): Promise<void> {
   if (!paths.length) return
+
+  // 选择器必须在用户手势的同步栈里触发，故放在第一个 await 之前。
+  const sink = await pickSaveSink()
+  if (sink === 'cancelled') {
+    ctx?.notify?.('已取消下载')
+    return
+  }
+  if (sink.kind === 'browser') ctx?.notify?.(fallbackText(sink.reason))
   if (paths.length > 1) ctx?.notify?.('正在下载 ' + paths.length + ' 个文件…')
+
   try {
-    const out = await downloadMany(paths, { sessionId: ctx?.sessionId })
+    const out = await downloadMany(paths, { sessionId: ctx?.sessionId, sink })
     ctx?.notify?.(batchText(out))
   } catch (error) {
     ctx?.notify?.('下载失败：' + textOfError(error))
   }
+}
+
+/**
+ * 目录选择不可用时的提示文案（说明文件去了浏览器默认下载目录）。
+ * @author ddj 2026年11月03号
+ * @param reason 回落原因
+ * @returns 单行提示文案
+ */
+function fallbackText(reason: SaveFallback): string {
+  if (reason === 'unsupported') return '浏览器不支持选择保存目录，已保存到默认下载目录'
+  if (reason === 'insecure') return '当前页面不是安全上下文（需 https 或 localhost），已保存到默认下载目录'
+  return '未获得目录写入权限，已保存到默认下载目录'
 }
 
 /**

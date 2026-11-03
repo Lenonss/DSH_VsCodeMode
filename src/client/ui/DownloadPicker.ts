@@ -114,6 +114,7 @@ export function DownloadPicker(props: DownloadPickerProps): React.ReactElement {
   },
     React.createElement('h3', null, '下载到本机'),
     React.createElement('div', { className: 'edrv-dl-sub' }, root ? '/' + root : '工作区根目录'),
+    React.createElement('div', { className: 'edrv-dl-hint' }, '点下载后会先选择保存文件夹，文件按相对路径写入'),
     renderTree({ state, root, rows, empty, loadDir, renderRow, onToggleDir, onToggleFile }),
     renderFoot({
       picked,
@@ -182,7 +183,7 @@ function renderFoot(opts: FootOpts): React.ReactElement {
       className: 'edrv-dl-go',
       disabled: !picked.length,
       onClick: () => onConfirm(picked),
-    }, '下载 ' + picked.length + ' 个文件'),
+    }, '选择位置并下载 ' + picked.length + ' 个文件'),
   )
 }
 

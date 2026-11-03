@@ -117,3 +117,82 @@ describe('downloadOne / downloadMany', () => {
     expect(seen).toEqual([1, 2])
   })
 })
+
+describe('保存位置（目录选择器）', () => {
+  interface Picked {
+    dirs: string[]
+    files: Array<{ name: string; bytes: number[] }>
+  }
+
+  /** 造一个只记录调用的假目录句柄。 */
+  function pickedDir(record: Picked) {
+    const handle: Record<string, unknown> = {
+      async getDirectoryHandle(name: string) {
+        record.dirs.push(name)
+        return handle
+      },
+      async getFileHandle(name: string) {
+        return {
+          async createWritable() {
+            return {
+              async write(bytes: Uint8Array) {
+                record.files.push({ name, bytes: Array.from(bytes) })
+              },
+              async close() {},
+            }
+          },
+        }
+      },
+      async queryPermission() {
+        return 'granted'
+      },
+    }
+    return handle
+  }
+
+  it('选择目录后按相对路径写盘，不再触发 <a download>', async () => {
+    const record: Picked = { dirs: [], files: [] }
+    vi.stubGlobal('isSecureContext', true)
+    vi.stubGlobal('showDirectoryPicker', vi.fn(async () => pickedDir(record)))
+
+    const out = await mod.downloadOne('docs/a.md', { sink: { kind: 'dir', dir: pickedDir(record) as never } })
+    expect(out.path).toBe('docs/a.md')
+    expect(record.files.map((file) => file.name)).toEqual(['a.md'])
+    expect(anchor.click).not.toHaveBeenCalled()
+  })
+
+  it('用户取消目录选择时整批中止且不发起读取', async () => {
+    vi.stubGlobal('isSecureContext', true)
+    vi.stubGlobal('showDirectoryPicker', vi.fn(async () => {
+      throw Object.assign(new Error('aborted'), { name: 'AbortError' })
+    }))
+    const notify = vi.fn()
+    await mod.downloadTarget({ path: 'a.txt', type: 'file' }, { notify } as never)
+
+    expect(notify).toHaveBeenCalledWith('已取消下载')
+    expect(calls).toHaveLength(0)
+  })
+
+  it('目录选择不可用时提示回落默认下载目录，仍完成下载', async () => {
+    vi.stubGlobal('isSecureContext', false)
+    const notify = vi.fn()
+    await mod.downloadTarget({ path: 'a.txt', type: 'file' }, { notify } as never)
+
+    expect(notify).toHaveBeenCalledWith('当前页面不是安全上下文（需 https 或 localhost），已保存到默认下载目录')
+    expect(anchor.download).toBe('a.txt')
+    expect(anchor.click).toHaveBeenCalledTimes(1)
+  })
+
+  it('选择目录后经菜单入口的单个文件走写盘路径', async () => {
+    const record: Picked = { dirs: [], files: [] }
+    vi.stubGlobal('isSecureContext', true)
+    vi.stubGlobal('showDirectoryPicker', vi.fn(async () => pickedDir(record)))
+    const notify = vi.fn()
+    await mod.downloadTarget({ path: 'docs/a.md', type: 'file' }, { notify } as never)
+
+    expect(record.dirs).toEqual(['docs'])
+    expect(record.files.map((file) => file.name)).toEqual(['a.md'])
+    expect(notify).toHaveBeenCalledWith('已下载 1 个文件')
+    expect(anchor.click).not.toHaveBeenCalled()
+  })
+})
