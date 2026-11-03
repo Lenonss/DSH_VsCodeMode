@@ -23,6 +23,8 @@ import { rpc } from '../rpc.js'
 import { absoluteOf, relativeOf } from '../tabActions.js'
 import { copyText } from '../copyText.js'
 import { clearFileClip, fileClipOf, setFileClip } from '../fileClipboard.js'
+import { downloadTarget } from '../downloadFile.js'
+import { isRemoteChannel } from '../../shared/remoteChannel.js'
 import type { TreeMenuItem } from './contextMenu.js'
 import type { SidebarCtx } from './types.js'
 import type { TreeMenuTarget } from './contextMenu.js'
@@ -39,6 +41,8 @@ const ORDER_COPY = 80
 const ORDER_PASTE = 90
 const ORDER_COPY_PATH = 110
 const ORDER_COPY_REL = 120
+/** 远程下载（仅远程访问可见）落在复制路径段之后、重命名段之前，不新起视觉块。 */
+const ORDER_DOWNLOAD = 125
 const ORDER_RENAME = 140
 const ORDER_DELETE = 150
 const SVN_ORDER_BASE = 200
@@ -454,6 +458,28 @@ function editGroupItems(): TreeMenuItem[] {
 
 // --endregion
 
+// --region 远程下载（仅远程访问可见）
+
+/**
+ * 「下载到本机」菜单项：远程访问时把工作区文件拉回浏览器所在机器。
+ * 可见性唯一判据是通道 seat（{@link isRemoteChannel}）——本机回环页面完全看不到该项，
+ * 也不因打开菜单发出任何请求；文件目标直下，文件夹 / 根空白区弹勾选弹窗。
+ * @author ddj 2026年11月03号
+ * @returns 菜单项数组（固定 1 项，显隐交给 visible）
+ */
+function downloadItems(): TreeMenuItem[] {
+  return [{
+    id: 'remote-download',
+    label: (target) => (target.type === 'file' ? '下载到本机' : '下载到本机…'),
+    order: ORDER_DOWNLOAD,
+    group: GROUP_COPY_PATH,
+    visible: () => isRemoteChannel(),
+    run: (target, ctx) => { void downloadTarget(target, ctx) },
+  }]
+}
+
+// --endregion
+
 // --region SVN 组（动作清单来自 shared/svnActions.ts）
 
 /** 目标路径对应的变更条目（不在清单里返回 undefined）。 */
@@ -559,6 +585,7 @@ export function createDefaultFileMenuItems(): TreeMenuItem[] {
     ...refGroupItems(),
     ...clipGroupItems(),
     ...copyPathItems(),
+    ...downloadItems(),
     ...editGroupItems(),
     ...svnMenuItems(),
   ]

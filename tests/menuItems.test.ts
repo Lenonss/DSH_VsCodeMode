@@ -57,6 +57,7 @@ describe('createDefaultFileMenuItems', () => {
       'paste',
       'copy-path',
       'copy-relative-path',
+      'remote-download',
       'rename',
       'delete',
       'svn-update',

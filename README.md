@@ -26,7 +26,7 @@
 | 审改动 | 行内红绿差异、累计基线待审、Keep / Undo / 回滚 / 归档，重启不丢 |
 | 懂代码 | LSP：定义 / 引用 / Peek / 补全 / 签名帮助，按文件语言自动选后端 |
 | 调问题 | DAP：断点、调用堆栈、变量、监视、调试控制台 REPL（Lua attach / .NET） |
-| 管文件 | 活动栏 + 资源管理器 + 右键菜单 + 工作区搜索 + SVN 状态徽标 |
+| 管文件 | 活动栏 + 资源管理器 + 右键菜单 + 工作区搜索 + SVN 状态徽标 + 远程下载 |
 | 看文档 | Markdown 预览、PDF 注释编辑、Excel 基础编辑与只读数据预览 |
 
 ## 目录
@@ -272,6 +272,10 @@ cmaps 支持中文渲染）；工具条进入注释编辑：✎ 文本框 / 🖌
     粘贴（剪贴板空时灰显）｜ 复制路径·复制相对路径 ｜ 重命名…·永久删除 ｜ SVN 组。
   - 根空白区 = 文件夹菜单去掉全部「仅非根」项；参考图中本架构无法实现的条目
     （在集成终端中打开 / 运行测试 / Build 等）不显示。
+  - **下载到本机**（仅远程访问时出现，落在「复制相对路径」与「重命名」之间）：
+    文件直接下载原文件；文件夹与根空白区弹出确认框，按需懒加载展开目录树、
+    逐级勾选文件后逐个下载（不打包，勾选几个就下几个）。判定口径与页面的
+    远程通道一致（`channelPrefix()` 非空），本机回环页面不显示。
   - 文件管理写操作走 `edrv.fsCreateFile / fsCreateDir / fsRename / fsDelete /
     fsCopy / fsMove`（工作区边界 + 同名拒绝 + 名称校验），删除带确认；重命名 /
     移动 / 删除与开着的页签自动同步（路径改写 / 关签）。剪切·复制·粘贴为应用内
@@ -572,13 +576,13 @@ profile 请替换为实际目标，不要把示例目录当成当前运行 profi
 
 ```bash
 # ① Git 安装（clone + prepare 构建；推荐打固定 tag）
-dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.24.0
+dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.25.0
 
 # ② npm 注册表（发布到 npm 后）
-dsh plugin --profile web add dsh-vscode-mode@0.24.0
+dsh plugin --profile web add dsh-vscode-mode@0.25.0
 
 # ③ GitHub Release tgz 直装（Release asset 可用后）
-dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.24.0/dsh-vscode-mode-0.24.0.tgz
+dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.25.0/dsh-vscode-mode-0.25.0.tgz
 ```
 
 > **DSH 版本政策（0.17.0 起）**：六项 DSH peer 仍统一声明为 `*`，另以
@@ -958,6 +962,7 @@ Keep All / Undo All 却是亮的。修复：单文件 Keep / Undo 覆盖冲突�
 
 | 版本 | 要点 |
 | --- | --- |
+| v0.25.0 | 资源管理器右键「下载到本机」：远程访问时把工作区文件拉回浏览器所在机器 |
 | v0.24.0 | 经第三方远程访问插件时，文件管理器与 Monaco 恢复可用；加载失败提示按状态区分 |
 | v0.23.5 | 同一文件不再算成两条差异；新建文件按整文件新增渲染 |
 | v0.23.4 | 计划卡「查看全文」直通编辑器，不再闪一下再关 |
@@ -967,8 +972,9 @@ Keep All / Undo All 却是亮的。修复：单文件 Keep / Undo 覆盖冲突�
 | v0.23.0 | 快捷菜单：可拖动悬浮按钮 + 自定义菜单树 |
 
 <details>
-<summary>完整版本记录（v0.24.0 → v0.1.5x，点击展开）</summary>
+<summary>完整版本记录（v0.25.0 → v0.1.5x，点击展开）</summary>
 
+- **v0.25.0**：新增远程下载——经远程访问插件打开 DSH 时，工作区文件原本只能到远端机器上自己下载再传回，现在资源管理器右键菜单新增「下载到本机」（仅远程访问页可见，本机回环不出现）：文件右键直接下载原文件；文件夹与根空白区弹出确认框，按需懒加载展开目录树、逐级勾选文件后逐个下载原文件（不打包）。取字节复用既有链路（`edrv.readBinary` 二进制直出，远程代理剥掉 `x-edrv-*` 时自动回落 `edrv.read` 的 base64 分支），点选的文件名与远端一致，超过 32MB 的文件在弹窗内标明并禁用、不静默失败；确认框复用 `ModalShell`（自动满足 `data-edrv-view` 浮层契约与 z-index 阶梯），目录整行可展开、点文件名也能勾选、加载失败行带重试。可见性判据与 v0.24.0 的远程通道同源（`src/shared/remoteChannel.ts` 新增 `isRemoteChannel()`，即 `channelPrefix()` 非空），非远程页面完全不出现该条目、打开菜单也不发请求。不新增 host 路由、不改鉴权、不动既有导出实现。验证：typecheck 0 error；全量 287 文件、3715 通过 + 22 跳过；`node --test tests/nativeOpen.test.mjs` 9/9；build 四 bundle 通过；本机 GUI 注入远程座位后冒烟：菜单出现且位置正确、单文件下载落盘名正确、根/文件夹弹窗展开 105 行、单选 1 / 全选已展开 82 / 清空 0、勾选 2 个文件逐个下载成功（`edrv.readBinary` ×2），干净刷新后控制台无新增报错；**真实远程设备（真插件 + 真配对）未验收，缺口保留**。见 [0.25.0 发布说明](docs/release-0.25.0.md)。
 
 - **v0.24.0**：修复经第三方远程访问插件（如 `@linxin666/dsh-remote-web-ui`）访问 DSH Web GUI 时，文件管理器报「DSH 拒绝了当前页面的访问」、编辑器报「Monaco loader 加载失败」。根因在宿主准入顺序：`connection.requestRejection()` 先用 `isTrustedApiRequest` 判 Host/Origin，不属于回环、监听地址或 `trustedHosts` 就**直接 403**，根本不看登录态（401 才是认证失败），而本插件的 `/edrv/rpc` 与 `/edrv/vendor/**` 都不在远程插件的改写白名单里，于是 RPC、Monaco 的脚本/CSS/字体/Worker、pdf.js 模块 import 与角标图片全部直连宿主被拒。现按远程通道选路径前缀：`window.__DSH_REMOTE_CHANNEL_BOOT__` 存在（远程插件在 `<head>` 解析期安装的座位对象）时，所有插件内部路径改挂其已接管的 `/remote` catch-all（`/remote/edrv/...`），本地与桌面入口保持 `/edrv/...` 原样。新增 `src/shared/remoteChannel.ts`（`channelPrefix` / `transportPath` / `transportUrl`，仍经 `appUrl` 继承应用基址与 `dsh-app:`），RPC、二进制预览、Monaco 基址、pdf.js 基址与角标图片统一走它；**服务端零改动**，不新增路由、不取消鉴权、不读也不写任何凭据，`/remote` 门禁仍要求已配对设备。另新增 `src/client/loadFailure.ts`：加载失败先 HEAD 探测真实状态，403（Host 围栏）/401（登录失效）/404（资源或路由缺失）/0（请求未到达宿主）分别给不同提示，且只带 pathname 与状态码；设备未配对（403 `code:'unpaired'`）直接提示去配对，不再把所有 Monaco 失败都说成「检查资源是否完整」。验证：typecheck 0 error；全量 284 文件、3691 通过 + 22 跳过；`node --test tests/nativeOpen.test.mjs` 9/9；build 四 bundle 通过；本机 GUI 全链 200 并确认无 cookie 仍 401；远程通道用本地回环代理复刻转发语义后，138/138 请求落 `/remote/edrv/…`、目录/读/写/保存与 Monaco+Worker 全部通；**真机 + 真插件的配对门禁与 TLS 未验收（缺口保留）**。见 [0.24.0 发布说明](docs/release-0.24.0.md)。
 - **v0.23.5**：修复差异栏把同一文件算成两条（差异文件数偏大）。待审条目存的是写入时的相对路径，官方导航用绝对身份，而 `mergedPage()` 与 `diffSummary` 的去重都只按 path 建覆盖集，相对路径的待审行压不掉绝对身份的官方行，于是同一文件同时留下待审行与官方汇总行；现两侧覆盖集都补入条目身份（与官方 identity 同源）。另修复本会话新建的文件被渲染成一堆修改块：累计基线保留「最早内容」，新建文件首次采集时磁盘已有会话自己的中间产物，基线因此非空，「新增 516 行」被切成若干 `-`/`+` 混合块，与官方整文件新增（`before=false`、`oldLines=0`）口径相反；现按每个文件在该会话内最早的官方记录判定整文件新增，命中时待审侧基线置空，列表与详情只出一块全加差异、增删计数等于整文件行数，`addedFiles()` 查询失败则回退旧口径。验证：typecheck 0 error；全量单测通过；`npm run build` 通过；本版未做 GUI 点按验收（缺口保留）。见 [0.23.5 发布说明](docs/release-0.23.5.md)。

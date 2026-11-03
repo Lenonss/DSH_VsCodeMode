@@ -38,6 +38,17 @@ export function channelPrefix(): string {
 }
 
 /**
+ * 本页是否经远程访问通道接入（远程 vs 本机回环）。
+ * 与 {@link import('../client/rpc.js').channelNote} 同口径：只认通道 seat，不解析地址。
+ * 用于「仅远程可用」能力的显隐，例如资源管理器的「下载到本机」。
+ * @author ddj 2026年11月03号
+ * @returns 已接入远程通道为 true；本机、桌面 dsh-app:、未装该插件均为 false
+ */
+export function isRemoteChannel(): boolean {
+  return channelPrefix() !== ''
+}
+
+/**
  * 给插件内部路径加通道前缀。
  * @author ddj 2026年11月02号
  * @param path 以 '/' 开头的插件内部路径（合法性由 {@link transportUrl} 内的 appUrl 兜底校验）

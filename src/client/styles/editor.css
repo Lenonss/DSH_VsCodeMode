@@ -899,6 +899,30 @@
 
 
 
+/* 远程下载确认框（仅远程访问时由资源管理器右键打开）：懒加载目录树 + 文件勾选。
+   卡片与遮罩由 ModalShell 提供（vsm-mcp-dialog / edrv-modal-mask，z-index 190），
+   此处只补树列表与底栏布局。⚠️ 规则一律以 [data-edrv-view] 开头，否则整块失配。 */
+[data-edrv-view] .edrv-dl-dialog { display: flex; flex-direction: column; gap: 10px; }
+[data-edrv-view] .edrv-dl-sub { margin: -6px 0 2px; font-size: 12px; color: var(--dsw-alias-label-tertiary, #9aa5b1); word-break: break-all; }
+[data-edrv-view] .edrv-dl-tree { display: flex; flex-direction: column; gap: 1px; min-height: 120px; max-height: min(48vh, 420px); overflow: auto; padding: 4px; border: 1px solid var(--dsw-alias-border-l1, #3a3a3a); border-radius: 8px; background: var(--dsw-alias-bg-layer-1, #262626); }
+[data-edrv-view] .edrv-dl-row { display: flex; align-items: center; gap: 6px; min-height: 26px; padding: 2px 6px; border-radius: 6px; font-size: 13px; color: var(--dsw-alias-label-primary, #e6e6e6); }
+[data-edrv-view] .edrv-dl-row:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(255, 255, 255, .06)); }
+[data-edrv-view] .edrv-dl-row.is-dir { cursor: pointer; }
+[data-edrv-view] .edrv-dl-twist { flex: 0 0 auto; width: 18px; height: 18px; color: var(--dsw-alias-label-secondary, #aaa); font-size: 11px; line-height: 18px; text-align: center; }
+[data-edrv-view] .edrv-dl-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+[data-edrv-view] .edrv-dl-dir { font-weight: 600; }
+[data-edrv-view] .edrv-dl-size { flex: 0 0 auto; font-size: 11px; color: var(--dsw-alias-label-tertiary, #9aa5b1); }
+[data-edrv-view] .edrv-dl-size.is-large { color: var(--dsw-alias-state-warn-primary, #e5b93f); }
+[data-edrv-view] .edrv-dl-hint { padding: 3px 8px; font-size: 11px; color: var(--dsw-alias-label-tertiary, #9aa5b1); }
+[data-edrv-view] .edrv-dl-hint.is-error { display: flex; align-items: center; gap: 8px; color: var(--dsw-alias-state-error-primary, #f07878); }
+[data-edrv-view] .edrv-dl-hint button { padding: 2px 8px; border: 1px solid var(--dsw-alias-border-l2, #555); border-radius: 5px; background: none; color: var(--dsw-alias-label-primary, #eee); font-size: 11px; cursor: pointer; }
+[data-edrv-view] .edrv-dl-foot { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+[data-edrv-view] .edrv-dl-count { margin-right: auto; font-size: 12px; color: var(--dsw-alias-label-secondary, #aaa); }
+[data-edrv-view] .edrv-dl-foot button { padding: 6px 12px; border: 1px solid var(--dsw-alias-border-l2, #555); border-radius: 6px; background: none; color: var(--dsw-alias-label-primary, #eee); font-size: 12px; cursor: pointer; }
+[data-edrv-view] .edrv-dl-foot button:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover, rgba(255, 255, 255, .06)); }
+[data-edrv-view] .edrv-dl-foot button:disabled { opacity: .55; cursor: default; }
+[data-edrv-view] .edrv-dl-go { border-color: var(--dsw-alias-brand-primary, #6d55ff); }
+
 /* 调试（DAP）：断点圆点 / 停帧行 / 浮动调试工具条。
    圆点挂在 Monaco glyphMargin（glyphMarginClassName），行背景为 isWholeLine className；
    工具条绝对定位于编辑区右上（editorArea relative 由 .edrv-editor-area 自身定位）。 */
