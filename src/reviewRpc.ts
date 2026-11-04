@@ -3,13 +3,13 @@ import { createHash } from 'node:crypto'
 import type { RpcHandlerMap } from './shared/rpc.js'
 import type { KeepAllItem, KeepAllResult, ReviewDetail, ReviewItem, ReviewPage } from './shared/review.js'
 import type { PendingPage } from './shared/pendingReview.js'
-import { addedFiles, decideReview, keepOfficialAll, reviewDetail, reviewPage } from './reviewDb.js'
+import { decideReview, keepOfficialAll, reviewDetail, reviewPage } from './reviewDb.js'
 import { undoReview } from './reviewUndo.js'
 import { applyDecide, keepAll, loadDetail, loadPage } from './pending/store.js'
 import { PENDING_PREFIX, mergedPage, pendingDetailOf, pendingItemOf, pendingSamePath } from './pendingCompat.js'
 import { bucketOf, resolveScope, sessionOf } from './registry.js'
 import type { Registry } from './registry.js'
-import { resolveTargetIn } from './store.js'
+import { policyOf, resolveTargetIn } from './store.js'
 import type { Ctx } from './store.js'
 import { log } from './log.js'
 
@@ -154,9 +154,8 @@ export function reviewHandlers(ctx: Ctx, registry: Registry): Partial<RpcHandler
    */
   function pendingPageOf(cwd: string, sessionId: string): PendingPage {
     try {
-      // 本会话新建的文件由官方首个块判为整文件新增，待审基线必须跟着置空：
-      // 否则同一次新建会同时存在「官方说全加 516 行」与「待审说改 8 处」两套相反口径。
-      const page = loadPage(cwd, sessionId, addedFiles(cwd, sessionId))
+      // 基线由累计条目来源及决定历史统一解析，不依赖当前查看者对话。
+      const page = loadPage(cwd, sessionId)
       // 已结算（老文本与新文本一致）的投影没有净变化可审：留着会顶掉同路径的官方待审记录，
       // 让差异栏选中一条 Keep 不可用的条目，表现为「按钮亮着却点不动」。
       return page.items.some((item) => item.settled === true)
@@ -279,7 +278,7 @@ export function reviewHandlers(ctx: Ctx, registry: Registry): Partial<RpcHandler
       if (args.id.startsWith(PENDING_PREFIX)) {
         const entryId = args.id.slice(PENDING_PREFIX.length)
         // 详情侧与列表侧必须同一口径：整文件新增的文件用空基线渲染，差异块才是全绿一整块
-        const detail = loadDetail(cwd, entryId, addedFiles(cwd, args.sessionId).has(entryId))
+        const detail = loadDetail(cwd, entryId)
         if (!detail) return { ok: false, error: '待审条目不存在' }
 
         const mapped = pendingDetailOf(detail, new Date(detail.item.updatedAt).toISOString(), cwd)
@@ -314,7 +313,7 @@ export function reviewHandlers(ctx: Ctx, registry: Registry): Partial<RpcHandler
             decision: args.decision,
             scope: args.scope === 'hunk' ? 'block' : 'file',
             ...(args.blockId === undefined ? {} : { blockId: args.blockId }),
-          })
+          }, undefined, policyOf(ctx, sessionOf(ctx, args.sessionId)))
           if (!result.ok) return { ok: false, error: result.reason }
           return { ok: true, revision: result.flags.revision }
         }

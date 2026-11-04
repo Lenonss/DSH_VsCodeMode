@@ -8,7 +8,7 @@
  * 作者 ddj 2026年09月10号
  */
 import React from 'react'
-import { forwardToEditor, parseOfficialFileAddress, resolveNavLine } from '../officialSidebar.js'
+import { forwardToEditor, parseOfficialFileAddress, resolveNavLine, resolveNavColumn } from '../officialSidebar.js'
 import { log } from '../log.js'
 
 /** 转发尝试次数（含首次）与重试间隔。 */
@@ -68,17 +68,22 @@ export function createClaimRouter(spec) {
     const doneRef = React.useRef(-1)
 
     React.useEffect(() => {
-      if (revision === doneRef.current) return
-      doneRef.current = revision
+      const intent = JSON.stringify([props?.sessionId, tab?.id, revision, navigation?.address])
+      if (intent === doneRef.current) return
       const parsed = parseOfficialFileAddress(navigation?.address)
       if (!parsed) {
         setFailed(true)
         return
       }
       const line = resolveNavLine(navigation?.params)
+      const column = resolveNavColumn(navigation?.params)
+      let alive = true
+      setFailed(false)
       let left = FORWARD_ATTEMPTS
       const attempt = () => {
-        if (forwardToEditor(service, parsed.path, line, navigation?.params?.preview)) {
+        if (!alive || tab?.signal?.aborted) return
+        if (forwardToEditor(typeof tab?.actions?.openTab === 'function' ? tab.actions : service, parsed.path, line, navigation?.params?.preview, column)) {
+          doneRef.current = intent
           closeTab(tab)
           return
         }
@@ -87,7 +92,8 @@ export function createClaimRouter(spec) {
         else setFailed(true)
       }
       attempt()
-    }, [revision])
+      return () => { alive = false }
+    }, [revision, props?.sessionId, tab?.id, navigation?.address])
 
     if (!failed || typeof fallback !== 'function') return null
     return React.createElement(fallback, props)

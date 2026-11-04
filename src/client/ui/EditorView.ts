@@ -274,11 +274,11 @@ export function EditorView(props) {
   const [monacoErr, setMonacoErr] = React.useState(null)
   const [records, setRecords] = React.useState({})
   const [review, setReview] = React.useState({ page: null, error: '' })
+  React.useEffect(() => { setReview({ page: null, error: '' }) }, [sessionId])
   React.useEffect(() => {
-    setReview({ page: null, error: '' })
-    if (!sessionId) return undefined
+    if (!sessionId || props.visible === false) return undefined
     return subscribeReview(sessionId, setReview)
-  }, [sessionId])
+  }, [sessionId, props.visible])
   const [tabs, setTabs] = React.useState([])
   const [active, setDiskActive] = React.useState(null)
   const [planTabs, setPlanTabs] = React.useState([])
@@ -1454,12 +1454,12 @@ export function EditorView(props) {
 
   // 挂载：接入会话级共享订阅（单定时器由 recordsFeed 持有，本组件不再自建 interval）
   React.useEffect(() => {
-    if (!sessionId) return undefined
+    if (!sessionId || props.visible === false) return undefined
     const offRecords = subscribeRecords(sessionId, applyRecords)
     const offErrors = subscribeErrors(sessionId, (message) => setError('list异常:' + message))
     refreshRecords()
     return () => { offRecords(); offErrors() }
-  }, [sessionId])
+  }, [sessionId, props.visible])
 
   /**
    * 展示外部同步提示（按路径+类型去重：同一文件重复回调不重置已关闭的提示）。
@@ -1560,12 +1560,21 @@ export function EditorView(props) {
   })
 
   React.useEffect(() => {
-    const publishLsp = (servers) => setLspServers(Array.isArray(servers) ? servers : [])
+    let alive = true
+    let loading = false
+    const publishLsp = (servers) => { if (alive) setLspServers(Array.isArray(servers) ? servers : []) }
+    const refreshLsp = async () => {
+      if (loading || props.visible === false || document.hidden) return
+      loading = true
+      try { publishLsp(await refreshStatus(true)) }
+      finally { loading = false }
+    }
     const unsubscribe = onLspProgress(publishLsp)
-    void refreshStatus(true).then(publishLsp)
-    const timer = setInterval(() => { void refreshStatus(true).then(publishLsp) }, 1500)
-    return () => { unsubscribe(); clearInterval(timer) }
-  }, [sessionId])
+    void refreshLsp()
+    const timer = setInterval(refreshLsp, 1500)
+    document.addEventListener('visibilitychange', refreshLsp)
+    return () => { alive = false; unsubscribe(); clearInterval(timer); document.removeEventListener('visibilitychange', refreshLsp) }
+  }, [sessionId, props.visible])
 
   // LSP 会话：EditorView 持有权威 sessionId，直接写入 lspClient 并广播。
   // 直接调用不依赖事件时序（订阅可能晚于首次派发），广播供其它消费方复用。
@@ -1609,6 +1618,9 @@ export function EditorView(props) {
   const fileOpenRef = React.useRef(null)
   /** @private @author ddj 2026年10月08号 @param e Routed file request. Always uses the current workspace and save/preview callbacks. */
   fileOpenRef.current = (e) => {
+    if (e?.detail?.sessionId && e.detail.sessionId !== sessionId) return
+    if (e?.detail?.ownerId && e.detail.ownerId !== props?.ownerId) return
+    if (!e?.detail?.ownerId && props?.visible === false) return
     const p = e?.detail?.path
     if (!p) return
     // G9：入口统一归一为工作区相对路径（差异栏/对话链接/LSP 跳转等都经此事件）
@@ -4108,6 +4120,8 @@ export function EditorView(props) {
   }
   const tabMenuActions = (path) => ({
     'add-to-conversation': () => addRefToChat(path),
+    'forge-open': () => props.forge?.open(sessionId),
+    'forge-local': () => props.forge?.open(sessionId, true),
     'split-left': () => splitTab(path, 'left'),
     'split-right': () => splitTab(path, 'right'),
     'split-top': () => splitTab(path, 'top'),
@@ -4144,6 +4158,7 @@ export function EditorView(props) {
       cwd,
       hasSession: Boolean(sessionId),
       canAddToConversation: Boolean(addToConversation),
+      forgeReady: props.forge?.available() === true,
       canSplit: workbench.groups.length < GROUP_LIMIT && !workbench.floats.some((item) => item.group === ownerOf(workbench, tabMenu.path)?.id),
       canFloat: workbench.groups.length < GROUP_LIMIT,
       canReturn: ownerOf(workbench, tabMenu.path)?.id !== MAIN_GROUP,
@@ -4442,6 +4457,25 @@ export function EditorView(props) {
   function consumeDrag() { return dragRef.current?.consumeClick() ?? false }
   /** @private @author ddj 2026年10月14号 @param path File. @param event Context trigger. */
   function paneMenu(path, event) { setTabMenu({ path, x: event.clientX, y: event.clientY }) }
+  const menuOwner = React.useRef({ sessionId, scope, alive: true })
+  menuOwner.current.sessionId = sessionId
+  menuOwner.current.scope = scope
+  const menuValid = React.useRef(null)
+  React.useEffect(() => {
+    menuOwner.current.alive = props.visible !== false
+    return () => { menuOwner.current.alive = false; if (menuValid.current) props.officialMenus?.invalidate(menuValid.current) }
+  }, [sessionId, scope, props.visible, props.officialMenus])
+  React.useEffect(() => {
+    if (!tabMenu || !props.officialMenus || !sessionId) return
+    const capturedSession = sessionId
+    const capturedScope = scope
+    const path = tabMenu.path
+    const groupId = ownerOf(benchRef.current, path)?.id
+    const valid = () => menuOwner.current.alive && menuOwner.current.sessionId === capturedSession && menuOwner.current.scope === capturedScope && ownerOf(benchRef.current, path)?.id === groupId && tabsRef.current.some((tab) => tab.path === path)
+    menuValid.current = valid
+    const items = tabMenuEntries().map((entry) => ({ ...entry, run: entry.onClick ?? (() => {}) }))
+    if (props.officialMenus.open('tab', sessionId, path, { x: tabMenu.x, y: tabMenu.y }, items, valid)) setTabMenu(null)
+  }, [tabMenu, props.officialMenus, sessionId, scope])
   /** @private @author ddj 2026年10月14号 @param group Auxiliary group. Return documents rather than closing them. */
   function returnPane(group) { acceptLayout(returnGroup(benchRef.current, group)) }
   /** @private @author ddj 2026年10月14号 @param group Float id. @param rect Viewport-safe bounds. */
@@ -5047,6 +5081,9 @@ export function EditorView(props) {
     editor: () => editorRef.current,
     outlineSources: props.outlineSources,
     fileMenuItems: props.fileMenuItems,
+    officialMenus: props.officialMenus,
+    visible: props.visible,
+    forge: props.forge,
     addToConversation,
     svn: svnStatus,
     // SVN 变更：面板列表 + 文件树徽标查表（客户端合成，不改 listDir 契约）

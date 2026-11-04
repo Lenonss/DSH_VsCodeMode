@@ -13,6 +13,8 @@ export interface ClientCompatState {
   fileClaim: boolean
   claimWanted: boolean
   selected: string
+  officialMenus?: boolean
+  forge?: boolean
 }
 
 /**
@@ -73,5 +75,7 @@ export function clientSummary(state: ClientCompatState, version = ''): CompatAda
   if (state.fileClaim || (state.claimWanted && (official || officialExpected !== false))) {
     items.push({ name: '文件链接官方认领（dsh-resource://file）', active: state.fileClaim, note: state.fileClaim ? '聊天文件链接转发进单一编辑器页签' : '官方文件链接认领未安装' })
   }
+  if (state.officialMenus !== undefined) items.push({ name: '官方右键菜单', active: state.officialMenus, note: state.officialMenus ? '插件动作接入共享菜单' : '服务缺失或装配失败，保留插件菜单' })
+  if (state.forge !== undefined) items.push({ name: 'Forge 导航', active: state.forge, note: state.forge ? '导航至官方面板与本地变更；PR 保持官方审查' : '官方 Forge 未安装或未启用，不自动启用' })
   return items
 }

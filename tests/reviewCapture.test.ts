@@ -6,7 +6,7 @@ import { installEvidence } from '../src/reviewCapture.js'
 import { closeArchiveDbs, migrateActive } from '../src/archiveDb.js'
 import { reviewDb, reviewDetail, reviewPage, saveSnapshot } from '../src/reviewDb.js'
 import type { ReviewSnapshot } from '../src/shared/review.js'
-vi.mock('../src/store.js', () => ({ resolveTarget: vi.fn(async (_ctx, _session, path) => path) }))
+vi.mock('../src/store.js', () => ({ cwdOfSession: vi.fn(() => '/capture-evidence') }))
 let home: string, original: string | undefined
 const cwd = '/capture-evidence'
 beforeAll(async () => { original = process.env.DSH_HOME; home = mkdtempSync(join(tmpdir(), 'review-capture-')); process.env.DSH_HOME = home; await migrateActive(cwd, null, async () => null) })
@@ -14,7 +14,7 @@ afterAll(() => { closeArchiveDbs(); if (original === undefined) delete process.e
 /** @private @author ddj 2026年10月27号 @param turn Isolated source. @returns Actual collector adapter with public filesystem mock and isolated durable facts. */
 function fixture(turn: number) {
   const hooks = new Map<string, (...args: any[]) => any>(), path = cwd + '/file' + turn, disk = { text: 'head\nold\ntail' }
-  const fs = { processPath: (target: string) => target, readBytes: async () => Buffer.from(disk.text) }
+  const fs = { resolve: async (path: string) => path, processPath: (target: string) => target, readBytes: async () => Buffer.from(disk.text) }
   const ctx = { on: (name: string, callback: (...args: any[]) => any) => hooks.set(name, callback), get: () => fs }
   const recorder = installEvidence(ctx)
   const session = { id: 'capture' + turn }

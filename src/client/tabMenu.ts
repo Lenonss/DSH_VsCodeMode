@@ -48,6 +48,7 @@ export interface TabMenuState {
   canSplit?: boolean
   canFloat?: boolean
   canReturn?: boolean
+  forgeReady?: boolean
 }
 
 /** 一条页签菜单项（ContextMenu 的展示形状 + 动作 id）。 */
@@ -122,6 +123,10 @@ export function buildTabMenu(state: TabMenuState): TabMenuEntry[] {
       label: '添加到对话',
       disabled: !(hasSession && canAddToConversation),
     },
+    ...(state.forgeReady ? [
+      { id: 'forge-open', label: '打开 Forge' },
+      { id: 'forge-local', label: '查看本地变更（Forge）' },
+    ] : []),
     { id: 'close', label: '关闭', separator: true, ...(closeChord ? { hint: closeChord } : {}) },
     { id: 'close-others', label: '关闭其他', disabled: nothingToClose(closeOthers(tabs, path, active), tabs) },
     { id: 'close-right', label: '关闭右侧标签页', disabled: nothingToClose(closeRight(tabs, path, active), tabs) },

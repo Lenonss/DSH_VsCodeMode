@@ -3,7 +3,7 @@ import { reviewHandlers } from '../src/reviewRpc.js'
 import type { Ctx } from '../src/store.js'
 import { decideReview, keepOfficialAll, reviewDetail, reviewPage } from '../src/reviewDb.js'
 import { undoReview } from '../src/reviewUndo.js'
-import { keepAll, loadPage } from '../src/pending/store.js'
+import { applyDecide, keepAll, loadPage } from '../src/pending/store.js'
 import type { PendingItem, PendingPage } from '../src/shared/pendingReview.js'
 import type { KeepAllItem, KeepAllResult, ReviewDetail, ReviewItem, ReviewPage } from '../src/shared/review.js'
 vi.mock('../src/reviewUndo.js', () => ({ undoReview: vi.fn() }))
@@ -48,6 +48,32 @@ describe('official review workspace boundary', () => {
     const conflict = '当前文件已被后续编辑，版本与回滚证据冲突，未修改文件'
     vi.mocked(undoReview).mockRejectedValueOnce(new Error(conflict))
     expect(await handlers['edrv.review.decide']!({ ...request, decision: 'rejected' })).toEqual({ ok: false, error: conflict })
+  })
+
+  it.each(['read-only', 'workspace-write', 'danger-full-access'])('forwards the exact session policy for pending Undo: %s', async (mode) => {
+    const session = { id: 'policy-view', header: { cwd: '/policy-repo' } }
+    const policy = { mode, workspaceRoot: '/policy-repo', sessionId: session.id }
+    const resolve = vi.fn(() => policy)
+    const fs = { writeText: vi.fn() }
+    const ctx = { get: (name: string) => {
+      if (name === 'sessions') return { get: () => session }
+      if (name === 'sandboxPolicy') return { resolve }
+      if (name === 'fs') return fs
+      return undefined
+    } } as unknown as Ctx
+    vi.mocked(applyDecide).mockResolvedValueOnce({ ok: false, reason: 'guard-test' })
+    const handlers = reviewHandlers(ctx, new Map([['/policy-repo', new Map()]]))
+    const request = { sessionId: session.id, id: 'pending:/policy-repo/file.txt', seq: 1, revision: 0,
+      operationId: `policy-${mode}`, decision: 'rejected' as const, scope: 'file' as const }
+
+    expect(await handlers['edrv.review.decide']!(request)).toEqual({ ok: false, error: 'guard-test' })
+    expect(resolve).toHaveBeenLastCalledWith({ session })
+    const call = vi.mocked(applyDecide).mock.calls.at(-1)!
+    expect(call[0]).toBe(fs)
+    expect(call[1]).toBe('/policy-repo')
+    expect(call[2]).toMatchObject({ sessionId: session.id, id: '/policy-repo/file.txt', decision: 'rejected' })
+    expect(call[4]).toBe(policy)
+    expect(fs.writeText).not.toHaveBeenCalled()
   })
 
   it('crosses Host instances for reads and Keep: persisted sessions may accept, never undo or judge pending', async () => {

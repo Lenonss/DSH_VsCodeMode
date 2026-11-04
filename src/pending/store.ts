@@ -5,10 +5,9 @@
 import type { PendingDecide, PendingDetail, PendingHistoryMove, PendingItem, PendingPage } from '../shared/pendingReview.js'
 import type { ReviewBlockState } from '../shared/reviewRegions.js'
 import { reviewBlocks } from '../shared/reviewRegions.js'
-import { unlink } from 'node:fs/promises'
-import { resolve, sep } from 'node:path'
+import { addedFiles } from '../reviewDb.js'
 import type { PendingWrite } from './capture.js'
-import { readText } from './capture.js'
+import { readText, pendingGaps } from './capture.js'
 import type { ShellLike, VcsImportOptions } from './vcs.js'
 import { importVcsChanges } from './vcs.js'
 import type { DecideOutcome, WriteResult } from './decide.js'
@@ -18,7 +17,7 @@ import type { PendingEntry } from './kernel.js'
 import type { PendingFlags, StoredEntry } from './persist.js'
 import type { KeepRecord } from './persist.js'
 import {
-  dropEntry, earliestUndone, latestApplied, loadBlocks, loadEntries, pushHistory,
+  dropEntry, earliestUndone, latestApplied, loadBlocks, loadEntries, pendingDb, pushHistory,
   readOp, saveBlocks, saveDecisions, saveEntry, setHistoryState, writeOp,
 } from './persist.js'
 
@@ -122,18 +121,42 @@ export function itemOf(stored: StoredEntry, baselineEmpty = false): PendingItem 
 }
 
 /**
- * @author ddj 2026年10月29号
- * @description: 读一页待审条目，按更新时间升序；会话过滤走血缘集合。
+ * @private
+ * @author ddj 2026年11月04号
+ * @description 从条目来源判断创建基线；任何决定历史都阻止展示层复活已推进的旧基线。
  * @param cwd 工作区
- * @param sessionId 当前会话
- * @param wholeAdd 本次会话新建的文件身份集合，命中时基线置空
+ * @param stored 累计条目
+ * @param sourceAdds 单次读取内的来源创建集合缓存
+ * @returns 是否将展示基线置空
+ */
+function emptyBaseOf(cwd: string, stored: StoredEntry, sourceAdds = new Map<string, Set<string>>()): boolean {
+  if (isSettled(stored.entry)) return false
+  const decided = pendingDb(cwd).prepare('SELECT 1 FROM pending_history WHERE entry_id=? LIMIT 1').get(stored.entry.id)
+  if (decided) return false
+  for (const sourceId of stored.entry.sessionIds) {
+    let createdPaths = sourceAdds.get(sourceId)
+    if (!createdPaths) {
+      createdPaths = addedFiles(cwd, sourceId)
+      sourceAdds.set(sourceId, createdPaths)
+    }
+    if (createdPaths.has(stored.entry.id)) return true
+  }
+  return false
+}
+
+/**
+ * @author ddj 2026年10月29号
+ * @description: 读工作区全部待审条目，按更新时间升序；来源会话仅用于追溯。
+ * @param cwd 工作区
+ * @param _sessionId 兼容旧调用签名，不再用于可见性过滤
  * @returns 列表
  */
-export function loadPage(cwd: string, sessionId?: string, wholeAdd?: ReadonlySet<string>): PendingPage {
+export function loadPage(cwd: string, _sessionId?: string): PendingPage {
   const all = loadEntries(cwd)
-  const visible = sessionId ? all.filter((stored) => stored.entry.sessionIds.includes(sessionId)) : all
-  const items = visible.map((stored) => itemOf(stored, wholeAdd?.has(stored.entry.id) === true))
-  const gaps: string[] = []
+  const visible = all
+  const sourceAdds = new Map<string, Set<string>>()
+  const items = visible.map((stored) => itemOf(stored, emptyBaseOf(cwd, stored, sourceAdds)))
+  const gaps: string[] = pendingGaps(cwd)
   for (const stored of visible) {
     if (stored.flags.oversized) gaps.push(`${stored.entry.path}: 文本超出上限，仅保留标记`)
   }
@@ -151,9 +174,10 @@ export function loadPage(cwd: string, sessionId?: string, wholeAdd?: ReadonlySet
 export function loadDetail(cwd: string, id: string, baselineEmpty = false): PendingDetail | null {
   const stored = loadEntries(cwd).find((item) => item.entry.id === id)
   if (!stored) return null
-  const diff = diffOf(stored.entry, baselineEmpty)
+  const emptyBase = baselineEmpty || emptyBaseOf(cwd, stored)
+  const diff = diffOf(stored.entry, emptyBase)
   return {
-    item: itemOf(stored, baselineEmpty),
+    item: itemOf(stored, emptyBase),
     diff,
     blocks: blockStatesOf(stored.entry),
     capability: capabilityOf(stored.entry, stored.flags),
@@ -230,19 +254,19 @@ export function writerFor(
     } catch {
       return { ok: false, reason: 'resolve-failed' }
     }
-    const current = await readText(fs, target).catch(() => undefined)
-    if (current === undefined) return { ok: false, reason: 'read-failed' }
-    // 撤销「Revert 删除新建文件」时文件已不存在，只有显式允许重建才放行
-    const recreate = allowCreate && current === null
-    if (!recreate && current !== expected) return { ok: false, reason: 'diverged' }
-    const currentStat = await fs.stat(target, signal).catch(() => undefined)
+    const snapshot = await stableRead(fs, target, signal)
+    if (!snapshot.ok) return snapshot
+    // 缺失仅允许撤销/重做重建；原子 createIfAbsent 防止检查后被其他写入抢占。
+    const recreate = allowCreate && snapshot.content === null
+    if (!recreate && snapshot.content !== expected) return { ok: false, reason: 'diverged' }
+    if (snapshot.content === null && !recreate) return { ok: false, reason: 'missing' }
+    const intent = recreate
+      ? { kind: 'createIfAbsent' }
+      : { kind: 'replaceIfVersion', version: snapshot.version }
     try {
-      // 第五个实参是沙箱策略；缺它时 provider 会以 FS_SANDBOX_DENIED 拒绝写入
-      const written = await fs.writeText(
-        target, content ?? '', currentStat ? { kind: 'replaceIfVersion', version: currentStat.version } : undefined, signal, policy,
-      )
+      const written = await fs.writeText(target, content ?? '', intent, signal, policy)
       const readBack = await readText(fs, target)
-      if ((content ?? '') !== (readBack ?? '')) return { ok: false, reason: 'read-back-mismatch' }
+      if (content !== readBack) return { ok: false, reason: 'read-back-mismatch' }
       if (content === null && readBack !== null) return { ok: false, reason: 'delete-failed' }
       void written
       return { ok: true, content }
@@ -274,7 +298,7 @@ export async function applyDecide(
     blocks: beforeBlocks,
     now: Date.now(),
     write: (content) => {
-      if (content === null) return deleteTarget(fs, cwd, stored.entry.id, signal)
+      if (content === null) return deleteTarget(fs, cwd, stored.entry.id, stored.entry.newText, signal, policy)
       return writerFor(fs, cwd, stored.entry.id, stored.entry.newText, signal, policy)(content)
     },
   })
@@ -445,7 +469,7 @@ export async function undoDecide(
 async function writeBack(
   fs: any, cwd: string, stored: StoredEntry, target: HistoryState, signal?: AbortSignal, policy?: unknown,
 ): Promise<WriteResult> {
-  if (target.flags.missing) return deleteTarget(fs, cwd, stored.entry.id, signal)
+  if (target.flags.missing) return deleteTarget(fs, cwd, stored.entry.id, stored.entry.newText, signal, policy)
   const write = writerFor(fs, cwd, stored.entry.id, stored.entry.newText, signal, policy, true)
   return write(target.entry.newText)
 }
@@ -480,48 +504,62 @@ function parseSnapshot(text: string): HistorySnapshot | null {
   }
 }
 
+/** 稳定快照；缺失与读取失败严格区分，不允许省略现存文件的版本。 */
+type StableFile = { ok: true; content: string | null; version?: string } | { ok: false; reason: string }
+
 /**
- * @author ddj 2026年10月29号
- * @description: Revert 的删除分支：FileSystem 抽象没有删除能力，只有确认仍在工作区内才用宿主 unlink。
- * @param fs 文件系统
- * @param cwd 工作区
- * @param identity 目标身份
+ * @private
+ * @author ddj 2026年11月04号
+ * @description 版本—内容—版本读取，防止将新版本令牌与旧内容拼成写入依据。
+ * @param fs 文件提供方
+ * @param target 已解析目标
  * @param signal 取消信号
- * @returns 删除结果
+ * @returns 稳定快照或拒绝原因
  */
-async function deleteTarget(fs: any, cwd: string, identity: string, signal?: AbortSignal): Promise<WriteResult> {
-  let target: any
+async function stableRead(fs: any, target: any, signal?: AbortSignal): Promise<StableFile> {
   try {
-    target = await fs.resolve(identity, { cwd, signal })
-  } catch {
-    return { ok: false, reason: 'resolve-failed' }
-  }
-  const currentStat = await fs.stat(target, signal).catch(() => undefined)
-  if (!currentStat) return { ok: true, content: null }
-  const absolute = String(fs.processPath(target))
-  if (!insideWorkspace(cwd, absolute)) return { ok: false, reason: 'outside-workspace' }
-  try {
-    await unlink(absolute)
+    const before = await fs.stat(target, signal)
+    if (!before) return { ok: true, content: null }
+    if (before.type !== 'file' || !before.version) return { ok: false, reason: 'unguarded-file' }
+    const content = await readText(fs, target, signal)
+    if (content === null) return { ok: false, reason: 'revision-mismatch' }
+    const after = await fs.stat(target, signal)
+    if (after?.type !== 'file' || after.version !== before.version) return { ok: false, reason: 'revision-mismatch' }
+    return { ok: true, content, version: before.version }
   } catch (error) {
     return { ok: false, reason: reasonOf(error) }
   }
-  const after = await fs.stat(target, signal).catch(() => undefined)
-  return after ? { ok: false, reason: 'delete-failed' } : { ok: true, content: null }
 }
 
 /**
- * @author ddj 2026年10月29号
- * @description: 判断宿主路径是否位于工作区内，Windows 下按大小写不敏感比较。
- * @param cwd 工作区
- * @param absolute 目标绝对路径
- * @returns 是否在工作区内
+ * @private
+ * @author ddj 2026年11月04号
+ * @description 通过 provider 受控删除，保留会话策略与原子版本校验；旧 Host 不回落直删。
+ * @param fs 文件提供方
+ * @param cwd 工作目录
+ * @param identity 目标身份
+ * @param expected 应有内容
+ * @param signal 取消信号
+ * @param policy 会话沙箱策略
+ * @returns 删除结果；结果不明不提交决定
  */
-function insideWorkspace(cwd: string, absolute: string): boolean {
-  const root = resolve(cwd)
-  const candidate = resolve(absolute)
-  const normalize = (value: string) => (process.platform === 'win32' ? value.toLowerCase() : value)
-  const rootKey = normalize(root).endsWith(sep) ? normalize(root) : normalize(root) + sep
-  return normalize(candidate).startsWith(rootKey)
+async function deleteTarget(
+  fs: any, cwd: string, identity: string, expected: string, signal?: AbortSignal, policy?: unknown,
+): Promise<WriteResult> {
+  if (typeof fs.deleteFile !== 'function') return { ok: false, reason: 'delete-unavailable' }
+  try {
+    const target = await fs.resolve(identity, { cwd, signal })
+    const snapshot = await stableRead(fs, target, signal)
+    if (!snapshot.ok) return snapshot
+    if (snapshot.content === null) return { ok: true, content: null }
+    if (snapshot.content !== expected) return { ok: false, reason: 'diverged' }
+
+    await fs.deleteFile(target, { version: snapshot.version }, signal, policy)
+    const after = await fs.stat(target, signal)
+    return after ? { ok: false, reason: 'delete-failed' } : { ok: true, content: null }
+  } catch (error) {
+    return { ok: false, reason: reasonOf(error) }
+  }
 }
 
 /**

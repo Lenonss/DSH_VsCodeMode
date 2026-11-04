@@ -22,6 +22,9 @@ import { PerfSizeBadge } from './ui/PerfSizeBadge.js'
 import { ConversationDiffDock } from './ui/ConversationDiffDock.js'
 import { McpSettings } from './ui/McpSettings.js'
 import { mcpSessionState } from './mcpSessionState.js'
+import { forgeBridge } from './forgeBridge.js'
+import { lazyMenus } from './contextMenusOfficial.js'
+import { IconCodeOutline16 } from './ui/icons.js'
 import { McpSessionIcon, McpSessionDetail, type McpRowProps } from './ui/McpSessionStatus.js'
 import { PluginDetailSection } from './ui/PluginDetailSection.js'
 import { rpc } from './rpc.js'
@@ -442,6 +445,7 @@ export async function apply(ctx: any): Promise<void> {
     sidebarOpener: registry.get(SIDEBAR_PLUGIN) !== undefined,
     legacySidebar: sideService !== undefined, officialSidebar: officialService !== undefined,
     fileClaim: claimDisposer !== null, claimWanted: shouldClaimFiles(selected), selected,
+    officialMenus: Boolean(ctx.get('contextMenus')), forge: forge.available(),
   }, version)
 
   ctx.provide('fileOpeners', registry)
@@ -484,7 +488,10 @@ export async function apply(ctx: any): Promise<void> {
     return sidebar ? registry.register(sidebar) : undefined
   }, 'vscode-mode: sidebar file opener')
   // 官方侧边栏正文组件装配（页类型正文；兼作 file 认领转发失败时的兜底正文）
-  const officialRenderTab = (props: Record<string, unknown>) => React.createElement(OfficialSideTab, Object.assign({}, props, { schedule, addToConversation, sidebarPanels, outlineSources, fileMenuItems, fileOpeners: registry, sessions, readSessionScope: () => readSessionScope(ctx) }))
+  const forge = forgeBridge(ctx, () => readSessionScope(ctx).sessionId ?? undefined)
+  const menuBridge = lazyMenus(ctx)
+  if (menuBridge) ctx.effect(() => () => menuBridge.dispose(), 'vscode-mode: official menus')
+  const officialRenderTab = (props: Record<string, unknown>) => React.createElement(OfficialSideTab, Object.assign({}, props, { schedule, addToConversation, sidebarPanels, outlineSources, fileMenuItems, officialMenus: menuBridge, forge, fileOpeners: registry, sessions, readSessionScope: () => readSessionScope(ctx) }))
   /** 官方 file 地址认领同步：自动/VSCodeMode 档认领（转发进单一编辑器页签），其余交官方查看器。 */
   const syncFileClaim = (): void => {
     const official = officialService
@@ -669,7 +676,7 @@ export async function apply(ctx: any): Promise<void> {
       order: 5,
       label: () => t('slot.fileEditor'),
       inject: (sessionId: string) => ({ sessionId }),
-    }, (props: unknown) => React.createElement(EditorView, Object.assign({}, props, { layout: 'tab', sideHint: SIDEBAR_INSTALL_CMD, schedule, addToConversation, sidebarPanels, outlineSources, fileMenuItems, fileOpeners: registry, sessions })))
+    }, (props: unknown) => React.createElement(EditorView, Object.assign({}, props, { layout: 'tab', sideHint: SIDEBAR_INSTALL_CMD, schedule, addToConversation, sidebarPanels, outlineSources, fileMenuItems, officialMenus: menuBridge, forge, fileOpeners: registry, sessions })))
   }
 
   // 侧边栏三形态互斥切换：官方（DSH 0.1.5+）> better-sidebar（归档，仅旧版回退）> 中央页签。
@@ -748,7 +755,7 @@ export async function apply(ctx: any): Promise<void> {
       if (legacyDisposer !== null) { legacyDisposer(); legacyDisposer = null }
       sideDisposer = ctx.effect(() => installSideEditor({
         service: sideService as NonNullable<typeof sideService>,
-        renderTab: (props: Record<string, unknown>) => React.createElement(SideEditorTab, Object.assign({}, props, { schedule, addToConversation, sidebarPanels, outlineSources, fileMenuItems, fileOpeners: registry, sessions })),
+        renderTab: (props: Record<string, unknown>) => React.createElement(SideEditorTab, Object.assign({}, props, { schedule, addToConversation, sidebarPanels, outlineSources, fileMenuItems, officialMenus: menuBridge, forge, fileOpeners: registry, sessions })),
         activeSession: () => {
           const scope = readSessionScope(ctx)
           if (!scope.sessionId) return undefined
@@ -832,6 +839,14 @@ export async function apply(ctx: any): Promise<void> {
     // 服务运行时探测（自愈）：旧版 DSH 无该服务时按钮给出手动打开方式。
     getShortcuts: () => detectShortcuts(ctx),
   })))
+
+  registerSlotSafely(ctx, { name: 'settings.section.icon', id: 'vscode-mode', order: 30 },
+    (input: unknown) => {
+      const props = input as { size?: number; active?: boolean }
+      return React.createElement(IconCodeOutline16 as React.ComponentType<{ size?: number; className?: string }>, {
+        size: props.size ?? 16, className: props.active ? 'edrv-settings-active' : undefined,
+      })
+    })
 
   // 官方插件管理器详情页的只读状态段（DSH 0.2.1 新增扩展位）：非本插件页返回 null。
   // 该 slot 在旧版 DSH 不存在，slots.inject 会一直等待（不报错），故无需版本判断。

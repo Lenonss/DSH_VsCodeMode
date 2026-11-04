@@ -9,11 +9,9 @@ import { pathKeyFor } from './shared/pathKey.js'
 
 /**
  * 进程内"已被待审接管"的路径集合；旧写入口守卫只读它，绝不碰数据库。
- * 按会话登记：待审列表按会话可见，守卫必须同口径，否则会出现"拦得住、看不见"的死锁。
- * 无会话归属的登记落在 workspace 集合（兼容只有工作区+路径的旧用法）。
+ * 按工作区登记，来源会话仅作追溯；任一对话重建或注销都会更新同一份集合。
  */
-const coveredBySession = new Map<string, Set<string>>()
-const coveredWorkspace = new Set<string>()
+const coveredWorkspace = new Map<string, Map<string, string | null>>()
 
 /** 待审条目在面板列表里的 id 前缀，用于把请求路由回待审内核。 */
 export { PENDING_PREFIX } from './shared/pendingReview.js'
@@ -154,16 +152,18 @@ function coverKey(cwd: string, path: string): string {
 }
 
 /**
- * @author ddj 2026年11月3号
- * @description: 取某会话的覆盖集合；首次登记时就地建集合，避免调用方判空。
- * @param sessionId 会话 id
- * @returns 该会话的覆盖键集合
+ * @private
+ * @author ddj 2026年11月04号
+ * @description: 取工作区唯一接管集合；来源对话仅保留为诊断信息。
+ * @param cwd 工作区路径
+ * @returns 路径到登记来源的映射
  */
-function sessionCovers(sessionId: string): Set<string> {
-  const existing = coveredBySession.get(sessionId)
+function workspaceCovers(cwd: string): Map<string, string | null> {
+  const workspaceKey = pathKey(cwd)
+  const existing = coveredWorkspace.get(workspaceKey)
   if (existing) return existing
-  const created = new Set<string>()
-  coveredBySession.set(sessionId, created)
+  const created = new Map<string, string | null>()
+  coveredWorkspace.set(workspaceKey, created)
   return created
 }
 
@@ -178,25 +178,25 @@ function sessionCovers(sessionId: string): Set<string> {
  */
 export function trackPendingCover(cwd: string, path: string, covered: boolean, sessionId?: string): void {
   const key = coverKey(cwd, path)
-  const target = sessionId ? sessionCovers(sessionId) : coveredWorkspace
-  if (covered) target.add(key)
+  const target = workspaceCovers(cwd)
+  if (covered) target.set(key, sessionId ?? null)
   else target.delete(key)
 }
 
 /**
  * @author ddj 2026年11月3号
- * @description: 用一次列表结果整体重建某会话的接管集合：条目被移除或结案后自动失效，不再残留登记。
+ * @description: 用完整列表重建工作区接管集合，清除任何对话留下的过期登记。
  * @param cwd 工作区
  * @param sessionId 会话 id
  * @param paths 本会话当前可见的待审条目路径
  * @returns 无
  */
 export function setPendingCovers(cwd: string, sessionId: string, paths: readonly string[]): void {
-  const next = new Set<string>()
+  const next = new Map<string, string | null>()
   for (const path of paths) {
-    if (path) next.add(coverKey(cwd, path))
+    if (path) next.set(coverKey(cwd, path), sessionId)
   }
-  coveredBySession.set(sessionId, next)
+  coveredWorkspace.set(pathKey(cwd), next)
 }
 
 /**
@@ -208,16 +208,13 @@ export function setPendingCovers(cwd: string, sessionId: string, paths: readonly
  */
 export function pendingCoverOwner(cwd: string, path: string): string | null {
   const key = coverKey(cwd, path)
-  for (const [sessionId, set] of coveredBySession) {
-    if (set.has(key)) return sessionId
-  }
-  return null
+  return coveredWorkspace.get(pathKey(cwd))?.get(key) ?? null
 }
 
 /**
  * @author ddj 2026年10月29号
  * @description: 判断某路径是否已由待审投影接管；仅读进程内集合，不产生任何 IO。
- * 给 sessionId 时按该会话的可见范围判定（列表看不到的接管不拦旧入口），缺省按全工作区并集判定。
+ * 所有对话按同一工作区集合判定，兼容参数不影响可见范围。
  * @param cwd 工作区
  * @param path 请求路径
  * @param sessionId 会话 id；缺省按并集判定
@@ -225,12 +222,7 @@ export function pendingCoverOwner(cwd: string, path: string): string | null {
  */
 export function pendingCovers(cwd: string, path: string, sessionId?: string): boolean {
   const key = coverKey(cwd, path)
-  if (coveredWorkspace.has(key)) return true
-  if (sessionId) return coveredBySession.get(sessionId)?.has(key) === true
-  for (const set of coveredBySession.values()) {
-    if (set.has(key)) return true
-  }
-  return false
+  return coveredWorkspace.get(pathKey(cwd))?.has(key) === true
 }
 
 /**

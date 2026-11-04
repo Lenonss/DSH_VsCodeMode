@@ -1,7 +1,6 @@
 /**
- * 旧写入口守卫（legacyBlocked）按会话作用域拦截测试。
- * 待审可见性按会话过滤，守卫必须同口径：本会话看得见的接管要拦，别的会话的接管不能拦，
- * 否则会出现"在文件里点 Keep 被拒、面板里却看不到对应待审条目"的死锁。
+ * 旧写入口守卫（legacyBlocked）按工作区共享作用域拦截测试。
+ * 待审列表跨对话共享，其他对话的旧入口同样不能绕过累计基线。
  * @author ddj 2026年11月3号
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -121,18 +120,17 @@ describe('旧写入口守卫', () => {
     expect(fs.writeText).not.toHaveBeenCalled()
   })
 
-  it('接管只属于别的会话时放行：拦截口径与本会话可见性一致', async () => {
+  it('其他会话登记的同工作区接管也必须拦截', async () => {
     const fs = fakeFs({ [CWD + '/a.ts']: 'b' })
     const registry = new Map([[CWD, bucketOf([rec({ callId: 'c1' })])]])
     const handlers = buildHandlers(fakeCtx(fs), registry)
-    // 该文件由 s2 的待审条目接管；s1 的列表里看不到它，因此 s1 的旧入口不能拦
+    // s1 与 s2 看到同一份待审投影，不允许跨对话绕过接管。
     setPendingCovers(CWD, 's2', [CWD + '/a.ts'])
 
     const res = await handlers['edrv.decideBatch']({ sessionId: 's1', items: [{ callId: 'c1', decision: 'accepted' }] })
 
-    expect(res).toMatchObject({ ok: true })
-    if (!res.ok) return
-    expect(res.results[0]).toMatchObject({ ok: true })
-    expect(registry.get(CWD)!.get('c1')!.decisions.call).toBe('accepted')
+    expect(res).toMatchObject({ ok: false, error: expect.stringContaining('待审累计基线') })
+    expect(fs.writeText).not.toHaveBeenCalled()
+    expect(registry.get(CWD)!.get('c1')!.decisions.call).toBe('pending')
   })
 })

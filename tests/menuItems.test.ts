@@ -49,6 +49,8 @@ describe('createDefaultFileMenuItems', () => {
       'open-with',
       'new-file',
       'new-folder',
+      'forge-open',
+      'forge-local',
       'reveal-in-explorer',
       'add-to-conversation',
       'find-in-folder',

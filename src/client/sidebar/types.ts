@@ -11,6 +11,7 @@ import type { TreeMenuRegistry } from './contextMenu.js'
 /** 面板可用的共享上下文（由 SidebarView 从 EditorView 注入，面板不直碰其内部）。 */
 export interface SidebarCtx {
   sessionId?: string
+  visible?: boolean
   /** 当前会话工作区 cwd（来自 sessions 快照；规则面板项目 Tab 自动匹配用）。 */
   cwd?: string | null
   /** 状态作用域键（工作区优先，无 cwd 回退会话；面板持久化统一走它，scopeStore 产出）。 */
@@ -31,6 +32,8 @@ export interface SidebarCtx {
   outlineSources?: OutlineSourceRegistry
   /** 文件右键菜单项注册表（公开 provide 为 edrvFileContextMenuItems；文件管理面板构建菜单用）。 */
   fileMenuItems?: TreeMenuRegistry
+  officialMenus?: import('../contextMenusOfficial.js').OfficialMenuBridge
+  forge?: import('../forgeBridge.js').ForgeBridge
   /** 「添加到对话」动作集（文件/文件夹引用注入对话输入框；缺省时菜单项降级提示）。 */
   addToConversation?: AddToConversation
   /** SVN 能力状态（未加载/未检出为 null；SVN 菜单项显隐判定）。 */

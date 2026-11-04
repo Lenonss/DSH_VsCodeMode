@@ -84,11 +84,17 @@ function rowView(props) {
   function select() { onSelect(path, isDir) }
   /** @private @author ddj 2026年10月10号 @param event Context trigger. */
   function menu(event) { onContext(path, type, event) }
+  /** @private @author ddj 2026年11月04号 @param event Keyboard context trigger anchored to the focused row. */
+  function menuKey(event) {
+    if (event.key !== 'ContextMenu' && !(event.shiftKey && event.key === 'F10')) return
+    const rect = event.currentTarget.getBoundingClientRect()
+    onContext(path, type, { preventDefault: () => event.preventDefault(), stopPropagation: () => event.stopPropagation(), clientX: rect.left, clientY: rect.bottom })
+  }
   return React.createElement('div', {
     className: 'edrv-tree-row' + (active ? ' edrv-tree-active' : '') + (context ? ' edrv-tree-context' : '')
       + (reveal ? ' edrv-tree-reveal' : '') + (mark?.stale ? ' edrv-tree-stale' : ''),
     title: path + (mark?.stale ? '；SVN 状态陈旧，等待确认' : ''), 'data-edrv-path': path,
-    style: { paddingLeft: 6 + depth * 14 }, onClick: select, onContextMenu: menu,
+    style: { paddingLeft: 6 + depth * 14 }, tabIndex: 0, onClick: select, onContextMenu: menu, onKeyDown: menuKey,
   },
     React.createElement('span', { className: 'edrv-tree-chev' }, isDir ? (isOpen ? '▾' : '▸') : ''),
     React.createElement('span', { className: 'edrv-tree-iconbox' }, rowIconEl({ name }, isDir, isOpen), svnOverlayEl(viewOverlayOf(mark), remote)),
@@ -480,6 +486,25 @@ export function FileExplorer(props) {
   /** @private @author ddj 2026年10月22号 Close stale path menus instead of rebinding recycled rows. */
   function closeLostMenu() { if (menu && !menuValid) setMenu(null) }
   React.useEffect(closeLostMenu, [menu, menuValid])
+  const liveMenu = React.useRef({ scope, treeRows, sessionId: ctx?.sessionId, alive: true })
+  const openingValid = React.useRef(null)
+  liveMenu.current = { scope, treeRows, sessionId: ctx?.sessionId, alive: liveMenu.current.alive }
+  React.useEffect(() => {
+    liveMenu.current.alive = ctx?.visible !== false
+    return () => { liveMenu.current.alive = false; if (openingValid.current) ctx?.officialMenus?.invalidate(openingValid.current) }
+  }, [scope, ctx?.sessionId, ctx?.officialMenus, ctx?.visible])
+  React.useEffect(() => {
+    if (!menuValid || !ctx?.officialMenus || !ctx.sessionId) return
+    const target = { ...menu.target }
+    const sessionId = ctx.sessionId
+    const valid = () => liveMenu.current.alive && liveMenu.current.sessionId === sessionId && liveMenu.current.scope === menu.scope && (target.path === '' || liveMenu.current.treeRows.some((row) => row.e?.path === target.path))
+    openingValid.current = valid
+    const items = buildTreeMenu(ctx.fileMenuItems, target, ctx).map((item) => ({
+      id: item.id, label: item.label, disabled: item.disabled, danger: item.danger, separator: item.separator,
+      run: () => item.run(target, ctx),
+    }))
+    if (ctx.officialMenus.open('resource', ctx.sessionId, target.path, { x: menu.x, y: menu.y }, items, valid)) setMenu(null)
+  }, [menu, menuValid, ctx?.officialMenus])
   // 当前右键目标的可视菜单项（构建时过滤/排序，registry 变化下次打开生效）。
   const menuEntries = menuValid
     ? buildTreeMenu(ctx?.fileMenuItems, menu.target, ctx).map((item) => ({

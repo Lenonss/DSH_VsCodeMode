@@ -33,7 +33,7 @@ describe('OfficialSideTab actual cleanup lifecycle', () => {
     vi.stubGlobal('window', { dispatchEvent })
     OfficialSideTab({ sessionId: 's', useTabInfo: () => ({ tab: { navigation: { revision: 1, params: { openPath: 'plans/a.md', preview: true, line: 10 } } } }) })
     effects[1]()
-    expect(dispatchEvent.mock.calls[0][0].detail).toEqual({ path: 'plans/a.md', focusDiff: false, line: 10, preview: true })
+    expect(dispatchEvent.mock.calls[0][0].detail).toMatchObject({ sessionId: 's', path: 'plans/a.md', focusDiff: false, line: 10, preview: true })
   })
 
   it('clears activity when the same session closes the tab', () => {

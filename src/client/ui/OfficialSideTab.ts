@@ -11,7 +11,7 @@ import React from 'react'
 import { pickSessionScope } from '../sessionScope.js'
 import { EditorView } from './EditorView.js'
 import { setSideEditorMounted } from '../sidebarBridge.js'
-import { editorMountEpoch, markEditorActive, markEditorMounted, parseOfficialFileAddress, resolveNavLine, resolveNavOpen } from '../officialSidebar.js'
+import { editorMountEpoch, markEditorActive, markEditorMounted, parseOfficialFileAddress, resolveNavLine, resolveNavColumn, resolveNavOpen } from '../officialSidebar.js'
 
 /**
  * 官方侧边栏 Tab 正文组件（keyed slot sidebar.right.pane.tab 装配）。
@@ -22,10 +22,14 @@ export function OfficialSideTab(props) {
   const sessionId = props?.sessionId
   const useTabInfo = props?.useTabInfo
   let navigation
+  let tab
+  let visible = true
   // useTabInfo 是 slot 框架按组件实例生成的 hook，须在组件顶层无条件调用
   if (typeof useTabInfo === 'function') {
     try {
-      navigation = useTabInfo()?.tab?.navigation
+      tab = useTabInfo()?.tab
+      navigation = tab?.navigation
+      visible = tab?.visible !== false
     } catch {
       navigation = undefined
     }
@@ -67,16 +71,16 @@ export function OfficialSideTab(props) {
     // file 资源 Tab：地址即文件（解码出真实路径，透传 params.line 行号定位）
     const fileHit = parseOfficialFileAddress(navigation?.address)
     if (fileHit) {
-      const line = navigation?.params?.line
+      const line = resolveNavLine(navigation?.params)
       window.dispatchEvent(new CustomEvent('edrv:open-editor', {
-        detail: { path: fileHit.path, line: typeof line === 'number' ? line : undefined, preview: navigation?.params?.preview },
+        detail: { sessionId, ownerId: tab?.id, path: fileHit.path, line, column: resolveNavColumn(navigation?.params), preview: navigation?.params?.preview },
       }))
       return
     }
     // 页类型 Tab：params 携带打开请求（line = 行引用/工具行跳转的行号定位）
     const request = resolveNavOpen(navigation?.params)
     window.dispatchEvent(new CustomEvent('edrv:open-editor', {
-      detail: { path: request.path, focusDiff: request.focusDiff, line: resolveNavLine(navigation?.params), preview: navigation?.params?.preview },
+      detail: { sessionId, ownerId: tab?.id, path: request.path, focusDiff: request.focusDiff, line: resolveNavLine(navigation?.params), column: resolveNavColumn(navigation?.params), preview: navigation?.params?.preview },
     }))
   })
 
@@ -84,11 +88,15 @@ export function OfficialSideTab(props) {
     key: sessionId,
     sessionId,
     layout: 'side',
+    visible,
+    ownerId: tab?.id,
     schedule: props?.schedule,
     addToConversation: props?.addToConversation,
     sidebarPanels: props?.sidebarPanels,
     outlineSources: props?.outlineSources,
     fileMenuItems: props?.fileMenuItems,
+    officialMenus: props?.officialMenus,
+    forge: props?.forge,
     fileOpeners: props?.fileOpeners,
     sessions: props?.sessions,
   })

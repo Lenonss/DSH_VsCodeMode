@@ -581,6 +581,12 @@ function svnMenuItems(): TreeMenuItem[] {
 export function createDefaultFileMenuItems(): TreeMenuItem[] {
   return [
     ...openGroupItems(),
+    { id: 'forge-open', label: '打开 Forge', order: 6, group: GROUP_OPEN,
+      visible: (_target, ctx) => ctx.forge?.available() === true,
+      run: (_target, ctx) => { if (ctx.sessionId) ctx.forge?.open(ctx.sessionId) } },
+    { id: 'forge-local', label: '查看本地变更（Forge）', order: 7, group: GROUP_OPEN,
+      visible: (_target, ctx) => ctx.forge?.available() === true,
+      run: (_target, ctx) => { if (ctx.sessionId) ctx.forge?.open(ctx.sessionId, true) } },
     ...revealGroupItems(),
     ...refGroupItems(),
     ...clipGroupItems(),

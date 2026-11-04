@@ -3,7 +3,8 @@ import { rawReviewFile, evidenceBlocks } from './reviewEvidence.js'
 import type { RawReviewFile } from './reviewEvidence.js'
 import type { ReviewSnapshot } from './shared/review.js'
 import { reviewDb } from './reviewDb.js'
-import { resolveTarget } from './store.js'
+import { cwdOfSession } from './store.js'
+import { toolTargets } from './toolTargets.js'
 import type { Ctx } from './store.js'
 import { log } from './log.js'
 
@@ -18,12 +19,19 @@ export function installEvidence(ctx: Ctx): EvidenceCapture {
   const chains = new Map<string, Map<string, ByteChain>>()
   const staged = new Map<string, Map<string, ByteChain>>()
   let stopped = false
+  const disposed = new Set<string>()
   ctx.on('tools/execute', aroundTool)
   ctx.on('session/event', onEvent)
   ctx.on('session/disposed', onDisposed)
 
   /** @private @author ddj 2026年10月27号 @param session Disposed owner. Drops optional in-memory evidence, never persisted official facts. */
-  function onDisposed(session: { id: string }): void { chains.delete(session.id) }
+  function onDisposed(session: { id: string }): void {
+    disposed.add(session.id)
+    chains.delete(session.id)
+    for (const key of staged.keys()) {
+      if ((JSON.parse(key) as unknown[])[0] === session.id) staged.delete(key)
+    }
+  }
 
   /** @private @author ddj 2026年10月27号 @returns Current bounded capture footprint, excluding transient filesystem reads. */
   function footprint(): number {
@@ -39,32 +47,65 @@ export function installEvidence(ctx: Ctx): EvidenceCapture {
   /** @private @author ddj 2026年10月27号 @param exec Allowed tool dispatch. @param next Original dispatch. @returns Original result unchanged, regardless of capture failure. */
   async function aroundTool(exec: any, next: () => Promise<any>): Promise<any> {
     const session = exec.agent?.session
-    const path = exec.arguments?.file_path
-    if (stopped || !session?.id || !['edit', 'write'].includes(exec.name) || typeof path !== 'string') return next()
-    let fs: any
-    let chain: ByteChain | undefined
-    let target: any
+    if (stopped || !session?.id) return next()
+    const captures: Array<{ fs: any; target: any; chain: ByteChain }> = []
     try {
-      if ((chains.size >= 16 && !chains.has(session.id)) || footprint() >= 32 * 1024 * 1024) return next()
-      fs = ctx.get('fs')
-      target = await resolveTarget(ctx, session, path)
-      const identity = fs.processPath(target)
-      const before = await readRaw(fs, target, exec.signal)
-      let files = chains.get(session.id)
-      if (!files) { files = new Map(); chains.set(session.id, files) }
-      if (files.size >= 64 && !files.has(identity)) return next()
-      chain = files.get(identity)
-      if (!chain) { chain = { before, after: before, busy: false, invalid: false }; files.set(identity, chain) }
-      if (chain.busy || chain.after.hash !== before.hash) chain.invalid = true
-      chain.busy = true
-    } catch { /* No trustworthy read means no undo evidence, not a failed user tool. */ }
+      const cwd = cwdOfSession(ctx, session)
+      const fs = ctx.get('fs')
+      const paths = await toolTargets(exec)
+      for (const path of paths) {
+        try {
+          const capture = await prepareRaw(fs, session.id, cwd ?? undefined, path, exec.signal)
+          if (capture) captures.push(capture)
+        } catch { /* A failed target never prevents independent targets. */ }
+      }
+    } catch { /* Optional parser absence must not fail the original tool. */ }
     try { return await next() }
     finally {
-      if (chain) {
-        try { chain.after = await readRaw(fs, target, exec.signal) } catch { chain.invalid = true }
-        chain.busy = false
+      for (const capture of captures) {
+        try {
+          const after = await readRaw(capture.fs, capture.target, exec.signal)
+          if (!stopped && !disposed.has(session.id)) {
+            capture.chain.after = after
+            if (footprint() > 32 * 1024 * 1024) {
+              capture.chain.invalid = true
+              capture.chain.before = rawReviewFile(null); capture.chain.after = rawReviewFile(null)
+            }
+          }
+        } catch { capture.chain.invalid = true }
+        capture.chain.busy = false
       }
     }
+  }
+
+  /** @private @author ddj 2026年11月04号 @param sessionId Frozen owner. @param cwd Frozen workspace. @param path Patch target. @param signal Tool cancellation. @returns Reserved raw capture or no evidence. */
+  async function prepareRaw(fs: any, sessionId: string, cwd: string | undefined, path: string, signal?: AbortSignal) {
+    if (stopped || disposed.has(sessionId) || !cwd || (chains.size >= 16 && !chains.has(sessionId)) || footprint() >= 32 * 1024 * 1024) return null
+    const target = await fs.resolve(path, { cwd })
+    if (stopped || disposed.has(sessionId)) return null
+    const identity = fs.processPath(target)
+    let files = chains.get(sessionId)
+    if (!files) { files = new Map(); chains.set(sessionId, files) }
+    if (files.size >= 64 && !files.has(identity)) return null
+    let chain = files.get(identity)
+    if (chain?.busy) { chain.invalid = true; return null }
+    const empty = rawReviewFile(null)
+    if (!chain) {
+      chain = { before: empty, after: empty, busy: true, invalid: false }
+      files.set(identity, chain)
+      try { chain.before = await readRaw(fs, target, signal); chain.after = chain.before }
+      catch (error) { chain.invalid = true; chain.busy = false; throw error }
+    } else {
+      chain.busy = true
+      try {
+        const before = await readRaw(fs, target, signal)
+        if (chain.after.hash !== before.hash) chain.invalid = true
+      } catch (error) { chain.invalid = true; chain.busy = false; throw error }
+    }
+    if (stopped || disposed.has(sessionId) || footprint() > 32 * 1024 * 1024) {
+      chain.invalid = true; chain.busy = false; files.delete(identity); return null
+    }
+    return { fs, target, chain }
   }
 
   /** @private @author ddj 2026年10月27号 @param session Source session. @param event Published official turn. Freezes the chain before the next turn can mutate it. */

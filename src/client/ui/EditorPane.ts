@@ -43,7 +43,15 @@ export function EditorPane(props: PaneProps): React.ReactElement {
     /** @private @author ddj 2026年10月14号 @param event Close press. Never start a drag. */
     function stop(event: React.PointerEvent): void { event.stopPropagation() }
     /** @private @author ddj 2026年10月14号 @param event Keyboard activation. */
-    function key(event: React.KeyboardEvent): void { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); props.onSelect(group.id, tab.path) } }
+    function key(event: React.KeyboardEvent): void {
+      if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) {
+        event.preventDefault(); event.stopPropagation()
+        const rect = event.currentTarget.getBoundingClientRect()
+        props.onMenu(tab.path, { clientX: rect.left, clientY: rect.bottom } as React.MouseEvent)
+        return
+      }
+      if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); props.onSelect(group.id, tab.path) }
+    }
     return React.createElement('div', {
       key: tab.path, 'data-edrv-tab-path': tab.path, role: 'tab', tabIndex: 0, 'aria-selected': selected,
       className: 'edrv-tab' + (selected ? ' edrv-tab-active' : '') + (tab.pinned ? ' edrv-tab-pinned' : ''),

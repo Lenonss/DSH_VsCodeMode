@@ -32,6 +32,8 @@ const docVersions = new Map()
 let statusCache = { servers: [], at: 0 }
 let progressListeners = new Set()
 let ready = false
+let statusRequest = null
+let statusEpoch = 0
 
 /** 会话 id 变更通知（EditorView 持有权威 sessionId，经窗口事件回填）。 */
 const SESSION_EVENT = 'edrv:lsp-session'
@@ -54,6 +56,9 @@ export function setLspSession(id) {
   syncTimers.clear()
   docVersions.clear()
   sessionId = id
+  statusEpoch++
+  statusCache = { servers: [], at: 0 }
+  ready = false
   void refreshStatus()
 }
 
@@ -308,15 +313,28 @@ export async function fetchSemanticTokens(path, text) {
   return res.tokens
 }
 
-/** 拉取服务器状态（带 5s 缓存）。 */
+/** @public @author ddj 2026年11月04号 @param force Bypass cached data, not the in-flight guard. @returns Current-session server status; stale responses never publish. */
 export async function refreshStatus(force = false) {
+  if (statusRequest) {
+    const pending = statusRequest
+    await pending.promise
+    if (pending.epoch !== statusEpoch) return refreshStatus(force)
+    return statusCache.servers
+  }
+  if (typeof document !== 'undefined' && document.hidden) return statusCache.servers
   if (!force && Date.now() - statusCache.at < 1500) return statusCache.servers
-  const res = await rpc('edrv.lsp.status', { sessionId }).catch(() => null)
-  const servers = res && res.ok && Array.isArray(res.servers) ? res.servers : []
-  statusCache = { servers, at: Date.now() }
-  ready = true
-  publishProgress()
-  return servers
+  const epoch = statusEpoch, owner = sessionId
+  const request = { epoch, promise: rpc('edrv.lsp.status', { sessionId: owner }).catch(() => null) }
+  statusRequest = request
+  try {
+    const res = await request.promise
+    if (epoch !== statusEpoch || owner !== sessionId) return statusCache.servers
+    const servers = res && res.ok && Array.isArray(res.servers) ? res.servers : []
+    statusCache = { servers, at: Date.now() }
+    ready = true
+    publishProgress()
+    return servers
+  } finally { if (statusRequest === request) statusRequest = null }
 }
 
 export function lspReady() {

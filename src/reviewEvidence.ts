@@ -16,7 +16,7 @@ export function rawReviewFile(bytes: Uint8Array | null): RawReviewFile {
 }
 
 /** @private @author ddj 2026年10月27号 @param file Persisted raw image. @returns UTF-8 storage text preserving BOM and terminators. @throws Binary, invalid encoding or corrupt hash. */
-function rawText(file: RawReviewFile): string {
+export function rawText(file: RawReviewFile): string {
   const bytes = Buffer.from(file.bytes, 'base64')
   if (bytes.length > 8 * 1024 * 1024 || bytes.includes(0)) throw new Error('回滚证据不是受支持的 UTF-8 文本')
   if (rawReviewFile(file.present ? bytes : null).hash !== file.hash) throw new Error('回滚证据哈希不匹配')

@@ -50,13 +50,27 @@ afterEach(() => {
 })
 
 describe('recordsFeed 共享订阅', () => {
+  it('隐藏30秒不发自动请求，恢复仅拉一次', async () => {
+    const doc = new EventTarget() as EventTarget & { hidden: boolean }
+    doc.hidden = true
+    vi.stubGlobal('document', doc)
+    const off = feed.subscribeRecords('hidden-case', () => {})
+    await vi.advanceTimersByTimeAsync(30000)
+    expect(rpcMock).not.toHaveBeenCalled()
+    doc.hidden = false
+    doc.dispatchEvent(new Event('visibilitychange'))
+    await flush()
+    expect(rpcMock).toHaveBeenCalledTimes(1)
+    off()
+  })
+
   it('首个订阅者立即拉取一次，并把记录回调出去', async () => {
     const seen: RecordView[][] = []
     const off = feed.subscribeRecords('s1', (list) => seen.push(list))
     await flush()
 
     expect(rpcMock).toHaveBeenCalledTimes(1)
-    expect(rpcMock).toHaveBeenCalledWith('edrv.list', { sessionId: 's1' })
+    expect(rpcMock).toHaveBeenCalledWith('edrv.list', { sessionId: 's1' }, expect.any(AbortSignal))
     expect(seen).toHaveLength(1)
     expect(seen[0][0].callId).toBe('c1')
     off()

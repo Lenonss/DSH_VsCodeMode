@@ -1,12 +1,14 @@
 /** 待审投影真实文件往返：采集→折叠→Keep 零写盘→Revert 写回/删除。 @author ddj 2026年10月29号 */
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
-import { readFile, stat, writeFile } from 'node:fs/promises'
+import { readFile, stat, unlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { closeArchiveDbs, migrateActive } from '../src/archiveDb.js'
 import { archiveDbFile } from '../src/paths.js'
-import { applyDecide, keepAll, loadDetail, loadPage, recordWrite, removeEntry, undoDecide } from '../src/pending/store.js'
+import { saveSnapshot } from '../src/reviewDb.js'
+import { pendingHandlers } from '../src/pendingRpc.js'
+import { applyDecide, keepAll, loadDetail, loadPage, recordWrite, removeEntry, undoDecide, writerFor } from '../src/pending/store.js'
 import { PENDING_PREFIX, mergedPage, pendingCoverOwner, pendingCovers, pendingDetailOf, pendingRawId, setPendingCovers, trackPendingCover } from '../src/pendingCompat.js'
 
 let home = ''
@@ -42,6 +44,7 @@ function realFs() {
   return {
     processPath: (path: string) => path,
     resolve: async (path: string) => path,
+    readBytes: async (path: string) => readFile(path),
     readText: async (path: string) => readFile(path, 'utf8'),
     stat: async (path: string) => {
       const version = await versionOf(path)
@@ -52,7 +55,11 @@ function realFs() {
         const version = await versionOf(path)
         if (version !== expected.version) throw Object.assign(new Error('stale'), { code: 'FS_STALE' })
       }
-      await writeFile(path, text, 'utf8')
+      await writeFile(path, text, { encoding: 'utf8', flag: expected?.kind === 'createIfAbsent' ? 'wx' : 'w' })
+    }),
+    deleteFile: vi.fn(async (path: string, expected?: { version?: string }) => {
+      if (await versionOf(path) !== expected?.version) throw Object.assign(new Error('stale'), { code: 'FS_STALE' })
+      await unlink(path)
     }),
   }
 }
@@ -224,6 +231,29 @@ describe('待审投影真实往返', () => {
     expect(detail!.item.added).toBe(4)
   })
 
+  it('创建来源而非查看者决定全量新增，Keep 后不复活空基线', async () => {
+    const file = join(workspace, 'source-created.ts')
+    await writeFile(file, 'A\nB\nC')
+    recordWrite(write(file, 'A\nB', 'A\nB\nC', 1))
+    saveSnapshot(workspace, { sourceKind: 'official', sessionId: 's1', turn: 1, seq: 1,
+      capturedAt: '2026-11-04T00:00:00Z',
+      summary: { cwd: workspace, turn: 1, total: 1, added: 3, deleted: 0,
+        files: [{ path: file, display: file, added: 3, deleted: 0 }] },
+      files: [{ identity: file, diff: { kind: 'text', path: file, display: file, before: false, after: true, coarse: false,
+        hunks: [{ oldStart: 0, oldLines: 0, newStart: 1, newLines: 3, lines: ['+A', '+B', '+C'] }] } }] })
+    expect(loadPage(workspace, 's2').items[0]?.added).toBe(3)
+    expect(loadPage(workspace, 's2')).toEqual(loadPage(workspace, 's1'))
+    expect(loadDetail(workspace, file)?.item.added).toBe(3)
+
+    const item = loadPage(workspace, 's2').items[0]!
+    await applyDecide(realFs(), workspace, { sessionId: 's2', id: file, revision: item.revision,
+      operationId: 'source-keep', decision: 'accepted', scope: 'file' })
+    await writeFile(file, 'A\nB\nC\nD')
+    recordWrite({ ...write(file, 'A\nB\nC', 'A\nB\nC\nD', 2), sessionId: 's2' })
+    expect(loadPage(workspace, 's1').items[0]?.added).toBe(1)
+    expect(loadDetail(workspace, file)?.item.added).toBe(1)
+  })
+
   it('旧写入口守卫：登记后拒绝、注销后放行，且不读数据库', () => {
     const cwd = join(workspace, 'w')
     const covered = join(cwd, 'guard.ts')
@@ -235,20 +265,21 @@ describe('待审投影真实往返', () => {
     expect(pendingCovers(cwd, covered)).toBe(false)
   })
 
-  it('旧写入口守卫按会话隔离：登记给会话 A 不拦会话 B', () => {
+  it('旧写入口守卫按工作区共享：登记给会话 A 也拦会话 B', () => {
     const cwd = join(workspace, 'w2')
     const covered = join(cwd, 'scope.ts')
     trackPendingCover(cwd, covered, true, 'sA')
-    // 会话 A 看得见这条待审 → 旧入口必须拦；会话 B 列表里没有它 → 不能拦，否则拦得住却看不见
+    // 同工作区共享待审列表，任何对话的旧入口都不能绕过累计基线。
     expect(pendingCovers(cwd, covered, 'sA')).toBe(true)
-    expect(pendingCovers(cwd, covered, 'sB')).toBe(false)
+    expect(pendingCovers(cwd, covered, 'sB')).toBe(true)
+    expect(pendingCovers(join(cwd, 'other'), covered, 'sB')).toBe(false)
     // 不给会话时按全工作区并集判定，保持旧调用点语义
     expect(pendingCovers(cwd, covered)).toBe(true)
     trackPendingCover(cwd, covered, false, 'sA')
     expect(pendingCovers(cwd, covered, 'sA')).toBe(false)
   })
 
-  it('整集重建：setPendingCovers 覆盖该会话旧登记，其他会话不受影响', () => {
+  it('整集重建清除工作区旧登记，不残留其他会话副本', () => {
     const cwd = join(workspace, 'w3')
     const keep = join(cwd, 'keep.ts')
     const drop = join(cwd, 'drop.ts')
@@ -259,8 +290,44 @@ describe('待审投影真实往返', () => {
     expect(pendingCovers(cwd, keep, 'sA')).toBe(true)
     // 条目被移除/结案后登记必须自动失效，不能把旧入口永久封死
     expect(pendingCovers(cwd, drop, 'sA')).toBe(false)
-    expect(pendingCovers(cwd, drop, 'sB')).toBe(true)
+    expect(pendingCovers(cwd, drop, 'sB')).toBe(false)
     expect(pendingCoverOwner(cwd, keep)).toBe('sA')
+  })
+
+  it('待审 RPC 通过查看者工作区共享列表和详情，不借用来源会话权限', async () => {
+    const file = join(workspace, 'rpc-shared.ts')
+    recordWrite(write(file, 'A', 'B', 1))
+    const other = join(workspace, 'rpc-other')
+    await migrateActive(other, null, async () => null)
+    const sessions = new Map(['s1', 's2', 's3'].map((id) => [id, { id, header: { cwd: id === 's3' ? other : workspace } }]))
+    const ctx = { get: (name: string) => name === 'sessions' ? sessions : undefined }
+    const handlers = pendingHandlers(ctx, new Map([[workspace, new Map()], [other, new Map()]]))
+    const first = await handlers['edrv.pending.list']!({ sessionId: 's1' })
+    expect(await handlers['edrv.pending.list']!({ sessionId: 's2' })).toEqual(first)
+    expect(await handlers['edrv.pending.list']!({ sessionId: 's3' })).toMatchObject({ ok: true, page: { items: [] } })
+    sessions.delete('s1')
+    expect(await handlers['edrv.pending.detail']!({ sessionId: 's2', id: file })).toMatchObject({ ok: true })
+    expect(await handlers['edrv.pending.detail']!({ sessionId: 's3', id: file })).toMatchObject({ ok: false })
+  })
+
+  it('未参与修改的对话共享列表、决定与撤销，其他工作区隔离', async () => {
+    const file = join(workspace, 'shared.ts')
+    await writeFile(file, 'B', 'utf8')
+    recordWrite(write(file, 'A', 'B', 1))
+    const item = loadPage(workspace, 's2').items[0]!
+    expect(item).toEqual(loadPage(workspace, 's1').items[0])
+    const other = join(workspace, 'other')
+    await migrateActive(other, null, async () => null)
+    expect(loadPage(other, 's2').items).toEqual([])
+
+    const fs = realFs()
+    const request = { sessionId: 's2', id: item.id, revision: item.revision,
+      operationId: 'shared-keep', decision: 'accepted' as const, scope: 'file' as const }
+    expect(await applyDecide(fs, workspace, request)).toMatchObject({ ok: true })
+    expect(loadPage(workspace, 's1').pending).toBe(0)
+    expect(await applyDecide(fs, workspace, { ...request, operationId: 'shared-stale' })).toMatchObject({ ok: false })
+    expect(await undoDecide(fs, workspace, { sessionId: 's1', direction: 'undo', operationId: 'shared-undo' })).toMatchObject({ ok: true })
+    expect(loadPage(workspace, 's2').pending).toBe(1)
   })
 
   it('撤销 Keep：条目回到未决且不写盘', async () => {
@@ -396,5 +463,89 @@ describe('待审投影真实往返', () => {
     const again = await keepAll(workspace, items.map((item) => ({ id: item.id, display: item.display, operationId: `bulk-again-${item.id}` })))
     expect(again.kept).toHaveLength(2)
     expect(again.skipped).toEqual([])
+  })
+
+  it('删除传递版本、signal 与 policy；权限拒绝不结案', async () => {
+    const file = join(workspace, 'denied-delete.ts')
+    await writeFile(file, 'B')
+    recordWrite(write(file, null, 'B', 1))
+    const item = loadPage(workspace, 's1').items[0]!
+    const fs = realFs()
+    const signal = new AbortController().signal
+    const policy = { mode: 'read-only' }
+    fs.deleteFile.mockRejectedValue(Object.assign(new Error('denied'), { code: 'FS_SANDBOX_DENIED' }))
+    const outcome = await applyDecide(fs, workspace, {
+      sessionId: 's1', id: item.id, revision: item.revision, operationId: 'denied-del', decision: 'rejected', scope: 'file',
+    }, signal, policy)
+    expect(outcome.ok).toBe(false)
+    expect(fs.deleteFile.mock.calls[0]).toEqual([file, { version: expect.any(String) }, signal, policy])
+    expect(await readFile(file, 'utf8')).toBe('B')
+    expect(loadPage(workspace, 's1').pending).toBe(1)
+  })
+
+  it('旧 provider 无删除能力时不回落宿主 unlink', async () => {
+    const file = join(workspace, 'old-provider.ts')
+    await writeFile(file, 'B')
+    recordWrite(write(file, null, 'B', 1))
+    const item = loadPage(workspace, 's1').items[0]!
+    const fs: any = realFs()
+    delete fs.deleteFile
+    const outcome = await applyDecide(fs, workspace, {
+      sessionId: 's1', id: item.id, revision: item.revision, operationId: 'old-del', decision: 'rejected', scope: 'file',
+    })
+    expect(outcome).toMatchObject({ ok: false, reason: 'delete-unavailable' })
+    expect(await readFile(file, 'utf8')).toBe('B')
+  })
+
+  it('删除后 stat 失败不冒充删除成功，条目保留未决', async () => {
+    const file = join(workspace, 'uncertain-delete.ts')
+    await writeFile(file, 'B')
+    recordWrite(write(file, null, 'B', 1))
+    const item = loadPage(workspace, 's1').items[0]!
+    const fs = realFs()
+    fs.deleteFile.mockImplementationOnce(async () => {
+      fs.stat = async () => { throw new Error('stat unavailable') }
+    })
+    const outcome = await applyDecide(fs, workspace, {
+      sessionId: 's1', id: item.id, revision: item.revision, operationId: 'uncertain-del', decision: 'rejected', scope: 'file',
+    })
+    expect(outcome.ok).toBe(false)
+    expect(loadPage(workspace, 's1').pending).toBe(1)
+  })
+})
+
+describe('写回版本守卫', () => {
+  it('stat-read-stat 版本变化时不写，缺少版本也不写', async () => {
+    const fs = {
+      resolve: async () => 'target',
+      stat: vi.fn().mockResolvedValueOnce({ type: 'file', version: 'v1' }).mockResolvedValueOnce({ type: 'file', version: 'v2' }),
+      readBytes: async () => Buffer.from('B'),
+      writeText: vi.fn(),
+    }
+    expect(await writerFor(fs, workspace, 'a.ts', 'B')('A')).toMatchObject({ ok: false, reason: 'revision-mismatch' })
+    fs.stat.mockResolvedValue({ type: 'file' })
+    expect(await writerFor(fs, workspace, 'a.ts', 'B')('A')).toMatchObject({ ok: false, reason: 'unguarded-file' })
+    expect(fs.writeText).not.toHaveBeenCalled()
+  })
+
+  it('空文本写回后目标缺失不冒充空文件成功', async () => {
+    const fs = {
+      resolve: async () => 'target', stat: async () => ({ type: 'file', version: 'v1' }),
+      readBytes: vi.fn().mockResolvedValueOnce(Buffer.from('B')).mockRejectedValueOnce(Object.assign(new Error('missing'), { code: 'FS_NOT_FOUND' })),
+      writeText: vi.fn(),
+    }
+    expect(await writerFor(fs, workspace, 'a.ts', 'B')('')).toMatchObject({ ok: false, reason: 'read-back-mismatch' })
+  })
+
+  it('缺失重建必须用 createIfAbsent，抢占创建失败不报成功', async () => {
+    const signal = new AbortController().signal
+    const policy = { mode: 'workspace-write' }
+    const fs = {
+      resolve: async () => 'target', stat: async () => undefined,
+      writeText: vi.fn().mockRejectedValue(Object.assign(new Error('exists'), { code: 'FS_ALREADY_EXISTS' })),
+    }
+    const outcome = await writerFor(fs, workspace, 'a.ts', '', signal, policy, true)('A')
+    expect(outcome.ok).toBe(false)
+    expect(fs.writeText).toHaveBeenCalledWith('target', 'A', { kind: 'createIfAbsent' }, signal, policy)
   })
 })

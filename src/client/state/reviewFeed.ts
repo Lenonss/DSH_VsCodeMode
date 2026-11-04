@@ -4,7 +4,7 @@ import type { ReviewPage } from '../../shared/review.js'
 
 export interface ReviewFeed { page: ReviewPage | null; error: string }
 type Listener = (feed: ReviewFeed) => void
-interface Entry { listeners: Set<Listener>; value: ReviewFeed; controller: AbortController; timer?: ReturnType<typeof setTimeout>; loading: boolean; again: boolean; onRefresh: () => void }
+interface Entry { listeners: Set<Listener>; value: ReviewFeed; controller: AbortController; timer?: ReturnType<typeof setTimeout>; loading: boolean; again: boolean; onRefresh: () => void; onVisible?: () => void }
 const feeds = new Map<string, Entry>()
 
 /** @private @author ddj 2026年10月26号 @param entry Shared feed. Notify mounted observers only. */
@@ -13,6 +13,7 @@ function notify(entry: Entry): void { for (const listener of entry.listeners) li
 /** @private @author ddj 2026年10月26号 @param sessionId Scope. @param entry Current generation. @returns First-page metadata update; no overlap or late publication. */
 async function refresh(sessionId: string, entry: Entry, force = false): Promise<void> {
   if (entry.controller.signal.aborted) return
+  if (typeof document !== 'undefined' && document.hidden) { entry.again = true; return }
   if (entry.loading) { entry.again = true; return }
   clearTimeout(entry.timer)
   entry.loading = true
@@ -46,14 +47,20 @@ export function subscribeReview(sessionId: string, listener: Listener): () => vo
     entry = { listeners: new Set(), value: { page: null, error: '' }, controller: new AbortController(), loading: false, again: false, onRefresh }
     feeds.set(sessionId, entry)
     if (typeof window !== 'undefined') window.addEventListener('edrv:refresh', onRefresh)
+    if (typeof document !== 'undefined') {
+      const current = entry
+      entry.onVisible = () => { if (!document.hidden) void refresh(sessionId, current) }
+      document.addEventListener('visibilitychange', entry.onVisible)
+    }
     void refresh(sessionId, entry)
   }
   entry.listeners.add(listener); listener(entry.value)
   return () => {
     entry.listeners.delete(listener)
-    if (entry.listeners.size) return
+    if (entry.listeners.size || feeds.get(sessionId) !== entry) return
     entry.controller.abort(); clearTimeout(entry.timer); feeds.delete(sessionId)
     if (typeof window !== 'undefined') window.removeEventListener('edrv:refresh', entry.onRefresh)
+    if (entry.onVisible && typeof document !== 'undefined') document.removeEventListener('visibilitychange', entry.onVisible)
   }
 }
 

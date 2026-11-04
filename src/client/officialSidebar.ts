@@ -64,6 +64,7 @@ export interface OfficialTabParams {
   preview?: boolean
   /** 目标行号（行引用/工具行跳转透传；缺省仅打开文件）。 */
   line?: number
+  column?: number
 }
 
 /** sidebarRightTabs 服务的最小结构面（结构性探测，不 import 官方类型）。 */
@@ -133,8 +134,15 @@ export function resolveNavOpen(params: unknown): { path: string | null; focusDif
 export function resolveNavLine(params: unknown): number | undefined {
   const value = (params ?? {}) as OfficialTabParams
   const line = value?.line
-  if (typeof line !== 'number' || !Number.isFinite(line) || line <= 0) return undefined
+  if (typeof line !== 'number' || !Number.isFinite(line) || line < 1) return undefined
   return Math.floor(line)
+}
+
+/** @public @author ddj 2026年11月04号 @param params Plugin navigation extension. @returns Positive column only alongside a valid line; official line-only callers remain unchanged. */
+export function resolveNavColumn(params: unknown): number | undefined {
+  if (!resolveNavLine(params)) return undefined
+  const column = (params as OfficialTabParams)?.column
+  return typeof column === 'number' && Number.isFinite(column) && column >= 1 ? Math.floor(column) : undefined
 }
 
 /** 逐段 component 解码（失败返回 null，对齐官方 parseFileAddress 的容错语义）。 */
@@ -158,7 +166,7 @@ function decodeSegment(raw: string | undefined): string | null {
  */
 export function parseOfficialFileAddress(address: unknown): { path: string; sessionId?: string } | null {
   if (typeof address !== 'string' || !address.startsWith(OFFICIAL_FILE_PREFIX)) return null
-  const [scope, ...tail] = address.slice(OFFICIAL_FILE_PREFIX.length).split('/')
+  const [scope, ...tail] = address.split(/[?#]/, 1)[0].slice(OFFICIAL_FILE_PREFIX.length).split('/')
   const kind = decodeSegment(scope)
   if (kind === 'session') {
     const sessionId = decodeSegment(tail[0])
@@ -236,10 +244,14 @@ export function forwardToEditor(
   path: string | null,
   line?: number,
   preview?: boolean,
+  column?: number,
 ): boolean {
   if (!service || typeof service.openTab !== 'function' || !path) return false
   const params: OfficialTabParams = { openPath: path }
-  if (line !== undefined) params.line = line
+  const validLine = resolveNavLine({ line })
+  if (validLine !== undefined) params.line = validLine
+  const validColumn = resolveNavColumn({ line: validLine, column })
+  if (validColumn !== undefined) params.column = validColumn
   if (preview !== undefined) params.preview = preview
   try {
     // 官方语义：页类型恒去重，故转发只会聚焦既有编辑器页签，不产生新实例

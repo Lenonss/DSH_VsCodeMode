@@ -30,6 +30,11 @@ interface FeedEntry {
   onRefresh: (() => void) | null
   seq: number
   inflight: boolean
+  queued?: boolean
+  queuedSkipStale?: boolean
+  request?: Promise<void>
+  controller?: AbortController
+  onVisible?: () => void
 }
 
 const feeds = new Map<string, FeedEntry>()
@@ -80,12 +85,21 @@ function notifyRecords(entry: FeedEntry): void {
  */
 export function refreshFeed(sessionId: string, skipStale = false): Promise<void> {
   const entry = entryOf(sessionId)
+  entry.queuedSkipStale = entry.queuedSkipStale === undefined ? skipStale : entry.queuedSkipStale && skipStale
+  if (typeof document !== 'undefined' && document.hidden) { entry.queued = true; return Promise.resolve() }
+  if (entry.inflight) {
+    entry.queued = true
+    return entry.request ?? Promise.resolve()
+  }
+  skipStale = entry.queuedSkipStale ?? skipStale
+  entry.queuedSkipStale = undefined
   const current = ++entry.seq
   entry.inflight = true
+  entry.controller = new AbortController()
   const payload: { sessionId: string; skipStale?: boolean } = { sessionId }
   if (skipStale) payload.skipStale = true
 
-  return rpc('edrv.list', payload)
+  entry.request = rpc('edrv.list', payload, entry.controller.signal)
     .then((res) => {
       if (current !== entry.seq) return
       if (!res || !res.ok || !Array.isArray(res.records)) return
@@ -105,8 +119,14 @@ export function refreshFeed(sessionId: string, skipStale = false): Promise<void>
       }
     })
     .finally(() => {
-      if (current === entry.seq) entry.inflight = false
+      if (current !== entry.seq) return
+      entry.inflight = false
+      if (entry.queued) {
+        entry.queued = false
+        if (feeds.get(sessionId) === entry) return refreshFeed(sessionId, entry.queuedSkipStale ?? false)
+      }
     })
+  return entry.request
 }
 
 /**
@@ -118,6 +138,7 @@ export function refreshFeed(sessionId: string, skipStale = false): Promise<void>
 function ensureTimer(sessionId: string, entry: FeedEntry): void {
   if (entry.timer === null) {
     entry.timer = setInterval(() => {
+      if (typeof document !== 'undefined' && document.hidden) return
       const tickers = Array.from(entry.tickers)
       for (const tick of tickers) {
         try {
@@ -129,6 +150,14 @@ function ensureTimer(sessionId: string, entry: FeedEntry): void {
       // 只有存在记录/错误订阅者时才拉取记录；纯心跳订阅者（如体积徽章）不额外制造 RPC。
       if (entry.listeners.size > 0 || entry.errorListeners.size > 0) void refreshFeed(sessionId)
     }, FEED_INTERVAL_MS)
+  }
+  if (!entry.onVisible && typeof document !== 'undefined') {
+    entry.onVisible = () => {
+      if (document.hidden) return
+      for (const tick of entry.tickers) { try { tick() } catch { /* Isolated observer. */ } }
+      if (entry.listeners.size || entry.errorListeners.size) { entry.queued = false; void refreshFeed(sessionId) }
+    }
+    document.addEventListener('visibilitychange', entry.onVisible)
   }
   if (entry.onRefresh === null) {
     const handler = () => {
@@ -147,12 +176,16 @@ function ensureTimer(sessionId: string, entry: FeedEntry): void {
  * @param entry 订阅槽位
  */
 function releaseIfIdle(sessionId: string, entry: FeedEntry): void {
-  if (entry.listeners.size || entry.tickers.size || entry.errorListeners.size) return
+  if (feeds.get(sessionId) !== entry || entry.listeners.size || entry.tickers.size || entry.errorListeners.size) return
   if (entry.timer !== null) clearInterval(entry.timer)
   if (entry.onRefresh !== null) {
     const target = win()
     if (target) target.removeEventListener('edrv:refresh', entry.onRefresh)
   }
+  entry.seq++
+  entry.queued = false
+  entry.controller?.abort()
+  if (entry.onVisible && typeof document !== 'undefined') document.removeEventListener('visibilitychange', entry.onVisible)
   feeds.delete(sessionId)
 }
 
@@ -237,5 +270,9 @@ export function disposeFeed(sessionId: string): void {
     const target = win()
     if (target) target.removeEventListener('edrv:refresh', entry.onRefresh)
   }
+  entry.seq++
+  entry.queued = false
+  entry.controller?.abort()
+  if (entry.onVisible && typeof document !== 'undefined') document.removeEventListener('visibilitychange', entry.onVisible)
   feeds.delete(sessionId)
 }
