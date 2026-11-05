@@ -7,6 +7,22 @@
  * 作者 ddj 2026年10月27号
  */
 import { sessionErrorText } from './sessionError.js'
+import type { ReviewDetail } from '../shared/review.js'
+
+/**
+ * @public
+ * @author ddj 2026年11月5号
+ * @description 仅收敛已成功生成的空文本净差异；不把定位失败、二进制或生成异常当作已解决。
+ * @param detail 已加载的权威详情
+ * @returns 是否可以无写盘结案
+ */
+export function emptyTextReview(detail: ReviewDetail | null): boolean {
+  if (!detail || detail.item.decision !== 'pending' || !detail.item.current) return false
+  if (detail.capability.keep !== true || detail.diff.kind !== 'text') return false
+
+  return detail.diff.hunks.length === 0 && detail.blocks.length === 0
+    && detail.item.added === 0 && detail.item.deleted === 0
+}
 
 /** 官方差异栏输入：全部来自 EditorView dock 快照，不读取磁盘或 RPC。 */
 export interface ReviewBarInput {

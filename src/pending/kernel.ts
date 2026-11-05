@@ -4,6 +4,7 @@
  * @author ddj 2026年10月29号
  */
 import type { PendingEarlier, PendingLineage } from '../shared/pendingReview.js'
+import { logicalLines } from '../shared/lineEndings.js'
 
 /** 内存态条目：比展示投影多保存两侧全文。 */
 export interface PendingEntry {
@@ -50,12 +51,17 @@ export function sameEntryText(left: string, right: string): boolean {
 
 /**
  * @author ddj 2026年10月29号
- * @description: 净零判定：基线等于当前内容即为已解决，但条目仍留在列表等待移除。
+ * @description: 净零判定与文本差异生成器保持逻辑行口径一致；只忽略 BOM 和换行编码，不改存储原文。
  * @param entry 待审条目
  * @returns 是否已无净差异
  */
 export function isSettled(entry: PendingEntry): boolean {
-  return sameEntryText(entry.oldText, entry.newText)
+  if (sameEntryText(entry.oldText, entry.newText)) return true
+
+  const baselineLines = logicalLines(entry.oldText)
+  const currentLines = logicalLines(entry.newText)
+  return baselineLines.length === currentLines.length
+    && baselineLines.every((line, index) => line === currentLines[index])
 }
 
 /**

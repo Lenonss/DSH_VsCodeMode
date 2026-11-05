@@ -26,6 +26,31 @@ export function diffPathKey(path: string): string {
   return pathKeyFor(path, false)
 }
 
+/**
+ * @public
+ * @author ddj 2026年11月5号
+ * @description: 解析编辑器权威审查路径，累计待审优先，详情与工具栏共用同一来源。
+ * @param path 当前文件
+ * @param page 权威审查元数据
+ * @param sameFile 工作区路径比较器，缺省按完整路径键比较
+ * @returns 后端审查路径；未接管时返回 null
+ */
+export function reviewPathOf(
+  path: string | null, page: ReviewPage | null,
+  sameFile: (left: string, right: string) => boolean = (left, right) => diffPathKey(left) === diffPathKey(right),
+): string | null {
+  if (!path || !page) return null
+
+  for (const item of page.items) {
+    if (!item.id.startsWith(PENDING_PREFIX)) continue
+    const currentPath = item.currentPath || item.path
+    const identity = item.id.slice(PENDING_PREFIX.length)
+    if (sameFile(currentPath, path) || sameFile(identity, path)) return currentPath
+  }
+
+  return page.overview?.coveredPaths.find((candidate) => sameFile(candidate, path)) ?? null
+}
+
 /** @public @author ddj 2026年10月26号 @param path Current editor file. @param page Authoritative metadata, including decided paths. @returns Whether legacy actions must be hidden for this file. */
 export function officialPath(path: string, page: ReviewPage | null): boolean {
   const key = diffPathKey(path)
@@ -90,10 +115,11 @@ function pendingRowsOf(page: ReviewPage | null): { rows: DiffFile[]; covered: Se
 }
 
 /** @public @author ddj 2026年10月26号 @param records Tool-call history. @param page Official file navigation, never only its first 50 rows. @returns Pending first, then official; legacy paths remain explicitly labelled. */
-export function diffSummary(records: RecordView[], page: ReviewPage | null): DiffSummary {
+export function diffSummary(records: (RecordView & { archived?: boolean })[], page: ReviewPage | null): DiffSummary {
   const pending = pendingRowsOf(page)
   // 同一路径只留一个权威：待审接管后，官方汇总行与历史留痕行都让位。
-  const legacy = summarize(records.filter((record) => !pending.covered.has(diffPathKey(record.path)) && !officialPath(record.path, page)))
+  const legacy = summarize(records.filter((record) => record.archived !== true
+    && !pending.covered.has(diffPathKey(record.path)) && !officialPath(record.path, page)))
   const files: DiffFile[] = [...pending.rows]
   for (const file of page?.overview?.files ?? []) {
     if (pending.covered.has(diffPathKey(file.path))) continue

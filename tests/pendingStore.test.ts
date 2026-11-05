@@ -70,6 +70,19 @@ function write(file: string, before: string | null, after: string | null, now: n
 }
 
 describe('待审投影真实往返', () => {
+  it('持久化的换行差异在重新加载后归零，不需要 Keep 或文件写入', async () => {
+    const file = join(workspace, 'line-endings.ts')
+    const currentText = 'a\r\nb\r\n'
+    await writeFile(file, currentText, 'utf8')
+    recordWrite(write(file, 'a\nb\n', currentText, 1))
+    closeArchiveDbs()
+
+    const page = loadPage(workspace, 's1')
+    expect(page.pending).toBe(0)
+    expect(page.items[0]?.settled).toBe(true)
+    expect(loadDetail(workspace, file)?.diff.hunks).toEqual([])
+    expect(await readFile(file, 'utf8')).toBe(currentText)
+  })
   it('两次写入折叠成一条，基线保留最早内容', async () => {
     const file = join(workspace, 'fold.ts')
     await writeFile(file, 'B', 'utf8')

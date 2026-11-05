@@ -46,6 +46,17 @@ function requestOf(
 }
 
 describe('pending kernel', () => {
+  it('换行编码或 BOM 变化自动归零，原始快照保持不变', () => {
+    const entry = entryOf('a\nb\n', '\uFEFFa\r\nb\r\n')
+    expect(diffOf(entry).hunks).toEqual([])
+    expect(isSettled(entry)).toBe(true)
+    expect(itemOf({ entry, flags: FLAGS }).settled).toBe(true)
+    expect(capabilityOf(entry, FLAGS).keep).toBe(false)
+    expect(entry.oldText).toBe('a\nb\n')
+    expect(entry.newText).toBe('\uFEFFa\r\nb\r\n')
+    expect(isSettled(entryOf('a\nb\n', 'a\nb'))).toBe(false)
+    expect(isSettled(entryOf('a\nb', 'a\nB'))).toBe(false)
+  })
   it('同一文件的多次改动折叠成一条，基线留最早、内容取最新', () => {
     const first = entryOf('A', 'B')
     const second = entryFromNew({ ...first, oldText: 'B', newText: 'C', updatedAt: 5 })

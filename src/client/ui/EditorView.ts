@@ -29,7 +29,7 @@ import { toastDom } from '../externalOpen.js'
 import { ReviewAllConfirm } from './ReviewAllConfirm.js'
 import { reviewRegions } from '../../shared/reviewRegions.js'
 import { PENDING_PREFIX } from '../../shared/pendingReview.js'
-import { coveredPathKeys, diffPathKey, diffSummary } from '../state/diffSummary.js'
+import { coveredPathKeys, diffPathKey, diffSummary, reviewPathOf } from '../state/diffSummary.js'
 import { emitFileChanged, emitRefresh } from '../events.js'
 import { langOf, loadMonaco, snippetLanguageOf } from '../monaco/loader.js'
 import { bindEditActions, runEditAction } from '../monaco/editActions.js'
@@ -136,7 +136,7 @@ import { clampToolbarPosition, loadToolbarPosition, saveToolbarPosition } from '
 import { editorModelPathOf } from '../dap/modelPath.js'
 import { dapTrace } from '../dap/trace.js'
 import { isSessionMissingError, sessionErrorText, sessionMissingDetail, sessionMissingTitle } from '../sessionError.js'
-import { officialDownView, SESSION_DOWN_NOTICE, SIDECAR_KEEP_DONE } from '../reviewBar.js'
+import { emptyTextReview, officialDownView, SESSION_DOWN_NOTICE, SIDECAR_KEEP_DONE } from '../reviewBar.js'
 
 /** 官方差异读取失败前缀：仅用于清理同源陈旧错误，不吞并保存类错误。@author ddj 2026年10月27号 */
 const REVIEW_LOAD_ERROR = '官方差异读取失败：'
@@ -595,14 +595,9 @@ export function EditorView(props) {
     const controller = new AbortController()
     // 待审条目也走同一条行内差异通道：它由累计基线投影而来，形状与官方条目一致，
     // 因此编辑器里天然就能画行内差异与 Keep/Undo 药丸，不必另开一个窄面板。
-    const pendingPath = (review.page?.items ?? [])
-      .filter((item) => String(item.id).startsWith(PENDING_PREFIX))
-      .map((item) => item.currentPath || item.path)
-      .find((path) => sameFile(path, active))
-    const coveredPath = review.page?.overview?.coveredPaths.find((path) => sameFile(path, active))
-    const reviewPath = coveredPath ?? pendingPath
-    dbg(sessionId, `[DEBUG reviewPath] active=${active ?? '(null)'} covered=${coveredPath ?? '(none)'}`
-      + ` pending=${pendingPath ?? '(none)'} coveredCount=${review.page?.overview?.coveredPaths.length ?? -1}`
+    const reviewPath = reviewPathOf(active, review.page, sameFile)
+    dbg(sessionId, `[DEBUG reviewPath] active=${active ?? '(null)'} resolved=${reviewPath ?? '(none)'}`
+      + ` coveredCount=${review.page?.overview?.coveredPaths.length ?? -1}`
       + ` items=${review.page?.items?.length ?? -1} overview=${review.page?.overview ? 1 : 0}`)
     if (!active || !reviewPath) {
       setOfficialDetail(null)
@@ -696,9 +691,11 @@ export function EditorView(props) {
   const decideRegions = React.useMemo(() => [...pendingRegions, ...staleRegions], [pendingRegions, staleRegions])
   // 记录的改动已全部不在当前文件中时没有可见差异可审：自动结案，不再让「改动已失效」占用差异栏。
   React.useEffect(() => {
-    if (!officialDetail || contentReady !== true || batchBusyRef.current) return
-    if (pendingRegions.length > 0 || staleRegions.length === 0) return
-    if (noBlocks || officialDetail.capability?.keep !== true) return
+    if (!officialDetail || batchBusyRef.current) return
+    // 空净差异只依赖权威快照，不依赖编辑器磁盘加载；定位失效仍须等待当前内容就绪。
+    const emptyText = emptyTextReview(officialDetail)
+    if (!emptyText && (contentReady !== true || pendingRegions.length > 0 || staleRegions.length === 0 || noBlocks)) return
+    if (officialDetail.capability?.keep !== true) return
     if (dirtyRef.current[active]) return
 
     void settleInvisibleRecord(officialDetail)
@@ -3552,7 +3549,7 @@ export function EditorView(props) {
   const allPending = React.useMemo(() => {
     const out = []
     for (const rec of Object.values(records)) {
-      if (rec.superseded === true || coveredPaths.has(diffPathKey(rec.path))) continue
+      if (rec.archived === true || rec.superseded === true || coveredPaths.has(diffPathKey(rec.path))) continue
       const perHunk = Array.isArray(rec.decisions?.perHunk) ? rec.decisions.perHunk : []
       const hunks = Array.isArray(rec.hunks) ? rec.hunks : []
       for (let i = 0; i < hunks.length; i++) {
@@ -4962,7 +4959,7 @@ export function EditorView(props) {
    * @author ddj 2026年09月29号
    * @returns 含布局及操作回调的差异快照
    */
-  const officialFile = review.page?.overview?.coveredPaths.find((path) => sameFile(path, active))
+  const officialFile = reviewPathOf(active, review.page, sameFile)
   // 官方通道自身的失败（list 失败 / 缺 overview）只影响官方栏，不能混进保存类错误。
   const officialDown = officialFile ? null : officialDownView(review.error)
   const rawReviewError = review.error || error

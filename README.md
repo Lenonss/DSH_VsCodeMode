@@ -587,13 +587,13 @@ profile 请替换为实际目标，不要把示例目录当成当前运行 profi
 
 ```bash
 # ① Git 安装（clone + prepare 构建；推荐打固定 tag）
-dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.27.0
+dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.27.1
 
 # ② npm 注册表（发布到 npm 后）
-dsh plugin --profile web add dsh-vscode-mode@0.27.0
+dsh plugin --profile web add dsh-vscode-mode@0.27.1
 
 # ③ GitHub Release tgz 直装（Release asset 可用后）
-dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.27.0/dsh-vscode-mode-0.27.0.tgz
+dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.27.1/dsh-vscode-mode-0.27.1.tgz
 ```
 
 > **DSH 版本政策（0.17.0 起）**：六项 DSH peer 仍统一声明为 `*`，另以
@@ -973,6 +973,7 @@ Keep All / Undo All 却是亮的。修复：单文件 Keep / Undo 覆盖冲突�
 
 | 版本 | 要点 |
 | --- | --- |
+| v0.27.1 | 修复仅 LF/CRLF 或 BOM 差异造成的空待审与差异栏残留；统一累计待审路径路由并过滤已归档历史记录 |
 | v0.27.0 | DSH alpha.3 官方菜单/Forge 导航/设置图标与能力诊断；多目标 patch 字节采集；回滚版本与会话策略守卫；工作区共享差异基线；隐藏轮询门控与导航隔离 |
 | v0.26.0 | Keep All 改为单次批量（不再因单条过期/冷端条目整批中止，2N+1 次往返降到 2 次）；差异审查旧通道遗留清理：待审接管的旧记录自动结案、守卫改会话作用域、失败原因不再被通用文案吞掉 |
 | v0.25.1 | 下载到本机支持选择保存文件夹（目录选择器），按工作区相对路径写入 |
@@ -986,7 +987,9 @@ Keep All / Undo All 却是亮的。修复：单文件 Keep / Undo 覆盖冲突�
 | v0.23.0 | 快捷菜单：可拖动悬浮按钮 + 自定义菜单树 |
 
 <details>
-<summary>完整版本记录（v0.27.0 → v0.1.5x，点击展开）</summary>
+<summary>完整版本记录（v0.27.1 → v0.1.5x，点击展开）</summary>
+
+- **v0.27.1**：净零判定复用差异生成器的逻辑行口径，消除仅 LF/CRLF 或 BOM 不同造成的「无差异块但仍计入待审」；保留真实文本与末尾换行增删，不改原始快照和磁盘文件。累计待审详情与工具栏统一身份解析，避免误走历史改动栏；汇总与批量列表排除已归档记录。客户端空文本差异收敛保留现有能力、脏缓冲和忙状态守卫。Web Host 重启后实测三个空待审归零、差异栏消失，三个游戏文件 SHA256 不变。参见 [0.27.1 发布说明](docs/release-0.27.1.md)。
 
 - **v0.27.0**：接入 DSH 0.2.2-alpha.3 官方共享菜单（树/页签、键盘入口、陈旧目标守卫、旧 Host 回退）、Forge 面板/本地变更导航（缺能力隐藏，不接管 PR 快照）、设置图标与能力诊断；apply_patch 多目标采集采用独立原始字节前后像，保留 BOM/行尾，不把结果 before:null 当作文件缺失。回滚使用 provider 原子版本与内容守卫，删除无直接文件系统兜底，修复累计待审入口漏传会话沙箱策略；差异按工作区共享基线及接管登记。展示轮询隐藏门控与单飞合并，LSP 旧会话结果隔离，导航补列及 owner/session 守卫。实机 write/edit → GUI Undo → 磁盘读回已通过。**已知缺口**：Undo 后当前已结算文件可能仍显示“待审”和超出总数的序号；真实 apply_patch 工具、Forge 已启用环境、真实后台请求与多会话完整矩阵尚未实测。缺口经维护者接受发布；不宣称完整端到端验收或 Console 零错误。
 

@@ -15,6 +15,9 @@ const page: ReviewPage = { items: [], pending: 70, nextCursor: 50, gaps: [],
   ] } }
 
 describe('source-aware diff file projection', () => {
+  it('excludes archived history from the pending file summary', () => {
+    expect(diffSummary([{ ...legacy('/done.lua'), archived: true }], null).totalFiles).toBe(0)
+  })
   it('counts files independently of record pagination, never constructs legacy hunks from official data', () => {
     const summary = diffSummary([legacy('c:/WS/a.lua'), legacy('c:/ws/done.lua'), legacy('/old.lua')], page)
     expect(summary.totalFiles).toBe(2)
