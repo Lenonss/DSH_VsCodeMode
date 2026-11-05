@@ -587,13 +587,13 @@ profile 请替换为实际目标，不要把示例目录当成当前运行 profi
 
 ```bash
 # ① Git 安装（clone + prepare 构建；推荐打固定 tag）
-dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.27.1
+dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.27.2
 
 # ② npm 注册表（发布到 npm 后）
-dsh plugin --profile web add dsh-vscode-mode@0.27.1
+dsh plugin --profile web add dsh-vscode-mode@0.27.2
 
 # ③ GitHub Release tgz 直装（Release asset 可用后）
-dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.27.1/dsh-vscode-mode-0.27.1.tgz
+dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.27.2/dsh-vscode-mode-0.27.2.tgz
 ```
 
 > **DSH 版本政策（0.17.0 起）**：六项 DSH peer 仍统一声明为 `*`，另以
@@ -973,6 +973,7 @@ Keep All / Undo All 却是亮的。修复：单文件 Keep / Undo 覆盖冲突�
 
 | 版本 | 要点 |
 | --- | --- |
+| v0.27.2 | 当前编辑文件 Tab 自动滚入可见区域；分组独立定位，适配宽度变化，不抢编辑焦点 |
 | v0.27.1 | 修复仅 LF/CRLF 或 BOM 差异造成的空待审与差异栏残留；统一累计待审路径路由并过滤已归档历史记录 |
 | v0.27.0 | DSH alpha.3 官方菜单/Forge 导航/设置图标与能力诊断；多目标 patch 字节采集；回滚版本与会话策略守卫；工作区共享差异基线；隐藏轮询门控与导航隔离 |
 | v0.26.0 | Keep All 改为单次批量（不再因单条过期/冷端条目整批中止，2N+1 次往返降到 2 次）；差异审查旧通道遗留清理：待审接管的旧记录自动结案、守卫改会话作用域、失败原因不再被通用文案吞掉 |
@@ -987,7 +988,9 @@ Keep All / Undo All 却是亮的。修复：单文件 Keep / Undo 覆盖冲突�
 | v0.23.0 | 快捷菜单：可拖动悬浮按钮 + 自定义菜单树 |
 
 <details>
-<summary>完整版本记录（v0.27.1 → v0.1.5x，点击展开）</summary>
+<summary>完整版本记录（v0.27.2 → v0.1.5x，点击展开）</summary>
+
+- **v0.27.2**：活动文件与计划预览 Tab 按编辑分组独立保持可见；打开、切换、关闭页签及编辑区尺寸变化后做最小横向定位，已可见时不滚动，不抢键盘焦点、不带动正文。保留手动横滚，超宽 Tab 显示名称起始部分。当前 GUI 未加载新 bundle，真实交互验收缺口已由用户接受；发布不自动安装或重启。参见 [0.27.2 发布说明](docs/release-0.27.2.md)。
 
 - **v0.27.1**：净零判定复用差异生成器的逻辑行口径，消除仅 LF/CRLF 或 BOM 不同造成的「无差异块但仍计入待审」；保留真实文本与末尾换行增删，不改原始快照和磁盘文件。累计待审详情与工具栏统一身份解析，避免误走历史改动栏；汇总与批量列表排除已归档记录。客户端空文本差异收敛保留现有能力、脏缓冲和忙状态守卫。Web Host 重启后实测三个空待审归零、差异栏消失，三个游戏文件 SHA256 不变。参见 [0.27.1 发布说明](docs/release-0.27.1.md)。
 

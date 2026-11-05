@@ -2134,19 +2134,6 @@ export function EditorView(props) {
     }
   }, [sessionId])
 
-  // 活动页签滚动可见（页签栏溢出时键盘切换/打开文件后把当前页签带回视野）：
-  // 只调整页签栏自身 scrollLeft，不触发页面滚动。
-  React.useEffect(() => {
-    const host = tabsHostRef.current
-    if (!host) return
-    const el = host.querySelector?.('.edrv-tab-active')
-    if (!el) return
-    const left = el.offsetLeft
-    const right = left + el.offsetWidth
-    if (left < host.scrollLeft) host.scrollLeft = left
-    else if (right > host.scrollLeft + host.clientWidth) host.scrollLeft = right - host.clientWidth
-  }, [active, planActive, planTabs.length, tabs.length, rowOwner])
-
   // 页签栏滚轮横向滚动（需求 3）：页签栏溢出时，鼠标滚轮（含触控板纵向手势）横滚页签栏，
   // 不溢出时不接管（保持页面垂直滚动）；Shift+滚轮交由浏览器原生横滚。详见 horizontalWheel.ts。
   React.useEffect(() => attachHorizontalWheel(tabsHostRef.current), [rowOwner])
@@ -4634,7 +4621,7 @@ export function EditorView(props) {
     const chrome = !floating && id === rowOwner
     // 计划预览占用的正文只会在焦点组里；承载页签行的组同时收起磁盘选中态，保证整屏只有计划页签一条下划线。
     const hideDiskActive = Boolean(planActive) && (chrome || focused)
-    return React.createElement(EditorPane, { key: id, group, focused, dirty: dirtyMap, suppressActive: hideDiskActive, tabsRef: chrome ? tabsHostRef : undefined, extras: chrome ? planTabExtras : undefined, tools: chrome ? rowTools : undefined, onSelect: selectGroup, onClose: closeTab, onMenu: paneMenu, onDrag: dragTab, consumeClick: consumeDrag },
+    return React.createElement(EditorPane, { key: id, group, focused, dirty: dirtyMap, suppressActive: hideDiskActive, previewActive: chrome ? planActive : undefined, tabsRef: chrome ? tabsHostRef : undefined, extras: chrome ? planTabExtras : undefined, tools: chrome ? rowTools : undefined, onSelect: selectGroup, onClose: closeTab, onMenu: paneMenu, onDrag: dragTab, consumeClick: consumeDrag },
       focused ? React.createElement('div', { className: 'edrv-full-slot', ref: mountFull }) : React.createElement(React.Fragment, null,
         React.createElement(GroupPathbar, { path: group.active, onFocus: () => selectGroup(id) }),
         React.createElement(PassiveEditor, { key: JSON.stringify([scope, sessionId, group.active]), path: group.active, groupId: id, mount: passiveMount })))

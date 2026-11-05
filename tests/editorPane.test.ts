@@ -18,8 +18,17 @@ function descendants(node: any): any[] {
 /** @private @author ddj 2026年10月14号 @param overrides Pane props replacing defaults. @returns Testable pane with real tab component callbacks. */
 function pane(overrides: Partial<PaneProps> = {}) {
   const callbacks = { onSelect: vi.fn(), onClose: vi.fn(), onDrag: vi.fn(), onMenu: vi.fn(), consumeClick: vi.fn(() => false) }
-  const tree = EditorPane({ group: { id: 'main', active: 'a.ts', tabs: [{ path: 'a.ts' }, { path: 'pin.ts', pinned: true }] }, focused: true, dirty: { 'a.ts': true }, ...callbacks, ...overrides })
-  return { tree, callbacks, nodes: descendants(tree) }
+  const refHook = vi.spyOn(React, 'useRef').mockReturnValue({ current: null })
+  const callbackHook = vi.spyOn(React, 'useCallback').mockImplementation(callback => callback)
+  const layoutHook = vi.spyOn(React, 'useLayoutEffect').mockImplementation(() => {})
+  try {
+    const tree = EditorPane({ group: { id: 'main', active: 'a.ts', tabs: [{ path: 'a.ts' }, { path: 'pin.ts', pinned: true }] }, focused: true, dirty: { 'a.ts': true }, ...callbacks, ...overrides })
+    return { tree, callbacks, nodes: descendants(tree), revealEffect: layoutHook.mock.calls[0], refDeps: callbackHook.mock.calls[0]?.[1] }
+  } finally {
+    refHook.mockRestore()
+    callbackHook.mockRestore()
+    layoutHook.mockRestore()
+  }
 }
 
 const css = readFileSync(new URL('../src/client/styles/editor.css', import.meta.url), 'utf8')
@@ -29,6 +38,32 @@ function cssRule(selector: string): string {
   if (start < 0) throw new Error('Missing style: ' + selector)
   return css.slice(css.indexOf('{', start) + 1, css.indexOf('}', start))
 }
+
+describe('per-group tab reveal lifecycle', () => {
+  it('preserves object and callback strip refs on attach and detach', () => {
+    const host = {} as HTMLDivElement
+    const tabsRef = { current: null as HTMLDivElement | null }
+    const first = pane({ tabsRef })
+    const strip = first.nodes.find(node => node.props.role === 'tablist')
+    strip.ref(host)
+    expect(tabsRef.current).toBe(host)
+    strip.ref(null)
+    expect(tabsRef.current).toBeNull()
+    expect(first.refDeps).toEqual([tabsRef])
+    const callback = vi.fn()
+    const second = pane({ tabsRef: callback })
+    const callbackStrip = second.nodes.find(node => node.props.role === 'tablist')
+    callbackStrip.ref(host)
+    callbackStrip.ref(null)
+    expect(callback.mock.calls).toEqual([[host], [null]])
+  })
+  it('tracks active file, group focus, preview and tab geometry states', () => {
+    const result = pane({ focused: false, previewActive: 'plan:one', suppressActive: true })
+    expect(result.revealEffect?.[1]?.slice(0, 4)).toEqual(['a.ts', false, true, 'plan:one'])
+    expect(result.revealEffect?.[1]?.[4]).toBe(JSON.stringify([['a.ts', undefined, true], ['pin.ts', true, undefined]]))
+    expect(result.revealEffect?.[0]()).toBeUndefined()
+  })
+})
 
 describe('page and tab visual contracts', () => {
   it('disables text selection on tabs without disabling editor content selection', () => {

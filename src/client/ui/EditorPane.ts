@@ -3,6 +3,7 @@ import React from 'react'
 import { createViewKeeper, type ViewEditor } from '../state/editorViewState.js'
 import type { Group } from '../state/editorLayout.js'
 import type { TabLike } from '../tabActions.js'
+import { watchTabReveal } from './tabReveal.js'
 
 export interface PaneProps {
   group: Group
@@ -22,11 +23,39 @@ export interface PaneProps {
   tabsRef?: React.Ref<HTMLDivElement>
   /** @public @author ddj 2026年10月20号 Read-only plan preview owns this pane body, so no disk tab paints as active. */
   suppressActive?: boolean
+  /** @public @author ddj 2026年11月05号 Selected virtual preview address, when this strip owns preview tabs. */
+  previewActive?: string | null
+}
+
+/**
+ * Keep each group's selected tab visible while preserving the workbench wheel ref.
+ * @private @author ddj 2026年11月05号
+ * @param props Group selection and shared strip reference.
+ * @returns Stable callback ref for this pane's strip.
+ */
+function useTabReveal(props: PaneProps): React.RefCallback<HTMLDivElement> {
+  const hostRef = React.useRef<HTMLDivElement | null>(null)
+  /** @private @author ddj 2026年11月05号 @param node Committed strip, or null on detach. Synchronize both owners. */
+  function bindStrip(node: HTMLDivElement | null): void {
+    hostRef.current = node
+    if (typeof props.tabsRef === 'function') props.tabsRef(node)
+    else if (props.tabsRef) (props.tabsRef as React.MutableRefObject<HTMLDivElement | null>).current = node
+  }
+  const stripRef = React.useCallback(bindStrip, [props.tabsRef])
+  // Include the rendered order/labels: closing, pinning or dirty marks can shift a same-path selection.
+  const tabShape = JSON.stringify(props.group.tabs.map(tab => [tab.path, tab.pinned, props.dirty[tab.path]]))
+  /** @private @author ddj 2026年11月05号 @returns Geometry observer cleanup for this committed selection. */
+  function observeStrip(): (() => void) | undefined {
+    if (hostRef.current) return watchTabReveal(hostRef.current)
+  }
+  React.useLayoutEffect(observeStrip, [props.group.active, props.focused, props.suppressActive, props.previewActive, tabShape, props.tabsRef])
+  return stripRef
 }
 
 /** @public @author ddj 2026年10月14号 @param props Group callbacks and file view. @returns Accessible tab strip and drop target. */
 export function EditorPane(props: PaneProps): React.ReactElement {
   const { group } = props
+  const stripRef = useTabReveal(props)
   // 计划预览接管本组正文时，磁盘页签只保留可点击性，不再画选中态，避免同一可见区域出现两条下划线。
   const suppressActive = props.suppressActive === true
   /** @private @author ddj 2026年10月20号 @param tab File record. @returns Draggable tab with isolated close control. */
@@ -67,7 +96,7 @@ export function EditorPane(props: PaneProps): React.ReactElement {
   }
   return React.createElement('section', { className: 'edrv-group' + (props.focused ? ' edrv-group-focused' : ''), 'data-edrv-group': group.id, onPointerDown: focusEmpty },
     React.createElement('div', { className: 'edrv-tabs-row' },
-      React.createElement('div', { className: 'edrv-tabs', role: 'tablist', 'data-edrv-group-tabs': group.id, ref: props.tabsRef }, group.tabs.map(renderTab), props.extras),
+      React.createElement('div', { className: 'edrv-tabs', role: 'tablist', 'data-edrv-group-tabs': group.id, ref: stripRef }, group.tabs.map(renderTab), props.extras),
       props.tools),
     React.createElement('div', { className: 'edrv-group-body', role: 'tabpanel' }, props.children))
 }
