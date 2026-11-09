@@ -5,7 +5,7 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
 
 # dsh-vscode-mode 开发/发布经验集（自我更新型技能）
 
-> updated: 2026-11-02 · 维护者：ddj（AI 会话按文末协议更新，保持精炼、去重）
+> updated: 2026-11-09 · 维护者：ddj（AI 会话按文末协议更新，保持精炼、去重）
 > **发布时先读「发布流程」与「失败恢复」**；下方实录是历史证据，不授权当前重跑发布、改 tag 或部署。冲突旧口径以更新后的规则为准。
 - 2026-10-19 实录（v0.17.0 发布：DSH 0.2.1 吸收——locale 元数据 meta 化、engines.dsh、workingDirectory 投影跟随 cd、
   会话级 recordsFeed 轮询收敛、ctx.locale 接入、plugins.detail.section；基线 v0.16.0 @ `8b79f8f`）：
@@ -384,6 +384,7 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
 4. 最终三门顺序为 `npm run typecheck` → `npm run test` → `npm run build`；本仓JS发布套件范围须在计划中写清，不扩大为Unity全量。保存退出码、测试通过/跳过/失败/耗时、双bundle结果与warning。先核验prebuild清理的绝对 `lib` 目标为本工作区普通目录、非junction。失败先定位，不偷偷修范围外源码。
 5. UI改动须真实浏览器冒烟受影响入口、回退、主题/滚动并检查Console；测试与mock DOM不能替代。工具不可用时写清“未验证”，**取得用户明确接受缺口后**才发布，不伪造验收；不为冒烟启动替代GUI或自动部署。
 6. **精确暂存获批清单**（`git add -- <paths>`），比较 `git diff --cached --name-only` 与清单、核对暂存diff及 `git diff --cached --check`。提交必须与三门已验证的内容一致；混合WIP不能仅暂存一部分却用脏树绿灯充当验证，需先获准隔离/验证实际提交树。commit：`release: vX.Y.Z <摘要>`。
+   - 2026-11-09 事实（混合 WIP 下的提交树验证，可直接复用）：`git worktree add --detach <临时目录> HEAD` → `git diff --cached > <patch>` → 在 worktree 内 `git apply <patch>` → 用 junction 把主仓 `node_modules` 链过去（`fs.symlinkSync(主仓/node_modules, 'node_modules', 'junction')`）→ 跑三门 → `git worktree remove --force`。约 1.5 分钟就得到「与提交树完全一致」的绿灯（v0.28.0 实测：隔离树 300 文件 3819 通过 / 23 跳过，脏树 301/3835，差异正来自他人 WIP）。
 7. 再查远端基线/版本占用 → `git push origin main` → `git tag vX.Y.Z` → `git push origin vX.Y.Z`；任一步失败即停，记录已成功的步骤，不能盲重复整串命令。核对main/tag指向发布提交。
 8. tag触发 `.github/workflows/release.yml`：tag/版本一致 → 三门 → pack → GitHub Release tgz → 有NPM_TOKEN才publish → Verify；记录CI/Release run ID和步骤结论。**本仓禁止本地 `npm publish`**，只走获批CI，不读取凭据。观察权限/CLI版本以当前证据为准，不沿用旧whoami/版本结论。
 
@@ -611,9 +612,10 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
   （cwd 非边界），插件可读任意绝对路径文件，保存仍受会话沙箱 `policyOf` 约束。
 - 2026-09-22 坑：沙箱内 `git push` 挂在凭据辅助器（Git sh.exe `couldn't create signal pipe`，Win32 error 5
   → could not read Username），commit 正常 → push 对同一命令一次性升 danger-full-access 重试即可。
-- 2026-09-22 坑：沙箱内出站 HTTPS 受限——后台任务报 `The SSL connection could not be established`，
-  前台 Invoke-WebRequest 报 `Authentication failed`（TLS 认证失败）→ 会话内查 CI/registry/公开 API
-  用 web_fetch 工具（api.github.com、registry.npmjs.org 直达），不起后台轮询任务。
+- 2026-09-22 坑 / 2026-11-09 更正：workspace-write 审批模式下沙箱出站 HTTPS 受限——后台任务报 `The SSL connection could not be established`，
+  前台 Invoke-WebRequest 报 `Authentication failed`（TLS 认证失败）→ 此时查 CI/registry/公开 API 用 web_fetch
+  （api.github.com、registry.npmjs.org 直达）。**但升到 danger-full-access 后 `gh run list/view`、`gh release view`、
+  `npm view`、`curl registry.npmjs.org` 都能直连**（v0.28.0 发布实测，四向闭环全程未用代理），别把旧结论当现行限制。
 - 2026-09-08 事实：gh CLI v2.94 已登录 Lenonss（keyring token，credential.helper=`!gh auth git-credential`，
   gh git 协议默认 ssh）→ `gh repo edit/fork/pr`、git clone/ls-remote/推 fork 一次性升权后可用；
   外部仓库克隆用显式 https URL 走 gh 凭据助手，别用 gh 的 ssh URL。
