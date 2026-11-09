@@ -211,6 +211,12 @@ Host 优先采集官方 `workspaceChanges` 的轮次净差异；旧版逐工具�
   `before:null` 不作为新建依据；部分成功只记录实际观测到的变化，unknown/畸形结果提供诊断。
   缺少 raw byte 能力、二进制、无可信基线或超限时不伪造可撤记录。UTF-8 BOM 和行尾按字节保留。
   可另外从版本库导入基线改动（git / svn / Perforce）。
+  dsh-ops 写工具同样环绕采集：`ops_edit_file` / `ops_write_file` / `ops_remove` 按 `arguments.path` 取证，
+  `ops_copy` / `ops_move` 追加 `arguments.to`（源删除 + 目标新增各一条）；`ops_replace` 目标执行前未知，
+  先按字面量 `pattern` 在替换作用域（`path`，glob 相对该作用域）内预读候选，最多 16 个文件，
+  执行后用回执 `items` 对齐——回执完成却没预读到的路径只记采集诊断，绝不伪造基线；
+  `dryRun` 预览不预读也不出条目。`ops_bash` 等非声明式写盘不在实时采集范围（git 工作区仍由官方每轮
+  快照展示；非 git 工作区可手动从版本库导入基线）。
 - **采集诊断**：进程内按工作区最多 50 条、全局最多 500 条；会话/插件释放后清理，Host 重启不保留。
   它不替代官方持久化采集完整性记录，也不绕过写回内容和 provider 原子版本守卫。
 - **采集作用域**：写前冻结当前 `workingDirectory`、provider 与目标；写后读回完成才释放
@@ -587,13 +593,13 @@ profile 请替换为实际目标，不要把示例目录当成当前运行 profi
 
 ```bash
 # ① Git 安装（clone + prepare 构建；推荐打固定 tag）
-dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.27.2
+dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.28.0
 
 # ② npm 注册表（发布到 npm 后）
-dsh plugin --profile web add dsh-vscode-mode@0.27.2
+dsh plugin --profile web add dsh-vscode-mode@0.28.0
 
 # ③ GitHub Release tgz 直装（Release asset 可用后）
-dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.27.2/dsh-vscode-mode-0.27.2.tgz
+dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.28.0/dsh-vscode-mode-0.28.0.tgz
 ```
 
 > **DSH 版本政策（0.17.0 起）**：六项 DSH peer 仍统一声明为 `*`，另以
@@ -973,6 +979,7 @@ Keep All / Undo All 却是亮的。修复：单文件 Keep / Undo 覆盖冲突�
 
 | 版本 | 要点 |
 | --- | --- |
+| v0.28.0 | dsh-ops 写工具纳入待审差异采集：ops_edit_file / ops_write_file / ops_remove / ops_copy / ops_move 可查看差异、Keep、Undo；ops_replace 按候选预读 + 回执对齐尽力采集 |
 | v0.27.2 | 当前编辑文件 Tab 自动滚入可见区域；分组独立定位，适配宽度变化，不抢编辑焦点 |
 | v0.27.1 | 修复仅 LF/CRLF 或 BOM 差异造成的空待审与差异栏残留；统一累计待审路径路由并过滤已归档历史记录 |
 | v0.27.0 | DSH alpha.3 官方菜单/Forge 导航/设置图标与能力诊断；多目标 patch 字节采集；回滚版本与会话策略守卫；工作区共享差异基线；隐藏轮询门控与导航隔离 |
@@ -988,8 +995,9 @@ Keep All / Undo All 却是亮的。修复：单文件 Keep / Undo 覆盖冲突�
 | v0.23.0 | 快捷菜单：可拖动悬浮按钮 + 自定义菜单树 |
 
 <details>
-<summary>完整版本记录（v0.27.2 → v0.1.5x，点击展开）</summary>
+<summary>完整版本记录（v0.28.0 → v0.1.5x，点击展开）</summary>
 
+- **v0.28.0**：把 dsh-ops 的写工具接进累计待审通道——`ops_edit_file` / `ops_write_file` / `ops_remove` / `ops_copy` / `ops_move` 执行前冻结写前基线、执行后读回真实内容，面板可查看差异、Keep 与 Undo；`ops_replace` 以替换作用域为搜索根按字面量预读候选（最多 16 个文件）、执行后用回执对齐，未预读到的文件只记缺口不伪造基线；`dryRun` 预览不采集。候选搜索直接走 `searchRipgrepContent`，不抢占用户的同根搜索。`ops_bash` 内的写盘、PTC 内联工具与非 git 工作区仍未覆盖：git 侧由官方快照列出但无字节证据，非 git 侧可走版本库导入 RPC 兜底。类型检查 0 error；全量 301 文件 3835 通过 / 22 跳过 + `node --test` 9/9；构建双面通过。Host 改动需重启 DSH 才生效，本次未安装、未重启，真实面板 Keep/Undo 冒烟缺口经维护者接受。参见 [0.28.0 发布说明](docs/release-0.28.0.md)。
 - **v0.27.2**：活动文件与计划预览 Tab 按编辑分组独立保持可见；打开、切换、关闭页签及编辑区尺寸变化后做最小横向定位，已可见时不滚动，不抢键盘焦点、不带动正文。保留手动横滚，超宽 Tab 显示名称起始部分。当前 GUI 未加载新 bundle，真实交互验收缺口已由用户接受；发布不自动安装或重启。参见 [0.27.2 发布说明](docs/release-0.27.2.md)。
 
 - **v0.27.1**：净零判定复用差异生成器的逻辑行口径，消除仅 LF/CRLF 或 BOM 不同造成的「无差异块但仍计入待审」；保留真实文本与末尾换行增删，不改原始快照和磁盘文件。累计待审详情与工具栏统一身份解析，避免误走历史改动栏；汇总与批量列表排除已归档记录。客户端空文本差异收敛保留现有能力、脏缓冲和忙状态守卫。Web Host 重启后实测三个空待审归零、差异栏消失，三个游戏文件 SHA256 不变。参见 [0.27.1 发布说明](docs/release-0.27.1.md)。

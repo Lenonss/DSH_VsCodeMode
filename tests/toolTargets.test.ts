@@ -15,4 +15,19 @@ describe('toolTargets', () => {
     await expect(toolTargets({ name: 'apply_patch', arguments: { input: 'patch' } }, null)).rejects.toThrow('parser unavailable')
     await expect(toolTargets({ name: 'apply_patch' }, () => [])).rejects.toThrow('input unavailable')
   })
+  it('maps dsh-ops single-target writes onto arguments.path', async () => {
+    for (const name of ['ops_edit_file', 'ops_write_file', 'ops_remove']) {
+      expect(await toolTargets({ name, arguments: { path: 'a' } })).toEqual(['a'])
+    }
+  })
+  it('returns both dsh-ops source and destination without duplicates', async () => {
+    expect(await toolTargets({ name: 'ops_move', arguments: { path: 'a', to: 'b' } })).toEqual(['a', 'b'])
+    expect(await toolTargets({ name: 'ops_copy', arguments: { path: 'a', to: 'a' } })).toEqual(['a'])
+    expect(await toolTargets({ name: 'ops_move', arguments: { path: 'a' } })).toEqual(['a'])
+  })
+  it('leaves undeclared ops tools without targets', async () => {
+    expect(await toolTargets({ name: 'ops_replace', arguments: { path: '.', pattern: 'a' } })).toEqual([])
+    expect(await toolTargets({ name: 'ops_bash', arguments: { path: 'a' } })).toEqual([])
+    expect(await toolTargets({ name: 'ops_write_image', arguments: { path: 'a' } })).toEqual([])
+  })
 })

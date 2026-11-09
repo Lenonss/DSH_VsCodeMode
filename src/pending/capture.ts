@@ -5,11 +5,18 @@
 import { cwdOfSession } from '../store.js'
 import type { Ctx } from '../store.js'
 import { log } from '../log.js'
-import { toolTargets, patchDiagnostics } from '../toolTargets.js'
+import { toolTargets, patchDiagnostics, OPS_PREFIX } from '../toolTargets.js'
+import { replaceCandidates, BULK_LIMIT } from './bulkTargets.js'
+import type { BulkSearcher } from './bulkTargets.js'
 import { rawText, rawReviewFile } from '../reviewEvidence.js'
 
-/** 可被采信为待审来源的写文件工具。 */
-const WRITE_TOOLS = ['edit', 'write', 'str_replace_editor', 'apply_patch']
+/** 可被采信为待审来源的写文件工具（含 dsh-ops 的单目标写工具）。 */
+const WRITE_TOOLS = [
+  'edit', 'write', 'str_replace_editor', 'apply_patch',
+  OPS_PREFIX + 'edit_file', OPS_PREFIX + 'write_file', OPS_PREFIX + 'remove', OPS_PREFIX + 'copy', OPS_PREFIX + 'move',
+]
+/** 批量替换：目标执行前未知，走候选预读 + 回执对齐。 */
+const BULK_TOOL = OPS_PREFIX + 'replace'
 /** 单文件文本上限：超过即标注 oversized，不静默截断。 */
 const MAX_TEXT = 1024 * 1024
 const captureGaps = new Map<string, { cwd: string; sessionId: string; message: string }>()
@@ -51,13 +58,15 @@ interface CaptureState {
   busy: Set<string>
   stopped: boolean
   disposed: Set<string>
+  /** 批量替换候选搜索注入点；缺省使用打包 ripgrep。 */
+  search?: BulkSearcher
 }
 
 /** 工具的写工具参数形状；只取本采集关心的字段。 */
 interface WriteExec {
   id?: string
   name?: string
-  arguments?: { file_path?: unknown; path?: unknown; input?: unknown }
+  arguments?: { file_path?: unknown; path?: unknown; to?: unknown; input?: unknown; dryRun?: unknown; pattern?: unknown; glob?: unknown }
   agent?: { session?: { id?: string; cwd?: string } }
 }
 
@@ -68,8 +77,10 @@ interface WriteExec {
  * @param sink 已确认写入的接收方
  * @returns 可释放的采集器
  */
-export function installPending(ctx: Ctx, sink: (write: PendingWrite) => void): PendingCapture {
-  const state: CaptureState = { busy: new Set<string>(), stopped: false, disposed: new Set<string>() }
+export function installPending(
+  ctx: Ctx, sink: (write: PendingWrite) => void, options?: { search?: BulkSearcher },
+): PendingCapture {
+  const state: CaptureState = { busy: new Set<string>(), stopped: false, disposed: new Set<string>(), search: options?.search }
   ctx.on('tools/execute', (exec: WriteExec, next: () => Promise<unknown>) => aroundTool(ctx, state, sink, exec, next))
   ctx.on('session/disposed', (session: { id: string }) => {
     state.disposed.add(session.id)
@@ -125,6 +136,113 @@ interface CapturePlan {
   fs: any
 }
 
+/** 替换回执里的一条文件结果；只关心目标与完成状态。 */
+interface BulkItem { path: string; status?: string }
+
+/**
+ * @private
+ * @author ddj 2026年11月09号
+ * @description: dryRun 只预览不落盘，既不预读基线也不产生待审条目。
+ * @param exec 工具分发上下文
+ * @returns 是否预览调用
+ */
+function isDryRun(exec: WriteExec): boolean {
+  return exec.arguments?.dryRun === true
+}
+
+/**
+ * @private
+ * @author ddj 2026年11月09号
+ * @description: 解析批量替换回执里的文件条目；形状不符返回空，交给官方快照兜底。
+ * @param result 工具返回值
+ * @returns 带路径的回执条目
+ */
+function bulkItems(result: unknown): BulkItem[] {
+  const envelope = result as { value?: unknown } | null
+  const payload = (envelope?.value ?? result) as { items?: unknown } | null
+  if (!Array.isArray(payload?.items)) return []
+
+  const items: BulkItem[] = []
+  for (const raw of payload.items as unknown[]) {
+    const item = raw as { path?: unknown; status?: unknown } | null
+    if (!item || typeof item.path !== 'string' || !item.path) continue
+    items.push({ path: item.path, status: typeof item.status === 'string' ? item.status : undefined })
+  }
+  return items
+}
+
+/**
+ * @private
+ * @author ddj 2026年11月09号
+ * @description: 求本次调用的采集目标；批量替换先按字面量预读候选，其余按工具参数取路径。
+ * @param ctx Host 生命周期
+ * @param cwd 工作区
+ * @param exec 工具分发上下文
+ * @param bulk 是否批量替换
+ * @returns 目标路径与批量替换的候选总数
+ * @throws 候选求值失败或工具参数不可用
+ */
+async function captureTargets(
+  ctx: Ctx, cwd: string, exec: WriteExec, bulk: boolean, search?: BulkSearcher,
+): Promise<{ paths: string[]; total: number }> {
+  if (!bulk) return { paths: await toolTargets(exec), total: 0 }
+  const session = exec.agent?.session ?? { id: '' }
+  return replaceCandidates({ ctx, session: session as never, cwd, args: exec.arguments ?? {} }, search)
+}
+
+/**
+ * @private
+ * @author ddj 2026年11月09号
+ * @description: 用替换回执对齐预读候选；回执完成但没预读到的文件只记 gap，不伪造基线。
+ * @param scope 工作区作用域
+ * @param exec 工具分发上下文
+ * @param result 工具返回值
+ * @param plans 已完成写前冻结的采集计划
+ * @returns 无；路径解析失败只记 gap
+ */
+async function reconcileBulk(
+  scope: { cwd: string; sessionId: string; fs: any }, exec: WriteExec, result: unknown, plans: CapturePlan[],
+): Promise<void> {
+  const known = new Set(plans.map((plan) => plan.identity))
+  for (const item of bulkItems(result)) {
+    if (item.status !== 'completed') continue
+    try {
+      const target = await scope.fs.resolve(item.path, { cwd: scope.cwd })
+      if (known.has(scope.fs.processPath(target))) continue
+      recordGap(scope, exec, item.path, '未预读基线，未采集该文件前后差异')
+    } catch (error) {
+      recordGap(scope, exec, item.path, error)
+    }
+  }
+}
+
+/**
+ * @private
+ * @author ddj 2026年11月09号
+ * @description: 逐目标冻结写前基线；预算超限、路径不可用或读取失败只影响对应目标。
+ * @param scope 工作区作用域
+ * @param state 采集生命周期状态
+ * @param exec 工具分发上下文
+ * @param paths 本次调用的目标路径
+ * @returns 已冻结的采集计划
+ */
+async function buildPlans(
+  scope: { cwd: string; sessionId: string; fs: any }, state: CaptureState, exec: WriteExec, paths: string[],
+): Promise<CapturePlan[]> {
+  const plans: CapturePlan[] = []
+  for (const path of paths) {
+    try {
+      if (plans.length >= BULK_LIMIT) throw new Error('capture target budget exceeded')
+      const plan = await planOf(scope, state, path)
+      if (plan) plans.push(plan)
+    } catch (error) {
+      if (!state.stopped && !state.disposed.has(scope.sessionId)) recordGap(scope, exec, path, error)
+      log.debug('待审采集跳过：' + path + ': ' + String(error))
+    }
+  }
+  return plans
+}
+
 /**
  * @author ddj 2026年10月30号
  * @description: 写工具执行前后各读一次，内容变化才上报；任何采集异常都不改变工具结果。
@@ -139,26 +257,34 @@ async function aroundTool(
   ctx: Ctx, state: CaptureState, sink: (write: PendingWrite) => void,
   exec: WriteExec, next: () => Promise<unknown>,
 ): Promise<unknown> {
-  if (state.stopped || !WRITE_TOOLS.includes(String(exec.name))) return next()
+  const name = String(exec.name)
+  const bulk = name === BULK_TOOL
+  if (state.stopped || (!bulk && !WRITE_TOOLS.includes(name)) || isDryRun(exec)) return next()
+
   const session = exec.agent?.session
   const cwd = session ? cwdOfSession(ctx, session as never) : null
   if (!session?.id || !cwd) return next()
+
   const scope = { cwd, sessionId: session.id, fs: ctx.get('fs') }
-  const plans: CapturePlan[] = []
+  let targets: { paths: string[]; total: number }
   try {
-    const paths = await toolTargets(exec)
-    for (const path of paths) {
-      try {
-        if (plans.length >= 16) throw new Error('capture target budget exceeded')
-        const plan = await planOf(scope, state, path)
-        if (plan) plans.push(plan)
-      } catch (error) { if (!state.stopped && !state.disposed.has(scope.sessionId)) recordGap(scope, exec, path, error); log.debug('待审采集跳过：' + path + ': ' + String(error)) }
-    }
-  } catch (error) { if (!state.stopped && !state.disposed.has(scope.sessionId)) recordGap(scope, exec, String(exec.name), error); log.debug('待审目标不可用：' + String(error)) }
+    targets = await captureTargets(ctx, scope.cwd, exec, bulk, state.search)
+  } catch (error) {
+    recordGap(scope, exec, bulk ? BULK_TOOL : name, error)
+    log.debug('待审目标不可用：' + String(error))
+    return next()
+  }
+
+  // 候选超出预算时只保证前 BULK_LIMIT 个文件有真实基线，其余在回执对齐阶段补 gap。
+  if (bulk && targets.total > targets.paths.length) {
+    recordGap(scope, exec, BULK_TOOL, '批量替换候选 ' + targets.total + ' 个文件，仅采集前 ' + targets.paths.length + ' 个')
+  }
+  const plans = await buildPlans(scope, state, exec, targets.paths)
 
   try {
     const result = await next()
-    if (exec.name === 'apply_patch' && !state.stopped && !state.disposed.has(scope.sessionId)) {
+    if (bulk && !state.stopped && !state.disposed.has(scope.sessionId)) await reconcileBulk(scope, exec, result, plans)
+    if (name === 'apply_patch' && !state.stopped && !state.disposed.has(scope.sessionId)) {
       for (const diagnostic of patchDiagnostics(result)) recordGap(scope, exec, 'apply_patch', diagnostic)
     }
     return result
