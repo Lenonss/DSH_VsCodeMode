@@ -875,8 +875,10 @@ pdf.js vendor + 图标 + launcher）、`skills/`（插件技能组）、`src/`�
 - `.github/workflows/ci.yml`：push/PR → install → typecheck → test → build →
   `npm pack` 校验 + 上传 tgz。
 - `.github/workflows/release.yml`：打 `v*` tag → 同上构建 → GitHub Release
-  （附 tgz）→ **若配置了 `NPM_TOKEN` secret** 则同时 `npm publish`（npm 通道）；
-  未配 NPM_TOKEN 时仅 GitHub Release 通道，不影响安装。
+  （附 tgz）→ 用 **Trusted Publishing（OIDC）** 发布 npm，不再依赖仓库 secret
+  `NPM_TOKEN`。前提：npm 包设置里已配置 trusted publisher
+  （`Lenonss` / `DSH_VsCodeMode` / `release.yml`，且允许 `npm publish`）；
+  配置未生效时 publish 步骤以 ENEEDAUTH 失败，GitHub Release 仍照常生成。
 
 ### 开发期注入（超级模组注入器，可选）
 

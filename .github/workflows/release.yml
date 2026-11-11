@@ -11,6 +11,7 @@ jobs:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     permissions:
       contents: write
+      id-token: write
     steps:
       - uses: actions/checkout@v5
 
@@ -62,32 +63,22 @@ jobs:
           files: '*.tgz'
           generate_release_notes: true
 
-      # 仅当仓库配置了 NPM_TOKEN 时发布到 npm（env 传入、脚本内判断；
-      # GitHub Actions 的 secrets 上下文不允许出现在 if 条件，解析即失败）
+      # Trusted Publishing（OIDC）：不再依赖 NPM_TOKEN。npm CLI 会为本次 release
+      # 向 GitHub Actions 换取短时凭据，仅对 npmjs.com 上为该包配置的
+      # "Lenonss / DSH_VsCodeMode / release.yml" 这一条 trusted publisher 生效。
+      # Node 22 自带 npm 10.x，OIDC 需要 ≥ 11.5.1，故先升级 npm。
+      - name: Upgrade npm for OIDC
+        run: npm install -g npm@^11.5.1
+
       - name: Publish to npm
-        env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          if [ -z "${NPM_TOKEN}" ]; then
-            echo "NPM_TOKEN secret not configured — skipping npm publish (GitHub Release still attached)."
-            exit 0
-          fi
-          npm config set //registry.npmjs.org/:_authToken="${NPM_TOKEN}"
-          npm publish --access public
+        run: npm publish --access public
 
       # 发布后回读注册表 tarball，校验 main/exports 入口文件存在——
       # 镜像/CDN 刚发布时同步不完整会让用户端更新报"缺少入口文件"并回滚。
       # 发布后同步有秒级~分钟级延迟，用重试窗口覆盖，超时仍未就绪则判失败。
       - name: Verify published tarball (entry files present)
-        env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          if [ -z "${NPM_TOKEN}" ]; then
-            echo "npm publish skipped — nothing to verify."
-            exit 0
-          fi
           version="$(node -p "require('./package.json').version")"
-          npm config set //registry.npmjs.org/:_authToken="${NPM_TOKEN}"
           ok=0
           for attempt in $(seq 1 15); do
             tarball="$(npm view "dsh-vscode-mode@${version}" dist.tarball 2>/dev/null || true)"
