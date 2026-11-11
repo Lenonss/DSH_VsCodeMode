@@ -485,6 +485,11 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
   解除：备份 profile `package.json` → 依赖改 `^<version>` → `cmd /c rmdir` 删 Junction（只删重解析点，
   禁用 `Remove-Item -Recurse` 以防触达源码）→ profile 内 `pnpm install` → 重启 DSH 生效
   （运行中 host 半仍是旧代码）。解除后源码改动不再直达 profile，需走 tag 发布 + `pnpm install`。
+- 2026-11-11 事实（开发形态热重载 host，可免重启）：profile 依赖为 `link:` + junction 时，重建
+  `lib/` 不一定自动重载 host；用 Plugin Manager 关/开该插件（entryId `include:dsh-vscode-mode`）
+  触发一次 profile recomposition，新的 host bundle 即生效，会话不中断。本会话实测：重载前同一
+  `edrv.review.detail` 返回 `coarse=true`/+1141/−1140/1 hunk，重载后返回 `+2/−1`/2 hunks。
+  重载后右侧栏 slot 可能停在与宿主无关的占位（`data-slot-error`、右栏宽度 0），整页刷新一次即恢复。
 - 2026-09-08 坑：profile 依赖写 `file:...tgz` 但实际装的是手动 Junction 时，`readDevForm` 只认
   `link:` 前缀 → 兼容性报告误报「非开发形态」；依赖声明必须与实际安装方式一致。
 - 2026-09-08 事实：web profile pnpm 为 `nodeLinker: hoisted`（无 .pnpm 分层，包是顶层实目录）；

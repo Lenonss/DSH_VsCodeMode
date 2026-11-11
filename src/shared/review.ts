@@ -14,6 +14,11 @@ export interface ReviewHunk {
   newLines: number
   lines: string[]
 }
+/**
+ * @author ddj 2026年11月11号
+ * @description: 文本差异；coarse 表示比较中有区域退化为整段替换——官方来源是宿主比较超时，
+ * 待审来源是行差异引擎在无唯一行锚点时退化。为 true 时不作块级 Undo 依据。
+ */
 export type OfficialDiff = { kind: 'text'; path: string; display: string; before: boolean; after: boolean; hunks: ReviewHunk[]; coarse: boolean }
   | { kind: 'binary' | 'oversized'; path: string; display: string }
 export interface OfficialSummary {

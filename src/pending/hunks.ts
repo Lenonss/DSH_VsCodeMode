@@ -1,18 +1,12 @@
 /**
  * 待审差异构造：把两侧全文变成官方视图复用的 hunk，并提供块级 Keep/Revert 的文本合成。
+ * 行差异交给 lineDiff 引擎（唯一行锚点切分 + 小窗口 LCS），只有真整段替换才标 coarse。
  * @author ddj 2026年10月29号
  */
-import type { OfficialDiff, ReviewHunk } from '../shared/review.js'
+import type { OfficialDiff } from '../shared/review.js'
 import type { ReviewBlock } from '../shared/reviewRegions.js'
 import { logicalLines } from '../shared/lineEndings.js'
-
-/** 每个 hunk 的上下文行数。 */
-const CONTEXT = 3
-/** LCS 单元格上限：超过后退化为整段替换，避免大文件卡死。 */
-const CELL_LIMIT = 1_000_000
-
-/** 一行差异操作。 */
-type LineOp = { kind: ' ' | '-' | '+'; text: string }
+import { lineHunks } from './lineDiff.js'
 
 /**
  * @author ddj 2026年10月29号
@@ -21,11 +15,11 @@ type LineOp = { kind: ' ' | '-' | '+'; text: string }
  * @param display 展示名
  * @param oldText 基线全文
  * @param newText 当前全文
- * @returns 文本差异
+ * @returns 文本差异；coarse 表示比较中确有区域退化为整段替换
  */
 export function textDiff(path: string, display: string, oldText: string, newText: string): OfficialDiff {
-  const hunks = buildHunks(logicalLines(oldText), logicalLines(newText))
-  return { kind: 'text', path, display, before: true, after: true, hunks, coarse: hunks.length > 0 && isCoarse(oldText, newText) }
+  const { hunks, degraded } = lineHunks(logicalLines(oldText), logicalLines(newText))
+  return { kind: 'text', path, display, before: true, after: true, hunks, coarse: degraded }
 }
 
 /**
@@ -100,142 +94,4 @@ function locateSpan(lines: string[], pattern: string[]): number | null {
     at = offset
   }
   return at >= 0 ? at : null
-}
-
-/**
- * @author ddj 2026年10月29号
- * @description: 生成带上下文的标准 hunk 列表。
- * @param oldLines 基线行
- * @param newLines 当前行
- * @returns hunk 列表
- */
-function buildHunks(oldLines: string[], newLines: string[]): ReviewHunk[] {
-  const ops = diffLines(oldLines, newLines)
-  const hunks: ReviewHunk[] = []
-  let index = 0
-  let oldLine = 0
-  let newLine = 0
-  while (index < ops.length) {
-    if (ops[index].kind === ' ') {
-      oldLine++
-      newLine++
-      index++
-      continue
-    }
-    const head = ops.slice(Math.max(0, index - CONTEXT), index)
-    const collected: LineOp[] = []
-    let probe = index
-    while (probe < ops.length) {
-      const op = ops[probe]
-      if (op.kind !== ' ') { collected.push(op); probe++; continue }
-      const rest = ops.slice(probe, probe + CONTEXT * 2 + 1)
-      if (rest.some((item) => item.kind !== ' ')) { collected.push(op); probe++; continue }
-      break
-    }
-    const tail = ops.slice(probe, probe + CONTEXT)
-    const oldStartLine = oldLine - head.length + 1
-    const newStartLine = newLine - head.length + 1
-    hunks.push(makeHunk([...head, ...collected, ...tail], oldStartLine, newStartLine))
-    for (const op of collected) {
-      if (op.kind !== '+') oldLine++
-      if (op.kind !== '-') newLine++
-    }
-    oldLine += head.length + tail.length
-    newLine += head.length + tail.length
-    index = probe + tail.length
-  }
-  return hunks
-}
-
-/**
- * @author ddj 2026年10月29号
- * @description: 由一段操作装配 hunk。
- * @param ops 该 hunk 的操作
- * @param oldStart 基线起始行
- * @param newStart 当前起始行
- * @returns hunk
- */
-function makeHunk(ops: LineOp[], oldStart: number, newStart: number): ReviewHunk {
-  const oldCount = ops.filter((op) => op.kind !== '+').length
-  const newCount = ops.filter((op) => op.kind !== '-').length
-  return { oldStart, oldLines: oldCount, newStart, newLines: newCount, lines: ops.map((op) => op.kind + op.text) }
-}
-
-/**
- * @author ddj 2026年10月29号
- * @description: 行级差异：先剪公共前后缀，剩余部分在限额内做 LCS，超限按整段替换。
- * @param oldLines 基线行
- * @param newLines 当前行
- * @returns 顺序完整的操作列表
- */
-function diffLines(oldLines: string[], newLines: string[]): LineOp[] {
-  let head = 0
-  while (head < oldLines.length && head < newLines.length && oldLines[head] === newLines[head]) head++
-  let tail = 0
-  while (tail < oldLines.length - head && tail < newLines.length - head
-    && oldLines[oldLines.length - 1 - tail] === newLines[newLines.length - 1 - tail]) tail++
-  const left = oldLines.slice(head, oldLines.length - tail)
-  const right = newLines.slice(head, newLines.length - tail)
-  const middle = left.length * right.length > CELL_LIMIT ? coarseOps(left, right) : lcsOps(left, right)
-  return [
-    ...oldLines.slice(0, head).map((text) => ({ kind: ' ' as const, text })),
-    ...middle,
-    ...oldLines.slice(oldLines.length - tail).map((text) => ({ kind: ' ' as const, text })),
-  ]
-}
-
-/**
- * @author ddj 2026年10月29号
- * @description: 超限时的退化口径：整段删除再整段新增，绝不谎报逐行对应。
- * @param left 基线剩余行
- * @param right 当前剩余行
- * @returns 操作列表
- */
-function coarseOps(left: string[], right: string[]): LineOp[] {
-  return [
-    ...left.map((text) => ({ kind: '-' as const, text })),
-    ...right.map((text) => ({ kind: '+' as const, text })),
-  ]
-}
-
-/**
- * @author ddj 2026年10月29号
- * @description: 限额内的 LCS 行差异。
- * @param left 基线剩余行
- * @param right 当前剩余行
- * @returns 操作列表
- */
-function lcsOps(left: string[], right: string[]): LineOp[] {
-  const rows = left.length + 1
-  const cols = right.length + 1
-  const table = new Uint32Array(rows * cols)
-  for (let i = left.length - 1; i >= 0; i--) {
-    for (let j = right.length - 1; j >= 0; j--) {
-      table[i * cols + j] = left[i] === right[j]
-        ? table[(i + 1) * cols + j + 1] + 1
-        : Math.max(table[(i + 1) * cols + j], table[i * cols + j + 1])
-    }
-  }
-  const ops: LineOp[] = []
-  let i = 0
-  let j = 0
-  while (i < left.length && j < right.length) {
-    if (left[i] === right[j]) { ops.push({ kind: ' ', text: left[i] }); i++; j++; continue }
-    if (table[(i + 1) * cols + j] >= table[i * cols + j + 1]) { ops.push({ kind: '-', text: left[i] }); i++ }
-    else { ops.push({ kind: '+', text: right[j] }); j++ }
-  }
-  while (i < left.length) ops.push({ kind: '-', text: left[i++] })
-  while (j < right.length) ops.push({ kind: '+', text: right[j++] })
-  return ops
-}
-
-/**
- * @author ddj 2026年10月29号
- * @description: 判断这次差异是否触发了大文件退化口径。
- * @param oldText 基线全文
- * @param newText 当前全文
- * @returns 是否粗粒度
- */
-function isCoarse(oldText: string, newText: string): boolean {
-  return logicalLines(oldText).length * logicalLines(newText).length > CELL_LIMIT
 }

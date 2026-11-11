@@ -217,6 +217,10 @@ Host 优先采集官方 `workspaceChanges` 的轮次净差异；旧版逐工具�
   执行后用回执 `items` 对齐——回执完成却没预读到的路径只记采集诊断，绝不伪造基线；
   `dryRun` 预览不预读也不出条目。`ops_bash` 等非声明式写盘不在实时采集范围（git 工作区仍由官方每轮
   快照展示；非 git 工作区可手动从版本库导入基线）。
+- **差异精度**：行差异先裁公共前后缀，再按两侧唯一出现的相同行做锚点递归切分，
+  只在足够小的窗口内做 LCS；千行文件上的少量/分散改动按真实位置成块，不再因
+  单元格上限整段替换。只有窗口内确实没有可匹配行时才整段替换并标 `coarse`；
+  同时修正多 hunk 的 `oldStart/newStart` 行号（此前每块会多偏移一个上下文长度）。
 - **采集诊断**：进程内按工作区最多 50 条、全局最多 500 条；会话/插件释放后清理，Host 重启不保留。
   它不替代官方持久化采集完整性记录，也不绕过写回内容和 provider 原子版本守卫。
 - **采集作用域**：写前冻结当前 `workingDirectory`、provider 与目标；写后读回完成才释放
@@ -593,13 +597,13 @@ profile 请替换为实际目标，不要把示例目录当成当前运行 profi
 
 ```bash
 # ① Git 安装（clone + prepare 构建；推荐打固定 tag）
-dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.29.0
+dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.29.1
 
 # ② npm 注册表（发布到 npm 后）
-dsh plugin --profile web add dsh-vscode-mode@0.29.0
+dsh plugin --profile web add dsh-vscode-mode@0.29.1
 
 # ③ GitHub Release tgz 直装（Release asset 可用后）
-dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.29.0/dsh-vscode-mode-0.29.0.tgz
+dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.29.1/dsh-vscode-mode-0.29.1.tgz
 ```
 
 > **DSH 版本政策（0.17.0 起）**：六项 DSH peer 仍统一声明为 `*`，另以
@@ -981,6 +985,7 @@ Keep All / Undo All 却是亮的。修复：单文件 Keep / Undo 覆盖冲突�
 
 | 版本 | 要点 |
 | --- | --- |
+| v0.29.1 | 待审行差异引擎精准化：唯一行锚点切分 + 小窗口 LCS，千行文件不再整段替换；修正多 hunk 行号偏移 |
 | v0.29.0 | Excel 引擎与编解码改为按需分块（根包 930 KB，打开表格才加载 11.4 MB 引擎）；调试 hover / 侧栏拖拽 / 快捷菜单测量性能优化；官方文件侧栏 CSS 运行时兼容 |
 | v0.28.0 | dsh-ops 写工具纳入待审差异采集：ops_edit_file / ops_write_file / ops_remove / ops_copy / ops_move 可查看差异、Keep、Undo；ops_replace 按候选预读 + 回执对齐尽力采集 |
 | v0.27.2 | 当前编辑文件 Tab 自动滚入可见区域；分组独立定位，适配宽度变化，不抢编辑焦点 |
@@ -998,7 +1003,18 @@ Keep All / Undo All 却是亮的。修复：单文件 Keep / Undo 覆盖冲突�
 | v0.23.0 | 快捷菜单：可拖动悬浮按钮 + 自定义菜单树 |
 
 <details>
-<summary>完整版本记录（v0.29.0 → v0.1.5x，点击展开）</summary>
+<summary>完整版本记录（v0.29.1 → v0.1.5x，点击展开）</summary>
+
+- **v0.29.1**：待审差异引擎重写——新增 `src/pending/lineDiff.ts`：先裁窗口公共前后缀，再按两侧
+  唯一出现的相同行做锚点、按最长递增链切分，只在小窗口内做 LCS；单窗口 100 万单元格、单次差异
+  1200 万单元格（约 80 ms）与深度 64 三层预算兜底。千行文件上的少量/分散改动不再因单元格上限
+  整段替换，只有真正无锚点的区域才标 `coarse`。同版修正 `buildHunks` 每块重复计入 `head`
+  导致的多 hunk 行号偏移（块 ID、行区间选块、删除行 gutter），并新增 9 例精准性/行号/重建/
+  性能测试。验证：typecheck 0；全量 304 文件 3861 通过 / 22 跳过 + `node --test` 9/9；
+  真实归档历史 20 个旧触发状态 20/20 精准（最坏 6,094,517 单元格从整段替换变为 -0/+76）；
+  Web 3080 真机重载前后对比：旧 host `coarse=true`/+1141/−1140/1 hunk → 新 host
+  `coarse=false`/+2/−1/2 hunks；构建 host 1,101,565 B、根 client 930,057 B，产物校验通过。
+  见 [0.29.1 发布说明](docs/release-0.29.1.md)。
 
 - **v0.29.0**：Excel 引擎与编解码按需分块——根包不再内联 Univer / ExcelJS / fflate / saxes，打开表格才加载 `client.excel.js`（引擎面板）与 `client.excelcodec.js`（解码/导出）；`ExcelHost` 负责加载与重试，`mountExcel` 复用同一引擎节点（切换文件不重建），`codecLoader` 单例懒加载，`lazyPanel` 扩展为通用 `loadChunk`。构建新增两个 chunk entry 并启用 minify，`check-client-artifacts` 增加逐 chunk 契约与根包 3 MB 预算 / 引擎下限，防止引擎被重新内联。同版性能修复：调试 hover 树的 MutationObserver 只处理本批次受影响 hover 并跳过 Monaco 展示层；侧栏拖拽宽度改为 rAF 合并绘制、pointerup 一次性提交；快捷菜单测量收敛到 `quickMeasure`；官方文件侧栏 CSS 以运行时补丁兼容（不改安装包）。验证：typecheck 0 error；全量 303 文件 3852 通过 / 22 跳过 + `node --test` 9/9；构建 host 1,093,961 B、根 client 930,057 B（v0.28.0 为 23,431,817 B）、client.excel.js 11,371,696 B、client.excelcodec.js 1,002,902 B，产物校验通过；Web 3080 真机冒烟：打开 xlsx 渲染 Univer 面板（canvas ×3）、侧栏拖拽 452→560 px、console 无本插件新增错误（host-bridge 404 来自 dsh-notify-me）。快捷菜单入口与调试 hover 树未做真机冒烟（入口未显示、需 DAP 会话），缺口保留。见 [0.29.0 发布说明](docs/release-0.29.0.md)。
 - **v0.28.0**：把 dsh-ops 的写工具接进累计待审通道——`ops_edit_file` / `ops_write_file` / `ops_remove` / `ops_copy` / `ops_move` 执行前冻结写前基线、执行后读回真实内容，面板可查看差异、Keep 与 Undo；`ops_replace` 以替换作用域为搜索根按字面量预读候选（最多 16 个文件）、执行后用回执对齐，未预读到的文件只记缺口不伪造基线；`dryRun` 预览不采集。候选搜索直接走 `searchRipgrepContent`，不抢占用户的同根搜索。`ops_bash` 内的写盘、PTC 内联工具与非 git 工作区仍未覆盖：git 侧由官方快照列出但无字节证据，非 git 侧可走版本库导入 RPC 兜底。类型检查 0 error；全量 301 文件 3835 通过 / 22 跳过 + `node --test` 9/9；构建双面通过。Host 改动需重启 DSH 才生效，本次未安装、未重启，真实面板 Keep/Undo 冒烟缺口经维护者接受。参见 [0.28.0 发布说明](docs/release-0.28.0.md)。
