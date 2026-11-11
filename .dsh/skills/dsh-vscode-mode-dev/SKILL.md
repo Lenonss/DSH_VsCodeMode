@@ -5,7 +5,7 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
 
 # dsh-vscode-mode 开发/发布经验集（自我更新型技能）
 
-> updated: 2026-11-09 · 维护者：ddj（AI 会话按文末协议更新，保持精炼、去重）
+> updated: 2026-11-11 · 维护者：ddj（AI 会话按文末协议更新，保持精炼、去重）
 > **发布时先读「发布流程」与「失败恢复」**；下方实录是历史证据，不授权当前重跑发布、改 tag 或部署。冲突旧口径以更新后的规则为准。
 - 2026-10-19 实录（v0.17.0 发布：DSH 0.2.1 吸收——locale 元数据 meta 化、engines.dsh、workingDirectory 投影跟随 cd、
   会话级 recordsFeed 轮询收敛、ctx.locale 接入、plugins.detail.section；基线 v0.16.0 @ `8b79f8f`）：
@@ -386,7 +386,7 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
 6. **精确暂存获批清单**（`git add -- <paths>`），比较 `git diff --cached --name-only` 与清单、核对暂存diff及 `git diff --cached --check`。提交必须与三门已验证的内容一致；混合WIP不能仅暂存一部分却用脏树绿灯充当验证，需先获准隔离/验证实际提交树。commit：`release: vX.Y.Z <摘要>`。
    - 2026-11-09 事实（混合 WIP 下的提交树验证，可直接复用）：`git worktree add --detach <临时目录> HEAD` → `git diff --cached > <patch>` → 在 worktree 内 `git apply <patch>` → 用 junction 把主仓 `node_modules` 链过去（`fs.symlinkSync(主仓/node_modules, 'node_modules', 'junction')`）→ 跑三门 → `git worktree remove --force`。约 1.5 分钟就得到「与提交树完全一致」的绿灯（v0.28.0 实测：隔离树 300 文件 3819 通过 / 23 跳过，脏树 301/3835，差异正来自他人 WIP）。
 7. 再查远端基线/版本占用 → `git push origin main` → `git tag vX.Y.Z` → `git push origin vX.Y.Z`；任一步失败即停，记录已成功的步骤，不能盲重复整串命令。核对main/tag指向发布提交。
-8. tag触发 `.github/workflows/release.yml`：tag/版本一致 → 三门 → pack → GitHub Release tgz → 有NPM_TOKEN才publish → Verify；记录CI/Release run ID和步骤结论。**本仓禁止本地 `npm publish`**，只走获批CI，不读取凭据。观察权限/CLI版本以当前证据为准，不沿用旧whoami/版本结论。
+8. tag触发 `.github/workflows/release.yml`：tag/版本一致 → 三门 → pack → GitHub Release tgz → **OIDC Trusted Publishing 发布 npm**（job 权限 `id-token: write`、npm ≥11.5.1；仓库已无 `NPM_TOKEN` secret，凭据按 run 签发）→ Verify；记录CI/Release run ID和步骤结论。**本仓禁止本地 `npm publish`**，只走获批CI，不读取凭据。观察权限/CLI版本以当前证据为准，不沿用旧whoami/版本结论。
 
 ### 发布验收与有限等待
 
@@ -403,6 +403,7 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
 | 安装/typecheck/新测试/构建失败 | 查原文与改动范围；需要源码修复时追加审批 | 把平台路径断言失败一概判为抖动 |
 | 已知计时抖动，失败测试及实现未改、本地与同提交/前次CI绿 | 记录用例与stack；按获批预算最多2次 `gh run rerun <id> --failed`，仅无发布副作用CI任务或publish从未运行的Release任务 | 不看日志直接重跑；已尝试publish后重跑整Release job |
 | publish被跳过、拒绝，或日志/传输结果不明确 | 明确记录未尝试/失败/未知，查metadata与原响应，请用户决定凭据/CI恢复 | 未知状态当成安全重发；本地publish兜底 |
+| publish 报 `ENEEDAUTH` / `need auth` | 查 npmjs 包 Settings 的 trusted publisher 是否 `Valid`、workflow 文件名是否逐字匹配（含 `.yml`、大小写）、job 是否有 `id-token: write`、npm CLI 是否 ≥11.5.1；缺配置就补配置后 `gh run rerun <id> --failed` | 恢复 `NPM_TOKEN` secret 兜底；把 `ENEEDAUTH` 当 registry 问题盲等 |
 | 上传已接受后Verify失败或404 | 只读有限等待；就绪后独立校验实包 | 重跑含publish的job、重打同tag、擅自升版本 |
 | 明确stage证据 | 引导维护者用当前官方支持的CLI/Web与2FA确认/审批 | AI代办审批，重发探针 |
 | gitHead/SRI/入口不一致 | 立即停止，保留证据并请求恢复方案 | 当成延迟盲重试/宣称已发布 |
@@ -417,6 +418,10 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
 - `git add -A` / 自动stash是早期实录，不作默认动作：先逐条确认归属与发布授权，优先精确清单；WIP隔离和恢复都须用户确认，不能盲stash pop覆盖前移基线。
 - v0.3.3平台错误 `tests/skills.test.ts:158` 的 `'/D:/pkg/skills' !== 'D:/pkg/skills'` 说明Windows本地绿不保证ubuntu绿；先查失败步骤和断言。awesome PR #2532曾有过期固定tarball，修改外部收录要单独授权，优先npm映射避免冗余固定版本。
 - 历史pnpm报 `unable to open database file` 不授权跳过脚本；本次用 `npm run` 保留pre/post hooks成功。换执行入口必须确认钩子/测试链等价并按现行沙箱规则处理，不能只调vitest而漏掉native-open或prebuild。
+- 2026-11-11 凭据迁移（token 到期驱动）：写权限 granular token 最长 90 天 → 改 OIDC，仓库不再存任何 npm 凭据。顺序不可颠倒：先在 npmjs 包 Settings 建 trusted publisher（`Lenonss`/`DSH_VsCodeMode`/`release.yml`，**必须勾 Allow npm publish**，新配置 2 天内要完成首次发布否则作废）再推 tag；颠倒时 publish 报 `ENEEDAUTH`（Release 已生成、registry 404），配置 `Valid` 后 `rerun --failed` 即可补发。
+- 2026-11-11 Verify 窗口实测：0.29.0 从 `+ pkg@ver` 到 registry 可读约 10 分钟，30s×15=7.5 分钟会先判失败 → 已改 30s×30=15 分钟；窗口只覆盖常态，超时仍按既有口径独立核验，不重跑含 publish 的 job（0.29.0 那次 run 保留红色、无法补跑因版本已占用）。
+- 2026-11-11 现状：仓库 secrets 无 `NPM_TOKEN`、账号 token 清零、包策略 `Require 2FA and disallow bypass tokens`、账号 2FA 只剩 WebAuthn/passkey（npm 已停 TOTP 注册）→ 换机/重装前先加第二个安全密钥，否则失去 2FA 手段；改这些设置必须现场过 2FA，AI 只能在其后继续。
+- 2026-11-11 本机坑：MSYS `tar -tzf` 列表带 CRLF，`grep -qx 'package/lib/index.js'` 会假报入口缺失 → 用 `grep -cxF` 或先 `tr -d '\r'`；CI 在 ubuntu 不受影响，别据此判包坏了。
 
 
 ## 差异审查（DiffBox / 旁车）设计口径
