@@ -1,47 +1,61 @@
-/** Package-local CJS panel loading; transport, revision URLs and HMR belong to DSH. @author ddj 2026年10月22号 */
+/** Package-local CJS chunk loading; transport, revision URLs and HMR belong to DSH. @author ddj 2026年10月22号 */
 import React from 'react'
 import type { SidebarCtx } from './sidebar/types.js'
 
 type Panel = React.ComponentType<{ ctx: SidebarCtx }>
 type PanelKey = 'rules' | 'debug'
-type PanelImport = (file: string) => Promise<Record<string, unknown>>
-interface PanelLoad { pending?: Promise<Panel>; component?: Panel }
+type ChunkExports = Record<string, unknown>
+type ChunkImport = (file: string) => Promise<ChunkExports>
+interface ChunkLoad<T> { pending?: Promise<T>; value?: T }
 const FILES = { rules: './client.rules.js', debug: './client.debug.js' } as const
 const EXPORTS = { rules: 'RulesPanel', debug: 'DebugPanel' } as const
-const loads = new Map<PanelKey, PanelLoad>()
+const loads = new Map<string, ChunkLoad<unknown>>()
 let generation = 0
-let importer: PanelImport | undefined
+let importer: ChunkImport | undefined
 
 /** @public @author ddj 2026年10月22号 @param transport Injected ModuleLoader require.async, never a global require. @description Start a new plugin generation and discard older results. */
-export function setPanelImport(transport?: PanelImport): void {
+export function setPanelImport(transport?: ChunkImport): void {
   generation++
   loads.clear()
   importer = transport
 }
 
-/** @public @author ddj 2026年10月22号 @param key Fixed built-in panel key. @returns Shared pending load or cached component. @throws Unsupported loader or invalid chunk export. */
-export function loadPanel(key: PanelKey): Promise<Panel> {
-  const cached = loads.get(key)
-  if (cached?.component) return Promise.resolve(cached.component)
+/** @private @author ddj 2026年11月10号 @param file Chunk file relative to the root module. @param pick Projection from raw chunk exports. @returns Shared pending load or cached projection; failures are never cached. */
+function loadModule<T>(file: string, pick: (exports: ChunkExports) => T): Promise<T> {
+  const cached = loads.get(file) as ChunkLoad<T> | undefined
+  if (cached?.value !== undefined) return Promise.resolve(cached.value)
   if (cached?.pending) return cached.pending
   if (!importer) return Promise.reject(new Error('当前 DSH 不支持包内面板加载，请升级宿主'))
 
   const epoch = generation
   const transport = importer
-  const state: PanelLoad = {}
-  const pending = Promise.resolve().then(() => transport(FILES[key])).then((exports) => {
-    const component = exports[EXPORTS[key]]
-    if (typeof component !== 'function') throw new Error('面板脚本缺少组件导出')
+  const state: ChunkLoad<T> = {}
+  const pending = Promise.resolve().then(() => transport(file)).then((exports) => {
+    const value = pick(exports)
     if (epoch !== generation) throw new Error('面板加载已失效，请重试')
-    state.component = component as Panel
-    return state.component
+    state.value = value
+    return value
   }).catch((error) => {
-    if (loads.get(key) === state) loads.delete(key)
+    if (loads.get(file) === state) loads.delete(file)
     throw error
   })
   state.pending = pending
-  loads.set(key, state)
+  loads.set(file, state as ChunkLoad<unknown>)
   return pending
+}
+
+/** @public @author ddj 2026年11月10号 @param file Chunk file relative to the root module. @returns Raw exports, cached per file; used by non-React boundaries such as the Excel engine and codec. */
+export function loadChunk(file: string): Promise<ChunkExports> {
+  return loadModule(file, (exports) => exports)
+}
+
+/** @public @author ddj 2026年10月22号 @param key Fixed built-in panel key. @returns Shared pending load or cached component. @throws Unsupported loader or invalid chunk export. */
+export function loadPanel(key: PanelKey): Promise<Panel> {
+  return loadModule(FILES[key], (exports) => {
+    const component = exports[EXPORTS[key]]
+    if (typeof component !== 'function') throw new Error('面板脚本缺少组件导出')
+    return component as Panel
+  })
 }
 
 /** @public @author ddj 2026年10月22号 @param props Fixed panel and current context. @returns Loading, explicit retry, or the loaded panel subtree. */

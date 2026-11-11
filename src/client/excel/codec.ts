@@ -1,8 +1,12 @@
 import ExcelJS from 'exceljs'
 import { Unzip, UnzipInflate, strFromU8, strToU8, zipSync } from 'fflate/browser'
 import { xmlGate, parseXml, basicXml } from './xmlGate.js'
-import { DateSystem, LocaleType, type IWorkbookData, type IStyleData, type ICellData } from '@univerjs/presets'
+import type { IWorkbookData, IStyleData, ICellData, LocaleType, DateSystem } from '@univerjs/presets'
 import { basicFormula, EXCEL_LIMITS, type ExcelDocument } from './model.js'
+
+// 与 @univerjs/core 枚举同值的字面量：本模块随 codec chunk 独立分发，不能拉入 Univer 运行时。
+const LOCALE_ZH_CN = 'zhCN' as LocaleType
+const DATE_SYSTEM_1904 = 'date1904' as DateSystem
 
 const PARTS = /^(?:\[Content_Types\]\.xml|_rels\/\.rels|docProps\/(?:app|core)\.xml|xl\/(?:workbook\.xml|styles\.xml|sharedStrings\.xml|theme\/theme\d+\.xml|_rels\/workbook\.xml\.rels|worksheets\/sheet\d+\.xml))$/
 const RELATIONS = new Set(['officeDocument', 'metadata/core-properties', 'extended-properties', 'worksheet', 'styles', 'sharedStrings', 'theme'])
@@ -191,8 +195,8 @@ export async function decodeExcel(bytes: Uint8Array): Promise<ExcelDocument> {
   const safeEntries = Object.fromEntries([...parts].filter(([name]) => PARTS.test(name)).map(([name, xml]) => [name, strToU8(xml)]))
   await workbook.xlsx.load(zipSync(safeEntries) as never)
   reasons.push(...modelGate(workbook))
-  const snapshot: IWorkbookData = { id: 'excel-' + crypto.randomUUID(), name: 'Workbook', appVersion: '1.2.0', locale: LocaleType.ZH_CN, styles: {}, sheetOrder: [], sheets: {} }
-  if (workbook.properties.date1904) snapshot.dateSystem = DateSystem.Date1904
+  const snapshot: IWorkbookData = { id: 'excel-' + crypto.randomUUID(), name: 'Workbook', appVersion: '1.2.0', locale: LOCALE_ZH_CN, styles: {}, sheetOrder: [], sheets: {} }
+  if (workbook.properties.date1904) snapshot.dateSystem = DATE_SYSTEM_1904
   const palette = themePalette(parts)
   for (const sheet of workbook.worksheets) importSheet(snapshot, sheet, workbook.properties.date1904 === true, palette)
   return { snapshot, reasons: [...new Set(reasons)] }
@@ -357,7 +361,7 @@ export async function encodeExcel(snapshot: IWorkbookData): Promise<Uint8Array> 
   checkSnapshot(snapshot)
   const workbook = new ExcelJS.Workbook()
   workbook.calcProperties.fullCalcOnLoad = true
-  workbook.properties.date1904 = snapshot.dateSystem === (DateSystem.Date1904)
+  workbook.properties.date1904 = snapshot.dateSystem === (DATE_SYSTEM_1904)
   let count = 0
   for (const id of snapshot.sheetOrder) {
     const sheet = snapshot.sheets[id]

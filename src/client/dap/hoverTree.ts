@@ -575,7 +575,9 @@ function applyRows(hover: HTMLElement, held: boolean): void {
     row.style.display = visible ? '' : 'none'
   }
   const hint = hover.querySelector<HTMLElement>('[' + HINT_ATTR + ']')
-  if (hint) hint.textContent = hintText(held)
+  const message = hintText(held)
+  // 相同 textContent 赋值也会产生 childList，避免观察器被自己的提示更新反复唤醒。
+  if (hint && hint.textContent !== message) hint.textContent = message
 }
 
 /**
@@ -631,50 +633,70 @@ export function applyAltToHovers(held: boolean): void {
   for (const hover of Array.from(document.querySelectorAll<HTMLElement>('.monaco-hover'))) applyRows(hover, held)
 }
 
-/**
- * 批次末兜底扫描：绑定所有未绑定的树容器 + 同步所有 hover 层。
- * 覆盖 markdown 异步渲染的各种插入形态（先插容器后填子节点等），也保证 hover
- * 重渲染后重新打标记并回放展开层级。
- * @author ddj 2026年09月21号
- */
-function sweepWires(): void {
-  for (const tree of Array.from(document.querySelectorAll<HTMLElement>('[' + TREE_ATTR + ']:not([' + WIRED_ATTR + '])'))) wireTree(tree)
-  for (const hover of Array.from(document.querySelectorAll<HTMLElement>('.monaco-hover'))) syncHoverLayer(hover)
-}
-
-/** 兜底扫描合并计时器（一帧内多次 DOM 变更只扫一次）。 */
+/** 原生展示层不会挂载 hover；不可扩大到整个 editor（其 widget 层承载 hover）。 */
+const DISPLAY_ONLY = '.view-lines, .margin-view-overlays, .view-overlays, .minimap, .edrv-del-zone, .edrv-del-margin'
+/** 仅保存本批次实际受影响的 hover，避免兜底任务重新遍历整个页面。 */
+const pendingHovers = new Set<HTMLElement>()
 let sweepTimer: number | null = null
 
 /**
- * 合并调度一次兜底扫描（避免与宿主高频渲染互相放大）。
- * @author ddj 2026年09月21号
+ * @private
+ * @author ddj 2026年11月06号
+ * @description 批次末只绑定仍挂载的受影响 hover 内的树；先清空队列以支持后续异步插入。
  */
-function scheduleSweep(): void {
-  if (typeof window === 'undefined' || sweepTimer !== null) return
-  sweepTimer = window.setTimeout(() => {
-    sweepTimer = null
-    sweepWires()
-  }, 0)
+function sweepWires(): void {
+  sweepTimer = null
+  const hovers = Array.from(pendingHovers)
+  pendingHovers.clear()
+  for (const hover of hovers) {
+    if (!hover.isConnected) continue
+    for (const tree of Array.from(hover.querySelectorAll<HTMLElement>('[' + TREE_ATTR + ']:not([' + WIRED_ATTR + '])'))) wireTree(tree)
+  }
 }
 
 /**
- * 收集本次变更影响的 hover 容器（新增节点自身 / 祖先 / 后代）。
- * @author ddj 2026年09月21号
+ * @private
+ * @author ddj 2026年11月06号
+ * @description 同步应用当前 Alt 状态，并合并局部树绑定任务。
+ * @param hovers 本批次受影响的 hover
+ */
+function syncHovers(hovers: Set<HTMLElement>): void {
+  for (const hover of hovers) {
+    if (!hover.isConnected) continue
+    syncHoverLayer(hover)
+    pendingHovers.add(hover)
+  }
+  if (pendingHovers.size && sweepTimer === null) sweepTimer = window.setTimeout(sweepWires, 0)
+}
+
+/**
+ * @private
+ * @author ddj 2026年11月06号
+ * @description 按变更目标归类一次；代码展示子树不再逐个扫描新增行，hover 内移除也同步清理。
  * @param records 变更记录
- * @returns hover 容器集合
+ * @returns 受影响且仍挂载的 hover 集合
  */
 function hoversOf(records: MutationRecord[]): Set<HTMLElement> {
   const found = new Set<HTMLElement>()
   for (const record of records) {
+    const target = record.target as Element
+    if (target.nodeType !== 1) continue
+    const owner = target.closest<HTMLElement>('.monaco-hover, ' + DISPLAY_ONLY)
+    if (owner) {
+      if (owner.matches('.monaco-hover')) found.add(owner)
+      continue
+    }
+
+    // 外层容器整体插入仍须发现后代 hover；已知展示层则无须递归查询。
     for (const node of Array.from(record.addedNodes)) {
       if (node.nodeType !== 1) continue
-      const el = node as Element
-      const owner = (el.matches?.('.monaco-hover') ? el : el.closest?.('.monaco-hover')) as HTMLElement | null
-      if (owner) {
-        found.add(owner)
+      const element = node as HTMLElement
+      if (element.matches('.monaco-hover')) {
+        found.add(element)
         continue
       }
-      for (const hover of Array.from(el.querySelectorAll?.('.monaco-hover') ?? [])) found.add(hover as HTMLElement)
+      if (element.matches(DISPLAY_ONLY)) continue
+      for (const hover of Array.from(element.querySelectorAll<HTMLElement>('.monaco-hover'))) found.add(hover)
     }
   }
   return found
@@ -696,17 +718,22 @@ function clearHoverLayer(): void {
 }
 
 /**
- * 安装 hover 树绑定（幂等）：观察 hover 面板插入与内容重渲染，批次末兜底扫描。
+ * @private
+ * @author ddj 2026年11月06号
+ * @description 在新增行绘制前应用 Alt 可见性，绑定任务仅处理受影响容器。
+ * @param records 本批次 DOM 变更
+ */
+function onHoverMutations(records: MutationRecord[]): void {
+  syncHovers(hoversOf(records))
+}
+
+/**
+ * 安装 hover 树绑定（幂等）：观察 hover 面板插入与内容重渲染，批次末局部绑定。
  * @author ddj 2026年09月21号
  */
 export function installHoverTree(): void {
   if (typeof window === 'undefined' || observer) return
-  observer = new MutationObserver((records) => {
-    const hovers = hoversOf(records)
-    // 同步应用：新行一落地就处于正确的 Alt 可见性，不会在按住 Alt 时闪回调试块
-    for (const hover of hovers) syncHoverLayer(hover)
-    if (hovers.size) scheduleSweep()
-  })
+  observer = new MutationObserver(onHoverMutations)
   observer.observe(document.body, { childList: true, subtree: true })
 }
 
@@ -716,6 +743,7 @@ export function disposeHoverTree(): void {
   observer = null
   if (typeof window !== 'undefined' && sweepTimer !== null) window.clearTimeout(sweepTimer)
   sweepTimer = null
+  pendingHovers.clear()
   states.clear()
   clearHoverLayer()
 }

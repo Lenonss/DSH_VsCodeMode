@@ -593,13 +593,13 @@ profile 请替换为实际目标，不要把示例目录当成当前运行 profi
 
 ```bash
 # ① Git 安装（clone + prepare 构建；推荐打固定 tag）
-dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.28.0
+dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.29.0
 
 # ② npm 注册表（发布到 npm 后）
-dsh plugin --profile web add dsh-vscode-mode@0.28.0
+dsh plugin --profile web add dsh-vscode-mode@0.29.0
 
 # ③ GitHub Release tgz 直装（Release asset 可用后）
-dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.28.0/dsh-vscode-mode-0.28.0.tgz
+dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.29.0/dsh-vscode-mode-0.29.0.tgz
 ```
 
 > **DSH 版本政策（0.17.0 起）**：六项 DSH peer 仍统一声明为 `*`，另以
@@ -981,6 +981,7 @@ Keep All / Undo All 却是亮的。修复：单文件 Keep / Undo 覆盖冲突�
 
 | 版本 | 要点 |
 | --- | --- |
+| v0.29.0 | Excel 引擎与编解码改为按需分块（根包 930 KB，打开表格才加载 11.4 MB 引擎）；调试 hover / 侧栏拖拽 / 快捷菜单测量性能优化；官方文件侧栏 CSS 运行时兼容 |
 | v0.28.0 | dsh-ops 写工具纳入待审差异采集：ops_edit_file / ops_write_file / ops_remove / ops_copy / ops_move 可查看差异、Keep、Undo；ops_replace 按候选预读 + 回执对齐尽力采集 |
 | v0.27.2 | 当前编辑文件 Tab 自动滚入可见区域；分组独立定位，适配宽度变化，不抢编辑焦点 |
 | v0.27.1 | 修复仅 LF/CRLF 或 BOM 差异造成的空待审与差异栏残留；统一累计待审路径路由并过滤已归档历史记录 |
@@ -997,8 +998,9 @@ Keep All / Undo All 却是亮的。修复：单文件 Keep / Undo 覆盖冲突�
 | v0.23.0 | 快捷菜单：可拖动悬浮按钮 + 自定义菜单树 |
 
 <details>
-<summary>完整版本记录（v0.28.0 → v0.1.5x，点击展开）</summary>
+<summary>完整版本记录（v0.29.0 → v0.1.5x，点击展开）</summary>
 
+- **v0.29.0**：Excel 引擎与编解码按需分块——根包不再内联 Univer / ExcelJS / fflate / saxes，打开表格才加载 `client.excel.js`（引擎面板）与 `client.excelcodec.js`（解码/导出）；`ExcelHost` 负责加载与重试，`mountExcel` 复用同一引擎节点（切换文件不重建），`codecLoader` 单例懒加载，`lazyPanel` 扩展为通用 `loadChunk`。构建新增两个 chunk entry 并启用 minify，`check-client-artifacts` 增加逐 chunk 契约与根包 3 MB 预算 / 引擎下限，防止引擎被重新内联。同版性能修复：调试 hover 树的 MutationObserver 只处理本批次受影响 hover 并跳过 Monaco 展示层；侧栏拖拽宽度改为 rAF 合并绘制、pointerup 一次性提交；快捷菜单测量收敛到 `quickMeasure`；官方文件侧栏 CSS 以运行时补丁兼容（不改安装包）。验证：typecheck 0 error；全量 303 文件 3852 通过 / 22 跳过 + `node --test` 9/9；构建 host 1,093,961 B、根 client 930,057 B（v0.28.0 为 23,431,817 B）、client.excel.js 11,371,696 B、client.excelcodec.js 1,002,902 B，产物校验通过；Web 3080 真机冒烟：打开 xlsx 渲染 Univer 面板（canvas ×3）、侧栏拖拽 452→560 px、console 无本插件新增错误（host-bridge 404 来自 dsh-notify-me）。快捷菜单入口与调试 hover 树未做真机冒烟（入口未显示、需 DAP 会话），缺口保留。见 [0.29.0 发布说明](docs/release-0.29.0.md)。
 - **v0.28.0**：把 dsh-ops 的写工具接进累计待审通道——`ops_edit_file` / `ops_write_file` / `ops_remove` / `ops_copy` / `ops_move` 执行前冻结写前基线、执行后读回真实内容，面板可查看差异、Keep 与 Undo；`ops_replace` 以替换作用域为搜索根按字面量预读候选（最多 16 个文件）、执行后用回执对齐，未预读到的文件只记缺口不伪造基线；`dryRun` 预览不采集。候选搜索直接走 `searchRipgrepContent`，不抢占用户的同根搜索。`ops_bash` 内的写盘、PTC 内联工具与非 git 工作区仍未覆盖：git 侧由官方快照列出但无字节证据，非 git 侧可走版本库导入 RPC 兜底。类型检查 0 error；全量 301 文件 3835 通过 / 22 跳过 + `node --test` 9/9；构建双面通过。Host 改动需重启 DSH 才生效，本次未安装、未重启，真实面板 Keep/Undo 冒烟缺口经维护者接受。参见 [0.28.0 发布说明](docs/release-0.28.0.md)。
 - **v0.27.2**：活动文件与计划预览 Tab 按编辑分组独立保持可见；打开、切换、关闭页签及编辑区尺寸变化后做最小横向定位，已可见时不滚动，不抢键盘焦点、不带动正文。保留手动横滚，超宽 Tab 显示名称起始部分。当前 GUI 未加载新 bundle，真实交互验收缺口已由用户接受；发布不自动安装或重启。参见 [0.27.2 发布说明](docs/release-0.27.2.md)。
 

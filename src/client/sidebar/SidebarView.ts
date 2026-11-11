@@ -65,6 +65,20 @@ export function SidebarView(props) {
   const active = panels.find((p) => p.id === activePanel) || panels[0]
 
   const dragCleanup = React.useRef(null)
+  const sidebarNode = React.useRef(null)
+  const dragWidth = React.useRef(null)
+  const dragFrame = React.useRef(null)
+  /** @private @author ddj 2026年11月06号 @description Paint only the sidebar width; do not rerender the editor or persist during pointer motion. */
+  function paintWidth() {
+    dragFrame.current = null
+    if (sidebarNode.current && dragWidth.current !== null) sidebarNode.current.style.width = dragWidth.current + 'px'
+  }
+  /** @private @author ddj 2026年11月06号 @param nextWidth Live width in pixels. @description Coalesce pointer motion into one local style update per frame. */
+  function previewWidth(nextWidth) {
+    if (dragWidth.current === nextWidth || (dragWidth.current === null && nextWidth === width)) return
+    dragWidth.current = nextWidth
+    if (dragFrame.current === null) dragFrame.current = window.requestAnimationFrame(paintWidth)
+  }
   /** @private @author ddj 2026年10月22号 @description End the active drag; safe on repeated teardown. */
   function stopDrag() { dragCleanup.current?.() }
   const seamOpening = React.useRef(false)
@@ -88,9 +102,20 @@ export function SidebarView(props) {
     /** @author ddj 2026年10月22号 @param event Pointer event. @description Ignore another pointer's movement. */
     function onMove(event) { if (event.pointerId === pointerId) move(event) }
     /** @author ddj 2026年10月22号 @param event Pointer completion. @description Only the owning pointer ends the drag. */
-    function onEnd(event) { if (event.pointerId === pointerId) cleanup() }
+    function onEnd(event) {
+      if (event.pointerId !== pointerId) return
+      if (event.type === 'pointerup') move(event)
+      cleanup()
+    }
     /** @author ddj 2026年10月22号 @description Remove all drag listeners and release ownership. */
     function cleanup() {
+      if (dragCleanup.current !== cleanup) return
+      if (dragFrame.current !== null) window.cancelAnimationFrame(dragFrame.current)
+      dragFrame.current = null
+      const settledWidth = dragWidth.current
+      paintWidth()
+      dragWidth.current = null
+      if (settledWidth !== null) onWidth(settledWidth)
       window.removeEventListener('pointermove', onMove)
       window.removeEventListener('pointerup', onEnd)
       window.removeEventListener('pointercancel', onEnd)
@@ -121,7 +146,7 @@ export function SidebarView(props) {
         onHide()
         return
       }
-      onWidth(Math.min(W_MAX, raw))
+      previewWidth(Math.min(W_MAX, raw))
     }
     bindDrag(e.pointerId, onMove)
 
@@ -147,7 +172,7 @@ export function SidebarView(props) {
         onShow()
         return
       }
-      onWidth(Math.max(wMin, Math.min(W_MAX, baseW + (ev.clientX - expandStartX))))
+      previewWidth(Math.max(wMin, Math.min(W_MAX, baseW + (ev.clientX - expandStartX))))
     }
     bindDrag(e.pointerId, onMove)
   }
@@ -179,6 +204,7 @@ export function SidebarView(props) {
     }, visible ? '◀' : '▶'))
 
   return React.createElement('div', {
+    ref: sidebarNode,
     className: 'edrv-sidebar' + (visible ? '' : ' edrv-sidebar-rail-only'),
     // maxWidth 兜底：持久化宽度超过容器可用空间时也不允许布局宽溢出（配合 flex-shrink:1 收缩）
     style: { width: visible ? width : RAIL_ONLY_W + SEAM_W, maxWidth: '100%' },

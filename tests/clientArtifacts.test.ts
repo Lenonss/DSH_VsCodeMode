@@ -7,16 +7,25 @@ import { checkArtifacts, inspectArtifacts, verifyNativeLoader } from '../scripts
 const directories: string[] = []
 const OWNER = 'dsh-vscode-mode'
 const root = `window.__ModuleLoader__.load({id:'${OWNER}',factory:(require)=>{
-  const exports = { __lazyShared: {rpc(){},dbg(){},dapStore:{},BP_MODE:{},MODES:[],fieldOfMode(){},ContextMenu(){}}, __setPanelImport(){} };
+  const exports = { __lazyShared: {rpc(){},dbg(){},dapStore:{},BP_MODE:{},MODES:[],fieldOfMode(){},ContextMenu(){},editExcel(){},exportExcel(){},notifyExcel(){},openOriginal(){}}, __setPanelImport(){} };
   exports.__setPanelImport(require.async?.bind(require)); return exports;
 }});`
 
-/** @private @author ddj 2026年10月22号 @param name Chunk resource. @param panel Expected panel export. @returns Native chunk wrapper using root singleton bridge. */
-function chunk(name: string, panel: string): string {
+/** Root keys each chunk is contracted to consume. */
+const CHUNK_KEYS: Record<string, string[]> = {
+  'client.rules.js': ['rpc'],
+  'client.debug.js': ['dapStore', 'BP_MODE', 'MODES', 'fieldOfMode', 'ContextMenu', 'rpc'],
+  'client.excel.js': ['editExcel', 'exportExcel', 'notifyExcel', 'openOriginal'],
+  'client.excelcodec.js': [],
+}
+
+/** @private @author ddj 2026年10月22号 @param name Chunk resource. @param exported Expected chunk export. @returns Native chunk wrapper using root singleton bridge. */
+function chunk(name: string, exported: string): string {
+  const keys = CHUNK_KEYS[name] ?? []
+  const bridge = keys.length ? `const {${keys.join(',')}} = require('${OWNER}').__lazyShared;` : ''
   return `window.__ModuleLoader__.load({id:'${OWNER}',chunk:'${name}',factory:(require)=>{
-    const shared = require('${OWNER}').__lazyShared;
-    const {rpc,dapStore,BP_MODE,MODES,fieldOfMode,ContextMenu} = shared;
-    return {${panel}:function(){return rpc}};
+    ${bridge}
+    return {${exported}:function(){return 1}};
   }});`
 }
 
@@ -29,6 +38,8 @@ async function fixture(): Promise<string> {
     writeFile(join(directory, 'client.js'), root),
     writeFile(join(directory, 'client.rules.js'), chunk('client.rules.js', 'RulesPanel')),
     writeFile(join(directory, 'client.debug.js'), chunk('client.debug.js', 'DebugPanel')),
+    writeFile(join(directory, 'client.excel.js'), chunk('client.excel.js', 'excelPanel')),
+    writeFile(join(directory, 'client.excelcodec.js'), `window.__ModuleLoader__.load({id:'${OWNER}',chunk:'client.excelcodec.js',factory:(require)=>({decodeExcel:function(){return 1},downloadExcel:function(){return 1}})});`),
   ])
   return directory
 }
@@ -40,10 +51,18 @@ async function cleanup(): Promise<void> {
 afterEach(cleanup)
 
 describe('client artifact registration contract', () => {
-  it('accepts the root and both native package-local chunk wrappers', async () => {
-    const result = await checkArtifacts(await fixture())
-    expect(Object.keys(result.bytes)).toEqual(['index.js', 'client.js', 'client.rules.js', 'client.debug.js'])
+  it('accepts the root and all four native package-local chunk wrappers', async () => {
+    const result = await checkArtifacts(await fixture(), undefined, { engineFloor: 0 })
+    expect(Object.keys(result.bytes)).toEqual(['index.js', 'client.js', 'client.rules.js', 'client.debug.js', 'client.excel.js', 'client.excelcodec.js'])
     expect(result.native).toHaveProperty('skipped')
+  })
+  it('rejects a root bundle that re-inlined an engine chunk', async () => {
+    const directory = await fixture()
+    await expect(inspectArtifacts(directory, { rootBudget: 100 })).rejects.toThrow('root bundle exceeds')
+  })
+  it('rejects an engine chunk below the expected floor', async () => {
+    const directory = await fixture()
+    await expect(inspectArtifacts(directory, { engineFloor: 1024 })).rejects.toThrow('engine chunk below')
   })
   it('rejects missing and empty mandatory artifacts', async () => {
     const directory = await fixture()

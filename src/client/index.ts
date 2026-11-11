@@ -81,6 +81,7 @@ import { disposeAiInline } from './ai/inlineProvider.js'
 import { readSessionScope, subscribeScope } from './sessionScope.js'
 import { installPlanBridge } from './planBridge.js'
 import { installPageReload } from './pageReload.js'
+import { installFilesCss } from './filesCssCompat.js'
 import { installUpdateNotice } from './updateNotice.js'
 import { flushPageState, flushUiState, hydrateUiState, installUiStatePersist, onUiStateReady, reportUiStateEvent, uiStateSettled } from './state/uiStatePersist.js'
 import { workspaceScopeOf } from './state/scopeStore.js'
@@ -90,9 +91,10 @@ import { setPanelImport } from './lazyPanel.js'
 import { dbg } from './rpc.js'
 import { BP_MODE, MODES, fieldOfMode } from './dap/BpWidget.js'
 import { ContextMenu } from './ui/ContextMenu.js'
+import { editExcel, exportExcel, notifyExcel } from './excel/controller.js'
 
 /** Root-owned live objects shared with independent panel chunks; no copied stores or transport state. */
-export const __lazyShared = { rpc, dbg, dapStore, BP_MODE, MODES, fieldOfMode, ContextMenu }
+export const __lazyShared = { rpc, dbg, dapStore, BP_MODE, MODES, fieldOfMode, ContextMenu, editExcel, exportExcel, notifyExcel, openOriginal }
 export { setPanelImport as __setPanelImport }
 
 // ⚠️ inject 只列必需服务：webUiSettings 是 @linxin666/dsh-client-ui-web-ui-settings 提供的
@@ -143,6 +145,7 @@ function setupCommands(ctx: any): CommandBridge {
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export async function apply(ctx: any): Promise<void> {
+  ctx.effect(installFilesCss, 'vscode-mode: files CSS compatibility')
   const schedule = (fn: () => void, ms: number) => ctx.timeout(fn, ms)
 
   // UI 壳层文案：注册本插件词典到官方 locale 服务（旧版无该服务时直读中文词典）。

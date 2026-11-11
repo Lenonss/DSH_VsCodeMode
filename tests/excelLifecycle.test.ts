@@ -1,12 +1,12 @@
-import { describe, it, expect, vi, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { excelState, editExcel, exportExcel, allowClose, releaseExcel, renameExcel, loadExcel } from '../src/client/excel/controller.js'
+import { setExcelCodec } from '../src/client/excel/codecLoader.js'
 import { LocaleType } from '@univerjs/presets'
-import { downloadExcel } from '../src/client/excel/export.js'
-import { decodeExcel } from '../src/client/excel/codec.js'
 import { readFileSync } from 'node:fs'
-vi.mock('../src/client/excel/export.js', () => ({ downloadExcel: vi.fn().mockResolvedValue(undefined) }))
-vi.mock('../src/client/excel/codec.js', () => ({ decodeExcel: vi.fn() }))
-afterEach(() => { vi.clearAllMocks(); vi.unstubAllGlobals() })
+const downloadExcel = vi.fn()
+const decodeExcel = vi.fn()
+beforeEach(() => { downloadExcel.mockResolvedValue(undefined); setExcelCodec(async () => ({ decodeExcel, downloadExcel })) })
+afterEach(() => { setExcelCodec(); vi.clearAllMocks(); vi.unstubAllGlobals() })
 
 /** @private @author ddj 2026年10月28号 @returns Explicit deferred boundary for race assertions. */
 function deferred<T>() {
@@ -39,7 +39,7 @@ describe('Excel isolated lifecycle', () => {
   it('keeps later edits dirty while an older revision exports', async () => {
     const state = fixture('race-edit')
     const pending = deferred<void>()
-    vi.mocked(downloadExcel).mockReturnValueOnce(pending.promise)
+    downloadExcel.mockReturnValueOnce(pending.promise)
     editExcel(state)
     const exported = exportExcel(state, 'book.xlsx')
     editExcel(state)
@@ -54,8 +54,10 @@ describe('Excel isolated lifecycle', () => {
     const state = fixture('race-' + operation)
     const pending = deferred<void>()
     let allowed!: () => boolean
-    vi.mocked(downloadExcel).mockImplementationOnce(async (_snapshot, _path, current) => { allowed = current!; await pending.promise })
+    downloadExcel.mockImplementationOnce(async (_snapshot, _path, current) => { allowed = current!; await pending.promise })
     const exported = exportExcel(state, 'book.xlsx')
+    // 导出会先按需加载编解码 chunk，等 downloadExcel 真正拿到 live 回调后再改身份。
+    for (let tick = 0; tick < 10 && !allowed; tick += 1) await Promise.resolve()
     if (operation === 'release') releaseExcel('race-' + operation, 'book.xlsx')
     else renameExcel('race-' + operation, 'book.xlsx', 'new.xlsx')
     expect(allowed()).toBe(false)
@@ -67,7 +69,7 @@ describe('Excel isolated lifecycle', () => {
     const scope = 'parse-' + operation
     const state = excelState(scope, 'book.xlsx')
     const pending = deferred<NonNullable<typeof state.document>>()
-    vi.mocked(decodeExcel).mockReturnValueOnce(pending.promise)
+    decodeExcel.mockReturnValueOnce(pending.promise)
     const loaded = loadExcel(state, async () => ({ bytes: new Uint8Array() }))
     await Promise.resolve()
     if (operation === 'release') releaseExcel(scope, 'book.xlsx')
@@ -79,7 +81,7 @@ describe('Excel isolated lifecycle', () => {
   it('does not close after a new edit arrives during export', async () => {
     const state = fixture('race-close')
     const pending = deferred<void>()
-    vi.mocked(downloadExcel).mockReturnValueOnce(pending.promise)
+    downloadExcel.mockReturnValueOnce(pending.promise)
     const confirm = vi.fn().mockReturnValue(true)
     vi.stubGlobal('window', { prompt: () => '导出', confirm })
     editExcel(state)
@@ -91,7 +93,7 @@ describe('Excel isolated lifecycle', () => {
   })
   it('keeps dirty buffer and baseline after download fails', async () => {
     const state = fixture('download-fail')
-    vi.mocked(downloadExcel).mockRejectedValueOnce(new Error('download failed'))
+    downloadExcel.mockRejectedValueOnce(new Error('download failed'))
     editExcel(state)
     await expect(exportExcel(state, 'book.xlsx')).rejects.toThrow('download failed')
     expect(state.dirty).toBe(true)

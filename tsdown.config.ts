@@ -72,24 +72,38 @@ function hostConfig(): UserConfig {
   }
 }
 
-/** @private @author ddj 2026年10月22号 @param panel Optional independent built-in panel entry. @returns Browser CJS config using the documented ModuleLoader chunk handoff. */
-function clientConfig(panel?: 'rules' | 'debug'): UserConfig {
+/** Independent built-in chunks: the Excel engine and its codec load only when a workbook is opened. */
+const PANEL_ENTRIES = {
+  rules: 'src/client/sidebar/panels/RulesPanel.ts',
+  debug: 'src/client/sidebar/panels/DebugPanel.ts',
+  excel: 'src/client/excel/panel.ts',
+  excelcodec: 'src/client/excel/codecEntry.ts',
+} as const
+type PanelKey = keyof typeof PANEL_ENTRIES
+
+/** @private @author ddj 2026年10月22号 @param panel Optional independent built-in chunk entry. @returns Browser CJS config using the documented ModuleLoader chunk handoff. */
+function clientConfig(panel?: PanelKey): UserConfig {
   const chunk = panel ? `client.${panel}.js` : undefined
   const shared = new Map([
     [resolvePath('src/client/rpc.ts'), ['rpc', 'dbg']],
     [resolvePath('src/client/dap/store.ts'), ['dapStore']],
     [resolvePath('src/client/dap/BpWidget.ts'), ['BP_MODE', 'MODES', 'fieldOfMode']],
     [resolvePath('src/client/ui/ContextMenu.ts'), ['ContextMenu']],
+    // Excel chunk must reuse the root session map and the patched native-file opener.
+    [resolvePath('src/client/excel/controller.ts'), ['editExcel', 'exportExcel', 'notifyExcel']],
+    [resolvePath('src/client/remoteOpenRouter.ts'), ['openOriginal']],
   ])
   return {
     name: `${ID}/${panel ?? 'client'}`,
-    entry: panel ? { [panel]: `src/client/sidebar/panels/${panel === 'rules' ? 'RulesPanel' : 'DebugPanel'}.ts` } : { client: 'src/client/index.ts' },
+    entry: panel ? { [panel]: PANEL_ENTRIES[panel] } : { client: 'src/client/index.ts' },
     outDir: 'lib',
     format: 'cjs',
     platform: 'browser',
     dts: false,
     clean: false,
     sourcemap: true,
+    // Client bytes are on the page-load critical path; the panel chunks are downloaded on demand.
+    minify: true,
     // Inline everything not in the loader module table (our own code).
     external: panel ? [ID, ...CLIENT_EXTERNALS] : CLIENT_EXTERNALS,
     noExternal: (source: string) => (CLIENT_EXTERNALS.includes(source) || (panel && source === ID) ? undefined : true),
@@ -159,4 +173,4 @@ function clientConfig(panel?: 'rules' | 'debug'): UserConfig {
   }
 }
 
-export default [hostConfig(), clientConfig(), clientConfig('rules'), clientConfig('debug')] satisfies UserConfig[]
+export default [hostConfig(), clientConfig(), clientConfig('rules'), clientConfig('debug'), clientConfig('excel'), clientConfig('excelcodec')] satisfies UserConfig[]

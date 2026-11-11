@@ -6,14 +6,32 @@ import { createContext, runInContext } from 'node:vm'
 import ts from 'typescript'
 
 const OWNER = 'dsh-vscode-mode'
-const CHUNKS = ['client.rules.js', 'client.debug.js']
-const SHARED = ['rpc', 'dbg', 'dapStore', 'BP_MODE', 'MODES', 'fieldOfMode', 'ContextMenu']
+/** Per-chunk contract: root shared keys it must consume and the exports it must publish. */
+const CHUNK_SPECS = [
+  { name: 'client.rules.js', shared: ['rpc'], exports: ['RulesPanel'] },
+  { name: 'client.debug.js', shared: ['dapStore', 'BP_MODE', 'MODES', 'fieldOfMode', 'ContextMenu', 'rpc'], exports: ['DebugPanel'] },
+  { name: 'client.excel.js', shared: ['editExcel', 'exportExcel', 'notifyExcel', 'openOriginal'], exports: ['excelPanel'] },
+  { name: 'client.excelcodec.js', shared: [], exports: ['decodeExcel', 'downloadExcel'] },
+]
+const CHUNKS = CHUNK_SPECS.map((spec) => spec.name)
+const SHARED = [...new Set([
+  'rpc', 'dbg', 'dapStore', 'BP_MODE', 'MODES', 'fieldOfMode', 'ContextMenu',
+  'editExcel', 'exportExcel', 'notifyExcel', 'openOriginal',
+])]
+const ROOT_BUDGET = 3 * 1024 * 1024
+const ENGINE_FLOOR = 3 * 1024 * 1024
 
 /** @private @author ddj 2026年10月22号 @param source Bundle source. @param filename Diagnostic filename. @returns Registration without materializing its factory. */
 function registration(source, filename) {
   const rows = []
-  const context = createContext({ window: { __ModuleLoader__: { load(row) { rows.push(row) } } } })
-  runInContext(source, context, { filename, timeout: 5000 })
+  const context = createContext({
+    console, setTimeout, clearTimeout, setInterval, clearInterval, queueMicrotask,
+    __register(row) { rows.push(row) },
+  })
+  // 引擎 chunk 在注册期就会执行 Univer 启动代码；把 window 指回同一个 realm，
+  // 让 typeof window 检测与 Array/String shim 落在真实内建对象上。
+  runInContext('globalThis.window = globalThis; globalThis.self = globalThis; globalThis.__ModuleLoader__ = { load(row) { __register(row) } };', context, { filename: `${filename}#bootstrap` })
+  runInContext(source, context, { filename, timeout: 15000 })
   assert.equal(rows.length, 1, `${filename}: expected exactly one registration`)
   assert.equal(rows[0].id, OWNER, `${filename}: wrong owner`)
   assert.equal(typeof rows[0].factory, 'function', `${filename}: missing factory`)
@@ -22,9 +40,26 @@ function registration(source, filename) {
 
 /** @private @author ddj 2026年10月22号 @returns Explicit platform seeds; unknown externals never silently resolve. */
 function platformSeeds() {
-  const react = { memo: (component) => component, forwardRef: (component) => component,
-    createContext: () => ({ Provider() {}, Consumer() {} }), Component: class {}, PureComponent: class {} }
-  return { react, 'react/jsx-runtime': {}, 'react-dom': {}, 'react-dom/client': {}, '@deepseek-ai/dsh-client-ui-primitives': {} }
+  const react = {
+    memo: (component) => component, forwardRef: (component) => component,
+    createContext: () => ({ Provider() {}, Consumer() {} }), Component: class {}, PureComponent: class {},
+    createElement: () => ({}), cloneElement: () => ({}), isValidElement: () => false, Fragment: {},
+    createRef: () => ({ current: null }), Children: { map: (children) => children, toArray: () => [] },
+    useState: () => [undefined, () => {}], useReducer: () => [undefined, () => {}], useEffect: () => {},
+    useLayoutEffect: () => {}, useRef: () => ({ current: null }), useCallback: (fn) => fn,
+    useMemo: (fn) => fn(), useContext: () => ({}), useId: () => 'seed', useSyncExternalStore: () => undefined,
+  }
+  react.default = react
+  const jsxRuntime = { jsx: () => ({}), jsxs: () => ({}), createElement: react.createElement, Fragment: {} }
+  const reactDom = { createPortal: (children) => children, flushSync: (run) => run(), render: () => {}, unmountComponentAtNode: () => {}, findDOMNode: () => null }
+  reactDom.default = reactDom
+  return {
+    react,
+    'react/jsx-runtime': jsxRuntime,
+    'react-dom': reactDom,
+    'react-dom/client': { createRoot: () => ({ render() {}, unmount() {} }) },
+    '@deepseek-ai/dsh-client-ui-primitives': {},
+  }
 }
 
 /** @private @author ddj 2026年10月22号 @param source JavaScript source. @param name Filename. @param allowed Permitted externals. @returns Reject unsupported executable imports, ignoring comments and literals. */
@@ -71,8 +106,9 @@ function verifyHost(source) {
   assert.ok(ast.statements.some((statement) => ts.isFunctionDeclaration(statement) && statement.name?.text === applyName), 'index.js: apply export must resolve to a function declaration')
 }
 
-/** @private @author ddj 2026年10月22号 @param row Captured chunk factory. @param name Chunk filename. @returns Verify factory reads shared root objects rather than a private copy. */
-function verifySharedReads(row, name) {
+/** @private @author ddj 2026年10月22号 @param row Captured chunk factory. @param spec Chunk contract. @returns Verify factory reads shared root objects rather than a private copy. */
+function verifySharedReads(row, spec) {
+  const name = spec.name
   const reads = new Set()
   const shared = new Proxy(Object.fromEntries(SHARED.map((key) => [key, Object.freeze({ key })])), {
     get(target, key) { reads.add(key); assert.ok(key in target, `Unknown shared key: ${String(key)}`); return target[key] },
@@ -80,16 +116,15 @@ function verifySharedReads(row, name) {
   const seeds = platformSeeds()
   const exported = row.factory((specifier) => {
     if (specifier === OWNER) return { __lazyShared: shared }
-    assert.equal(specifier, 'react', `${name}: chunk external drift`)
-    return seeds.react
+    assert.ok(Object.hasOwn(seeds, specifier), `${name}: chunk external drift ${specifier}`)
+    return seeds[specifier]
   })
-  const expected = name === 'client.debug.js' ? ['dapStore', 'BP_MODE', 'MODES', 'fieldOfMode', 'ContextMenu', 'rpc'] : ['rpc']
-  for (const key of expected) assert.ok(reads.has(key), `${name}: did not consume root shared ${key}`)
-  assert.equal(typeof exported?.[name === 'client.rules.js' ? 'RulesPanel' : 'DebugPanel'], 'function', `${name}: missing panel export`)
+  for (const key of spec.shared) assert.ok(reads.has(key), `${name}: did not consume root shared ${key}`)
+  for (const exportedName of spec.exports) assert.equal(typeof exported?.[exportedName], 'function', `${name}: missing export ${exportedName}`)
 }
 
-/** @public @author ddj 2026年10月22号 @param libDir Read-only artifact directory. @returns Validated registrations and artifact byte counts. @throws Invalid or missing artifact. */
-export async function inspectArtifacts(libDir) {
+/** @public @author ddj 2026年10月22号 @param libDir Read-only artifact directory. @param options Optional byte budget overrides for fixtures. @returns Validated registrations and artifact byte counts. @throws Invalid or missing artifact, or a bundle that re-inlined an engine chunk. */
+export async function inspectArtifacts(libDir, options = {}) {
   const sources = {}
   const bytes = {}
   for (const name of ['index.js', 'client.js', ...CHUNKS]) {
@@ -100,21 +135,30 @@ export async function inspectArtifacts(libDir) {
   }
   verifyHost(sources['index.js'])
   for (const name of ['client.js', ...CHUNKS]) {
-    const allowed = new Set(name === 'client.js' ? Object.keys(platformSeeds()) : ['react', OWNER])
+    const allowed = new Set(name === 'client.js' ? Object.keys(platformSeeds()) : [...Object.keys(platformSeeds()), OWNER])
     verifySyntax(sources[name], name, allowed)
   }
   const root = registration(sources['client.js'], 'client.js')
   assert.equal(root.chunk, undefined, 'root must not register as a chunk')
-  const chunks = CHUNKS.map((name) => {
+  const chunks = CHUNK_SPECS.map((spec) => {
+    const name = spec.name
     const row = registration(sources[name], name)
     assert.equal(row.chunk, name, `${name}: wrong chunk registration`)
-    assert.match(sources[name], /require\(["']dsh-vscode-mode["']\)/, `${name}: missing shared root dependency`)
-    assert.match(sources[name], /__lazyShared/, `${name}: missing shared bridge`)
-    assert.doesNotMatch(sources[name], /function\s+(rpc|createDapStore)\s*\(/, `${name}: duplicated singleton implementation`)
-    verifySharedReads(row, name)
+    if (spec.shared.length) {
+      // Minified chunks reach the root through a renamed local require, so match the module id, not the call form.
+      assert.ok(sources[name].includes(`"${OWNER}"`) || sources[name].includes(`'${OWNER}'`) || sources[name].includes('`' + OWNER + '`'), `${name}: missing shared root dependency`)
+      assert.match(sources[name], /__lazyShared/, `${name}: missing shared bridge`)
+      assert.doesNotMatch(sources[name], /function\s+(rpc|createDapStore)\s*\(/, `${name}: duplicated singleton implementation`)
+    }
+    verifySharedReads(row, spec)
     return row
   })
-  assert.match(sources['client.js'], /require\.async\??\.bind\(require\)/, 'root must inject native asynchronous require')
+  // Minification renames the factory parameter, so assert the handoff shape instead of the literal `require` spelling.
+  assert.match(sources['client.js'], /__setPanelImport\(\s*[A-Za-z_$][\w$]*\.async\?\.bind\(/, 'root must inject native asynchronous require')
+  const rootBudget = options.rootBudget ?? ROOT_BUDGET
+  assert.ok(bytes['client.js'] <= rootBudget, `client.js: root bundle exceeds ${rootBudget} bytes; engine chunks must stay out of the entry`)
+  const engineFloor = options.engineFloor ?? 0
+  if (engineFloor > 0) assert.ok(bytes['client.excel.js'] >= engineFloor, `client.excel.js: engine chunk below ${engineFloor} bytes; Univer may have been dropped`)
   return { root, chunks, sources, bytes }
 }
 
@@ -175,8 +219,8 @@ export async function verifyNativeLoader(artifacts, loaderPath) {
 }
 
 /** @public @author ddj 2026年10月22号 @param libDir Artifact directory. @param loaderPath Optional explicit Host bundle. @returns Validation evidence; native validation omission is explicit. */
-export async function checkArtifacts(libDir, loaderPath) {
-  const artifacts = await inspectArtifacts(resolve(libDir))
+export async function checkArtifacts(libDir, loaderPath, options = {}) {
+  const artifacts = await inspectArtifacts(resolve(libDir), { rootBudget: ROOT_BUDGET, engineFloor: ENGINE_FLOOR, ...options })
   const native = loaderPath ? await verifyNativeLoader(artifacts, loaderPath) : { skipped: 'Set EDRV_MODULE_LOADER to validate the actual Host loader' }
   return { directory: resolve(libDir), bytes: artifacts.bytes, native }
 }

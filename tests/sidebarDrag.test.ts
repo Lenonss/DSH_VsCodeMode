@@ -16,10 +16,12 @@ vi.mock('react', () => ({ default: {
 import { SidebarView } from '../src/client/sidebar/SidebarView.js'
 
 let props: any
+let frames: Map<number, () => void>
+let frameId: number
 let listeners: Map<string, Set<any>>
 /** @private @author ddj 2026年10月22号 @param type Event kind. @param pointerId Pointer identity. @param clientX Screen coordinate. @description Deliver a window event to registered handlers. */
 function dispatch(type: string, pointerId = 1, clientX = 100) {
-  for (const handler of [...(listeners.get(type) ?? [])]) handler({ pointerId, clientX })
+  for (const handler of [...(listeners.get(type) ?? [])]) handler({ type, pointerId, clientX })
 }
 /** @private @author ddj 2026年10月22号 @returns Real component resize handler. */
 function render() { hooks.cursor = 0; hooks.effectCursor = 0; return (SidebarView(props) as any).children.at(-1).props.onPointerDown }
@@ -31,7 +33,10 @@ function start() { render()({ pointerId: 1, clientX: 100, preventDefault: vi.fn(
 beforeEach(() => {
   hooks.refs = []; hooks.cursor = 0; hooks.effects = []; hooks.effectCursor = 0
   listeners = new Map()
+  frames = new Map(); frameId = 0
   vi.stubGlobal('window', {
+    requestAnimationFrame: (callback: () => void) => { frames.set(++frameId, callback); return frameId },
+    cancelAnimationFrame: (id: number) => frames.delete(id),
     addEventListener: (type: string, handler: any) => { if (!listeners.has(type)) listeners.set(type, new Set()); listeners.get(type)!.add(handler) },
     removeEventListener: (type: string, handler: any) => listeners.get(type)?.delete(handler),
   })
@@ -40,12 +45,31 @@ beforeEach(() => {
 afterEach(() => { unmount(); vi.unstubAllGlobals() })
 
 describe('sidebar drag lifecycle', () => {
+  it('coalesces motion into local painting and commits the final release once', () => {
+    hooks.cursor = 0; hooks.effectCursor = 0
+    const view = SidebarView(props) as any
+    const node = { style: { width: '350px' } }
+    view.props.ref.current = node
+    view.children.at(-1).props.onPointerDown({ pointerId: 1, clientX: 100, preventDefault: vi.fn() })
+    for (let x = 101; x <= 150; x++) dispatch('pointermove', 1, x)
+    expect(frames.size).toBe(1)
+    expect(props.onWidth).not.toHaveBeenCalled()
+    const callbacks = [...frames.values()]; frames.clear()
+    callbacks.forEach(callback => callback())
+    expect(node.style.width).toBe('400px')
+    dispatch('pointerup', 1, 160)
+    expect(props.onWidth).toHaveBeenCalledExactlyOnceWith(410)
+    expect(frames.size).toBe(0)
+  })
   it('resizes only for the owning pointer and clamps maximum width', () => {
     start(); dispatch('pointermove', 2, 200); expect(props.onWidth).not.toHaveBeenCalled()
-    dispatch('pointerup', 2); dispatch('pointermove', 1, 800); expect(props.onWidth).toHaveBeenLastCalledWith(560)
+    dispatch('pointerup', 2); dispatch('pointermove', 1, 800)
+    expect(props.onWidth).not.toHaveBeenCalled()
+    dispatch('pointerup', 1, 800); expect(props.onWidth).toHaveBeenLastCalledWith(560)
+    expect(frames.size).toBe(0)
   })
   it.each(['pointerup', 'pointercancel', 'blur'])('releases every listener on %s', (kind) => {
-    start(); dispatch(kind); dispatch('pointermove', 1, 200)
+    start(); dispatch(kind, 1, 100); dispatch('pointermove', 1, 200)
     expect(props.onWidth).not.toHaveBeenCalled()
     expect([...listeners.values()].every((set) => set.size === 0)).toBe(true)
   })
@@ -65,7 +89,8 @@ describe('sidebar drag lifecycle', () => {
     props.visible = false; start(); dispatch('pointermove', 1, 111); expect(props.onShow).not.toHaveBeenCalled()
     dispatch('pointermove', 1, 112); expect(props.onShow).toHaveBeenCalledTimes(1)
     props.visible = true; render()
-    dispatch('pointermove', 1, 132); expect(props.onWidth).toHaveBeenLastCalledWith(370)
-    dispatch('pointercancel'); expect(listeners.get('pointermove')?.size).toBe(0)
+    dispatch('pointermove', 1, 132); expect(props.onWidth).not.toHaveBeenCalled()
+    dispatch('pointercancel'); expect(props.onWidth).toHaveBeenLastCalledWith(370)
+    expect(listeners.get('pointermove')?.size).toBe(0)
   })
 })

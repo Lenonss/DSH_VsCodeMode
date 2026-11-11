@@ -10,6 +10,8 @@
  */
 import React from 'react'
 import { createPortal } from 'react-dom'
+import { watchQuickSize } from './quickMeasure.js'
+import type { QuickMeasure } from './quickMeasure.js'
 import { MenuGlobalDialog, QuickItemDialog } from './QuickMenuDialog.js'
 import type { QuickMenuHost } from '../quickMenuHost.js'
 import {
@@ -178,6 +180,7 @@ export function QuickMenuLauncher(props: { host: QuickMenuHost }): React.ReactEl
   const [dialog, setDialog] = React.useState<DialogState>({ kind: 'none' })
   const [active, setActive] = React.useState<{ depth: number; index: number }>({ depth: 0, index: 0 })
   const hoverTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null)
+  const sizeWatch = React.useRef<QuickMeasure | null>(null)
 
   /**
    * 测量浮层与输入框锚点（浮层坐标系）。
@@ -200,27 +203,12 @@ export function QuickMenuLauncher(props: { host: QuickMenuHost }): React.ReactEl
 
   React.useEffect(() => {
     store.markMounted(true)
-    measure()
+    const watcher = watchQuickSize(measure)
+    sizeWatch.current = watcher
     void store.load()
-    const onResize = (): void => measure()
-    window.addEventListener('resize', onResize)
-    // 冷启动时输入框还没布局完，首帧量到的锚点是错的：前几秒补测几次，
-    // 之后用 ResizeObserver + 低频轮询兜底（measure 内部做等值短路，不会抖）。
-    const timers = [80, 320, 900, 2000].map((delay) => setTimeout(measure, delay))
-    const layerEl = document.querySelector('[data-shell-overlay]')
-    const seatEl = document.querySelector('[data-composer-seat]')
-    let observer: ResizeObserver | null = null
-    if (typeof ResizeObserver !== 'undefined') {
-      observer = new ResizeObserver(() => measure())
-      if (layerEl) observer.observe(layerEl)
-      if (seatEl) observer.observe(seatEl)
-    }
-    const poll = setInterval(measure, 1200)
     return () => {
-      window.removeEventListener('resize', onResize)
-      timers.forEach((timer) => clearTimeout(timer))
-      clearInterval(poll)
-      observer?.disconnect()
+      watcher.dispose()
+      sizeWatch.current = null
       store.markMounted(false)
     }
   }, [measure, store])
@@ -228,9 +216,9 @@ export function QuickMenuLauncher(props: { host: QuickMenuHost }): React.ReactEl
   // 打开时重新测量并刷新绑定快照（规则/技能可能在别处变了）
   React.useEffect(() => {
     if (!open) return
-    measure()
+    sizeWatch.current?.request()
     void store.refreshBindings()
-  }, [open, measure, store])
+  }, [open, store])
 
   const ctx = store.getContext()
   const basePos = React.useMemo(() => {

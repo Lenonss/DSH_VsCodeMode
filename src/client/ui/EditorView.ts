@@ -38,7 +38,7 @@ import { clampZoom, clearZoomMem, dataUrlOf, isImagePath, isSvgPath, recallZoom,
 import { isMarkdownPath } from '../markdownPreview.js'
 import { isExcelPath } from '../excel/model.js'
 import { excelState, loadExcel, allowClose, releaseExcel, renameExcel, unsafeExcel, notifyExcel } from '../excel/controller.js'
-import { excelPanel } from '../excel/panel.js'
+import { ExcelHost } from '../excel/ExcelHost.js'
 import { setActiveEditorPath } from '../activePathStore.js'
 import { MarkdownPanel } from '../md/mdPanel.js'
 import { isPlanPath, planDocument } from '../planState.js'
@@ -306,8 +306,11 @@ export function EditorView(props) {
   const [dragPreview, setDragPreview] = React.useState(null)
   const dragRef = React.useRef(null)
   const benchOps = React.useRef(null)
-  const fullHost = React.useMemo(() => document.createElement('div'), [])
-  fullHost.className = 'edrv-full-view'
+  const fullHost = React.useMemo(() => {
+    const host = document.createElement('div')
+    host.className = 'edrv-full-view'
+    return host
+  }, [])
   const pdfNodes = React.useRef(new Map())
   const paneEditors = React.useRef(new Map())
   const docRef = React.useRef(null)
@@ -4887,7 +4890,7 @@ export function EditorView(props) {
       loadContent(active, sessionId)
     }), largeCandidate === pageIdentity && React.createElement('button', { className: 'edrv-pill edrv-pill-ghost', onClick: openTextPages }, '只读分段查看'))
   } else if (isExcelActive && contentPath === active && excelState(excelScope, active).document) {
-    body = React.createElement('div', { className: 'edrv-excel-host', key: excelScope + active, ref: (host) => { if (host) { const node = excelPanel(excelState(excelScope, active), active, cwd); if (node.parentNode !== host) host.appendChild(node) } } })
+    body = React.createElement(ExcelHost, { key: excelScope + active, state: excelState(excelScope, active), path: active, cwd })
   } else if (isExcelActive) {
     body = loadingBody(loadStage.message || '读取 Excel…', loadStage.progress)
   } else if (isImageActive && imageSrc) {

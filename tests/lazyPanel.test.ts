@@ -13,7 +13,7 @@ vi.mock('react', () => ({ default: {
     hooks.cleanup?.(); hooks.cleanup = effect(); hooks.deps = deps
   },
 } }))
-import { LazyPanel, loadPanel, setPanelImport } from '../src/client/lazyPanel.js'
+import { LazyPanel, loadChunk, loadPanel, setPanelImport } from '../src/client/lazyPanel.js'
 /** @private @author ddj 2026年10月22号 @returns Controlled transport response. */
 function deferred() {
   let resolve!: (exports: Record<string, unknown>) => void
@@ -58,5 +58,21 @@ describe('lazy panel loading', () => {
   })
   it('fails clearly on older hosts without async chunk support', async () => {
     setPanelImport(); await expect(loadPanel('rules')).rejects.toThrow('升级宿主')
+  })
+})
+
+describe('lazy chunk loading', () => {
+  it('requests each chunk file once and drops the cache on generation change', async () => {
+    const transport = vi.fn(async () => ({ decodeExcel: () => 1 }))
+    setPanelImport(transport)
+    expect(await loadChunk('./client.excelcodec.js')).toHaveProperty('decodeExcel')
+    expect(await loadChunk('./client.excelcodec.js')).toHaveProperty('decodeExcel')
+    expect(transport).toHaveBeenCalledExactlyOnceWith('./client.excelcodec.js')
+    setPanelImport(transport)
+    await loadChunk('./client.excelcodec.js')
+    expect(transport).toHaveBeenCalledTimes(2)
+  })
+  it('rejects chunk loads on older hosts without async chunk support', async () => {
+    setPanelImport(); await expect(loadChunk('./client.excel.js')).rejects.toThrow('升级宿主')
   })
 })

@@ -1,6 +1,9 @@
 /** DAP hover 变量树：成员全量直显/折叠判定/上限保护/转义 纯逻辑测试。作者 ddj 2026年09月21号 */
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
+  applyAltToHovers,
+  disposeHoverTree,
+  installHoverTree,
   clipValue,
   createTreeState,
   escapeHtml,
@@ -20,8 +23,196 @@ import {
   type TreeNode,
 } from '../src/client/dap/hoverTree.js'
 
+/** 最小 DOM 行为桩，只实现本模块使用的查询与属性契约。 */
+class HoverElement {
+  nodeType = 1
+  isConnected = true
+  style = { display: '' }
+  attrs = new Map<string, string>()
+  parent: HoverElement | null = null
+  children: HoverElement[] = []
+  writes = 0
+  private text = ''
+  querySelectorAll = vi.fn((selector: string): HoverElement[] => {
+    const matches: HoverElement[] = []
+    for (const child of this.children) {
+      if (child.matches(selector)) matches.push(child)
+      matches.push(...child.querySelectorAll(selector))
+    }
+    return matches
+  })
+  addEventListener = vi.fn()
+
+  /** @public @author ddj 2026年11月06号 @description 创建指定 CSS 类的元素桩。 @param classes 类名 */
+  constructor(public classes = '') {}
+  /** @public @author ddj 2026年11月06号 @description 读取文本。 @returns 文本 */
+  get textContent(): string { return this.text }
+  /** @public @author ddj 2026年11月06号 @description 统计文本写入。 @param message 文本 */
+  set textContent(message: string) { this.text = message; this.writes += 1 }
+  /** @public @author ddj 2026年11月06号 @description 匹配使用到的选择器。 @param selector 选择器 @returns 是否匹配 */
+  matches(selector: string): boolean {
+    for (const part of selector.split(', ')) {
+      const required = part.match(/^\.([\w-]+)/)?.[1]
+      if (required && !this.classes.split(' ').includes(required)) continue
+      const attr = part.match(/\[([\w-]+)\]/)?.[1]
+      if (attr && !this.attrs.has(attr)) continue
+      const excluded = part.match(/:not\(\[([\w-]+)\]\)/)?.[1]
+      if (excluded && this.attrs.has(excluded)) continue
+      return true
+    }
+    return false
+  }
+  /** @public @author ddj 2026年11月06号 @description 查找最近归属。 @param selector 选择器 @returns 归属元素 */
+  closest(selector: string): HoverElement | null {
+    if (this.matches(selector)) return this
+    return this.parent?.closest(selector) ?? null
+  }
+  /** @public @author ddj 2026年11月06号 @description 查询首个后代。 @param selector 选择器 @returns 后代 */
+  querySelector(selector: string): HoverElement | null { return this.querySelectorAll(selector)[0] ?? null }
+  /** @public @author ddj 2026年11月06号 @description 追加子节点。 @param child 子节点 */
+  appendChild(child: HoverElement): void { child.parent = this; this.children.push(child) }
+  /** @public @author ddj 2026年11月06号 @description 写属性。 @param name 属性名 @param content 属性值 */
+  setAttribute(name: string, content: string): void { this.attrs.set(name, content) }
+  /** @public @author ddj 2026年11月06号 @description 读属性。 @param name 属性名 @returns 属性值 */
+  getAttribute(name: string): string | null { return this.attrs.get(name) ?? null }
+  /** @public @author ddj 2026年11月06号 @description 判断属性。 @param name 属性名 @returns 是否存在 */
+  hasAttribute(name: string): boolean { return this.attrs.has(name) }
+  /** @public @author ddj 2026年11月06号 @description 清理属性。 @param name 属性名 */
+  removeAttribute(name: string): void { this.attrs.delete(name) }
+  /** @public @author ddj 2026年11月06号 @description 从父节点移除自身。 */
+  remove(): void {
+    if (this.parent) this.parent.children = this.parent.children.filter(child => child !== this)
+    this.isConnected = false
+  }
+}
+
 /** 变量桩。 */
 const node = (name: string, value: string, ref = 0): TreeNode => ({ name, value, ref })
+
+/** @private @author ddj 2026年11月06号 @description 创建 DOM 监听测试环境。 @returns 桩与变更入口 */
+function hoverHarness() {
+  const body = new HoverElement()
+  const disconnect = vi.fn()
+  const observe = vi.fn()
+  let callback: MutationCallback = () => undefined
+  const doc = { body, querySelectorAll: vi.fn(() => []), createElement: () => new HoverElement() }
+  class Observer {
+    /** @public @author ddj 2026年11月06号 @description 捕获监听回调。 @param handler 回调 */
+    constructor(handler: MutationCallback) { callback = handler }
+    observe = observe
+    disconnect = disconnect
+  }
+  vi.useFakeTimers()
+  vi.stubGlobal('window', { setTimeout, clearTimeout })
+  vi.stubGlobal('document', doc)
+  vi.stubGlobal('MutationObserver', Observer)
+  installHoverTree()
+
+  /** @private @author ddj 2026年11月06号 @description 派发指定目标的批量变更。 @param target 变更容器 @param added 新增节点 */
+  function emit(target: HoverElement, ...added: HoverElement[]): void {
+    callback([{ target, addedNodes: added } as unknown as MutationRecord], {} as MutationObserver)
+  }
+  return { body, doc, emit, observe, disconnect }
+}
+
+/** @private @author ddj 2026年11月06号 @description 组装真实调试浮窗的最小结构。 @returns 浮窗及子节点 */
+function debugHover() {
+  const hover = new HoverElement('monaco-hover')
+  const content = new HoverElement('monaco-hover-content')
+  const row = new HoverElement('hover-row')
+  const block = new HoverElement()
+  block.setAttribute('data-edrv-dap', '1')
+  const tree = new HoverElement()
+  tree.setAttribute(TREE_ATTR, '1')
+  block.appendChild(tree)
+  row.appendChild(block)
+  content.appendChild(row)
+  hover.appendChild(content)
+  return { hover, content, row, tree }
+}
+
+// 每次先清理监听与待绑定队列，再还原全局，避免跨测试共享 DOM 状态。
+afterEach(() => {
+  disposeHoverTree()
+  vi.unstubAllGlobals()
+  vi.useRealTimers()
+})
+
+describe('hoverTree DOM 热路径', () => {
+  it.each(['view-lines', 'margin-view-overlays', 'view-overlays', 'minimap', 'edrv-del-zone', 'edrv-del-margin'])('%s 大批新增代码行不查询后代、不调度任务', classes => {
+    const env = hoverHarness()
+    const target = new HoverElement(classes)
+    const lines = Array.from({ length: 1000 }, () => new HoverElement('view-line'))
+    env.emit(target, ...lines)
+    expect(lines.every(line => line.querySelectorAll.mock.calls.length === 0)).toBe(true)
+    expect(target.querySelectorAll).not.toHaveBeenCalled()
+    expect(env.doc.querySelectorAll).not.toHaveBeenCalled()
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('外层整体插入发现多个浮窗，去重并仅绑定各自的树', () => {
+    const env = hoverHarness()
+    const wrapper = new HoverElement()
+    const first = debugHover()
+    const second = debugHover()
+    wrapper.appendChild(first.hover)
+    wrapper.appendChild(second.hover)
+    env.emit(env.body, wrapper)
+    env.emit(first.content, new HoverElement())
+    expect(vi.getTimerCount()).toBe(1)
+    vi.runAllTimers()
+    expect(first.tree.addEventListener).toHaveBeenCalledTimes(2)
+    expect(second.tree.addEventListener).toHaveBeenCalledTimes(2)
+    expect(env.doc.querySelectorAll).not.toHaveBeenCalled()
+  })
+
+  it('异步 LSP 行立即应用 Alt 状态，相同提示不重复写入', () => {
+    const env = hoverHarness()
+    applyAltToHovers(true)
+    const panel = debugHover()
+    env.emit(env.body, panel.hover)
+    expect(panel.row.style.display).toBe('none')
+    const hint = panel.hover.querySelector('[data-edrv-hint]')!
+    const writes = hint.writes
+    const lsp = new HoverElement('hover-row')
+    panel.content.appendChild(lsp)
+    env.emit(panel.content, lsp)
+    expect(lsp.style.display).toBe('')
+    expect(panel.content.querySelector('[data-edrv-placeholder]')).toBeNull()
+    expect(hint.writes).toBe(writes)
+    // 模拟自身提示文字变更带来的记录；不再反复写入 childList。
+    env.emit(hint)
+    expect(hint.writes).toBe(writes)
+    applyAltToHovers(false)
+    env.emit(panel.content)
+    expect(panel.row.style.display).toBe('')
+    expect(lsp.style.display).toBe('none')
+  })
+
+  it('安装幂等；卸载取消局部任务，重装不残留旧容器', () => {
+    const env = hoverHarness()
+    installHoverTree()
+    expect(env.observe).toHaveBeenCalledTimes(1)
+    const panel = debugHover()
+    env.emit(env.body, panel.hover)
+    disposeHoverTree()
+    expect(env.disconnect).toHaveBeenCalledTimes(1)
+    expect(vi.getTimerCount()).toBe(0)
+    installHoverTree()
+    vi.runAllTimers()
+    expect(panel.tree.addEventListener).not.toHaveBeenCalled()
+    expect(env.observe).toHaveBeenCalledTimes(2)
+  })
+
+  it('已脱离文档的浮窗不绑定', () => {
+    const env = hoverHarness()
+    const panel = debugHover()
+    env.emit(env.body, panel.hover)
+    panel.hover.isConnected = false
+    vi.runAllTimers()
+    expect(panel.tree.addEventListener).not.toHaveBeenCalled()
+  })
+})
 
 describe('hoverTree 行生成', () => {
   it('根级行按 ref 判定可展开，并带稳定路径', () => {

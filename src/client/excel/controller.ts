@@ -1,6 +1,5 @@
 import type { IWorkbookData } from '@univerjs/presets'
-import { decodeExcel } from './codec.js'
-import { downloadExcel } from './export.js'
+import { loadExcelCodec } from './codecLoader.js'
 import type { ExcelDocument } from './model.js'
 
 export interface ExcelState {
@@ -57,7 +56,8 @@ export async function loadExcel(state: ExcelState, read: () => Promise<{ bytes: 
   async function parse(): Promise<void> {
     try {
       const source = await read()
-      const document = await decodeExcel(source.bytes)
+      const codec = await loadExcelCodec()
+      const document = await codec.decodeExcel(source.bytes)
       if (state.released || generation !== state.generation) return
       document.baseline = source.version
       state.dispose?.()
@@ -82,7 +82,10 @@ export async function exportExcel(state: ExcelState, path: string): Promise<numb
   const generation = state.generation
   const snapshot = structuredClone(state.capture?.() || state.document.snapshot)
   state.exporting = true
-  try { await downloadExcel(snapshot, state.path || path, () => !state.released && state.generation === generation) }
+  try {
+    const codec = await loadExcelCodec()
+    await codec.downloadExcel(snapshot, state.path || path, () => !state.released && state.generation === generation)
+  }
   finally { state.exporting = false }
   if (state.released || state.generation !== generation) throw new Error('Excel 导出已取消，文档身份变化')
   state.exportRevision = revision

@@ -1097,3 +1097,5 @@
 .edrv-drop-label { position: absolute; left: 4px; top: 4px; }
 [data-edrv-view] .edrv-tab:focus-visible { outline: 2px solid var(--dsw-alias-state-info-primary, #4d6bfe); outline-offset: -2px; }
 @media (prefers-reduced-motion: reduce) { .edrv-drag-overlay { transition: none; } }
+/* 宿主节点在表格引擎 chunk 加载前就必须有高度，故留在根样式而非 panel.css。 */
+.edrv-excel-host { height: 100%; min-height: 0; flex: 1; }
