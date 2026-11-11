@@ -76,17 +76,19 @@ jobs:
       # 发布后回读注册表 tarball，校验 main/exports 入口文件存在——
       # 镜像/CDN 刚发布时同步不完整会让用户端更新报"缺少入口文件"并回滚。
       # 发布后同步有秒级~分钟级延迟，用重试窗口覆盖，超时仍未就绪则判失败。
+      # 窗口 30×30s = 15 分钟：v0.29.0 实测 registry 可见耗时约 10 分钟，
+      # 原 15×30s 会在同步完成前判失败，把已成功的发布误报成红色。
       - name: Verify published tarball (entry files present)
         run: |
           version="$(node -p "require('./package.json').version")"
           ok=0
-          for attempt in $(seq 1 15); do
+          for attempt in $(seq 1 30); do
             tarball="$(npm view "dsh-vscode-mode@${version}" dist.tarball 2>/dev/null || true)"
             if [ -n "${tarball}" ] && curl -fsSL "${tarball}" -o /tmp/verify.tgz; then
               ok=1
               break
             fi
-            echo "attempt ${attempt}/15: registry tarball for v${version} not ready yet, retrying in 30s..."
+            echo "attempt ${attempt}/30: registry tarball for v${version} not ready yet, retrying in 30s..."
             sleep 30
           done
           if [ "${ok}" != "1" ]; then
