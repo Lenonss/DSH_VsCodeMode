@@ -9,6 +9,8 @@
  * 作者 ddj
  */
 import React from 'react'
+import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
+import { SettingNotice } from './SettingsUi.js'
 import { rpc } from '../rpc.js'
 import { setAiInlineEnabled } from '../ai/inlineProvider.js'
 import { isDelistedModel } from '../../shared/ai.js'
@@ -98,7 +100,7 @@ export function AiSettings() {
   // 仅提示，不擅自改写用户已保存的配置（避免覆盖其意图）；清空即回到自动路由。
   const delisted = isDelistedModel(cfg.model)
   const taskDelisted = isDelistedModel(cfg.taskModel)
-  return React.createElement('section', { className: 'vsm-lsp-card' },
+  return React.createElement('section', { className: 'vsm-ai-settings' },
     React.createElement('h3', null, 'AI 自动补全（实验）'),
     React.createElement('p', { className: 'vsm-lsp-note' }, '编辑停顿后由模型生成内联建议（ghost text），Tab 接受，Alt+\\ 手动触发。每次补全是一次模型调用；建议选择非推理模型，且思考强度选「跟随默认」或最低档以获得更快响应。'),
     (delisted
@@ -106,7 +108,7 @@ export function AiSettings() {
           '当前模型「' + cfg.model + '」已从 DSH 默认模型列表移除（0.1.6-alpha.2 起）。该模型可能不再可用；将「模型」改回「自动」即可使用第一个可用模型（现有配置不会被自动改动）。')
       : null),
     React.createElement('div', { className: 'vsm-lsp-row' },
-      React.createElement('button', { className: cfg.enabled ? 'vsm-primary' : '', disabled: busy, onClick: toggle },
+      React.createElement(Button, { variant: cfg.enabled ? 'primary' : 'outline', size: 'sm', 'aria-pressed': cfg.enabled, disabled: busy, onClick: toggle },
         cfg.enabled ? '已开启（点击关闭）' : '已关闭（点击开启）'),
     ),
     React.createElement('div', { className: 'vsm-lsp-row' },
@@ -121,7 +123,7 @@ export function AiSettings() {
           efforts.map((e) => React.createElement('option', { key: e.id, value: e.id }, e.name))),
       ) : null,
     ),
-    React.createElement('h3', null, 'AI 任务模型（AI 智能整理等非补全调用）'),
+    React.createElement('h3', null, 'AI 任务模型'),
     React.createElement('p', { className: 'vsm-lsp-note' }, '独立于补全模型：整理分析可选推理模型 + 较高思考强度，补全仍可选快模型。留空 = 跟随补全模型配置。'),
     (taskDelisted
       ? React.createElement('div', { className: 'vsm-mcp-error vsm-mcp-banner' },
@@ -139,7 +141,7 @@ export function AiSettings() {
           taskEfforts.map((e) => React.createElement('option', { key: e.id, value: e.id }, e.name))),
       ) : null,
     ),
-    note && React.createElement('div', { className: 'vsm-compat-item ok' }, React.createElement('span', { className: 'vsm-compat-name' }, note)),
-    error && React.createElement('div', { className: 'vsm-mcp-error vsm-mcp-banner' }, error),
+    React.createElement(SettingNotice, { message: note }),
+    React.createElement(SettingNotice, { message: error, error: true }),
   )
 }

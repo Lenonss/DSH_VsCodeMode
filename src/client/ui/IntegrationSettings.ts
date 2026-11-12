@@ -8,6 +8,8 @@
  * 作者 ddj 2026-09-07
  */
 import React from 'react'
+import { Button, Input } from '@deepseek-ai/dsh-client-ui-primitives'
+import { SettingNotice } from './SettingsUi.js'
 import { rpc } from '../rpc.js'
 import { SettingsContext } from '../settingsContext.js'
 
@@ -184,19 +186,19 @@ export function IntegrationSettings() {
     React.createElement('h3', { className: 'vsm-panel-title' }, '系统集成'),
     React.createElement('div', { className: 'vsm-panel-body' },
       React.createElement('p', { style: { margin: '0 0 8px' } },
-        '把 DSH 编辑器接入系统入口：文件管理器右键菜单（Windows/Linux/macOS）+ Unity 外部脚本编辑器（UPM 内嵌包，自动发现，无需改 manifest.json）。'),
-      error && React.createElement('div', { className: 'vsm-mcp-error vsm-mcp-banner' }, error),
-      message && React.createElement('small', { className: 'vsm-devform-msg' }, message),
+        '从文件管理器或 Unity 直接打开 DSH 编辑器。Unity 使用内嵌包，无需修改项目 manifest。'),
+      React.createElement(SettingNotice, { message: error, error: true }),
+      React.createElement(SettingNotice, { message }),
       status && !onWin && React.createElement(PlatformNote, { platform, registered: anyRegistered }),
       React.createElement('label', { className: 'vsm-general-row' },
         React.createElement('span', null, 'DSH 服务地址'),
-        React.createElement('input', {
+        React.createElement(Input, {
           value: baseDraft ?? baseUrl,
           placeholder: 'http://127.0.0.1:3080',
           onChange: (event) => setBaseDraft(event.target.value),
           onKeyDown: (event) => { if (event.key === 'Enter') saveBase() },
         }),
-        React.createElement('button', { disabled: busy === 'base' || baseDraft === null, onClick: saveBase }, '保存'),
+        React.createElement(Button, { variant: 'outline', size: 'sm', disabled: busy === 'base' || baseDraft === null, onClick: saveBase }, '保存地址'),
       ),
       React.createElement('label', { className: 'vsm-general-row' },
         React.createElement('span', null,
@@ -229,7 +231,7 @@ export function IntegrationSettings() {
       })),
       React.createElement('label', { className: 'vsm-general-row' },
         React.createElement('span', null, '添加 Unity 项目'),
-        React.createElement('input', {
+        React.createElement(Input, {
           value: rootDraft,
           placeholder: '项目根目录（含 Assets 与 ProjectSettings）',
           onChange: (event) => setRootDraft(event.target.value),

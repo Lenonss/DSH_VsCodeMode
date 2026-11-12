@@ -597,13 +597,13 @@ profile 请替换为实际目标，不要把示例目录当成当前运行 profi
 
 ```bash
 # ① Git 安装（clone + prepare 构建；推荐打固定 tag）
-dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.29.1
+dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.29.2
 
 # ② npm 注册表（发布到 npm 后）
-dsh plugin --profile web add dsh-vscode-mode@0.29.1
+dsh plugin --profile web add dsh-vscode-mode@0.29.2
 
 # ③ GitHub Release tgz 直装（Release asset 可用后）
-dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.29.1/dsh-vscode-mode-0.29.1.tgz
+dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.29.2/dsh-vscode-mode-0.29.2.tgz
 ```
 
 > **DSH 版本政策（0.17.0 起）**：六项 DSH peer 仍统一声明为 `*`，另以
@@ -985,6 +985,7 @@ Keep All / Undo All 却是亮的。修复：单文件 Keep / Undo 覆盖冲突�
 
 | 版本 | 要点 |
 | --- | --- |
+| v0.29.2 | 设置界面优化：轻量分组、字段说明与控件对齐、官方输入原语及状态提示；MCP 加载/失败不再遮挡其他分类 |
 | v0.29.1 | 待审行差异引擎精准化：唯一行锚点切分 + 小窗口 LCS，千行文件不再整段替换；修正多 hunk 行号偏移 |
 | v0.29.0 | Excel 引擎与编解码改为按需分块（根包 930 KB，打开表格才加载 11.4 MB 引擎）；调试 hover / 侧栏拖拽 / 快捷菜单测量性能优化；官方文件侧栏 CSS 运行时兼容 |
 | v0.28.0 | dsh-ops 写工具纳入待审差异采集：ops_edit_file / ops_write_file / ops_remove / ops_copy / ops_move 可查看差异、Keep、Undo；ops_replace 按候选预读 + 回执对齐尽力采集 |
@@ -1003,7 +1004,13 @@ Keep All / Undo All 却是亮的。修复：单文件 Keep / Undo 覆盖冲突�
 | v0.23.0 | 快捷菜单：可拖动悬浮按钮 + 自定义菜单树 |
 
 <details>
-<summary>完整版本记录（v0.29.1 → v0.1.5x，点击展开）</summary>
+<summary>完整版本记录（v0.29.2 → v0.1.5x，点击展开）</summary>
+
+- **v0.29.2**：设置页移除重复标题与厚重灰底，统一分组、间距、焦点与窄容器布局；
+  编辑器字段分离名称、帮助与控件，并关联可访问标签；文件打开与安装更新独立分组。
+  AI、系统集成采用官方 UI 原语和可访问状态提示，语言服务器二级导航与顶层分类区分；
+  MCP 读取中或失败仅影响 MCP 分类，不再阻塞通用等页面。保留配置键、自动/显式保存及危险操作确认。
+  已完成当前 Web 六分类浅色约 550px 冒烟；深色及 360/900px 未实测。
 
 - **v0.29.1**：待审差异引擎重写——新增 `src/pending/lineDiff.ts`：先裁窗口公共前后缀，再按两侧
   唯一出现的相同行做锚点、按最长递增链切分，只在小窗口内做 LCS；单窗口 100 万单元格、单次差异

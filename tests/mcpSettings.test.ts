@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const harness = vi.hoisted(() => ({ scope: '', index: 0, states: new Map<string, any[]>(), effects: new Map<string, any[]>(), pending: [] as Array<() => void>, request: vi.fn() }))
 vi.mock('../src/client/rpc.js', () => ({ rpc: harness.request }))
+vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({ Button: 'button', Input: 'input' }))
 vi.mock('../src/client/ui/LspSettings.js', () => ({ LspSettings: () => null }))
 vi.mock('../src/client/ui/PerfSettings.js', () => ({ PerfSettings: () => null }))
 vi.mock('../src/client/ui/IntegrationSettings.js', () => ({ IntegrationSettings: () => null }))
@@ -88,6 +89,34 @@ describe('MCP settings integration', () => {
     vi.unstubAllGlobals()
     vi.useRealTimers()
   })
+  it('keeps all six categories reachable and exposes the current category', () => {
+    for (const label of ['通用', 'MCP 管理', '语言服务器', 'AI 补全', '性能优化', '兼容性']) {
+      const tree = render(McpSettings)
+      find(tree, (node) => node.type === 'button' && node.props.children === label).props.onClick()
+      const selected = render(McpSettings)
+      expect(find(selected, (node) => node.type === 'button' && node.props.children === label).props['aria-current']).toBe('page')
+      expect(find(selected, (node) => node.props?.id === 'vsm-settings-content')).toBeTruthy()
+    }
+  })
+  it('does not let pending MCP reads hide general settings', () => {
+    harness.states.clear(); harness.effects.clear()
+    harness.request.mockImplementation(() => new Promise(() => {}))
+    const tree = render(McpSettings)
+    expect(find(tree, (node) => node.type?.name === 'GeneralSettings')).toBeTruthy()
+    expect(find(tree, (node) => node.props?.children === '正在读取 MCP 服务…')).toBeUndefined()
+  })
+  it('keeps MCP failures scoped to MCP and other categories usable', async () => {
+    harness.states.clear(); harness.effects.clear()
+    harness.request.mockResolvedValue({ ok: false, error: 'MCP probe failed' })
+    render(McpSettings)
+    await settle()
+    let tree = render(McpSettings)
+    expect(find(tree, (node) => node.type?.name === 'GeneralSettings')).toBeTruthy()
+    expect(find(tree, (node) => node.type?.name === 'SettingNotice')).toBeUndefined()
+    find(tree, (node) => node.type === 'button' && node.props.children === 'MCP 管理').props.onClick()
+    tree = render(McpSettings)
+    expect(find(tree, (node) => node.type?.name === 'SettingNotice').props.error).toBe(true)
+  })
   it('does not poll on general tab, polls snapshot on MCP, and unsubscribes on unmount', async () => {
     await vi.advanceTimersByTimeAsync(10000)
     expect(harness.request).toHaveBeenCalledTimes(2)
@@ -140,7 +169,7 @@ describe('MCP settings integration', () => {
     expect(manage.props.draft.args).toBe('[1]')
     expect(manage.props.busy).toBe('')
     expect(harness.request.mock.calls.some((call) => call[0] === 'mcp.save')).toBe(false)
-    expect(find(render(McpSettings), (node) => node.props.className === 'vsm-mcp-error vsm-mcp-banner')).toBeTruthy()
+    expect(find(render(McpSettings), (node) => node.type?.name === 'SettingNotice' && node.props.error && node.props.message)).toBeTruthy()
   })
   it('preserves failed save form and closes only after success', async () => {
     let manage = panel()

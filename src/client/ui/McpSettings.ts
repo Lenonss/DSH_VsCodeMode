@@ -7,6 +7,8 @@
  * 作者 ddj 2026年08月22号 / 2026年08月26号 / 2026年08月27号 / 2026年10月
  */
 import React from 'react'
+import { Button, Input } from '@deepseek-ai/dsh-client-ui-primitives'
+import { SettingRow, SettingNotice } from './SettingsUi.js'
 import { rpc } from '../rpc.js'
 import type { MpcProject, MpcServer } from '../../shared/mcp.js'
 import { configOf } from '../mcpForm.js'
@@ -273,24 +275,21 @@ function GeneralSettings({ registry, getShortcuts }) {
     ),
   )
   return React.createElement('section', { className: 'vsm-general-page' },
-    React.createElement('h2', null, '通用'),
-    React.createElement('p', null, '配置 DSH 对话中文件链接的打开工具。工具由当前运行时自动扫描。'),
+
     unavailable && React.createElement('div', { className: 'vsm-mcp-error vsm-mcp-banner' }, '设置服务暂不可用，当前使用自动选择。'),
     error && React.createElement('div', { className: 'vsm-mcp-error vsm-mcp-banner' }, error),
     React.createElement('section', { className: 'vsm-panel' },
-      React.createElement('h3', { className: 'vsm-panel-title' }, '文件与安装'),
+      React.createElement('h3', { className: 'vsm-panel-title' }, '文件打开'),
       React.createElement('div', { className: 'vsm-panel-body' },
         React.createElement('label', { className: 'vsm-general-row' }, React.createElement('span', null, '文件链接使用工具'), React.createElement('select', { value: currentOption, disabled: loading || unavailable || notReady || busy || snapshot?.writable === false, onChange: (event) => save(event.target.value) }, options.map((item) => React.createElement('option', { key: item.id, value: item.id }, item.label))), loading && React.createElement('small', null, '读取中…')),
-        devFormRow,
-        updateRow,
+
       ),
     ),
     React.createElement('section', { className: 'vsm-panel' },
       React.createElement('h3', { className: 'vsm-panel-title' }, '编辑器'),
       React.createElement('div', { className: 'vsm-panel-body' },
-        React.createElement('label', { className: 'vsm-general-row' },
-          React.createElement('span', null, '侧边栏最小宽度'),
-          React.createElement('input', {
+        React.createElement(SettingRow, { label: '侧边栏最小宽度', description: '180–560 px；拖拽低于此宽度时自动隐藏。' },
+          React.createElement(Input, {
             type: 'number', min: 180, max: 560, step: 10,
             value: minDraft ?? minW,
             disabled: loading || unavailable || notReady || busy || snapshot?.writable === false,
@@ -298,11 +297,9 @@ function GeneralSettings({ registry, getShortcuts }) {
             onChange: (event) => setMinDraft(event.target.value),
             onBlur: commitMinW,
             onKeyDown: (event) => { if (event.key === 'Enter') commitMinW() },
-          }),
-          React.createElement('small', null, '180–560 px；拖拽低于该宽度自动隐藏')),
-        React.createElement('label', { className: 'vsm-general-row' },
-          React.createElement('span', null, '页签数量上限'),
-          React.createElement('input', {
+          })),
+        React.createElement(SettingRow, { label: '页签数量上限', description: '0 表示不限制；超限时关闭最久未使用的页签，固定页签除外。' },
+          React.createElement(Input, {
             type: 'number', min: 0, max: EDITOR_LIMIT_CEIL, step: 1,
             value: limitDraft ?? limit,
             disabled: loading || unavailable || notReady || busy || snapshot?.writable === false,
@@ -310,11 +307,9 @@ function GeneralSettings({ registry, getShortcuts }) {
             onChange: (event) => setLimitDraft(event.target.value),
             onBlur: commitLimit,
             onKeyDown: (event) => { if (event.key === 'Enter') commitLimit() },
-          }),
-          React.createElement('small', null, '0 = 不限制；超限时关闭最久未使用的页签（固定页签除外）')),
-        React.createElement('label', { className: 'vsm-general-row' },
-          React.createElement('span', null, '原生打开范围'),
-          React.createElement('input', {
+          })),
+        React.createElement(SettingRow, { label: '原生预览文件类型', description: '后缀以逗号分隔；留空恢复默认 Office 与二进制类型。CSV、TSV 需显式加入。' },
+          React.createElement(Input, {
             type: 'text',
             value: nativeDraft ?? nativeSaved,
             disabled: loading || unavailable || notReady || busy || snapshot?.writable === false,
@@ -323,8 +318,7 @@ function GeneralSettings({ registry, getShortcuts }) {
             onChange: (event) => setNativeDraft(event.target.value),
             onBlur: commitNative,
             onKeyDown: (event) => { if (event.key === 'Enter') commitNative() },
-          }),
-          React.createElement('small', null, '逗号分隔；命中的文件用 DSH 原生预览打开，留空恢复默认（Office + 二进制，csv/tsv 需显式加入）')),
+          })),
       ),
     ),
     React.createElement('section', { className: 'vsm-panel' },
@@ -333,10 +327,13 @@ function GeneralSettings({ registry, getShortcuts }) {
         React.createElement('label', { className: 'vsm-general-row' },
           React.createElement('span', null, '键位配置',
             React.createElement('small', { className: 'vsm-devform-note' },
-              '插件命令（edrv.*）与 DSH 官方命令的键位统一由官方快捷键机制管理：录键、冲突校验、按平台默认值、恢复默认都在官方弹窗内完成；本插件不再单独提供录键编辑器。')),
-          React.createElement('button', { onClick: openShortcuts }, '打开官方快捷键配置')),
+              '在官方快捷键面板统一配置插件与 DSH 命令，支持录键、冲突检查及恢复默认。')),
+          React.createElement(Button, { variant: 'outline', size: 'sm', onClick: openShortcuts }, '配置快捷键')),
         kbMessage && React.createElement('small', { className: 'vsm-devform-msg' }, kbMessage)),
     ),
+    React.createElement('section', { className: 'vsm-panel' },
+      React.createElement('h3', { className: 'vsm-panel-title' }, '安装与更新'),
+      React.createElement('div', { className: 'vsm-panel-body' }, devFormRow, updateRow)),
     React.createElement(SvnSettingsSection, null),
     React.createElement(IntegrationSettings, null),
   )
@@ -689,7 +686,7 @@ export function McpSettings(props) {
   /** @author ddj 2026年10月08号 @description Reset the draft when no mutation is pending. */
   const resetDraft = () => { if (!ref.current?.view.busy) setDraft(EMPTY) }
   let body
-  if (loading) body = React.createElement('div', { className: 'vsm-mcp-empty' }, '正在读取 MCP 服务…')
+  if (tab === 'mcp' && loading) body = React.createElement('div', { className: 'vsm-mcp-empty' }, '正在读取 MCP 服务…')
   else if (tab === 'general') body = React.createElement(GeneralSettings, { registry: openerRegistry, getShortcuts })
   else if (tab === 'mcp') body = React.createElement(McpManagePanel, { servers, projects, busy, draft, edit, resetDraft,
     saveGlobal, saveProject, connectProject, policyProject,
@@ -699,10 +696,12 @@ export function McpSettings(props) {
   else if (tab === 'ai') body = React.createElement(AiSettings, null)
   else body = React.createElement(PerfSettings, null)
   return React.createElement('section', { className: 'vsm-mcp-page' },
-    React.createElement('header', { className: 'vsm-mcp-header' }, React.createElement('div', null, React.createElement('h2', null, 'VSCodeMode'), React.createElement('p', null, '管理当前 profile 与各项目的 Model Context Protocol 服务。'))),
-    React.createElement('nav', { className: 'vsm-mcp-tabs' }, React.createElement('button', { className: tab === 'general' ? 'active' : '', onClick: () => setTab('general') }, '通用'), React.createElement('button', { className: tab === 'mcp' ? 'active' : '', onClick: () => setTab('mcp') }, 'MCP 管理'), React.createElement('button', { className: tab === 'lsp' ? 'active' : '', onClick: () => setTab('lsp') }, '语言服务器'), React.createElement('button', { className: tab === 'ai' ? 'active' : '', onClick: () => setTab('ai') }, 'AI 补全'), React.createElement('button', { className: tab === 'perf' ? 'active' : '', onClick: () => setTab('perf') }, '性能优化'), React.createElement('button', { className: tab === 'compat' ? 'active' : '', onClick: () => setTab('compat') }, '兼容性')),
-    error && React.createElement('div', { className: 'vsm-mcp-error vsm-mcp-banner' }, error),
-    body,
+    React.createElement('header', { className: 'vsm-mcp-header' }, React.createElement('div', null, React.createElement('h2', null, 'VSCodeMode'), React.createElement('p', null, '编辑器偏好、开发工具与系统集成。'))),
+    React.createElement('nav', { className: 'vsm-mcp-tabs', 'aria-label': 'VSCodeMode 设置分类' },
+      [['general', '通用'], ['mcp', 'MCP 管理'], ['lsp', '语言服务器'], ['ai', 'AI 补全'], ['perf', '性能优化'], ['compat', '兼容性']].map(([id, label]) =>
+        React.createElement('button', { key: id, type: 'button', className: tab === id ? 'active' : '', 'aria-current': tab === id ? 'page' : undefined, 'aria-controls': 'vsm-settings-content', onClick: () => setTab(id) }, label))),
+    tab === 'mcp' && React.createElement(SettingNotice, { message: error, error: true }),
+    React.createElement('div', { className: 'vsm-settings-content', id: 'vsm-settings-content' }, body),
   )
 }
 

@@ -1,6 +1,42 @@
 /* dsh-vscode-mode MCP 管理界面样式。
    全部使用 DSH 真实主题变量（--dsw-alias-*），不再用不存在的 fg-* 变量。 */
-.vsm-mcp-page{display:flex;flex-direction:column;gap:18px;width:100%;max-width:920px;box-sizing:border-box;color:var(--dsw-alias-label-primary,#e6e6e6);padding-bottom:32px}
+.vsm-mcp-page{display:flex;flex-direction:column;gap:20px;width:100%;min-width:0;max-width:920px;box-sizing:border-box;color:var(--dsw-alias-label-primary,#20242c);padding-bottom:32px;font-family:inherit;font-size:13px;line-height:1.6;container-type:inline-size}
+.vsm-settings-content,.vsm-settings-stack{min-width:0;display:flex;flex-direction:column;gap:20px}
+.vsm-mcp-page :where(button,input,select,textarea){font-family:inherit;box-sizing:border-box;max-width:100%}
+.vsm-mcp-page :where(button,input,select,textarea):focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#4d6bfe);outline-offset:3px}
+.vsm-mcp-page :where(input:not([type=checkbox]),select,textarea){min-width:0;min-height:32px;border:1px solid var(--dsw-alias-border-l2,#c8ccd4);border-radius:6px;padding:6px 10px;background:var(--dsw-alias-bg-layer-1,#fff);color:var(--dsw-alias-label-primary,#20242c);font-size:13px}
+.vsm-mcp-page :where(button):disabled{cursor:not-allowed;opacity:.5}
+.vsm-mcp-page :where(.vsm-general-row,.vsm-lsp-row,.vsm-perf-toolbar) button{min-height:30px}
+.vsm-setting-row{display:grid;grid-template-columns:minmax(0,1fr) minmax(110px,42%);gap:12px 24px;align-items:center;padding:16px 0;border-bottom:1px solid var(--dsw-alias-border-l1,#e9e9e9)}
+.vsm-setting-row:last-child{border-bottom:0}
+.vsm-setting-copy{min-width:0}
+.vsm-setting-copy label{font-size:13px;font-weight:500}
+.vsm-general-page .vsm-setting-copy p{margin:4px 0 0;font-size:12px;line-height:1.6;color:var(--dsw-alias-label-secondary,#636b78);overflow-wrap:anywhere}
+.vsm-setting-control{min-width:0;display:flex;justify-content:flex-end}
+.vsm-setting-control>*,.vsm-setting-control input{width:100%;min-width:0}
+/* Official Input owns its wrapper border; leave its inner input unframed. */
+.vsm-mcp-page span>input{border:0;border-radius:0;padding:0;background:transparent;min-height:30px}
+.vsm-setting-notice{padding:10px 12px;border-left:3px solid var(--dsw-alias-brand-primary,#4d6bfe);background:var(--dsw-alias-bg-layer-1,#f5f6f8);font-size:12px;overflow-wrap:anywhere}
+.vsm-setting-notice.error{border-color:var(--dsw-alias-state-error-primary,#be3545);color:var(--dsw-alias-state-error-primary,#be3545)}
+.vsm-ai-settings{display:flex;flex-direction:column;gap:14px;min-width:0}
+.vsm-ai-settings h3{margin:0;font-size:14px;font-weight:600}
+.vsm-ai-settings h3:not(:first-child){margin-top:16px;padding-top:24px;border-top:1px solid var(--dsw-alias-border-l1,#e9e9e9)}
+.vsm-ai-settings .vsm-lsp-note{margin:0;color:var(--dsw-alias-label-secondary,#636b78);font-size:12px;line-height:1.7}
+.vsm-ai-settings .vsm-lsp-row{display:flex;flex-wrap:wrap;gap:12px}
+.vsm-ai-settings .vsm-lsp-row label{display:flex;flex:1 1 160px;min-width:0;flex-direction:column;gap:6px}
+.vsm-ai-settings select{width:100%}
+@container (max-width:440px){
+ .vsm-setting-row{grid-template-columns:minmax(0,1fr);gap:10px}
+ .vsm-setting-control{justify-content:flex-start}
+ .vsm-general-row{flex-wrap:wrap;gap:10px!important}
+ .vsm-general-row>span:first-child{flex-basis:100%}
+ .vsm-general-row>input,.vsm-general-row>select{flex:1 1 160px;width:100%}
+ .vsm-devform-actions{align-items:flex-start!important}
+ .vsm-mcp-card-head,.vsm-mcp-subhead,.vsm-compat-item{flex-wrap:wrap}
+ .vsm-compat-note{text-align:left!important}
+ .vsm-perf-card{min-width:80px!important;padding:8px!important}
+}
+@media(prefers-reduced-motion:reduce){.vsm-mcp-page *{transition:none!important;animation:none!important}}
 
 /* 顶部：标题 + 副标题 + 添加按钮 */
 .vsm-mcp-header{display:flex;align-items:flex-start;justify-content:space-between;gap:20px}
@@ -12,39 +48,43 @@
 
 /* MCP 管理下的二级子页签：我的 MCP / 项目 MCP / MCP 市场 */
 .vsm-mcp-subhead{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-top:-4px}
-.vsm-mcp-subtabs{display:flex;gap:18px;border-bottom:1px solid var(--dsw-alias-border-l1,#2e2e2e);flex:1}
+.vsm-mcp-subtabs{display:flex;flex-wrap:wrap;gap:0 18px;border-bottom:1px solid var(--dsw-alias-border-l1,#2e2e2e);flex:1}
 .vsm-mcp-subtabs button{border:0;background:none;color:var(--dsw-alias-label-tertiary,#9aa5b1);padding:7px 2px 9px;cursor:pointer;font-size:13px;position:relative}
 .vsm-mcp-subtabs button:hover{color:var(--dsw-alias-label-secondary,#c8c8c8)}
 .vsm-mcp-subtabs button.active{color:var(--dsw-alias-label-primary,#fff);font-weight:500}
 .vsm-mcp-subtabs button.active::after{content:"";position:absolute;left:0;right:0;bottom:-1px;height:2px;background:var(--dsw-alias-brand-primary,#6d55ff);border-radius:2px}
 
 /* 顶层 Tab：通用 / MCP 管理 / 语言服务器 / AI 补全 / 性能优化 / 兼容性 */
-.vsm-mcp-tabs{display:flex;gap:24px;border-bottom:1px solid var(--dsw-alias-border-l2,#3a3a3a)}
+.vsm-mcp-tabs{display:flex;flex-wrap:wrap;gap:0 18px;border-bottom:1px solid var(--dsw-alias-border-l1,#e9e9e9)}
 .vsm-mcp-tabs button{border:0;background:none;color:var(--dsw-alias-label-tertiary,#9aa5b1);padding:9px 2px 11px;cursor:pointer;font-size:14px;position:relative}
 .vsm-mcp-tabs button:hover{color:var(--dsw-alias-label-secondary,#c8c8c8)}
 .vsm-mcp-tabs button.active{color:var(--dsw-alias-label-primary,#fff);font-weight:500}
 .vsm-mcp-tabs button.active::after{content:"";position:absolute;left:0;right:0;bottom:-1px;height:2px;background:var(--dsw-alias-brand-primary,#6d55ff);border-radius:2px}
 
-/* 统一线框面板：圆角矩形边框圈住各设置分区，提升可读性。
-   用法：<section class="vsm-panel"> + 可选 <h3 class="vsm-panel-title">。 */
-.vsm-panel{border:1px solid var(--dsw-alias-border-l2,#3a3a3a);border-radius:12px;background:var(--dsw-alias-bg-layer-2,transparent);overflow:hidden}
+/* 设置分组用标题、留白与轻分隔线组织，不叠加厚重卡片。 */
+.vsm-panel{min-width:0;border:0;border-radius:0;background:transparent;overflow:visible}
 .vsm-panel-pad{padding:14px 16px}
-.vsm-panel-title{margin:0;padding:10px 16px;font-size:13px;font-weight:600;color:var(--dsw-alias-label-secondary,#c8c8c8);background:var(--dsw-alias-bg-mask-1,#ffffff0a);border-bottom:1px solid var(--dsw-alias-border-l1,#333)}
-.vsm-panel-body{padding:6px 16px}
+.vsm-panel-title{margin:0;padding:0 0 10px;font-size:14px;font-weight:600;color:var(--dsw-alias-label-primary,#20242c);background:transparent;border-bottom:1px solid var(--dsw-alias-border-l1,#e9e9e9)}
+.vsm-panel-body{padding:0;min-width:0;overflow-wrap:anywhere}
 .vsm-panel-body>*:first-child{margin-top:8px}
 .vsm-panel-body>*:last-child{margin-bottom:10px}
 
 /* 通用设置 */
-.vsm-general-page{display:flex;flex-direction:column;gap:14px;max-width:720px}
+.vsm-general-page{display:flex;flex-direction:column;gap:28px;max-width:100%;min-width:0}
 .vsm-general-page h2{margin:0;font-size:20px;color:var(--dsw-alias-label-primary,#e6e6e6)}
 .vsm-general-page p{margin:0;color:var(--dsw-alias-label-tertiary,#9aa5b1);font-size:13px}
-.vsm-general-row{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:14px 0;border-bottom:1px solid var(--dsw-alias-border-l1,#333);color:var(--dsw-alias-label-primary,#eee);font-size:14px}
+.vsm-general-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:16px 0;border-bottom:1px solid var(--dsw-alias-border-l1,#e9e9e9);color:var(--dsw-alias-label-primary,#20242c);font-size:13px;min-width:0}
+.vsm-general-row>span:first-child{min-width:0;flex:1 1 45%;overflow-wrap:anywhere}
+.vsm-general-row>input,.vsm-general-row>select{width:46%;min-width:0;flex-shrink:1}
+.vsm-general-row>small{flex:1 1 30%;font-size:12px;line-height:1.6}
+.vsm-general-row>span:has(>input){flex:1 1 160px;min-width:0}
+.vsm-general-row>span>input{width:100%}
 .vsm-general-row:last-child{border-bottom:0}
-.vsm-general-row select{min-width:220px;padding:8px 10px;border:1px solid var(--dsw-alias-border-l2,#555);border-radius:6px;background:var(--dsw-alias-bg-layer-1,#2b2b2b);color:var(--dsw-alias-label-primary,#eee);font:inherit}
+.vsm-general-row select{min-width:0;padding:8px 10px;border:1px solid var(--dsw-alias-border-l2,#555);border-radius:6px;background:var(--dsw-alias-bg-layer-1,#2b2b2b);color:var(--dsw-alias-label-primary,#eee);font:inherit}
 .vsm-general-row small{color:var(--dsw-alias-label-tertiary,#9aa5b1)}
 
 /* 服务卡片 */
-.vsm-mcp-card{border:1px solid var(--dsw-alias-border-l2,#3a3a3a);border-radius:10px;padding:14px 16px;margin-bottom:10px;background:var(--dsw-alias-bg-layer-2,transparent);transition:border-color .15s}
+.vsm-mcp-card{border:1px solid var(--dsw-alias-border-l1,#e9e9e9);border-radius:8px;padding:14px 16px;margin-bottom:10px;background:transparent;min-width:0}
 .vsm-mcp-card:hover{border-color:var(--dsw-alias-border-l3,#555)}
 .vsm-mcp-card-head{display:flex;justify-content:space-between;align-items:center;gap:12px}
 .vsm-mcp-title{display:flex;align-items:center;gap:9px;font-weight:600;font-size:14px;color:var(--dsw-alias-label-primary,#e6e6e6);min-width:0}
@@ -71,7 +111,7 @@
 .vsm-mcp-chip{font:12px var(--ds-font-family-code,ui-monospace,monospace);padding:4px 8px;border-radius:5px;background:var(--dsw-alias-bg-mask-2,#ffffff14);color:var(--dsw-alias-label-secondary,#c8c8c8);border:1px solid var(--dsw-alias-border-l1,#333)}
 
 /* 空态 / 加载态 */
-.vsm-mcp-empty{text-align:center;padding:56px 20px;color:var(--dsw-alias-label-tertiary,#9aa5b1);border:1px dashed var(--dsw-alias-border-l2,#3a3a3a);border-radius:8px;font-size:13px}
+.vsm-mcp-empty{text-align:left;padding:24px 16px;color:var(--dsw-alias-label-tertiary,#9aa5b1);border:1px dashed var(--dsw-alias-border-l2,#3a3a3a);border-radius:8px;font-size:13px}
 
 /* 项目搜索下拉框 */
 .vsm-project-picker{position:relative;width:100%;z-index:4}
@@ -125,7 +165,8 @@
 /* 开发形态开关 */
 .vsm-devform-note{display:block;margin-top:4px;font-size:11px;color:var(--dsw-alias-label-tertiary,#9aa5b1);word-break:break-all}
 .vsm-devform-actions{display:flex;flex-direction:column;align-items:flex-end;gap:6px;min-width:0}
-.vsm-devform-msg{color:var(--dsw-alias-state-warn-primary,#e5b93f);font-size:11px;text-align:right}
+.vsm-devform-msg{color:var(--dsw-alias-label-secondary,#636b78);font-size:12px;text-align:left;line-height:1.6}
+.vsm-mcp-page button.vsm-danger{color:var(--dsw-alias-state-error-primary,#be3545)}
 .vsm-general-row button{border:1px solid var(--dsw-alias-border-l2,#555);border-radius:6px;padding:6px 12px;background:none;color:var(--dsw-alias-label-primary,#eee);cursor:pointer;font-size:12px;white-space:nowrap}
 .vsm-general-row button:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover,#ffffff14)}
 .vsm-general-row button:disabled{opacity:.55;cursor:default}

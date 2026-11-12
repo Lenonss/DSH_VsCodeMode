@@ -357,7 +357,7 @@ export function LspSettings() {
   }
 
   if (loading) return React.createElement('div', { className: 'vsm-mcp-empty' }, '正在读取语言服务器状态…')
-  const nav = React.createElement('nav', { className: 'vsm-mcp-tabs' },
+  const nav = React.createElement('nav', { className: 'vsm-mcp-subtabs', 'aria-label': '语言服务器分类' },
     TABS.map((t) => React.createElement('button', { key: t.id, className: tab === t.id ? 'active' : '', onClick: () => switchTab(t.id) }, t.label)))
   const header = React.createElement('div', { className: 'vsm-mcp-header' },
     React.createElement('div', null,
@@ -420,5 +420,5 @@ export function LspSettings() {
             React.createElement('button', { className: 'vsm-primary vsm-small', disabled: busy === u.id, onClick: () => updateExt(u) }, busy === u.id ? '更新中…' : '更新')))))
         : React.createElement('div', { className: 'vsm-mcp-empty' }, '全部已是最新')))
   }
-  return React.createElement('div', null, header, nav, banner, body)
+  return React.createElement('div', { className: 'vsm-settings-stack' }, header, nav, banner, body)
 }

@@ -1,5 +1,7 @@
 /** 项目 MCP agent 隔离与项目选择纯函数测试。作者 ddj 2026年08月22号 */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+
+vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({ Button: 'button', Input: 'input' }))
 import { denyTools, isProjectEntry, matchWorkspace, normalizePath } from '../src/mcpIsolation.js'
 import { filterProjects } from '../src/client/ui/McpSettings.js'
 

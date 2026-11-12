@@ -7,6 +7,11 @@
  * 作者 ddj 2026-09-10
  */
 declare module '@deepseek-ai/dsh-client-ui-primitives' {
+  /** Theme-backed input wrapper; native attributes reach input. @author ddj 2026年11月12号 */
+  export const Input: import('react').ComponentType<import('react').InputHTMLAttributes<HTMLInputElement> & {
+    icon?: import('react').ReactNode
+  }>
+
   /** Compact theme-backed button; mirrors official Button.d.ts. @author ddj 2026年10月27号 */
   export const Button: import('react').ComponentType<import('react').ButtonHTMLAttributes<HTMLButtonElement> & {
     variant?: 'primary' | 'ghost' | 'outline' | 'toolbar'

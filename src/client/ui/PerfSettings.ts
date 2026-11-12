@@ -341,7 +341,7 @@ export function PerfSettings() {
           React.createElement('button', { className: 'vsm-secondary vsm-small', onClick: clearSel, disabled: !selCount }, '清空选择'),
           React.createElement('span', { className: 'vsm-perf-selcount' }, '已选 ' + selCount + ' 个'),
           React.createElement('button', { className: 'vsm-primary vsm-small', onClick: planMove, disabled: !selCount || busy === 'plan' }, busy === 'plan' ? '规划中…' : '移出所选'),
-          React.createElement('button', { className: 'vsm-secondary vsm-small', onClick: doPurge, disabled: busy === 'purge' }, '清除归档(>30天)'),
+          React.createElement('button', { className: 'vsm-secondary vsm-small vsm-danger', onClick: doPurge, disabled: busy === 'purge' }, '清除 30 天前的归档'),
           React.createElement('button', { className: 'vsm-secondary vsm-small', onClick: load, disabled: busy === 'load' }, '⟳ 刷新'),
         ),
         workspacePager,
