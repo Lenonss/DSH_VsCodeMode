@@ -143,7 +143,7 @@ describe('candidatesFor', () => {
     expect(lua?.version).toBe('3.13.6')
     expect(lua?.path).toContain('3.13.6')
     expect(lua?.chosen).toBe(true)
-    expect(candidatesFor('go', spec, home)).toEqual([])
+    expect(candidatesFor('rust', spec, home)).toEqual([])
   })
 
   it('C# 候选列出 Roslyn/DotRush，选用者唯一且命中 spec.argv', () => {

@@ -182,10 +182,10 @@ describe('LSP provider 卸载（G4）', () => {
     const mod = await import('../src/client/monaco/lsp/providers.js')
     const a = fakeMonaco()
     mod.registerLspProviders(a.monaco)
-    // 补全按语言注册（lua + csharp）→ 两个注销器都必须可被 dispose 处理；
+    // 补全按语言注册（lua + csharp + go）→ 每个注销器都必须可被 dispose 处理；
     // 若实现把注册结果数组整体压入，会静默漏注销 → 重载后补全叠加
     const completions = a.registeredProviders.filter((k) => k === 'completion').length
-    expect(completions).toBe(2)
+    expect(completions).toBe(3)
     mod.disposeLspProviders()
     expect(a.disposed.filter((k) => k === 'completion').length).toBe(completions)
   })
