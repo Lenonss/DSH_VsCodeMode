@@ -23,6 +23,32 @@ export function pathOfModel(model) {
   }
 }
 
+/**
+ * 工作区**外**目标（GOROOT、第三方依赖、系统头文件）的绝对路径旁路表。
+ *
+ * 为什么需要：edrv:/// URI 约定装「工作区相对路径」，工作区外的绝对路径在
+ * toEdrvUri 里必须剥前导 / 才能拼出合法 edrv URI；打开时无法再从 URI 还原
+ * 「这是绝对路径」还是「相对路径恰好以 Users/ 开头」。故生成 Location 时把
+ * uri.toString() → 绝对路径记录下来，editorOpener 优先查表还原。
+ * @author ddj 2026年11月15号
+ */
+const ABS_TARGETS = new Map()
+const ABS_TARGET_CAP = 500
+
+/** 取 edrv URI 记录的工作区外绝对路径（无记录返回空串）。 */
+export function absoluteTargetOf(uri) {
+  if (!uri) return ''
+  const key = typeof uri === 'string' ? uri : typeof uri.toString === 'function' ? uri.toString() : ''
+  return (key && ABS_TARGETS.get(key)) || ''
+}
+
+/** @private 记录 edrv URI → 工作区外绝对路径（超额整体清空，避免长会话无限增长）。 */
+function rememberAbsoluteTarget(uri, absPath) {
+  if (!uri || !absPath) return
+  if (ABS_TARGETS.size >= ABS_TARGET_CAP) ABS_TARGETS.clear()
+  ABS_TARGETS.set(uri, absPath)
+}
+
 const SYNC_DEBOUNCE_MS = 250
 const MAX_DOC_VERSION = 2147483647
 
@@ -353,8 +379,12 @@ function toClientLocation(loc) {
   const range = loc.range || {}
   const start = range.start || {}
   const end = range.end || {}
+  const targetPath = String(relativeLspPath(loc.uri, loc.root) ?? '')
+  const uri = window.monaco.Uri.parse(toEdrvUri(loc.uri, loc.root))
+  // 工作区外目标：edrv URI 吞掉了前导 /，打开时无法与相对路径区分 → 记表还原
+  if (targetPath.startsWith('/') || /^[A-Za-z]:\//.test(targetPath)) rememberAbsoluteTarget(uri.toString(), targetPath)
   return {
-    uri: window.monaco.Uri.parse(toEdrvUri(loc.uri, loc.root)),
+    uri,
     range: new window.monaco.Range(
       Math.max(1, (start.line ?? 0) + 1),
       Math.max(1, (start.character ?? 0) + 1),
@@ -402,7 +432,10 @@ export function lspUriToAbs(uri) {
   const raw = isObject && typeof uri.path === 'string' ? uri.path : String(uri)
   let path = raw
   if (path.startsWith('file://')) {
-    try { path = decodeURIComponent(path.replace(/^file:\/\/\/?/, '')) } catch (error) { path = path.replace(/^file:\/\/\/?/, '') }
+    // 只剥到 'file://'：'file:///home/x' 必须保留前导 /。原写法多吞一个 /，
+    // /home/x 退化成 home/x，与工作区根比较恒不命中（相对路径判定失败），
+    // 跳转目标被当相对路径拼到工作区下 → <root>/Users/... 文件不存在。
+    try { path = decodeURIComponent(path.replace(/^file:\/\//, '')) } catch (error) { path = path.replace(/^file:\/\//, '') }
     // file:///D:/x → D:/x（去 authority 空段保留盘符）；/home/x 保留前导 /（Unix 绝对路径）
     return path.replace(/\\/g, '/').replace(/^\/([A-Za-z]:)/, '$1')
   }
