@@ -445,6 +445,9 @@ export function EditorView(props) {
   const navCursorTimerRef = React.useRef(null) // 光标位置防抖记录计时器
   const navBackRef = React.useRef(null) // 后退动作最新闭包（窗口级键盘监听读取）
   const navForwardRef = React.useRef(null) // 前进动作最新闭包（窗口级键盘监听读取）
+  // 后退/前进的同一次按键去重：官方快捷键、Monaco 动作、鼠标侧键三条通道可能对同一下
+  // 输入各派发一次；连跑两次会「连退两步」，体感像跳错位置。用时间片吸收第二路派发。
+  const navDedupeRef = React.useRef(0)
   const cycleTabRef = React.useRef(null) // 页签循环动作最新闭包（Ctrl+Alt+←/→、Ctrl+PgUp/PgDn）
   const toggleMdPreviewRef = React.useRef(null) // Markdown 预览切换动作最新闭包（窗口键位监听读取，防陈旧闭包）
   const rowNavColRef = React.useRef(null) // 整行上下移动的期望列（连续移动保持列位）
@@ -866,7 +869,16 @@ export function EditorView(props) {
    * 后退：恢复上一处焦点（跨文件）。
    * @author ddj 2026年09月04号
    */
+  /** @private @author ddj 2026年11月15号 @returns 本次输入是否可由导航历史处理（120ms 内重复派发判为同一次按键） */
+  const claimNavGesture = () => {
+    const now = Date.now()
+    if (now - navDedupeRef.current < 120) return false
+    navDedupeRef.current = now
+    return true
+  }
+
   const navBack = () => {
+    if (!claimNavGesture()) return
     flushNavCursor()
     const entry = navRef.current.back()
     if (!entry) return
@@ -879,6 +891,7 @@ export function EditorView(props) {
    * @author ddj 2026年09月04号
    */
   const navForward = () => {
+    if (!claimNavGesture()) return
     flushNavCursor()
     const entry = navRef.current.forward()
     if (!entry) return
@@ -2084,6 +2097,9 @@ export function EditorView(props) {
       }],
       ['edrv.command.navigateBack', () => navBackRef.current?.()],
       ['edrv.command.navigateForward', () => navForwardRef.current?.()],
+      // LSP 跳转前的来源位置记录：同文件定义跳转走 Monaco 同模型快路径、不经 opener，
+      // 只有这一步能保证「后退」回到跳转前的焦点（providers 在触发跳转前派发）。
+      ['edrv:record-nav', () => recordNav()],
       ['edrv.command.nextTab', () => cycleTabRef.current?.(1)],
       ['edrv.command.prevTab', () => cycleTabRef.current?.(-1)],
       ['edrv.command.closeTab', () => closeActiveTab()],
@@ -2793,6 +2809,15 @@ export function EditorView(props) {
         recordNav()
       }, 500)
     })
+    // Ctrl/Cmd+点击触发原生「转到定义」时，同文件目标走 Monaco 同模型快路径（不经 opener），
+    // 若不在这里记录，后退只能退到更早的位置而不是跳转前的焦点。按下瞬间当前焦点即来源。
+    const navNode = ed.getDomNode?.()
+    const onNavClick = (event) => {
+      if (event.button !== 0 || !(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey) return
+      recordNav()
+    }
+    if (navNode) navNode.addEventListener('mousedown', onNavClick, true)
+    ed.onDidDispose(() => { if (navNode) navNode.removeEventListener('mousedown', onNavClick, true) })
     // 编辑区右键 → 注入 Monaco 原生 context menu（与 Go to Definition 等同菜单，避免分离浮层）。
     // 有选区时额外显示「选中内容」项：context key edrvSelection 由光标选区变化驱动。
     // 路径/选区在点击时从 model/editor 实时读取（不依赖闭包里的过期 active）。
@@ -2841,6 +2866,21 @@ export function EditorView(props) {
       keybindings: m.KeyMod.Shift | m.KeyCode.F12,
       precondition: 'editorTextFocus',
       run: (edx) => { void runFindReferences(edx) },
+    })
+    // 导航历史（后退/前进）：右键菜单 + 编辑器内键位双保险。
+    // 桌面版可能把 Alt+ArrowLeft/Right 当窗口级「返回」吞掉、或官方快捷键服务尚未就绪，
+    // 绑定在 Monaco 动作上仍能从编辑器内命中；同一次按键的重复派发由 claimNavGesture 吸收。
+    ed.addAction({
+      id: 'edrv.navBack', label: '后退（返回上一处焦点）', contextMenuGroupId: '0_edrv', contextMenuOrder: 1,
+      keybindings: [m.KeyMod.Alt | m.KeyCode.LeftArrow, m.KeyMod.CtrlCmd | m.KeyMod.Alt | m.KeyCode.Minus],
+      precondition: 'editorTextFocus',
+      run: () => navBackRef.current?.(),
+    })
+    ed.addAction({
+      id: 'edrv.navForward', label: '前进（回到下一处焦点）', contextMenuGroupId: '0_edrv', contextMenuOrder: 2,
+      keybindings: [m.KeyMod.Alt | m.KeyCode.RightArrow, m.KeyMod.CtrlCmd | m.KeyMod.Shift | m.KeyCode.Minus],
+      precondition: 'editorTextFocus',
+      run: () => navForwardRef.current?.(),
     })
     ed.addCommand(m.KeyCode.F12, () => { void runGoToDefinition(ed) })
     // 整行上下移动 + 命令栏：只登记 Monaco 右键菜单入口（不绑键位）。
@@ -4800,7 +4840,7 @@ export function EditorView(props) {
   const lspProgress = typeof lspServer?.progress === 'number' ? Math.round(lspServer.progress) : null
   // 状态段行内样式：单行状态栏内的一段；LSP 段弹性占满空闲宽度，把后续段推到行尾
   const lspSegStyle = { display: 'inline-flex', alignItems: 'center', gap: '10px', minWidth: 0, flex: '1 1 auto' }
-  const lspSeg = (lspLanguage === 'lua' || lspLanguage === 'csharp')
+  const lspSeg = (lspLanguage === 'lua' || lspLanguage === 'csharp' || lspLanguage === 'go')
     ? React.createElement('span', { className: 'edrv-status-seg', style: lspSegStyle, title: lspServer?.progressMessage || lspLabel },
         React.createElement('span', { className: 'edrv-lsp-status-dot ' + (lspServer?.phase === 'ready' ? 'ready' : lspServer?.phase === 'indexing' || lspServer?.phase === 'starting' ? 'busy' : 'idle') }),
         React.createElement('span', { className: 'edrv-sp-lsp' }, lspLabel),

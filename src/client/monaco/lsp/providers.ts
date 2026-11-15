@@ -13,7 +13,7 @@ import {
   fetchDocumentSymbols, fetchHover, fetchSemanticTokens,
   fetchCompletions, resolveCompletion, fetchSignatureHelp,
   targetOpenPath, lspStatusFor, refreshStatus,
-  lspUriToAbs,
+  lspUriToAbs, absoluteTargetOf,
 } from './lspClient.js'
 import {
   LSP_SEMANTIC_TOKEN_MODIFIERS, LSP_SEMANTIC_TOKEN_TYPES,
@@ -22,7 +22,7 @@ import {
 import { luaKeywordsAt, luaTypesAt, mergeKeywords } from './keywords.js'
 import { warmModelFor } from '../../state/modelWarmer.js'
 
-const LSP_LANGS = ['lua', 'csharp']
+const LSP_LANGS = ['lua', 'csharp', 'go']
 
 /**
  * 补全触发字符（按语言）。
@@ -34,6 +34,7 @@ const LSP_LANGS = ['lua', 'csharp']
 const COMPLETION_TRIGGERS = {
   lua: ['.', ':', '(', '['],
   csharp: ['.', ':', '(', '[', '<', '@'],
+  go: ['.'],
 }
 
 /** 签名帮助触发字符（与 LSP 服务器声明的 triggerCharacters 对齐）。 */
@@ -54,6 +55,19 @@ const LSP_PROVIDERS_GLOBAL = '__edrvLspProvidersRegistered__'
 /** 目标文件打开并定位（复用现有 openFileAt 的 edrv:open-editor 事件通道）。 */
 function openAt(path, target) {
   window.dispatchEvent(new CustomEvent('edrv:open-editor', { detail: Object.assign({ path }, target) }))
+}
+
+/**
+ * 跳转前把「来源焦点」压入导航历史（EditorView 监听 edrv:record-nav）。
+ *
+ * 为什么需要：同文件定义跳转由 Monaco 的同模型快路径直接改选区，既不经过
+ * editorOpener、也不经过 openFileAt，那两个记录点都不会执行 —— 结果「后退」
+ * 跳不回跳转前的行。这里在触发导航命令前补记一次；跨文件时与 openFileAt 的
+ * 记录内容相同，历史模块按 path+line+column 去重，不会重复压栈。
+ * @author ddj 2026年11月15号
+ */
+function noteNavOrigin() {
+  try { window.dispatchEvent(new CustomEvent('edrv:record-nav')) } catch (error) { /* 记录纯增强，失败静默 */ }
 }
 
 /**
@@ -99,7 +113,7 @@ export function navTargetOf(selectionOrPosition) {
 async function prewarmDefinitionTarget(locations) {
   if (!Array.isArray(locations) || locations.length !== 1) return
   try {
-    const target = lspUriToAbs(locations[0]?.uri)
+    const target = absoluteTargetOf(locations[0]?.uri) || lspUriToAbs(locations[0]?.uri)
     if (target) await warmModelFor(target)
   } catch (error) {
     /* 预热失败静默降级：等价于本次 hover 不显示预览 */
@@ -171,7 +185,9 @@ export function registerLspProviders(monaco) {
     // 必须经事件通道交给 EditorView openFileAt 打开并定位。
     monaco.editor.registerEditorOpener({
       openCodeEditor: (source, resource, selectionOrPosition) => {
-        const path = lspUriToAbs(resource)
+        // 工作区外目标优先用生成 Location 时记下的绝对路径（edrv URI 无法区分
+        // "绝对 /usr/local/..." 与 "相对 Users/..."），再退回常规解析。
+        const path = absoluteTargetOf(resource) || lspUriToAbs(resource)
         if (!path) return false
         openAt(path, navTargetOf(selectionOrPosition))
         return true
@@ -313,6 +329,7 @@ function toMonacoSymbol(symbol) {
  */
 export async function runGoToDefinition(ed) {
   if (!ed) return
+  noteNavOrigin()
   ed.trigger('edrv-lsp', 'editor.action.revealDefinition', null)
 }
 
@@ -424,6 +441,7 @@ export function bindLuaKeyRefs(ed, monaco) {
 export async function runFindReferences(ed) {
   const position = ed.getPosition()
   if (!position) return
+  noteNavOrigin()
   ed.setPosition(position)
   await triggerReferencePeek(ed)
 }

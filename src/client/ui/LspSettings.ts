@@ -13,6 +13,7 @@ import '../styles/mcp.css'
 const LANG_META = {
   lua: { label: 'Lua（EmmyLua / LuaLS）', hint: '优先使用已安装 EmmyLua；未安装时回退 LuaLS 或 PATH 中的 lua-language-server' },
   csharp: { label: 'C#（Roslyn / DotRush / OmniSharp）', hint: '优先自动发现 ms-dotnettools.csharp / DotRush 扩展（DotRush 需 .NET 10 运行时）；也可手动指定' },
+  go: { label: 'Go（gopls）', hint: '自动发现 PATH、GOPATH/bin 与常见安装目录中的 gopls；也可手动指定 go install golang.org/x/tools/gopls@latest 的产物路径' },
 }
 
 /** 语言展示元数据（含未知 id 兜底）。 */
