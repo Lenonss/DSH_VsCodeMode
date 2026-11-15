@@ -5,6 +5,7 @@
  * 作者 ddj 2026-08-20
  */
 import { applyOfficial, registerThemes } from './theme.js'
+import { registerTemplates } from './templateLanguages.js'
 
 import { transportUrl } from '../../shared/remoteChannel.js'
 import { loadFailureText, probeStatus } from '../loadFailure.js'
@@ -57,35 +58,91 @@ export const LANG_BY_EXT = {
   js: 'javascript', jsx: 'javascript', mjs: 'javascript', cjs: 'javascript',
   ts: 'typescript', tsx: 'typescript', mts: 'typescript', cts: 'typescript',
   json: 'json', jsonc: 'json', md: 'markdown', markdown: 'markdown', mdx: 'mdx',
-  css: 'css', scss: 'scss', less: 'less', html: 'html', htm: 'html', vue: 'html', xml: 'xml',
+  css: 'css', scss: 'scss', less: 'less', html: 'html', htm: 'html', vue: 'html', svelte: 'html', xml: 'xml',
   yaml: 'yaml', yml: 'yaml', toml: 'ini', ini: 'ini', cfg: 'ini',
   py: 'python', sh: 'shell', bash: 'shell', zsh: 'shell', ps1: 'powershell',
   lua: 'lua', java: 'java', c: 'c', h: 'c', cpp: 'cpp', cc: 'cpp', cxx: 'cpp', hpp: 'cpp',
   cs: 'csharp', go: 'go', rs: 'rust', rb: 'ruby', php: 'php', sql: 'sql',
-  swift: 'swift', kt: 'kotlin', kts: 'kotlin', dart: 'dart', dockerfile: 'dockerfile',
+  swift: 'plaintext', kt: 'kotlin', kts: 'kotlin', dart: 'dart', dockerfile: 'dockerfile',
   // 工程/配置文件（拿到正确语法分色，而非 plaintext）
-  csproj: 'xml', props: 'xml', targets: 'xml', plist: 'xml',
+  csproj: 'xml', props: 'xml', targets: 'xml', plist: 'xml', sln: 'plaintext',
   lua51: 'lua', luac: 'lua',
   v: 'verilog', vh: 'verilog', sv: 'systemverilog', svh: 'systemverilog',
   tcl: 'tcl', xdc: 'tcl', sdc: 'tcl', ucf: 'tcl',
   gitattributes: 'ini', editorconfig: 'ini', env: 'ini', properties: 'ini',
-  json5: 'jsonc', log: 'plaintext', txt: 'plaintext',
+  json5: 'json', log: 'plaintext', txt: 'plaintext',
   // 代码片段文件按 JSON 高亮（VS Code 同款：.code-snippets 是带注释的 JSON）
   'code-snippets': 'json',
+  // HTML 模板：内置语言（dividend 由 Monaco basic-languages 提供）
+  pug: 'pug', jade: 'pug', hbs: 'handlebars', handlebars: 'handlebars', mustache: 'handlebars',
+  twig: 'twig', liquid: 'liquid', razor: 'razor', cshtml: 'razor', freemarker: 'freemarker2', ftl: 'freemarker2',
+  // HTML 模板：本插件自注册（见 templateLanguages.ts，注册在 editor.main 回调内）
+  ejs: 'ejs', eta: 'ejs', erb: 'erb', njk: 'nunjucks', nunjucks: 'nunjucks',
+  jinja: 'jinja', jinja2: 'jinja', j2: 'jinja', haml: 'haml', slim: 'slim',
 }
 
 /**
- * 路径 → Monaco language id：取 basename 扩展名（dockerfile/Dockerfile 特判）。
- * @author ddj 2026年08月20号
+ * 点文件名 → Monaco language id（无扩展名前先命中；小写全名精确匹配）。
+ * 不在此表的点文件仍按扩展名规则回落（如 `.eslintrc.json`）。
+ */
+export const DOTFILE_LANG = {
+  '.babelrc': 'json',
+  '.eslintrc': 'json',
+  '.jshintrc': 'json',
+  '.jscsrc': 'json',
+  '.bowerrc': 'json',
+  '.swcrc': 'json',
+  '.prettierrc': 'json',
+  '.stylelintrc': 'json',
+  '.npmrc': 'ini',
+  '.yarnrc': 'ini',
+  '.gitconfig': 'ini',
+  '.gitmodules': 'ini',
+  '.gitattributes': 'ini',
+  '.editorconfig': 'ini',
+  '.rprofile': 'r',
+  '.bashrc': 'shell',
+  '.zshrc': 'shell',
+  '.profile': 'shell',
+  '.vimrc': 'shell',
+}
+
+/** 点文件前缀 → 语言 id（同一前缀派生多个名字时用，如 `.env` / `.env.local`）。 */
+export const DOTFILE_PREFIX_LANG = [['.env', 'ini']]
+
+/**
+ * 复合后缀 → Monaco language id（多段后缀优先于末段，如 `.blade.php` 不是 php）。
+ * 键为「从第一个点开始」的小写后缀。
+ */
+export const COMPOUND_EXT = {
+  '.blade.php': 'blade',
+  '.d.ts': 'typescript',
+}
+
+/**
+ * 路径 → Monaco language id：点文件 → 复合后缀 → 末段扩展名（dockerfile/Dockerfile 特判）。
+ * @author ddj 2026年08月20号 / 2026年11月15号
  * @param path 文件路径
  * @returns language id
  */
 export function langOf(path) {
   const base = String(path || '').split(/[\\/]/).pop() || ''
-  if (/^dockerfile$/i.test(base)) return 'dockerfile'
-  const dot = base.lastIndexOf('.')
+  const lower = base.toLowerCase()
+  if (lower === 'dockerfile') return 'dockerfile'
+
+  const dotfile = DOTFILE_LANG[lower]
+  if (dotfile) return dotfile
+  for (const [prefix, language] of DOTFILE_PREFIX_LANG) if (lower.startsWith(prefix)) return language
+
+  const firstDot = lower.indexOf('.')
+  if (firstDot > 0) {
+    const compound = COMPOUND_EXT[lower.slice(firstDot)]
+    if (compound) return compound
+  }
+
+  const dot = lower.lastIndexOf('.')
   if (dot <= 0) return 'plaintext'
-  return LANG_BY_EXT[base.slice(dot + 1).toLowerCase()] ?? 'plaintext'
+  return LANG_BY_EXT[lower.slice(dot + 1)] ?? 'plaintext'
 }
 
 /** 片段文件后缀（判断「文件自身是片段文件」而非普通源码）。 */
@@ -177,6 +234,11 @@ export function loadMonaco(onProgress) {
           window.require.config({ paths: { vs: MONACO_BASE } })
           publishStage('core', MONACO_STAGES.core.progress, MONACO_STAGES.core.message)
           window.require(['vs/editor/editor.main'], () => {
+            // 模板语言必须先于任何 createModel 注册：Monaco 只认 getLanguages() 里已存在的 id，
+            // 晚注册会静默回落 plaintext（见 templateLanguages.ts 的时序约定）。失败不阻塞编辑器。
+            try {
+              registerTemplates(window.monaco)
+            } catch (error) { /* 模板语言注册失败时模板文件回落 plaintext */ }
             publishStage('ready', MONACO_STAGES.ready.progress, MONACO_STAGES.ready.message)
             // 主题：注册现役双套（幂等）+ 应用跟随官方的令牌主题（令牌缺失时回落现役）
             try {

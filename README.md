@@ -87,6 +87,18 @@
   `Ctrl+Alt+-` / `Ctrl+Shift+-`、鼠标侧键 XButton 均可触发）；后退后新导航
   自动清空前进栈。
 
+### Univer Office 可选联动（开发中）
+
+安装并启用兼容的 `dsh-univer-office` 时，`.xlsx`、`.docx`、`.pptx` 可进入副本导入流程，`.univer` 在文件页签内展示 Viewer；CSV/TSV 通过右键「使用 Univer 编辑副本」显式进入。未启用或接口不兼容时不显示联动入口，既有 Excel 基础编辑与其他 Office 打开方式保持不变。不会自动安装、启用或升级 Univer。
+
+- 完成当前会话的 Viewer 安全确认后，Office 打开会自动在工作区 `.dsh/cache/dsh-vscode-mode/univer/v1/` 中创建容器和 draft，不再要求输入副本路径。相同源内容复用已有缓存及编辑；源文件变化时保留旧缓存并提示，可显式「导入源文件新版本」，不自动覆盖或合入。失败记录保留，不盲目重放未知导入。
+- 「设置 → VSCodeMode → 通用 → Univer 工作区缓存」显示当前工作区的受管理条目、体积和状态，可勾选并二次确认清理。缓存可能含唯一未导出的编辑，删除不可恢复；导入/其他进程操作中、版本变化、未知文件或运行中 Gateway 潜在占用均跳过，不自动停服务。只读不能清理。不会删除源文件、手动副本或自建 `.univer`。
+- 缓存不参与自动TTL/容量清扫。建议按项目需要忽略上述专属目录，插件不会自行修改 Git/SVN 忽略规则。旧版本生成在源文件旁的副本不自动迁移。
+- Viewer 仅适合可信单用户环境。Univer 0.4.0 上游代理不提供完整的逐会话/工作区隔离；安全确认不改变沙箱权限，URL 参数不是权限凭据。只读或无法确定策略的会话不加载 Viewer。会话切换或刷新后重新确认。
+- `.univer` 不作为文本读写，Ctrl+S 不会导出或合入；已有 Excel 未导出编辑不自动迁移。关闭页签不代表合入、丢弃或撤销上游连接权限。
+- 变更总览单独展示本会话已发现的 Univer 草稿，不扫描全工作区，不参与代码批量采纳/撤销。预览和语义审阅复用 Univer，确认/丢弃由用户在其界面操作。
+- 当前适配目标为 Univer Office 0.4.0；依赖其可选 Host 服务结构和浏览器状态接口。会话 `cd` 后超出初始作用域不支持内嵌；缺少能力、鉴权失败和服务停止会分别提示，不直连 Gateway 绕过。
+
 ### Excel 基础编辑（v0.21.0）
 
 - `.xlsx` 在文件编辑器中打开，支持多工作表、文本/数值/布尔值/日期、基础样式、行高列宽与合并单元格；公式限普通引用及 `SUM` / `AVERAGE` / `MIN` / `MAX` / `COUNT`。
@@ -587,6 +599,47 @@ DSH 每次启动监听随机端口，`http://127.0.0.1:<port>` 就是浏览器 o
   仍要求已配对设备（其设备 cookie 同源携带），转发到回环后本插件的权限校验照常执行；
   本地与桌面入口保持 `/edrv/*` 原样，未装远程插件时行为不变。
 
+### 20. 模板语言高亮与语言映射审计（v0.30.0）
+
+- **模板语言注册**（`src/client/monaco/templateLanguages.ts`）：随包 Monaco 只有
+  handlebars / mustache / pug / twig / liquid / razor / freemarker2；本插件额外注册
+  **EJS / Eta**（`ejs`）、**ERB**（`erb`）、**Nunjucks**（`nunjucks`）、**Jinja2**
+  （`jinja`）、**Laravel Blade**（`blade`）、**Haml**（`haml`）、**Slim**（`slim`）。
+  每个语言带 Monarch 词法（HTML 骨架 + 分隔符内代码段）与注释/括号/自动闭合配置；
+  注册在 `editor.main` 加载完成的同一回调里、任何 `createModel` 之前，幂等且单语言失败
+  不影响其他语言。只做词法分色，不提供语义服务。
+- **语言映射三级解析**（`langOf`）：点文件名（`.eslintrc`/`.gitconfig`/`.env*`…）→
+  复合后缀（`.blade.php`、`.d.ts`）→ 末段扩展名；全程小写归一，未知回落 plaintext。
+- **审计测试**（`tests/langMap.test.ts`）：解析随包 `editor.main.js` 的语言贡献表，
+  断言映射值真实存在、自定义 id 不与内置冲突、覆盖官方映射必须显式登记。
+  升级 Monaco 后该测试会给出差集，避免「静默丢色」。
+
+### 21. 搜索面板全局替换（v0.30.0）
+
+搜索框右侧 **⇄** 展开替换行（设置 → 通用「搜索替换」开关，默认开）：
+
+- **全部替换**：先 `dryRun` 预览命中数与文件数 → 确认弹窗 → 逐文件写入；
+  结果分组头的 **✎** 只替换该文件的命中。
+- **语义与搜索一致**：大小写 / 全词 / 正则（支持 `$1`）/ 包含 / 排除；
+  字面量模式下 `$` 原样输出；可匹配空串的模式（如 `a*`）直接拒绝。
+- **保真**：按行替换，CRLF 与 BOM 原样保留，只改写命中行。
+- **安全**：执行前经 `edrv:flush-all` 让所有编辑器落盘（3s 上限，超时中止）；
+  逐文件 `replaceIfVersion` 守卫，写盘瞬间被改动的文件记为该文件失败并继续；
+  单次 ≤200 文件、单文件 ≤8MB，二进制/非普通文件跳过。
+
+### 22. 会话引用接入（v0.30.0）
+
+设置 → 通用「引用接入」开关（默认开），三条通道都只在官方对话输入区生效：
+
+- **拖文件进来**：资源管理器文件行拖进输入框 → 引用 chip（内部 MIME `text/x-edrv-path`）；
+- **复制选区**：编辑器里跨行（或整行单行）复制 → 剪贴板写入 `@相对路径 Lx-Ly`，
+  粘贴回输入框落成 chip；半行选区仍按普通文本复制；
+- **粘贴文件**：从系统文件管理器复制项目内文件后粘进输入框 → 按文件名解析成引用；
+  图片仍走 DSH 原生附件。
+
+路径解析走 host `edrv.resolveRef`（绝对路径 → 相对路径 → 文件名检索），多义时提示候选、
+不瞎插；解析失败回退纯文本，不吞内容。旧版 DSH 或未打开会话时整体静默不生效。
+
 ## 安装
 
 官方 `dsh plugin` 方式，三选一。下面以 `web` profile 为例；Desktop 或其他命名
@@ -597,13 +650,13 @@ profile 请替换为实际目标，不要把示例目录当成当前运行 profi
 
 ```bash
 # ① Git 安装（clone + prepare 构建；推荐打固定 tag）
-dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.29.2
+dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.30.0
 
 # ② npm 注册表（发布到 npm 后）
-dsh plugin --profile web add dsh-vscode-mode@0.29.2
+dsh plugin --profile web add dsh-vscode-mode@0.30.0
 
 # ③ GitHub Release tgz 直装（Release asset 可用后）
-dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.29.2/dsh-vscode-mode-0.29.2.tgz
+dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.30.0/dsh-vscode-mode-0.30.0.tgz
 ```
 
 > **DSH 版本政策（0.17.0 起）**：六项 DSH peer 仍统一声明为 `*`，另以
@@ -985,6 +1038,7 @@ Keep All / Undo All 却是亮的。修复：单文件 Keep / Undo 覆盖冲突�
 
 | 版本 | 要点 |
 | --- | --- |
+| v0.30.0 | 模板语言高亮（EJS/ERB/Nunjucks/Jinja2/Blade/Haml/Slim）+ 语言映射审计；搜索面板全局替换（预览确认、落盘前置、逐文件版本守卫、CRLF/BOM 保真）；会话引用接入（拖文件/复制行引用/粘贴文件，多义不瞎插）；设置新增「交互」开关 |
 | v0.29.2 | 设置界面优化：轻量分组、字段说明与控件对齐、官方输入原语及状态提示；MCP 加载/失败不再遮挡其他分类 |
 | v0.29.1 | 待审行差异引擎精准化：唯一行锚点切分 + 小窗口 LCS，千行文件不再整段替换；修正多 hunk 行号偏移 |
 | v0.29.0 | Excel 引擎与编解码改为按需分块（根包 930 KB，打开表格才加载 11.4 MB 引擎）；调试 hover / 侧栏拖拽 / 快捷菜单测量性能优化；官方文件侧栏 CSS 运行时兼容 |
@@ -1004,7 +1058,18 @@ Keep All / Undo All 却是亮的。修复：单文件 Keep / Undo 覆盖冲突�
 | v0.23.0 | 快捷菜单：可拖动悬浮按钮 + 自定义菜单树 |
 
 <details>
-<summary>完整版本记录（v0.29.2 → v0.1.5x，点击展开）</summary>
+<summary>完整版本记录（v0.30.0 → v0.1.5x，点击展开）</summary>
+
+- **v0.30.0**：新增模板语言高亮（EJS/Eta、ERB、Nunjucks、Jinja2、Blade、Haml、Slim 注册进
+  Monaco，注册时机固定在 `editor.main` 回调内）；`langOf` 改为点文件 → 复合后缀 → 末段扩展名
+  三级解析（`.blade.php`、`.eslintrc`、`.gitconfig`、`.env*` 不再落纯文本）；新增
+  `tests/langMap.test.ts` 解析随包 Monaco 语言表做映射审计。搜索面板新增「全局替换」：
+  dryRun 预览 → 确认弹窗 → 逐文件 `replaceIfVersion` 写入，按行替换保留 CRLF/BOM，
+  拒绝空匹配正则，写盘前经 `edrv:flush-all` 落盘已打开页签（3s 上限）。新增会话引用接入：
+  资源管理器拖文件、编辑器跨行/整行复制 `@路径 Lx-Ly`、粘贴系统文件三条通道落成引用 chip，
+  host 新增 `edrv.resolveRef` 三级路径解析；设置新增 `refIntake` / `searchReplace` 开关。
+  兼容性报告增加三条探针；新增 `docs/pitfalls.md` 与 `docs/gui-acceptance.md`。
+  真机 GUI 未验收，详见 [0.30.0 发布说明](docs/release-0.30.0.md)。
 
 - **v0.29.2**：设置页移除重复标题与厚重灰底，统一分组、间距、焦点与窄容器布局；
   编辑器字段分离名称、帮助与控件，并关联可访问标签；文件打开与安装更新独立分组。

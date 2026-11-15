@@ -14,6 +14,8 @@ import { setEnsureSideEditor } from './sidebarBridge.js'
 import { CACHE_KEY } from './paths.js'
 import { OFFICE_EXT, BLIND_EXT, suffixOf } from '../shared/nativeOpen.js'
 import { inNativePath } from './nativeOpenStore.js'
+import { univerCapability } from './univer/store.js'
+import { isOfficePath, isUniverPath } from '../shared/univer.js'
 
 // 让位清单与 CSV/TSV 决策（可编辑性优先，同 avif 例外）已抽至双面契约 shared/nativeOpen.ts
 //（host 的 Config schema 默认原生打开范围与本模块共用同一事实源）；此处 re-export 保持旧 import 路径。
@@ -358,13 +360,15 @@ export function registerOfficialFileClaim(options: {
     typeDisposer = tabs.register({
       id: OFFICIAL_FILE_TAB_ID,
       kind: OFFICIAL_FILE_KIND,
-      patterns: [OFFICIAL_FILE_PATTERN],
+      patterns: [OFFICIAL_FILE_PATTERN, '*.univer'],
       priority: 'extension',
       // 畸形/解码失败地址否决 + Office/不可预览后缀让位官方 + 用户配置的原生打开范围
       //（nativeOpenExts）同步让位——否则认领会把 openResource 又转发回本插件（原生打开失效）
       canOpen: (address: string) => {
         const parsed = parseOfficialFileAddress(address)
         if (parsed === null) return false
+        if (parsed.sessionId && univerCapability(parsed.sessionId)?.available && (isUniverPath(parsed.path) || isOfficePath(parsed.path))) return true
+        if (isUniverPath(parsed.path)) return false
         return !deferToOfficial(parsed.path) && (suffixOf(parsed.path) === 'xlsx' || !inNativePath(parsed.path))
       },
       title: (address: string) => officialFileTitle(address),

@@ -20,6 +20,7 @@ import { explorerLoad, explorerSave } from '../../state/explorerCache.js'
 import { entriesCacheGet, entriesCacheIsFresh, entriesCachePut } from '../../state/explorerEntriesCache.js'
 import { workspaceScopeOf } from '../../state/scopeStore.js'
 import { ancestorDirsOf } from '../../tabActions.js'
+import { DRAG_MIME } from '../../refIntake.js'
 import { refreshSvnChanges, refreshSvnStatus } from '../../svnStatus.js'
 import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
 import { emitRefresh } from '../../events.js'
@@ -90,11 +91,21 @@ function rowView(props) {
     const rect = event.currentTarget.getBoundingClientRect()
     onContext(path, type, { preventDefault: () => event.preventDefault(), stopPropagation: () => event.stopPropagation(), clientX: rect.left, clientY: rect.bottom })
   }
+  /** @private @author ddj 2026年11月15号 @param event Drag start. @description 拖拽携带内部路径 MIME，交给对话输入框落成引用 */
+  function drag(event) {
+    if (isDir) return
+    try {
+      event.dataTransfer.setData(DRAG_MIME, JSON.stringify({ path }))
+      event.dataTransfer.setData('text/plain', path)
+      event.dataTransfer.effectAllowed = 'copy'
+    } catch (error) { /* 拖拽能力不可用时按普通拖拽处理 */ }
+  }
   return React.createElement('div', {
     className: 'edrv-tree-row' + (active ? ' edrv-tree-active' : '') + (context ? ' edrv-tree-context' : '')
       + (reveal ? ' edrv-tree-reveal' : '') + (mark?.stale ? ' edrv-tree-stale' : ''),
     title: path + (mark?.stale ? '；SVN 状态陈旧，等待确认' : ''), 'data-edrv-path': path,
     style: { paddingLeft: 6 + depth * 14 }, tabIndex: 0, onClick: select, onContextMenu: menu, onKeyDown: menuKey,
+    draggable: !isDir, onDragStart: drag,
   },
     React.createElement('span', { className: 'edrv-tree-chev' }, isDir ? (isOpen ? '▾' : '▸') : ''),
     React.createElement('span', { className: 'edrv-tree-iconbox' }, rowIconEl({ name }, isDir, isOpen), svnOverlayEl(viewOverlayOf(mark), remote)),

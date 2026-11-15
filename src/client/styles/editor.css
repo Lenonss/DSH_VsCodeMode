@@ -4,6 +4,26 @@
    旧环境/缺令牌场景由每条声明的 var(--dsw-alias-*, 回落值) 兜底。
    @author ddj 2026-09-10 */
 [data-edrv-view] { box-sizing: border-box; --edrv-tab-h: 34px; }
+/* Owned Office cache list: compact settings rows. @author ddj 2026年11月13号 */
+.edrv-uv-cache-settings { padding:16px; border-top:1px solid var(--dsw-alias-border-l1); }
+.edrv-uv-cache-row { display:flex; align-items:center; gap:12px; padding:10px 0; border-bottom:1px solid var(--dsw-alias-border-l1); }
+.edrv-uv-cache-row > span { flex:1; min-width:0; overflow-wrap:anywhere; }
+.edrv-uv-cache-row small { display:block; color:var(--dsw-alias-label-secondary); font-size:12px; }
+/* Optional Office tab: quiet host chrome, document owns the content area. @author ddj 2026年11月12号 */
+.edrv-uv-host { display:flex; flex:1; flex-direction:column; min-width:0; min-height:0; height:100%; color:var(--dsw-alias-label-primary); font-size:13px; }
+.edrv-uv-toolbar { display:flex; align-items:center; gap:8px; padding:8px 12px; min-width:0; overflow-x:auto; flex-shrink:0; border-bottom:1px solid var(--dsw-alias-border-l1); }
+.edrv-uv-toolbar button { flex-shrink:0; }
+.edrv-uv-toolbar > span { min-width:64px; }
+.edrv-uv-import > button + button { margin-inline-start:8px; }
+.edrv-uv-toolbar > span { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.edrv-uv-frame { flex:1; min-height:0; width:100%; border:0; background:var(--dsw-alias-bg-base); }
+.edrv-uv-consent, .edrv-uv-import { max-width:580px; padding:32px 24px; line-height:1.6; }
+.edrv-uv-import label { display:flex; flex-direction:column; gap:8px; margin:16px 0; }
+.edrv-uv-host h3 { font-size:16px; font-weight:600; margin:0 0 12px; }
+.edrv-uv-notice { padding:8px 12px; margin:0; overflow-wrap:anywhere; color:var(--dsw-alias-state-warn-primary); }
+.edrv-uv-footer { padding:6px 12px; font-size:12px; color:var(--dsw-alias-label-secondary); border-top:1px solid var(--dsw-alias-border-l1); }
+.edrv-uv-reviews { display:flex; flex-direction:column; align-items:flex-start; gap:8px; padding:12px; border-top:1px solid var(--dsw-alias-border-l1); }
+@media (max-width:600px) { .edrv-uv-toolbar { gap:4px; padding:6px; } .edrv-uv-consent, .edrv-uv-import { padding:20px 12px; } }
 
 [data-edrv-view] .edrv-tabs { display: flex; align-items: center; gap: 2px; padding: 2px 8px 0; background: var(--dsw-alias-bg-layer-1, transparent); overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; flex-shrink: 0; overscroll-behavior-x: contain; } /* overscroll-behavior-x: 横滚到边界不把滚动链传给页面（滚轮横滚接管更可控）@author ddj 2026年09月18号 */
 [data-edrv-view] .edrv-tab { user-select: none; -webkit-user-select: none; display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 8px 0 12px; border: none; border-radius: 6px 6px 0 0; background: transparent; color: var(--dsw-alias-label-secondary, #aaa); font-size: 12px; cursor: pointer; white-space: nowrap; flex-shrink: 0; }
@@ -792,6 +812,21 @@
 [data-edrv-view] .edrv-search-toggle:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover, rgba(15,157,88,.08)); }
 [data-edrv-view] .edrv-search-toggle.on { background: var(--dsw-alias-interactive-bg-hover, rgba(15,157,88,.14)); color: var(--dsw-alias-label-primary, #1f2933); border-color: var(--dsw-alias-brand-primary, #0f9d58); }
 [data-edrv-view] .edrv-search-toggle:disabled { opacity: .4; cursor: default; }
+
+/* replace row (collapsible, VS Code 形态：搜索框右侧 chevron 展开) */
+[data-edrv-view] .edrv-search-replace-row { display: flex; align-items: center; gap: 4px; padding: 2px 0 0; }
+[data-edrv-view] .edrv-search-replace { flex: 1; min-width: 0; height: 26px; padding: 0 8px; border: 1px solid var(--dsw-alias-border-l2, #555); border-radius: 6px; background: var(--dsw-alias-bg-base, #111); color: var(--dsw-alias-label-primary, #eee); font-size: 12px; outline: none; }
+[data-edrv-view] .edrv-search-replace:focus { border-color: var(--dsw-alias-brand-primary, #4f8cff); }
+[data-edrv-view] .edrv-search-replace-btn { flex-shrink: 0; height: 26px; padding: 0 8px; border: 1px solid var(--dsw-alias-border-l2, #555); border-radius: 6px; background: transparent; color: var(--dsw-alias-label-primary, #1f2933); font-size: 11px; cursor: pointer; }
+[data-edrv-view] .edrv-search-replace-btn:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover, rgba(15,157,88,.08)); }
+[data-edrv-view] .edrv-search-replace-btn:disabled { opacity: .45; cursor: default; }
+[data-edrv-view] .edrv-search-replace-btn.danger { border-color: var(--dsw-alias-state-error-primary, rgba(217,83,79,.5)); color: var(--dsw-alias-state-error-primary, #d9534f); }
+[data-edrv-view] .edrv-search-file-replace { flex-shrink: 0; width: 18px; height: 16px; padding: 0; border: none; border-radius: 4px; background: transparent; color: var(--dsw-alias-label-tertiary, #9aa5b1); font-size: 11px; line-height: 16px; cursor: pointer; }
+[data-edrv-view] .edrv-search-file-replace:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(255,255,255,.12)); color: var(--dsw-alias-label-primary, #1f2933); }
+[data-edrv-view] .edrv-search-notice { padding: 5px 8px; border: 1px solid var(--dsw-alias-border-l2, rgba(15,157,88,.35)); border-radius: 6px; background: var(--dsw-alias-interactive-bg-hover, rgba(15,157,88,.10)); color: var(--dsw-alias-label-secondary, #52606d); font-size: 11px; word-break: break-all; }
+[data-edrv-view] .edrv-search-confirm-list { margin: 0; padding-left: 18px; font-size: 12px; line-height: 1.7; }
+[data-edrv-view] .edrv-search-confirm-note { margin: 8px 0 0; font-size: 11px; color: var(--dsw-alias-label-tertiary, #9aa5b1); }
+[data-edrv-view] .edrv-search-confirm-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
 
 /* ===== rules panel (sidebar, Codebuddy rules view) ===== */
 [data-edrv-view] .edrv-rules-panel { display: flex; flex-direction: column; min-width: 0; min-height: 0; flex: 1; padding: 6px; gap: 4px; }

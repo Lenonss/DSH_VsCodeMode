@@ -43,6 +43,7 @@ import { clientSummary } from './compatSummary.js'
 import { detectSidebarService, hasSideRoute, installSideEditor, routeSideEditor, setEnsureSideEditor, SIDEBAR_INSTALL_CMD } from './sidebarBridge.js'
 import { detectOfficial, installOfficial, registerOfficialFileClaim, OFFICIAL_TAB_KIND, OFFICIAL_TAB_TITLE, isEditorTabActive, markEditorActive, restoreEditorTab, buildFileAddress, readSavedTab, setEditorTabScope } from './officialSidebar.js'
 import { setNativeCsv, setNativeOpenHandler, resetNativeOpen } from './nativeOpenStore.js'
+import { setFeaturePrefs } from './featurePrefs.js'
 import { SideEditorTab } from './ui/SideEditorTab.js'
 import { OfficialSideTab } from './ui/OfficialSideTab.js'
 import { createClaimRouter } from './ui/ClaimRouter.js'
@@ -92,6 +93,7 @@ import { dbg } from './rpc.js'
 import { BP_MODE, MODES, fieldOfMode } from './dap/BpWidget.js'
 import { ContextMenu } from './ui/ContextMenu.js'
 import { editExcel, exportExcel, notifyExcel } from './excel/controller.js'
+import { activateUniver, refreshUniver } from './univer/store.js'
 
 /** Root-owned live objects shared with independent panel chunks; no copied stores or transport state. */
 export const __lazyShared = { rpc, dbg, dapStore, BP_MODE, MODES, fieldOfMode, ContextMenu, editExcel, exportExcel, notifyExcel, openOriginal }
@@ -106,6 +108,21 @@ export const inject = ['slots', 'timer', 'locale', 'connection', 'remote', 'work
 
 /** 指令桥单例（同一 document 重复 apply 只装配一次；HMR 重挂不重复注册）。 */
 let commandsBridge: CommandBridge | null = null
+
+/**
+ * 模板语言是否已注册进当前 Monaco（兼容性报告探针）。
+ * @author ddj 2026年11月15号
+ * @returns true = Monaco 语言目录里已含本插件注册的模板语言 id
+ */
+function templatesReady(): boolean {
+  try {
+    const languages = (window as unknown as { monaco?: { languages?: { getLanguages?: () => Array<{ id?: string }> } } }).monaco?.languages?.getLanguages?.()
+    if (!Array.isArray(languages)) return false
+    return languages.some((item) => item?.id === 'ejs' || item?.id === 'jinja')
+  } catch (error) {
+    return false
+  }
+}
 
 /**
  * 装配指令注册表（指令桥 + 命令栏）。
@@ -256,12 +273,24 @@ export async function apply(ctx: any): Promise<void> {
       const scope = readSessionScope(ctx)
       // 传 undefined = 清除绑定（保留原 LSP 同步语义：无当前会话时不残留旧归属）
       setSession(scope.sessionId)
+      activateUniver(scope.sessionId ?? '')
+      if (scope.sessionId) void refreshUniver(scope.sessionId)
       if (!scope.sessionId || scope.sessionId === preloadedFor) return
       preloadedFor = scope.sessionId
       schedulePreload()
     }
     ctx.effect(() => subscribeScope(ctx, onScopeChange), 'vscode-mode: monaco session trigger')
     onScopeChange()
+    ctx.effect(() => {
+      /** @private @author ddj 2026年11月12号 @sideEffects Rechecks optional service/policy without starting Gateway; no background-window polling. */
+      function refreshOffice() {
+        if (document.visibilityState === 'hidden') return
+        const scope = readSessionScope(ctx)
+        if (scope.sessionId) void refreshUniver(scope.sessionId)
+      }
+      const timer = window.setInterval(refreshOffice, 10000)
+      return () => { window.clearInterval(timer); activateUniver('') }
+    }, 'vscode-mode: optional Univer capability')
   }
   // 会话切换 → 编辑 Tab 跨会话自动恢复：上一会话编辑区激活时，新会话自动展开并激活
   //（官方停靠面按会话隔离，新会话默认收起；先试 openTabIn 直写新会话面，未 adopt 走有界重试）。
@@ -449,6 +478,10 @@ export async function apply(ctx: any): Promise<void> {
     legacySidebar: sideService !== undefined, officialSidebar: officialService !== undefined,
     fileClaim: claimDisposer !== null, claimWanted: shouldClaimFiles(selected), selected,
     officialMenus: Boolean(ctx.get('contextMenus')), forge: forge.available(),
+    // 交互特性探针：模板语言注册、composer 座位、搜索替换（v0.30.0）
+    templateLanguages: templatesReady(),
+    composerSeat: typeof document !== 'undefined' && document.querySelector('[data-composer-seat]') !== null,
+    searchReplace: true,
   }, version)
 
   ctx.provide('fileOpeners', registry)
@@ -556,6 +589,8 @@ export async function apply(ctx: any): Promise<void> {
         window.dispatchEvent(new CustomEvent('edrv:max-open-editors', { detail: { value: limit } }))
         // 原生打开范围同拍推送（nativeOpenStore 解析缓存；旧版无该字段 → 保持默认集）
         setNativeCsv(snapshot.value?.nativeOpenExts)
+        // 交互特性开关（引用接入 / 搜索替换）：模块级缓存 + 事件，输入事件热路径直接读
+        setFeaturePrefs(snapshot.value ?? {})
       }
       sync()
       return scope.subscribe(sync)

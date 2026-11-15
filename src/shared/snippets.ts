@@ -129,6 +129,9 @@ export const SNIPPET_LANGUAGES: readonly string[] = [
   'javascript', 'json', 'jsonc', 'kotlin', 'less', 'lua', 'markdown', 'mdx', 'php',
   'plaintext', 'powershell', 'python', 'ruby', 'rust', 'scss', 'shell', 'sql',
   'swift', 'systemverilog', 'tcl', 'typescript', 'verilog', 'xml', 'yaml',
+  // HTML 模板语言（v0.30.0 起 langOf 会映射到这些 id，片段目录必须同步，见 tests/snippetLanguage.test.ts）
+  'handlebars', 'pug', 'twig', 'liquid', 'razor', 'freemarker2',
+  'ejs', 'erb', 'nunjucks', 'jinja', 'blade', 'haml', 'slim',
 ]
 
 /** 语言 id → 展示名（仅收录写法与 id 明显不同的；未收录的原样返回）。 */
@@ -140,6 +143,20 @@ const LANGUAGE_LABELS: Record<string, string> = {
   jsonc: 'JSON with Comments',
   powershell: 'PowerShell',
   plaintext: '纯文本',
+  // HTML 模板语言
+  ejs: 'EJS',
+  erb: 'ERB',
+  nunjucks: 'Nunjucks',
+  jinja: 'Jinja2',
+  blade: 'Blade',
+  haml: 'Haml',
+  slim: 'Slim',
+  handlebars: 'Handlebars',
+  pug: 'Pug',
+  twig: 'Twig',
+  liquid: 'Liquid',
+  razor: 'Razor',
+  freemarker2: 'FreeMarker',
 }
 
 /**

@@ -269,7 +269,7 @@ describe('registerOfficialFileClaim', () => {
     const definition = definitions[0] as Record<string, unknown>
     expect(definition['id']).toBe(OFFICIAL_FILE_TAB_ID)
     expect(definition['kind']).toBe('edrvEditorFile')
-    expect(definition['patterns']).toEqual(['dsh-resource://file/**'])
+    expect(definition['patterns']).toEqual(['dsh-resource://file/**', '*.univer'])
     expect(definition['priority']).toBe('extension')
     expect(slotKeys).toEqual([OFFICIAL_FILE_TAB_ID])
     const canOpen = definition['canOpen'] as (a: string) => boolean

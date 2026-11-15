@@ -4,6 +4,9 @@
  * 作者 ddj 2026年08月24号
  */
 import { patchMethod } from './compat.js'
+import { refreshUniver, univerCapability } from './univer/store.js'
+import { routesUniver } from './univer/routing.js'
+import { isOfficePath, isUniverPath } from '../shared/univer.js'
 import { openEditorView } from './events.js'
 import { AUTO_OPEN_TOOL, VSCODE_OPEN_TOOL, type FileOpenContext, type FileOpenerRegistry, isAvailable, selectOpener } from './fileOpeners.js'
 
@@ -24,6 +27,10 @@ export interface OpenPathRouterOptions {
 export function installOpenPathRouter(options: OpenPathRouterOptions): () => void {
   const open = async (original: (path: string) => Promise<void>, path: string): Promise<void> => {
     const context = options.context()
+    if (context.sessionId && (isOfficePath(path) || isUniverPath(path))) {
+      await refreshUniver(context.sessionId)
+      if (routesUniver(path, univerCapability(context.sessionId))) { openEditorView(path); return }
+    }
     const opener = selectOpener(options.registry, options.selected())
     if (!opener || !isAvailable(opener)) return original.call(options.workspaces, path)
     try {

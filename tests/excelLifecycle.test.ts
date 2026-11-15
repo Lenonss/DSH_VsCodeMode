@@ -23,6 +23,12 @@ function fixture(scope: string) {
 }
 
 describe('Excel isolated lifecycle', () => {
+  it('does not hand existing dirty Excel buffers to the optional Office viewer', () => {
+    const source = readFileSync(new URL('../src/client/ui/EditorView.ts', import.meta.url), 'utf8')
+    const route = source.slice(source.indexOf('function useOffice('), source.indexOf('const isUniverActive'))
+    expect(route).toContain('excelState(JSON.stringify([scope, sessionId]), path).dirty')
+    expect(route).toContain('officeFallback.has(path)')
+  })
   it('keeps every EditorView text-save entry behind an Excel guard', () => {
     const source = readFileSync(new URL('../src/client/ui/EditorView.ts', import.meta.url), 'utf8')
     const save = source.slice(source.indexOf('function saveDocument('), source.indexOf('const onEdit ='))

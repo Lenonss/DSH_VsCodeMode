@@ -32,6 +32,9 @@ Thumbs.db
 pnpm-lock.yaml.*.tmp
 pnpm-lock.yaml.??????
 
+# 用例运行残留（临时 profile / unity 工程 / 收件箱夹具，随机后缀）
+tests/.edrv-*/
+tests/.open-inbox-*/
 # 本地临时产物（交换脚本日志、冒烟脚本等）
 tmp/
 

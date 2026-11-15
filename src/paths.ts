@@ -21,6 +21,11 @@ import { RPC_PATH } from './shared/rpc.js'
 export const PLUGIN_ID = 'dsh-vscode-mode'
 /** DSH 工作区目录名（默认 home 下）。 */
 export const DSH_DIR_NAME = '.dsh'
+
+/** @public @author ddj 2026年11月13号 @param cwd Session workspace. @returns Local Office cache excluded from global automatic sweep. */
+export function univerCacheRoot(cwd: string): string {
+  return join(cwd, DSH_DIR_NAME, 'cache', 'dsh-vscode-mode', 'univer', 'v1')
+}
 /** home 覆盖环境变量（与引擎 resolveDshHome 一致）。 */
 export const DSH_HOME_ENV = 'DSH_HOME'
 /** 树缓存 schema 版本（文件名携带；版本递增即触发旧版清理）。 */

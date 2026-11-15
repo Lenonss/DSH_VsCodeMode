@@ -1,4 +1,7 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+
+// DiffLauncher 的归档纯函数与 Univer 无关：mock 掉 Univer UI，避免测试拉入 primitives 的未声明传递依赖
+vi.mock('../src/client/univer/UniverHost.js', () => ({ UniverReviews: () => null }))
 import { archiveKey, mergeArchives } from '../src/client/ui/DiffLauncher.js'
 
 describe('归档分页视图', () => {

@@ -383,7 +383,8 @@ export async function updateSection(provider: SettingsProvider | undefined, ns: 
 /**
  * 构建设置 section schema（install 路径与插件 Config 声明共用，保证两代形状同源）。
  * 字段集 = fileOpenTool/keybindings/sidebarMinWidth/maxOpenEditors/integrationBaseUrl/
- * aiInline/aiProvider/aiModel/aiEffort/svnPath/tortoisePath/nativeOpenExts，全部带默认值
+ * aiInline/aiProvider/aiModel/aiEffort/svnPath/tortoisePath/nativeOpenExts/refIntake/searchReplace，
+ * 全部带默认值
  * （keybindings 自 2026-10 起废弃停写：键位持久化归官方 shortcuts 存储
  *   userData/keybindings.json / dsh.keybindings.v1；字段保留仅为旧档迁移读取与降级回滚，
  *   见 client/shortcutsOfficial.ts 的 migrateLegacyKeybindings。）
@@ -430,6 +431,9 @@ export function buildSettingsSchema(z: SettingsDeps['z'], options?: { volatile?:
     tortoisePath: withVol(z.string().default(TORTOISE_DIR_DEFAULT)),
     // 原生打开范围（逗号分隔后缀；默认 = 让位清单并集，csv/tsv 决策见 shared/nativeOpen.ts）
     nativeOpenExts: withVol(z.string().default(DEFAULT_NATIVE_CSV)),
+    // 交互特性开关（默认开）：拖拽/粘贴/复制的引用接入；搜索面板的全局替换
+    refIntake: withVol(z.boolean().default(true)),
+    searchReplace: withVol(z.boolean().default(true)),
   }
   if (wantVolatile) configVolatile = { requested: true, marked, total: Object.keys(shape).length }
   return z.object(shape)

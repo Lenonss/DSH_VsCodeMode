@@ -9,6 +9,7 @@ import { rpc } from '../rpc.js'
 import { MONO, btn } from './shared.js'
 import { ReviewLedger } from './OfficialReview.js'
 import { subscribeReview } from '../state/reviewFeed.js'
+import { UniverReviews } from '../univer/UniverHost.js'
 
 /**
  * 文件与批次共同标识归档卡片，避免同文件多批次共用展开状态。
@@ -197,5 +198,6 @@ export function DiffLauncher(props) {
       React.createElement('span', { style: { flex: 1 } }),
       (error ? React.createElement('span', { style: { fontSize: 11, color: 'var(--dsw-alias-state-error-primary,#d9534f)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '40%' } }, '错误：' + String(error)) : null),
       React.createElement('button', { onClick: onClose, style: btn(false) }, '✕ 关闭')),
-    React.createElement('div', { className: 'edrv-launch-body' }, body))
+    React.createElement('div', { className: 'edrv-launch-body' }, body,
+      tab === 'pending' ? React.createElement(UniverReviews, { sessionId, onOpen: (path) => onOpenFile?.(path) }) : null))
 }

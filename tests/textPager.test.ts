@@ -35,7 +35,8 @@ async function editorFunction(name: string, dependencies: Record<string, unknown
   if (!found) throw new Error('Missing production function: ' + name)
   const javascript = ts.transpileModule(found.getText(ast), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText
   // Extracted functions still need the production import used by their Excel guard.
-  const scope = { isExcelPath, ...dependencies }
+  // useOffice 是 v0.30.0 起 EditorView 的 Office 路由判定：本测试跑文本分页，统一按「非 Office」注入
+  const scope = { isExcelPath, useOffice: () => false, ...dependencies }
   return new Function(...Object.keys(scope), javascript + `;return ${name}`)(...Object.values(scope))
 }
 

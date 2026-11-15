@@ -6,6 +6,7 @@
  * Purity rule: no node/react imports (same as types.ts).
  * 作者 ddj 2026-08-20
  */
+import type { UniverCapability, UniverImport, UniverImportResult, UniverCachedOpen, UniverCacheList, UniverCleanItem } from './univer.js'
 import type {
   ArchiveBatch,
   ArchiveEntry,
@@ -375,6 +376,11 @@ export interface UiStatePatchInput {
 
 /** 每个方法的请求参数（sessionId 为公共可选字段）。 */
 export interface RpcRequestMap {
+  'edrv.univer.capabilities': { sessionId: string }
+  'edrv.univer.importCopy': UniverImport
+  'edrv.univer.openCached': { sessionId: string; source: string; operationId: string; refresh?: boolean }
+  'edrv.univer.cacheList': { sessionId: string }
+  'edrv.univer.cacheClean': { sessionId: string; entries: Array<{ id: string; revision: string }> }
   'edrv.review.list': ReviewRequest & { cursor?: number; history?: boolean; path?: string; all?: boolean }
   'edrv.review.detail': ReviewRequest & { id: string }
   'edrv.review.decide': DecideReview
@@ -410,6 +416,8 @@ export interface RpcRequestMap {
   'edrv.dlog.reveal': { sessionId?: string }
   'edrv.searchFiles': { sessionId?: string; query: string }
   'edrv.searchContent': { sessionId?: string; query: string; matchCase?: boolean; wholeWord?: boolean; regex?: boolean; maxResults?: number; include?: string[]; exclude?: string[]; force?: boolean }
+  'edrv.replaceContent': { sessionId?: string; query: string; replacement: string; matchCase?: boolean; wholeWord?: boolean; regex?: boolean; include?: string[]; exclude?: string[]; paths?: string[]; dryRun?: boolean }
+  'edrv.resolveRef': { sessionId?: string; ref: string; activePath?: string }
   'edrv.listDir': { sessionId?: string; path: string; force?: boolean }
   'edrv.revealInExplorer': { sessionId?: string; path: string }
   'edrv.fsCreateFile': { sessionId?: string; path: string }
@@ -561,6 +569,11 @@ export type RpcMethod = keyof RpcRequestMap
 
 /** 每个方法成功（ok:true）时的附加载荷。 */
 export interface RpcOkMap {
+  'edrv.univer.capabilities': { capability: UniverCapability }
+  'edrv.univer.importCopy': { imported: UniverImportResult }
+  'edrv.univer.openCached': { cached: UniverCachedOpen }
+  'edrv.univer.cacheList': { cache: UniverCacheList }
+  'edrv.univer.cacheClean': { results: UniverCleanItem[] }
   'edrv.review.list': { page: ReviewPage }
   'edrv.review.detail': { detail: ReviewDetail }
   'edrv.review.decide': { revision: number }
@@ -596,6 +609,8 @@ export interface RpcOkMap {
   'edrv.dlog.reveal': { opened: boolean }
   'edrv.searchFiles': { files: string[]; truncated: boolean }
   'edrv.searchContent': { matches: SearchContentMatch[]; truncated: boolean; warning?: string }
+  'edrv.replaceContent': { files: Array<{ path: string; replaced: number }>; totalFiles: number; totalReplaced: number; truncated: boolean; dryRun: boolean; skipped: number; failed: Array<{ path: string; reason: string }>; warning?: string }
+  'edrv.resolveRef': { path: string; ambiguous?: string[] }
   'edrv.listDir': { root: string; path: string; entries: TreeEntry[] }
   'edrv.revealInExplorer': { revealed: string }
   'edrv.fsCreateFile': { path: string }

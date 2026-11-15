@@ -10,6 +10,8 @@
  * 作者 ddj 2026-08-27 / 2026-09-03 / 2026-09-16 / 2026年09月22号
  */
 import { isSvnDiffable } from '../../shared/svn.js'
+import { canImportOffice } from '../../shared/univer.js'
+import { univerCapability } from '../univer/store.js'
 import type { SvnChangeEntry } from '../../shared/svn.js'
 import { svnActionOn, svnActionsFor } from '../../shared/svnActions.js'
 import type { SvnActionContext, SvnTargetType } from '../../shared/svnActions.js'
@@ -271,6 +273,14 @@ async function pasteInto(target: TreeMenuTarget, ctx: SidebarCtx): Promise<void>
  */
 function openGroupItems(): TreeMenuItem[] {
   return [
+    {
+      id: 'univer-import',
+      label: '使用 Univer 编辑副本',
+      order: ORDER_OPEN - 1,
+      group: GROUP_OPEN,
+      visible: (target, ctx) => isFileTarget(target) && canImportOffice(target.path) && univerCapability(ctx.sessionId ?? '')?.available === true,
+      run: (target, ctx) => { window.dispatchEvent(new CustomEvent('edrv:open-editor', { detail: { path: target.path, univer: true, sessionId: ctx.sessionId } })) },
+    },
     {
       id: 'open-with',
       label: '打开方式…',

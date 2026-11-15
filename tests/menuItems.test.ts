@@ -46,6 +46,7 @@ describe('createDefaultFileMenuItems', () => {
   it('内置项按 order 排序：打开/新建 → 浏览器打开 → 对话/查找 → 剪贴板 → 复制路径 → 重命名/删除 → SVN 组', () => {
     const items = createDefaultFileMenuItems()
     expect(items.map((item) => item.id)).toEqual([
+      'univer-import',
       'open-with',
       'new-file',
       'new-folder',

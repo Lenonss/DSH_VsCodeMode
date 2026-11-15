@@ -35,7 +35,9 @@ collect(source)
 function editorFunction(name: string, scope: Record<string, unknown>): (...args: any[]) => any {
   const text = functions.get(name)
   if (!text) throw new Error('Missing editor adapter: ' + name)
-  return new Function(...Object.keys(scope), text + '; return ' + name)(...Object.values(scope))
+  // useOffice 是 v0.30.0 起 EditorView 的 Office 路由判定：单测不涉及 Office，统一兜底为 false（显式 scope 可覆盖）
+  const resolved = { useOffice: () => false, ...scope }
+  return new Function(...Object.keys(resolved), text + '; return ' + name)(...Object.values(resolved))
 }
 
 /** @author ddj 2026年09月28号 @param overrides Actual editor state overrides. @returns Adapter scope with real receiptView. */

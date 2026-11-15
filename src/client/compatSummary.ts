@@ -15,6 +15,12 @@ export interface ClientCompatState {
   selected: string
   officialMenus?: boolean
   forge?: boolean
+  /** 模板语言（EJS/Jinja/Nunjucks/Blade/Haml/Slim/ERB）是否注册成功（v0.30.0）。 */
+  templateLanguages?: boolean
+  /** 是否探测到官方 composer 座位（引用接入依赖它，v0.30.0）。 */
+  composerSeat?: boolean
+  /** 搜索面板全局替换是否可用（v0.30.0）。 */
+  searchReplace?: boolean
 }
 
 /**
@@ -77,5 +83,14 @@ export function clientSummary(state: ClientCompatState, version = ''): CompatAda
   }
   if (state.officialMenus !== undefined) items.push({ name: '官方右键菜单', active: state.officialMenus, note: state.officialMenus ? '插件动作接入共享菜单' : '服务缺失或装配失败，保留插件菜单' })
   if (state.forge !== undefined) items.push({ name: 'Forge 导航', active: state.forge, note: state.forge ? '导航至官方面板与本地变更；PR 保持官方审查' : '官方 Forge 未安装或未启用，不自动启用' })
+  if (state.templateLanguages !== undefined) {
+    items.push({ name: '模板语言高亮（EJS/ERB/Nunjucks/Jinja2/Blade/Haml/Slim）', active: state.templateLanguages, note: state.templateLanguages ? '已注册到 Monaco（编辑器打开模板文件按对应语法分色）' : 'Monaco 未就绪或注册失败，模板文件回落 plaintext' })
+  }
+  if (state.composerSeat !== undefined) {
+    items.push({ name: '引用接入（拖文件/粘贴文件/复制行引用）', active: state.composerSeat, note: state.composerSeat ? '探测到官方对话输入区，拖入/粘贴会落成引用 chip' : '未探测到对话输入区（旧版 DSH 或未打开会话），引用接入自动不生效' })
+  }
+  if (state.searchReplace !== undefined) {
+    items.push({ name: '搜索面板全局替换', active: state.searchReplace, note: state.searchReplace ? '先预览命中数再确认写盘；执行前自动落盘已打开页签' : '当前环境未启用' })
+  }
   return items
 }

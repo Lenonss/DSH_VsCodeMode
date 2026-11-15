@@ -64,8 +64,11 @@ import { settingsDocPath } from './settingsDocPath.js'
 import { createTextPages } from './textPages.js'
 import { reviewHandlers } from './reviewRpc.js'
 import { pendingHandlers } from './pendingRpc.js'
+import { univerHandlers } from './univerRpc.js'
 import { fileAbsent, missingReview, missingDecide, missingPath, refusalCodeOf } from './missingReview.js'
 import { pendingCovers } from './pendingCompat.js'
+import { runReplace } from './search/replaceRun.js'
+import { resolveRefPath } from './refPointer.js'
 
 /** Process-local cursor signer; reads must stay on the Host filesystem capability. */
 const readTextPage = createTextPages()
@@ -620,6 +623,7 @@ export function buildHandlers(
     ...((dapHandlers ?? {}) as RpcHandlerMap),
     ...(reviewHandlers(ctx, registry) as RpcHandlerMap),
     ...(pendingHandlers(ctx, registry) as RpcHandlerMap),
+    ...(univerHandlers(ctx) as RpcHandlerMap),
     'edrv.list': async (args) => {
       // #region debug log
       const start = performance.now()
@@ -1124,6 +1128,53 @@ export function buildHandlers(
         return { ok: true, ...result }
       } catch (error) {
         return { ok: false, error: '搜索失败：' + String(error) }
+      }
+    },
+    'edrv.replaceContent': async (args) => {
+      // 工作区替换：rg 枚举候选 → 逐文件版本守卫写入（dryRun 只统计）。见 search/replaceRun.ts。
+      const sc = await requireSession(ctx, args.sessionId)
+      if ('err' in sc) return { ok: false, error: sc.err }
+      try {
+        const outcome = await runReplace({
+          ctx,
+          session: sc.session,
+          cwd: sc.cwd,
+          request: {
+            query: args.query,
+            replacement: args.replacement,
+            matchCase: args.matchCase,
+            wholeWord: args.wholeWord,
+            regex: args.regex,
+            include: args.include,
+            exclude: args.exclude,
+            paths: args.paths,
+            dryRun: args.dryRun,
+          },
+        })
+        // 真实写盘后必须让内容搜索缓存失效：旧缓存会让面板继续显示已不存在的命中。
+        if (args.dryRun !== true && outcome.totalReplaced > 0) contentSearcher.dispose(sc.cwd)
+        return { ok: true, ...outcome }
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : String(error) }
+      }
+    },
+    'edrv.resolveRef': async (args) => {
+      // 文件名/路径片段 → 工作区相对路径（拖拽、粘贴文件、粘贴 @路径 文本共用）。
+      const sc = await requireSession(ctx, args.sessionId)
+      if ('err' in sc) return { ok: false, error: sc.err }
+      try {
+        const result = await resolveRefPath({
+          ctx,
+          session: sc.session,
+          cwd: sc.cwd,
+          ref: args.ref,
+          activePath: args.activePath,
+          search: (query: string) => searcher.search({ session: sc.session, cwd: sc.cwd, query, activePaths: [] }),
+        })
+        if (result === null) return { ok: false, error: '未在工作区内找到该文件：' + String(args.ref ?? '') }
+        return { ok: true, ...result }
+      } catch (error) {
+        return { ok: false, error: '解析引用失败：' + String(error) }
       }
     },
     'edrv.listDir': async (args) => {

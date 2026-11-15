@@ -105,7 +105,8 @@ function adapter(name: string, scope: Record<string, unknown>): (...args: any[])
   const text = adapters.get(name)
   if (!text) throw new Error('Missing workbench adapter: ' + name)
   // Preserve the production Excel guard when executing a detached adapter.
-  const dependencies = { isExcelPath, missingRef: { current: new Map() }, ...scope }
+  // useOffice 是 v0.30.0 起 EditorView 的 Office 路由判定：本测试只关心保存语义，按「非 Office」注入
+  const dependencies = { isExcelPath, useOffice: () => false, missingRef: { current: new Map() }, ...scope }
   return new Function(...Object.keys(dependencies), text + '; return ' + name)(...Object.values(dependencies))
 }
 

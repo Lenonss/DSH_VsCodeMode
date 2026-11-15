@@ -27,6 +27,7 @@ import { LspSettings } from './LspSettings.js'
 import { PerfSettings } from './PerfSettings.js'
 import { IntegrationSettings } from './IntegrationSettings.js'
 import { AiSettings } from './AiSettings.js'
+import { UniverCacheSettings } from '../univer/UniverCacheSettings.js'
 
 const EMPTY = { serverName: '', transport: 'stdio', command: '', args: '', cwd: '', url: '', headers: '', startup: 'on-demand', sharing: 'agent', startupTimeoutMs: 60000 }
 
@@ -148,6 +149,8 @@ function GeneralSettings({ registry, getShortcuts }) {
   const [limitDraft, setLimitDraft] = React.useState(null) // 页签上限草稿（同上提交语义）
   const [nativeSaved, setNativeSaved] = React.useState(DEFAULT_NATIVE_CSV) // 原生打开范围已保存值
   const [nativeDraft, setNativeDraft] = React.useState(null) // 原生打开范围草稿（同上提交语义）
+  const [refIntakeOn, setRefIntakeOn] = React.useState(true) // 引用接入（拖拽/粘贴/复制 → 引用 chip）
+  const [searchReplaceOn, setSearchReplaceOn] = React.useState(true) // 搜索面板全局替换
   const [kbMessage, setKbMessage] = React.useState('') // 打开官方快捷键弹窗的失败说明（空 = 未失败）
   const settings = React.useContext(SettingsContext)
   const snapshot = settings?.getSnapshot?.()
@@ -163,6 +166,8 @@ function GeneralSettings({ registry, getShortcuts }) {
       setLimit(normalizeMaxOpenEditors(snap?.value?.maxOpenEditors))
       const native = snap?.value?.nativeOpenExts
       setNativeSaved(typeof native === 'string' && native.trim() ? native : DEFAULT_NATIVE_CSV)
+      setRefIntakeOn(snap?.value?.refIntake !== false)
+      setSearchReplaceOn(snap?.value?.searchReplace !== false)
     }
     onChange()
     return settings?.subscribe?.(onChange)
@@ -214,6 +219,30 @@ function GeneralSettings({ registry, getShortcuts }) {
   const commitNative = () => {
     if (nativeDraft === null) return
     saveNative(nativeDraft)
+  }
+  /**
+   * 提交布尔开关（引用接入 / 搜索替换）。
+   * @author ddj 2026年11月15号
+   * @param key 设置字段名
+   * @param value 新值（true/false）
+   * @param apply 乐观写入本地状态的函数（失败时用 !value 回滚）
+   * @returns 无（失败经 error 状态提示）
+   * @sideEffects 写设置文档；客户端特性读取由 index.ts 的设置桥同拍推送
+   */
+  const saveToggle = (key, value, apply) => {
+    apply(value)
+    setBusy(true)
+    setError('')
+    if (!settings?.set) {
+      setError('设置服务不可用')
+      apply(!value)
+      setBusy(false)
+      return
+    }
+    settings.set(key, value).catch((e) => {
+      setError(String(e))
+      apply(!value)
+    }).finally(() => setBusy(false))
   }
   const closeDevForm = () => {
     if (!window.confirm('关闭开发形态：插件将切换为正式版安装（版本依赖 + 删除工作区链接），pnpm 装配后需重启 DSH 生效。确认关闭？')) return
@@ -318,6 +347,23 @@ function GeneralSettings({ registry, getShortcuts }) {
             onChange: (event) => setNativeDraft(event.target.value),
             onBlur: commitNative,
             onKeyDown: (event) => { if (event.key === 'Enter') commitNative() },
+          })),
+      ),
+    ),
+    React.createElement('section', { className: 'vsm-panel' },
+      React.createElement('h3', { className: 'vsm-panel-title' }, '交互'),
+      React.createElement('div', { className: 'vsm-panel-body' },
+        React.createElement(SettingRow, { label: '引用接入', description: '资源管理器拖入的文件、编辑器里复制的行选区、粘贴的文件会落成对话引用 chip；关闭后完全走原生行为。' },
+          React.createElement('input', {
+            type: 'checkbox', checked: refIntakeOn,
+            disabled: loading || unavailable || notReady || busy || snapshot?.writable === false,
+            onChange: (event) => saveToggle('refIntake', event.target.checked, setRefIntakeOn),
+          })),
+        React.createElement(SettingRow, { label: '搜索替换', description: '搜索面板显示替换入口（先预览命中再确认写盘）；关闭后只保留搜索。' },
+          React.createElement('input', {
+            type: 'checkbox', checked: searchReplaceOn,
+            disabled: loading || unavailable || notReady || busy || snapshot?.writable === false,
+            onChange: (event) => saveToggle('searchReplace', event.target.checked, setSearchReplaceOn),
           })),
       ),
     ),
@@ -687,7 +733,9 @@ export function McpSettings(props) {
   const resetDraft = () => { if (!ref.current?.view.busy) setDraft(EMPTY) }
   let body
   if (tab === 'mcp' && loading) body = React.createElement('div', { className: 'vsm-mcp-empty' }, '正在读取 MCP 服务…')
-  else if (tab === 'general') body = React.createElement(GeneralSettings, { registry: openerRegistry, getShortcuts })
+  else if (tab === 'general') body = React.createElement(React.Fragment, null,
+    React.createElement(GeneralSettings, { registry: openerRegistry, getShortcuts }),
+    React.createElement(UniverCacheSettings, { getSession: props?.getMcpSession ?? (() => undefined) }))
   else if (tab === 'mcp') body = React.createElement(McpManagePanel, { servers, projects, busy, draft, edit, resetDraft,
     saveGlobal, saveProject, connectProject, policyProject,
     refreshGlobal, toggleGlobal, removeGlobal, refreshProject, toggleProject, removeProject })

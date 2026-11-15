@@ -31,12 +31,19 @@ import { reviewRegions } from '../../shared/reviewRegions.js'
 import { PENDING_PREFIX } from '../../shared/pendingReview.js'
 import { coveredPathKeys, diffPathKey, diffSummary, reviewPathOf } from '../state/diffSummary.js'
 import { emitFileChanged, emitRefresh } from '../events.js'
+import { handleCopyAsRef } from '../refCopy.js'
+import { attachRefIntake } from '../refIntake.js'
+import { featurePrefs } from '../featurePrefs.js'
+import { FLUSH_ALL_EVENT } from '../editorFlush.js'
 import { langOf, loadMonaco, snippetLanguageOf } from '../monaco/loader.js'
 import { bindEditActions, runEditAction } from '../monaco/editActions.js'
 import { addReloadGuard } from '../pageReload.js'
 import { clampZoom, clearZoomMem, dataUrlOf, isImagePath, isSvgPath, recallZoom, rememberZoom, zoomKeyOf, zoomStepOf } from '../imagePreview.js'
 import { isMarkdownPath } from '../markdownPreview.js'
 import { isExcelPath } from '../excel/model.js'
+import { isUniverPath, isOfficePath } from '../../shared/univer.js'
+import { routesUniver } from '../univer/routing.js'
+import { UniverHost, useUniver } from '../univer/UniverHost.js'
 import { excelState, loadExcel, allowClose, releaseExcel, renameExcel, unsafeExcel, notifyExcel } from '../excel/controller.js'
 import { ExcelHost } from '../excel/ExcelHost.js'
 import { setActiveEditorPath } from '../activePathStore.js'
@@ -640,8 +647,18 @@ export function EditorView(props) {
   const isImageActive = !!active && isImagePath(active) && !svgTextRef.current.has(active)
   // 当前 tab 是否为 PDF 面板（与 loadContent 分派条件同源）
   const isPdfActive = !!active && isPdfPath(active)
+  const univer = useUniver(sessionId ?? '')
+  const [officeFallback, setOfficeFallback] = React.useState(new Set())
+  const [officeExplicit, setOfficeExplicit] = React.useState(new Set())
+  /** @private @author ddj 2026年11月12号 @param path File identity. @returns Optional Office route without taking ownership of existing dirty Excel buffers. */
+  function useOffice(path) {
+    if (isUniverPath(path)) return true
+    const offered = routesUniver(path, univer.capability) || (officeExplicit.has(path) && univer.capability?.available)
+    return offered && !officeFallback.has(path) && !(isExcelPath(path) && excelState(JSON.stringify([scope, sessionId]), path).dirty)
+  }
+  const isUniverActive = !!active && useOffice(active)
   const excelScope = JSON.stringify([scope, sessionId])
-  const isExcelActive = !!active && isExcelPath(active)
+  const isExcelActive = !!active && isExcelPath(active) && !isUniverActive
 
   React.useEffect(() => {
     /** @private @author ddj 2026年10月28号 @param event Browser exit. @sideEffects Warns on all retained sessions; never silently saves or discards. */
@@ -1256,6 +1273,13 @@ export function EditorView(props) {
       clearSync(scope, path)
       if (markRead === true) clearReadVersion(scope, path)
     }
+    if (useOffice(path)) {
+      setContent('')
+      setContentPath(path)
+      stampLoad(path, sid, seq)
+      setStatus('Univer 文档 · 查看与审阅')
+      return
+    }
     if (isExcelPath(path)) {
       const state = excelState(excelScope, path)
       void loadExcel(state, async () => {
@@ -1272,6 +1296,10 @@ export function EditorView(props) {
         setLoadStage({ progress: 100, message: 'Excel 已就绪' })
         setStatus(state.notice || 'Excel 基础编辑 · 仅导出副本')
       }).catch((error) => { if (loadCurrent(path, seq)) failLoad(path, sid, seq, String(error)) })
+      return
+    }
+    if (isOfficePath(path)) {
+      failLoad(path, sid, seq, 'Office 二进制文件不能作为文本读取；请使用其他打开方式')
       return
     }
     // 图片文件走专用通道：base64 → data URL 预览，不建 Monaco model、不进文本/差异流程
@@ -1537,7 +1565,7 @@ export function EditorView(props) {
    * @returns 比对结果；模型不可用/读失败 → null（按「需要重载」处理）
    */
   function readDiskCompare(path) {
-    if (isExcelPath(path)) return Promise.resolve({ equal: false })
+    if (isExcelPath(path) || useOffice(path)) return Promise.resolve({ equal: false })
     // A read-only page has no full Monaco buffer to compare. Acknowledge the observed
     // version as changed so polling advances its baseline instead of invalidating every reread.
     if (path === activeRef.current && (paging || pageChanged === pageIdentity)) return Promise.resolve({ equal: false })
@@ -1626,6 +1654,11 @@ export function EditorView(props) {
     // G9：入口统一归一为工作区相对路径（差异栏/对话链接/LSP 跳转等都经此事件）
     const normalized = tabPath(p)
     if (!normalized) return
+    if (e?.detail?.univer === true && (!e.detail.sessionId || e.detail.sessionId === sessionId)) {
+      flushSave()
+      setOfficeExplicit((previous) => new Set([...previous, normalized]))
+      setOfficeFallback((previous) => { const next = new Set(previous); next.delete(normalized); return next })
+    }
     if (e?.detail?.focusDiff === true) {
       recordNav()
       pendingFocusRef.current = { path: normalized, region: null }
@@ -2183,7 +2216,7 @@ export function EditorView(props) {
     setLoadStage({ progress: 10, message: '准备读取文件…' })
     setStatus('加载中…')
     loadContent(active, sessionId)
-  }, [active, sessionId])
+  }, [active, sessionId, isUniverActive])
 
   /**
    * 切换焦点分组时同步重置内容状态（与 setWorkbench 同批渲染）。
@@ -2366,7 +2399,7 @@ export function EditorView(props) {
     if (!path) return Promise.resolve(false)
     if (modelsRef.current.get(path)) return Promise.resolve(true)
     // 图片/PDF 不建文本 model（各自走预览控件），预热对它们没有意义
-    if (isExcelPath(path) || isImagePath(path) || isPdfPath(path)) return Promise.resolve(false)
+    if (useOffice(path) || isExcelPath(path) || isImagePath(path) || isPdfPath(path)) return Promise.resolve(false)
     const sid = sessionId
     if (!sid) return Promise.resolve(false)
 
@@ -2401,6 +2434,77 @@ export function EditorView(props) {
     if (docRef.current) void docRef.current.flush(target)
     return true
   }
+
+  /**
+   * 提交全部待保存内容（全局替换前置动作；见 editorFlush.ts 的成因说明）。
+   * 不依赖 active：遍历所有文档存储各自 flush，再补一次活动页签的防抖槽。
+   * @author ddj 2026年11月15号
+   * @returns 全部落盘完成的 promise（单个文档失败不阻塞其他文档）
+   */
+  const flushAllDocuments = () => {
+    saveTimerRef.current?.flush()
+    const tasks = []
+    for (const store of docStores.current.values()) {
+      try { tasks.push(Promise.resolve(store.flush?.()).catch(() => {})) } catch (error) { /* 单文档异常不阻塞 */ }
+    }
+    return Promise.all(tasks).then(() => undefined)
+  }
+
+  // 外部（搜索面板的全局替换）要求落盘时必须能等到真正写完，否则会用旧内容覆盖磁盘。
+  React.useEffect(() => {
+    /** @private @author ddj 2026年11月15号 @description 把本编辑器的落盘 promise 注册给请求方 */
+    const onFlush = (event) => {
+      const detail = event?.detail
+      if (!detail || typeof detail.register !== 'function') return
+      detail.register('editor:' + String(sessionId ?? ''), flushAllDocuments())
+    }
+    window.addEventListener(FLUSH_ALL_EVENT, onFlush)
+    return () => window.removeEventListener(FLUSH_ALL_EVENT, onFlush)
+    // flushAllDocuments 只读 ref，闭包无陈旧状态
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // 引用接入：拖文件 / 粘贴文件 / 粘贴 @路径 落成对话引用 chip（composer 内才生效）。
+  React.useEffect(() => {
+    if (!addToConversation) return undefined
+    let disposed = false
+    /** @private @author ddj 2026年11月15号 @description 路径片段交给 host 解析成工作区相对路径 */
+    const resolveRef = async (ref, activePathValue) => {
+      try {
+        const body = { sessionId, ref, ...(activePathValue ? { activePath: activePathValue } : {}) }
+        const res = await rpc('edrv.resolveRef', body)
+        if (disposed) return { ok: false }
+        return res && typeof res === 'object' ? res : { ok: false }
+      } catch (error) {
+        return { ok: false, error: String(error) }
+      }
+    }
+    const detach = attachRefIntake({
+      sessionId: () => sessionId,
+      activePath: () => activeRef.current ?? null,
+      appendReference: (targetSession, path, range) => addToConversation.appendReference(targetSession, path, range),
+      appendText: (targetSession, text) => addToConversation.appendText(targetSession, text),
+      resolve: resolveRef,
+      notify: (text) => setStatus(text),
+    })
+    return () => { disposed = true; detach() }
+    // 依赖 sessionId：换会话要重新绑定到新会话的输入框
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId])
+
+  // 复制选区 → 会话引用文本：只在编辑器根节点内拦截（终端/输入框/其他插件不受影响）。
+  React.useEffect(() => {
+    const host = viewRootRef.current ?? document
+    /** @private @author ddj 2026年11月15号 @description 跨行或整行单行选区复制为 @路径 Lx-Ly */
+    const onCopy = (event) => {
+      if (!featurePrefs().refIntake) return
+      handleCopyAsRef(event, editorRef.current, activeRef.current)
+    }
+    host.addEventListener('copy', onCopy, true)
+    return () => host.removeEventListener('copy', onCopy, true)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
 
   /**
    * Apply a save completion only to the unchanged model that supplied its text.
@@ -2464,6 +2568,7 @@ export function EditorView(props) {
   /** @private @author ddj 2026年10月14号 @param path Canonical path. @param manual Explicit save. @returns Guarded save, never another pane's content. */
   function saveDocument(path, manual) {
     if (isExcelPath(path)) return Promise.resolve({ ok: false })
+    if (useOffice(path)) return Promise.resolve({ ok: false })
     if (missingRef.current.has(path)) { setStatus('删除预览只读；请使用 Keep / Undo'); return Promise.resolve({ ok: false }) }
     const model = modelsRef.current.get(path)
     if (!model) return Promise.resolve({ ok: false })
@@ -2476,6 +2581,7 @@ export function EditorView(props) {
 
   const doSave = (silent) => {
     if (!active) return
+    if (useOffice(active)) { if (!silent) setStatus('Univer 文档请在文档内编辑与审阅；不会作为文本保存'); return }
     if (isExcelPath(active)) { if (!silent) setStatus('Excel 不写原件；请使用「基础 · 导出副本」'); return }
     // 外部改动待处理：自动保存（silent）直接放弃，避免陈旧缓冲覆盖磁盘；
     // 手工保存（Ctrl+S / 命令栏）继续走版本守卫，由 host 判定并给冲突提示。
@@ -2508,6 +2614,7 @@ export function EditorView(props) {
   const persistDirty = (paths) => {
     for (const path of paths) {
       if (isExcelPath(path)) continue
+      if (useOffice(path)) continue
       if (!dirtyRef.current[path]) continue
       // 外部改动未处理：不落盘（避免覆盖），脏内容仍保留在 model 中
       if (readSync(scope, path)) { setStatus('未落盘（外部已修改）：' + baseNameOf(path)); continue }
@@ -2547,7 +2654,7 @@ export function EditorView(props) {
   // 切回源码时 ensureEditor 会**新建**编辑器实例，而 active/content 都没变；缺此依赖则本 effect
   // 不重跑 → 空 model、行内差异标记消失。同款原因见下方差异自绘 effect。
   React.useEffect(() => {
-    if (!monaco || !editorRef.current || !active || !contentReady) return
+    if (!monaco || !editorRef.current || !active || !contentReady || useOffice(active)) return
     const ed = editorRef.current
     const model = getModel(active, content)
     viewKeeperRef.current?.bind(String(scope), active, model, findKeyOf(scope, focusedGroupOf(active)))
@@ -4184,7 +4291,7 @@ export function EditorView(props) {
     // 原生打开范围（nativeOpenExts 设置）：命中且非差异跳转 → 走官方渲染器
     //（focusDiff=true 跳过：差异审查对象必为本插件编辑的文本文件，审查优先）；
     // handler 缺失/失败（旧版无 openResource / seat 未挂）→ 回退现状页签打开，不阻断
-    if (!focusDiff && !isExcelPath(path) && inNativePath(path) && tryNativeOpen(path)) return
+    if (!useOffice(path) && !focusDiff && !isExcelPath(path) && inNativePath(path) && tryNativeOpen(path)) return
     // 对比浮窗独立保留，允许同时打开并编辑其他文件。
     recordNav()
     // G9：统一归一为页签规范形态（差异栏/启动器/树/命令栏等入口一致）
@@ -4303,6 +4410,10 @@ export function EditorView(props) {
 
   /** @private @author ddj 2026年09月28号 @param request Claimed target. @returns Correlated actual readiness. */
   function receiptReady(request) {
+    if (request.path && useOffice(request.path)) {
+      const host = viewRootRef.current?.querySelector('.edrv-uv-host')
+      return request.sessionId === sessionId && sameFile(active, request.path) && host?.getAttribute('data-univer-path') === active
+    }
     if (request.plan) return request.sessionId === sessionId && planActive === request.plan.address
       && planTabs.some((item) => item.address === request.plan.address && item.markdown === request.plan.markdown)
       && planHostRef.current?.getAttribute('data-plan-address') === request.plan.address
@@ -4530,6 +4641,7 @@ export function EditorView(props) {
   function openTextPages() {
     if (largeCandidate !== pageIdentity || dirtyRef.current[active] || savingRef.current.has(active)) return
     flushSave()
+    if (useOffice(active)) return
     if (dirtyRef.current[active] || savingRef.current.has(active)) return
     setPageChanged(null)
     setPagedFile(pageIdentity)
@@ -4539,6 +4651,10 @@ export function EditorView(props) {
     let disposed = false, keeper = null, subscription = null, observer = null, unbindGutter = null, pageRoot = null
     const focus = () => { const owner = ownerOf(benchRef.current, path); if (owner) selectGroup(owner.id, path) }
     host.addEventListener('pointerdown', focus)
+    if (useOffice(path)) {
+      host.textContent = 'Univer · 点击此编辑组继续查看与审阅'
+      return () => host.removeEventListener('pointerdown', focus)
+    }
     if (isExcelPath(path)) {
       host.textContent = 'Excel · 点击此编辑组继续查看和编辑（同一文件共享编辑状态）'
       return () => host.removeEventListener('pointerdown', focus)
@@ -4889,6 +5005,19 @@ export function EditorView(props) {
       setLoadStage({ progress: 10, message: '重新读取文件…' })
       loadContent(active, sessionId)
     }), largeCandidate === pageIdentity && React.createElement('button', { className: 'edrv-pill edrv-pill-ghost', onClick: openTextPages }, '只读分段查看'))
+  } else if (isUniverActive) {
+    const cachedDocument = [...univer.documents.values()].find((document) => sameFile(document.file, active))
+    body = React.createElement(UniverHost, { key: sessionId + active, path: active, sessionId,
+      source: cachedDocument?.source,
+      sourceChanged: cachedDocument?.sourceChanged,
+      onOpen: (path) => openFile(path, false),
+      onFallback: () => {
+        if (isUniverPath(active)) { setStatus('Univer 容器不能作为文本打开'); return }
+        flushSave()
+        if (isExcelPath(active)) { setOfficeFallback((previous) => new Set([...previous, active])); return }
+        if (props.fileOpeners) openWithDialog(props.fileOpeners, { sessionId, cwd: cwd ?? undefined }, active)
+        else setStatus('没有可用的其他打开方式')
+      } })
   } else if (isExcelActive && contentPath === active && excelState(excelScope, active).document) {
     body = React.createElement(ExcelHost, { key: excelScope + active, state: excelState(excelScope, active), path: active, cwd })
   } else if (isExcelActive) {
@@ -5209,7 +5338,7 @@ export function EditorView(props) {
     : null
 
   // 侧栏差异栏悬浮在编辑区底部；中央页签仍使用对话 dock。
-  const sideDock = dockInLayout(dockSnapshot, 'side')
+  const sideDock = !isUniverActive && dockInLayout(dockSnapshot, 'side')
     ? React.createElement('div', {
         className: 'edrv-side-diff-dock edrv-diff-dock-shell',
         'data-edrv-diff-dock-shell': '1',
