@@ -5,7 +5,7 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
 
 # dsh-vscode-mode 开发/发布经验集（自我更新型技能）
 
-> updated: 2026-11-11 · 维护者：ddj（AI 会话按文末协议更新，保持精炼、去重）
+> updated: 2026-11-15 · 维护者：ddj（AI 会话按文末协议更新，保持精炼、去重）
 > **发布时先读「发布流程」与「失败恢复」**；下方实录是历史证据，不授权当前重跑发布、改 tag 或部署。冲突旧口径以更新后的规则为准。
 - 2026-10-19 实录（v0.17.0 发布：DSH 0.2.1 吸收——locale 元数据 meta 化、engines.dsh、workingDirectory 投影跟随 cd、
   会话级 recordsFeed 轮询收敛、ctx.locale 接入、plugins.detail.section；基线 v0.16.0 @ `8b79f8f`）：
@@ -412,6 +412,15 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
 - **重打tag不是默认恢复动作**：只有明确证明publish从未尝试、版本未被占用/暂存且无Release资产，并取得用户对删tag/重打的单独批准后才考虑。已公开/已接受/未知的版本保持不可变；需要修复时另批新版本，不覆盖发布历史。
 - 日志优先 `gh run view <id> --log-failed` 或定向读取publish/verify步骤；再按实际权限回落check-runs/annotations。不能把旧“日志API需admin”当现行事实；504等临时故障有限重试，拿不到就明说，不猜失败原因，不输出token/env配置。
 
+- 2026-11-15 事实（tag 已推但 CI 在 Test 步骤红）：`release.yml` 的 Test 早于 Publish，失败时
+  npm 未上传、GitHub Release 未创建 → 修好后**删远端 tag 并重打到修复提交**可完成同版本发布
+  （实测 0.30.0：首 tag `b3e7873` 红 → 修复提交 `c2e13a8`，删 tag 重打后 Release 12m43s 全绿，
+  registry `gitHead=c2e13a8`、latest=0.30.0、npm 实包与 Release asset SHA256 同为 `e0ec1596…`）。
+  但仍属「重打 tag」动作，按上方规矩应**单独取得用户批准**再执行；版本已公开/已接受时一律另发新版本。
+- 2026-11-15 坑：`git add -- tests` 会把用例残留目录（`tests/.edrv-openbridge-*`、`tests/.edrv-unity-*`、
+  `tests/.open-inbox-*`，随机后缀）一并暂存 → 已在 `.gitignore` 加 `tests/.edrv-*/`、`tests/.open-inbox-*/`；
+  发布前核对 `git diff --cached --name-only` 时要看**完整路径**，不能只数条目数或按目录名信任。
+
 ### 历史教训（已纠偏）
 
 - v0.4.2出现 `409 Conflict - Cannot publish over previously staged version "X"` 是明确stage证据；不能复刻“再publish看409”的危险诊断。v0.4.3/v0.4.4/v0.14.5证明相似404/Verify超时也会自行公开，不能单凭时间窗口归因。
@@ -579,6 +588,16 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
   两平台同时成立且更贴近真实调用。
 - `pathToFileURL('C:\\x\\y')` 在 Linux 被当作**相对路径**按 cwd 解析（盘符不会成为路径段）；
   需要 file URL 的测试按 `process.platform` 分支构造合法 URL 并分别断言。
+- 2026-11-15 坑（**同一条规矩第三次踩**）：给 `relativeCandidate` 写跨平台断言时把
+  `relative('C:\\root','C:\\root\\src\\a.ts')` 写死 → ubuntu 上 `node:path.relative` 把盘符当普通段，
+  返回 `''`，CI 在 Test 步骤红。规矩：**路径语义断言按 `process.platform` 分支取样本**，
+  或只断言「同平台输入」的归一/越界行为；真实 rg 输出与运行平台一致，无需跨平台字面量。
+- 2026-11-15 事实（extraction 型测试对新闭包依赖敏感）：`tests/{textPager,editorPane,receiptState}.test.ts`
+  用 `new Function(...Object.keys(scope))` 跑从 `EditorView.ts` 抽出的真实函数。EditorView 新增局部依赖
+  （v0.30.0 的 `useOffice`）后，这些用例抛 `ReferenceError: useOffice is not defined` →
+  新闭包依赖必须同步注入 extraction scope（不涉及 Office 时注入 `() => false` 常量桩）。
+  同类：给菜单加内置项要同步 `tests/menuItems.test.ts` 的期望 id 顺序；新增设置字段要同步
+  `tests/{compat,settingsAdaptive}.test.ts` 的字段总数（15 → 17）与 `SNIPPET_LANGUAGES`（snippetLanguage 用例）。
 - .NET Framework 的 csc 是 **C# 5 方言**：无局部函数、无字符串插值、无 is-pattern；
   给 launcher 写编译探针时用传统语法。
 - 本地 Windows 全绿不代表 CI 绿——发布前自问：新断言在 Linux 上成立吗？
