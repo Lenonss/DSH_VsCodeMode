@@ -409,7 +409,7 @@ export function createLspRpc(deps: LspRpcDeps): { handlers: Partial<RpcHandlerMa
       const sc = await rootOf(args.sessionId)
       if ('err' in sc) return { ok: false, error: sc.err }
       const out: { symbols: never[]; truncated?: boolean } = { symbols: [] }
-      for (const lang of ['lua', 'csharp']) {
+      for (const lang of LSP_LANGUAGES) {
         const existing = serverOf(sc.root, lang)
         if (!existing) continue
         try {
