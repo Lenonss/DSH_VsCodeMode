@@ -115,10 +115,14 @@ describe('候选与失败原因', () => {
   })
 
   it('relativeCandidate 归一分隔符并拒绝越界路径', () => {
-    expect(relativeCandidate('/root', '/root/src/a.ts')).toBe('src/a.ts')
-    expect(relativeCandidate('C:\\root', 'C:\\root\\src\\a.ts')).toBe('src/a.ts')
-    expect(relativeCandidate('/root', '/other/a.ts')).toBe('')
-    expect(relativeCandidate('/root', '')).toBe('')
+    // 路径语义按平台取：node:path.relative 在 POSIX 上不认识 Windows 盘符，
+    // 若把 Windows 字面量写死会在 ubuntu CI 上误报（真实 rg 输出与运行平台一致）。
+    const root = process.platform === 'win32' ? 'C:\\root' : '/root'
+    const inner = process.platform === 'win32' ? 'C:\\root\\src\\a.ts' : '/root/src/a.ts'
+    const outside = process.platform === 'win32' ? 'C:\\other\\a.ts' : '/other/a.ts'
+    expect(relativeCandidate(root, inner)).toBe('src/a.ts')
+    expect(relativeCandidate(root, outside)).toBe('')
+    expect(relativeCandidate(root, '')).toBe('')
   })
 
   it('版本冲突给出可读原因，长消息截断', () => {
