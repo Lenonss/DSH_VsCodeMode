@@ -172,6 +172,12 @@
   多签名可切换。
 - 定义查找带降级链（definition → declaration → 引用推导）；参数 / 局部变量
   （`this`、`pTarget` 这类）同样能跳到声明。
+- **C/C++（clangd）**（本版新增）：自动发现 PATH、Homebrew（`brew install llvm`）与
+  Xcode / CommandLineTools 里的 clangd，定义、声明、引用跳转与 hover 都走它；状态栏语言段
+  显示 `LSP cpp`。**精准跳转依赖编译数据库**：clangd 会从文件所在目录逐级向上找
+  `compile_commands.json` / `compile_flags.txt`，都没有时可在工程或工作区根放一份
+  `.clangd`，用 `CompileFlags.Add` 补上 `-I` 与 `-std`——否则头文件解析失败，跨文件跳转会退化
+  （实测会跳到同文件里的无关行）。
 - 相关踩坑与修复见 [常见问题](#常见问题) 第 1–4 条。
 
 ### 6. 差异审查（核心能力）

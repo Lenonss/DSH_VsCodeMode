@@ -20,10 +20,11 @@ export interface LspLangConfig {
 export interface LspConfig {
   lua?: LspLangConfig
   csharp?: LspLangConfig
+  cpp?: LspLangConfig
   [languageId: string]: LspLangConfig | undefined
 }
 
-export const LSP_LANGUAGES = ['lua', 'csharp'] as const
+export const LSP_LANGUAGES = ['lua', 'csharp', 'cpp'] as const
 
 /** 清洗单语言配置：仅保留合法字段并剥离 undefined（稀疏覆盖语义，清空字段即回落组合配置）。 */
 export function sanitizeLang(raw: unknown): LspLangConfig | undefined {
@@ -88,7 +89,11 @@ export function langOfPath(path: string): string | null {
   const dot = base.lastIndexOf('.')
   if (dot <= 0) return null
   const ext = base.slice(dot + 1).toLowerCase()
-  for (const [lang, exts] of Object.entries({ lua: ['lua'], csharp: ['cs', 'csx'] })) {
+  for (const [lang, exts] of Object.entries({
+    lua: ['lua'],
+    csharp: ['cs', 'csx'],
+    cpp: ['c', 'cc', 'cpp', 'cxx', 'c++', 'h', 'hh', 'hpp', 'hxx', 'h++', 'inl', 'ipp', 'tpp', 'tcc'],
+  })) {
     if (exts.includes(ext)) return lang
   }
   return null

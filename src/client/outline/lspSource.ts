@@ -14,7 +14,7 @@ export function createLspOutlineSource(): OutlineSource {
   return {
     id: 'lsp',
     priority: LSP_OUTLINE_PRIORITY,
-    provides: (languageId: string) => languageId === 'lua' || languageId === 'csharp',
+    provides: (languageId: string) => languageId === 'lua' || languageId === 'csharp' || languageId === 'cpp' || languageId === 'c',
     async get(input: OutlineSourceInput): Promise<OutlineSymbol[]> {
       const model = input.model
       if (!model || typeof model.getValue !== 'function') return []
