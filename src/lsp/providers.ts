@@ -35,6 +35,8 @@ export interface LspProviderSpec {
 export const LSP_LANG_EXT: Record<string, string[]> = {
   lua: ['lua'],
   csharp: ['cs', 'csx'],
+  // C/C++ 共用同一个 clangd：头文件一律按 C++ 归口，具体按 C 还是 C++ 解析由 clangd 依据文件扩展名决定
+  cpp: ['c', 'cc', 'cpp', 'cxx', 'c++', 'h', 'hh', 'hpp', 'hxx', 'h++', 'inl', 'ipp', 'tpp', 'tcc'],
 }
 
 /** 平台目录名（LuaLS/OmniSharp 的 server/bin/<平台>）。 */
@@ -262,6 +264,46 @@ export function candidateLuaServers(home = dshHome()): { path: string; version?:
   return out.sort((a, b) => (b.version ?? '').localeCompare(a.version ?? '', undefined, { numeric: true }) || a.path.localeCompare(b.path))
 }
 
+/**
+ * clangd 自动发现候选（PATH + Homebrew/系统/Xcode 工具链；首个为建议选用者）。
+ * @author ddj 2026年11月17号
+ * @returns 候选列表（去重、仅含存在的文件）
+ */
+export function candidateClangdServers(): { path: string; version?: string }[] {
+  const suffix = exeSuffix()
+  const out: string[] = []
+  const push = (p: string | null | undefined) => {
+    if (p && existsSync(p) && !out.includes(p)) out.push(p)
+  }
+  push(findInPath('clangd' + suffix))
+  push('/opt/homebrew/opt/llvm/bin/clangd' + suffix)
+  push('/opt/homebrew/bin/clangd' + suffix)
+  push('/usr/local/opt/llvm/bin/clangd' + suffix)
+  push('/usr/local/bin/clangd' + suffix)
+  push('/usr/bin/clangd' + suffix)
+  // Xcode / CommandLineTools 自带 Apple clangd，无需额外安装
+  push('/Library/Developer/CommandLineTools/usr/bin/clangd' + suffix)
+  for (const xcode of ['/Applications/Xcode.app', '/Applications/Xcode-beta.app']) {
+    push(xcode + '/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clangd' + suffix)
+  }
+  return out.map((path) => ({ path }))
+}
+
+/**
+ * clangd 启动环境：GUI 启动的 DSH 进程 PATH 往往不含 Homebrew / Xcode 工具链目录，
+ * 而 clangd 需要调用系统 ld、clang 驱动与 xcrun，补上常见目录避免找不到。
+ * @author ddj 2026年11月17号
+ * @param clangdPath clangd 可执行文件绝对路径
+ * @returns 需要覆盖的环境变量（无需补充时 undefined）
+ */
+function clangdLaunchEnv(clangdPath: string): Record<string, string> | undefined {
+  const sepChar = sep === '\\' ? ';' : ':'
+  const dirs = [dirname(clangdPath), '/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin', '/Library/Developer/CommandLineTools/usr/bin']
+  const current = process.env.PATH ?? ''
+  const merged = [...new Set([...dirs, ...current.split(sepChar)].filter(Boolean))].join(sepChar)
+  return merged === current ? undefined : { PATH: merged }
+}
+
 /** C# 服务器发现结果（ms-Roslyn / DotRush / OmniSharp + 系统 dotnet；各取清单版本最高者）。 */
 export interface CSharpCandidates {
   roslynDll?: string
@@ -448,12 +490,39 @@ export function resolveCSharpProvider(manual?: { command?: string; path?: string
   })
 }
 
+/**
+ * 解析 C/C++ provider（clangd）。
+ *
+ * 精准跳转依赖编译数据库：clangd 会从文件所在目录逐级向上找 compile_commands.json /
+ * compile_flags.txt / .clangd。三者都没有时默认编译命令缺 -I，头文件解析失败会让跳转
+ * 退化（实测 brpc 上会跳到无关行），因此建议在工程（或工作区）根放一份 .clangd 声明
+ * include 目录。
+ * @author ddj 2026年11月17号
+ * @param manual 手动配置
+ * @param home DSH home（缺省真实；测试可注入临时目录）
+ * @returns provider 规格
+ */
+export function resolveClangdProvider(manual?: { command?: string; path?: string }, home = dshHome()): LspProviderSpec {
+  const base = { languageId: 'cpp' }
+  const manualResolved = manualSpec(manual)
+  if (manualResolved.ready) {
+    const exe = manualResolved.argv[0] ?? ''
+    return { ...base, kind: 'manual', argv: manualResolved.argv, cwd: manualResolved.cwd, env: clangdLaunchEnv(exe), ready: true }
+  }
+  return resolveCached('cpp', manual, home, () => {
+    const best = candidateClangdServers()[0]
+    if (best) return { ...base, kind: 'discover', argv: [best.path, '--background-index'], env: clangdLaunchEnv(best.path), ready: true, providerName: 'clangd' }
+    return { ...base, kind: 'none', argv: [], ready: false, reason: manualResolved.reason ?? '未发现 clangd（macOS 可装：xcode-select --install 或 brew install llvm；也可手动指定路径）' }
+  })
+}
+
 /** 语言 → provider 解析器（可扩展；Phase 2 由 extmgr 注册扩展源 provider）。 */
 export type ProviderResolver = (manual?: { command?: string; path?: string }) => LspProviderSpec
 
 export const PROVIDER_RESOLVERS: Record<string, ProviderResolver> = {
   lua: resolveLuaProvider,
   csharp: resolveCSharpProvider,
+  cpp: resolveClangdProvider,
 }
 
 /**
@@ -479,6 +548,9 @@ export function candidatesFor(languageId: string, spec: LspProviderSpec, home = 
       const inPath = findInPath('lua-language-server' + exeSuffix())
       if (inPath) out.push(markChosen({ name: 'lua-language-server（PATH）', path: inPath }))
       return out
+    }
+    if (languageId === 'cpp') {
+      return candidateClangdServers().slice(0, 3).map((c) => markChosen({ name: 'clangd', path: c.path }))
     }
     if (languageId === 'csharp') {
       const out: LspCandidate[] = []
