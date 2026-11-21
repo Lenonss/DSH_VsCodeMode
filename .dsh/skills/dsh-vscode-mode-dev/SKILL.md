@@ -433,6 +433,14 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
 - 2026-11-11 本机坑：MSYS `tar -tzf` 列表带 CRLF，`grep -qx 'package/lib/index.js'` 会假报入口缺失 → 用 `grep -cxF` 或先 `tr -d '\r'`；CI 在 ubuntu 不受影响，别据此判包坏了。
 
 
+
+- 2026-11-21 v0.31.0（提交 `2ef6f44`、tag `v0.31.0`）：本地三门 typecheck 0 / vitest 327 文件通过+2 跳过、
+  4086 通过 / 22 跳过 / 36.07s、`node --test` 9/9、build `index.js` 1,215,428 B + `client.js` 1,024,039 B；
+  Release run `44857099181` 全绿（推 tag 前先修 4 处陈旧断言：`settingsAdaptive`/`compat` 17→22 字段、
+  `svn` 原生提交动作 id/顺序、`llmTask` 统一错误文案）。registry `gitHead=2ef6f44`、latest=0.31.0、
+  npm 实包与 Release asset SHA256 同为 `0946d6ec…`，`lib/index.js`+`lib/client.js` 入口齐全。
+  未实机复验：HTML 预览/计划页/答复「回复并执行」、SVN 提交对话框；按用户要求记录缺口后发布。
+
 ## 差异审查（DiffBox / 旁车）设计口径
 
 - 2026-10-28 坑（**两套差异栏互相冒充，v0.20.4 修**）：插件并存官方栏与侧车栏，`DiffBox.ts:69` `if (props.official) return OfficialDiffBar`，
