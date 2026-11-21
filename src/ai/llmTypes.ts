@@ -36,6 +36,12 @@ export interface GenerateOptions {
   maxTokens?: number
   stop?: string[]
   signal?: AbortSignal
+  /**
+   * 会话身份（provider 路由用）：pi-ai 会把它转交 provider，
+   * 例如 opencode-go 需要据它发出 `x-opencode-session` 头，否则返回 MissingSessionID。
+   * 一次性调用传当前会话 id 即可（缺省则不带）。
+   */
+  sessionId?: string
 }
 
 /** 流块：本插件消费 text-delta / finish（其余忽略）。 */

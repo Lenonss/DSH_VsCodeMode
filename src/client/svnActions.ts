@@ -35,6 +35,8 @@ export interface SvnActionRunCtx {
   openPatchDialog?: (payload: { path: string; text: string; truncated: boolean; binary: boolean }) => void
   /** 打开目录对比对话框（diff-summarize 动作；目标目录相对路径，'' = 工作副本根）。 */
   openSumDialog?: (path: string) => void
+  /** 打开原生提交对话框（commit 动作；seed = 预选路径/预填信息）。 */
+  openCommitDialog?: (seed?: { paths?: string[]; message?: string }) => void
   /** 重查变更清单（写操作后）。 */
   refreshChanges?: () => void
   /** 就地打开文件（日志面板点击变更文件）。 */
@@ -118,6 +120,11 @@ export const SVN_ACTION_RUNNERS: Record<string, SvnActionRunner> = {
       if (!ok) return
     }
     afterWrite(ctx, svnCleanup(ctx.sessionId, options))
+  },
+  // 原生提交：打出对话框，提交范围与信息由人确认（动作只负责打开，不直接提交）
+  commit: (ctx) => {
+    if (!ctx.openCommitDialog) { ctx.notify?.('提交对话框不可用（请刷新页面）'); return }
+    ctx.openCommitDialog(ctx.path ? { paths: [ctx.path] } : {})
   },
   // Tortoise 组：统一由 svnTortoise 发射（action 由 id 后缀解析）
   'tortoise-commit': (ctx) => runTortoiseAction(ctx, 'commit'),

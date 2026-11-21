@@ -90,7 +90,7 @@ function sectionHeadEl(title, note, allChecked, onToggleAll, countText) {
  * @param toggleOpen 组卡展开切换
  * @returns 预览主体元素
  */
-function previewBodyEl(sel, setSel, open, toggleOpen) {
+function previewBodyEl(sel, setSel, open, toggleOpen, commitGroups, onCommitGroup) {
   /** 通用段更新（reverts/ignores 共用）。 */
   const patchItems = (key, index, checked) => setSel((old) => ({
     ...old,
@@ -160,7 +160,27 @@ function previewBodyEl(sel, setSel, open, toggleOpen) {
     React.createElement('div', { className: 'edrv-svnplan-sec' },
       sectionHeadEl('建议忽略（svn:ignore）', '将写入 svn:ignore 属性，随提交进仓库，默认不勾', ignoresAll,
         () => toggleItemsAll('ignores', !ignoresAll), sel.ignores.length + ' 项'),
-      React.createElement('div', { className: 'edrv-svnplan-list' }, itemRowsOf('ignores'))))
+      React.createElement('div', { className: 'edrv-svnplan-list' }, itemRowsOf('ignores'))),
+    (Array.isArray(commitGroups) && commitGroups.length
+      ? React.createElement('div', { className: 'edrv-svnplan-sec' },
+          React.createElement('div', { className: 'edrv-svnplan-sechead' },
+            React.createElement('span', { className: 'edrv-svnplan-sectitle' }, '建议拆分提交（逐组预填提交框）'),
+            React.createElement('span', { className: 'edrv-svn-count' }, commitGroups.length + ' 组'),
+            React.createElement('span', { className: 'edrv-svnplan-note' }, '不自动提交：只预填，仍需在提交框确认')),
+          React.createElement('div', { className: 'edrv-svnplan-list' },
+            ...commitGroups.map((group) => React.createElement('div', { key: 'commit-' + group.name, className: 'edrv-svnplan-card' },
+              React.createElement('div', { className: 'edrv-svnplan-row' },
+                React.createElement('span', { className: 'edrv-svnplan-groupname' }, group.name),
+                React.createElement('span', { className: 'edrv-svn-count' }, group.paths.length + ' 项'),
+                React.createElement('span', { style: { flex: 1 } }),
+                React.createElement('button', {
+                  className: 'edrv-svn-act',
+                  title: '打开提交对话框并预填该组（不会自动提交）',
+                  onClick: () => onCommitGroup?.(group),
+                }, '逐组提交…')),
+              React.createElement('div', { className: 'edrv-svnplan-path', title: group.subject }, group.subject),
+              (group.body ? React.createElement('div', { className: 'edrv-svnplan-reason' }, group.body) : null)))))
+      : null))
 }
 
 /**
@@ -204,7 +224,7 @@ function progressBodyEl(run) {
  * @returns 弹窗元素
  */
 export function SvnAiPlanDialog(props) {
-  const { plan, meta, run, onExecute, onPause, onResume, onCancelRest, onClose } = props
+  const { plan, meta, run, onExecute, onPause, onResume, onCancelRest, onClose, onCommitGroup } = props
   const [sel, setSel] = React.useState(() => initPlanSel(plan))
   const [open, setOpen] = React.useState(() => new Set())
   const selected = selectedOf(sel)
@@ -244,7 +264,7 @@ export function SvnAiPlanDialog(props) {
   let body = null
   let footer = null
   if (run === null) {
-    body = previewBodyEl(sel, setSel, open, toggleOpen)
+    body = previewBodyEl(sel, setSel, open, toggleOpen, plan?.commitGroups, onCommitGroup)
     footer = React.createElement('div', { className: 'edrv-svnplan-foot' },
       React.createElement('span', { className: 'edrv-svn-count' }, '已选 ' + count + ' 项'),
       React.createElement('span', { style: { flex: 1 } }),

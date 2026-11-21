@@ -268,19 +268,21 @@ describe('buildAgentPrompt', () => {
     expect(prompt).toContain('sub agent')
   })
 
-  it('硬约束：禁写放行只读（写命令禁止清单 + 只读允许）/ 一路径一类 / 不虚构 / 组名英文', () => {
+  it('硬约束：禁写放行只读（写工具/写命令禁止 + 只读允许）/ 一路径一类 / 不虚构 / 组名英文', () => {
     expect(prompt).toContain('禁止任何**写**操作')
-    expect(prompt).toContain('只读命令（status/diff/log/cat/info）允许')
-    expect(prompt).toContain('revert/commit/changelist/propset/update/merge')
+    expect(prompt).toContain('svn_revert')
+    expect(prompt).toContain('svn_commit')
+    expect(prompt).toContain('只读（status/diff/log/cat/info/blame/propget/list）允许')
     expect(prompt).toContain('至多归一类')
     expect(prompt).toContain('绝不虚构')
     expect(prompt).toContain('简短英文')
   })
 
-  it('方案 JSON 形状提示含三段键名', () => {
+  it('方案 JSON 形状提示含四段键名（含拆分提交）', () => {
     expect(prompt).toContain('"groups"')
     expect(prompt).toContain('"reverts"')
     expect(prompt).toContain('"ignores"')
+    expect(prompt).toContain('"commitGroups"')
   })
 })
 

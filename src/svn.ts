@@ -13,9 +13,11 @@ import type { Ctx, Session } from './store.js'
 import { cwdOfSession, sessionOf } from './registry.js'
 import type { SvnAction, SvnAiPlan, SvnChangeEntry, SvnConflictArtifact, SvnFeature, SvnIgnoreItem, SvnItemStatus, SvnLogEntry, SvnRemoteOutdatedEntry, SvnStatusPayload, SvnSumEntry } from './shared/svn.js'
 import { SESSION_MISSING_ERROR, SESSION_NO_WORKSPACE_ERROR } from './shared/rpc.js'
-import { AI_PLAN_DIFF_CAP, AI_PLAN_PATHS_CAP, BATCH_PATHS_CAP, FILE_SIZES_CAP, SVN_CLI_DEFAULT, TORTOISE_EXE, contentGuardOf, normalizeAiPlan, svnChangelistNameErrorOf, tortoiseLaunchArgv } from './shared/svn.js'
+import { AI_PLAN_DIFF_CAP, AI_PLAN_PATHS_CAP, BATCH_PATHS_CAP, COMMIT_PATHS_CAP, FILE_SIZES_CAP, SVN_CLI_DEFAULT, TORTOISE_EXE, commitGroupsOf, contentGuardOf, normalizeAiPlan, svnChangelistNameErrorOf, tortoiseLaunchArgv } from './shared/svn.js'
 import type { AiConfigView } from './shared/ai.js'
 import { buildAiPrompt, svnAiPlanOf } from './ai/svnTriage.js'
+import { runJsonTask } from './ai/llmTask.js'
+import { AI_COMMIT_MAX_TOKENS, AI_COMMIT_TIMEOUT_MS, buildCommitPrompt, commitMsgText, commitSystemPrompt, normalizeCommitMsg } from './ai/svnCommitMsg.js'
 import { attrOf, numAttrOf, scanXmlTags, textOf, unescapeXml } from './svnXml.js'
 import { TEXT_OUTPUT_CAP, batchResultOf, tailOfText, updateResultOf } from './svnText.js'
 import { LOG_CAP, LOG_DEFAULT_LIMIT, SVN_LOG_SHOW_ALL_CAP, parseLogXml, parseSvnInfoRevision } from './svnLog.js'
@@ -28,6 +30,10 @@ import type { SvnViewRequest } from './shared/svnExplorer.js'
 import { readStatusPipe } from './svnStatusStream.js'
 import type { StatusPipe } from './svnStatusStream.js'
 import type { UpdateProcess } from './svnUpdateJob.js'
+import { createSvnRunner } from './svnCore.js'
+import type { SvnRunnerSettings } from './svnCore.js'
+import { createSvnCommit } from './svnCommit.js'
+import type { SvnToolApi } from './svnTools.js'
 export { batchResultOf, commitResultOf, updateResultOf } from './svnText.js'
 export { mapRepoPath, parseLogXml } from './svnLog.js'
 
@@ -159,7 +165,11 @@ export async function findTortoiseProc(
 
 /** 设置里 SVN 路径的最小读取面（setupOpenSettings 提供）。 */
 export interface SvnSettingsLike {
-  svn: () => { svnPath: string; tortoisePath: string }
+  svn: () => { svnPath: string; tortoisePath: string; readOnly?: boolean; commandTimeoutScale?: number }
+  /** 提交前自动整理默认值（缺省按开启）。 */
+  svnCommitDefaults?: () => { autoAdd: boolean; autoDelete: boolean }
+  /** AI 界面设置（提交信息风格）。 */
+  aiUi?: () => { commitStyle: 'plain' | 'conventional' }
   /** AI 配置读取面（svn.aiPlan 模型路由；缺省自动选首个 provider/model）。 */
   ai?: () => AiConfigView
 }
@@ -189,7 +199,7 @@ export function ignoreNameErrorOf(name: unknown): string | null {
  * 当前：差异（P2「与基线比较」）、还原（P2 `revert -R`）、日志（P3 日志弹窗）。
  * 待补：提交（P4 完成后加入 'commit'）；追溯无自研计划（P5 另议），故不含 'blame'。
  */
-export const SVN_FEATURES: readonly SvnFeature[] = ['diff', 'revert', 'log']
+export const SVN_FEATURES: readonly SvnFeature[] = ['diff', 'revert', 'log', 'commit']
 
 // --region P2 工作副本状态解析
 
@@ -500,7 +510,7 @@ export function svnPathOf(cwd: string, wcRoot: string, rel: string): string | nu
  * @param deps ctx + 设置读取面 + 可注入时钟
  * @returns handlers（Partial<RpcHandlerMap> 形状）
  */
-export function createSvnRpc(deps: SvnRpcDeps): { handlers: Record<string, unknown>; dispose: () => void } {
+export function createSvnRpc(deps: SvnRpcDeps): { handlers: Record<string, unknown>; api: SvnToolApi; dispose: () => void } {
   const { ctx, settings } = deps
   const now = deps.now ?? (() => Date.now())
   const findRoot = deps.findRoot ?? ((cwd: string) => findSvnRoot(cwd))
@@ -537,6 +547,13 @@ export function createSvnRpc(deps: SvnRpcDeps): { handlers: Record<string, unkno
     if (!sub || typeof sub.spawn !== 'function') return null
     return (sub.spawn as SpawnFn).bind(sub)
   }
+
+  /** 统一执行器：只读门禁、超时倍数、操作数校验、错误分类都在 svnCore（单一执行路径）。 */
+  const runner = createSvnRunner({
+    ctx,
+    settings: settings as unknown as SvnRunnerSettings,
+    spawn: () => subprocess(),
+  })
 
   /** svn CLI 探测（inherit stdio 只取退出码；TTL 缓存按 exe 键）。 */
   const probeCli = async (exe: string): Promise<boolean> => {
@@ -624,43 +641,19 @@ export function createSvnRpc(deps: SvnRpcDeps): { handlers: Record<string, unkno
   }
 
   /**
-   * 运行 svn CLI（管道收集；spawn 级失败回退 inherit，输出降级为空）。
-   * @author ddj 2026年08月26号 / 2026年09月17号
+   * 运行 svn CLI（只读门禁 / 超时倍数 / 管道回退已收敛到 svnCore.createSvnRunner）。
+   * 保留原签名：调用点零改动，行为与既有 runSvn 等价（argv 不经 shell、自动 --non-interactive、
+   * stdin ignore、spawn 级失败回退 inherit）。
+   * @author ddj 2026年08月26号 / 2026年09月17号 / 2026年11月15号
    * @param cwd 运行目录
    * @param argv 参数（不含可执行文件名；自动加 --non-interactive）
-   * @param graceMs 进程宽限
+   * @param graceMs 进程宽限（会乘设置里的超时倍数）
    * @param stdoutCap stdout 收集上限（缺省 1MB；大载荷场景如日志拉取需显式放大）
+   * @param allowFallback 管道失败时是否回退 inherit
    * @returns 退出码与输出
    */
-  const runSvn = async (cwd: string, argv: string[], graceMs: number, stdoutCap: number = OUTPUT_CAP, allowFallback = true): Promise<SvnRunOutcome> => {
-    const spawn = subprocess()
-    if (!spawn) throw new Error('缺少 subprocess 服务')
-    const fs = ctx.get('fs') as { resolve?: (p: string, o: object) => Promise<unknown>; processPath?: (t: unknown) => string } | null | undefined
-    let realCwd = cwd
-    if (fs?.resolve && fs?.processPath) realCwd = fs.processPath(await fs.resolve(cwd, {}))
-    const exe = settings.svn().svnPath.trim() || SVN_CLI_DEFAULT
-    const attempt = (mode: 'pipe' | 'inherit') => spawn({
-      argv: [exe, '--non-interactive', ...argv],
-      cwd: realCwd,
-      stdio: mode === 'pipe'
-        ? { stdout: { maxBytes: stdoutCap }, stderr: { maxBytes: OUTPUT_CAP }, stdin: 'ignore' }
-        : { stdout: 'inherit', stderr: 'inherit', stdin: 'ignore' },
-      graceMs,
-    })
-    try {
-      const handle = attempt('pipe')
-      const outcome = await handle.done
-      const stdout = handle.collected?.stdout?.readFrom(0).text ?? ''
-      const stderr = handle.collected?.stderr?.readFrom(0).text ?? ''
-      return { code: outcome?.exitCode ?? outcome?.code ?? null, stdout, stderr }
-    } catch (error) {
-      if (!allowFallback) throw error
-      // 受管环境管道 EPERM：回退 inherit（只拿退出码，输出为空）
-      const handle = attempt('inherit')
-      const outcome = await handle.done
-      return { code: outcome?.exitCode ?? outcome?.code ?? null, stdout: '', stderr: '' }
-    }
-  }
+  const runSvn = (cwd: string, argv: string[], graceMs: number, stdoutCap: number = OUTPUT_CAP, allowFallback = true): Promise<SvnRunOutcome> =>
+    runner.run(cwd, argv, graceMs, stdoutCap, allowFallback)
 
   /** @private @author ddj 2026年10月14号 @param cwd Session workspace. @param root WC root. @param path Validated target. @returns Exact conflict evidence without recursive scanning. */
   const readConflict = async (cwd: string, root: string, path: string) => {
@@ -722,6 +715,35 @@ export function createSvnRpc(deps: SvnRpcDeps): { handlers: Record<string, unkno
     changesCache.set(wcRoot, { at, value })
     return value
   }
+
+  /**
+   * 会话 → 提交/工具作用域（含受管理与 CLI 校验）；提交与 agent 工具共用同一份判定。
+   * @author ddj 2026年11月15号
+   * @param sessionId 会话 id
+   * @returns 作用域或错误文案
+   */
+  const toolScopeOf = async (sessionId?: string): Promise<{ cwd: string; root: string } | { err: string }> => {
+    const sc = await requireSvnSession(ctx, sessionId)
+    if ('err' in sc) return { err: sc.err }
+    const status = await statusOf(sc.cwd)
+    if (!status.managed || !status.wcRoot) return { err: '当前工作区不受 SVN 管理' }
+    if (!status.svnCli) return { err: 'svn 命令不可用（可在设置页配置 svn 路径）' }
+    return { cwd: sc.cwd, root: status.wcRoot }
+  }
+
+  /** 原生提交能力（计划/执行/最近信息；依赖全部来自本作用域，避免模块环）。 */
+  const commit = createSvnCommit({
+    run: runSvn,
+    scopeOf: toolScopeOf,
+    changesOf: (root: string, force?: boolean) => changesOf(root, force === true),
+    invalidate: (root: string) => {
+      changesCache.delete(root)
+      statusCache.clear()
+    },
+    targetOf: (cwd: string, root: string, rel: string) => svnPathOf(cwd, root, rel),
+    readOnly: () => runner.readOnly(),
+    defaults: () => settings.svnCommitDefaults?.() ?? { autoAdd: true, autoDelete: true },
+  })
 
   /**
    * 批量路径动作公共流程（revert/add 共用）：会话 → 路径白名单与上限 → 受管理校验 → 执行。
@@ -1442,31 +1464,153 @@ export function createSvnRpc(deps: SvnRpcDeps): { handlers: Record<string, unkno
      * @param args.sessionId 会话 id
      * @returns 三段方案 + 分析元信息（条目数/是否含 diff/丢弃数/模型）
      */
-    'svn.aiPlan': async (args: { sessionId?: string }) => {
+    /**
+     * 提交计划：变更清单 + 既有 changelist + 最近提交信息（只读，不碰仓库）。
+     * @author ddj 2026年11月15号
+     * @param args.sessionId 会话 id
+     * @returns 提交对话框首屏载荷
+     */
+    'svn.commitPlan': async (args: { sessionId?: string }) => {
+      const outcome = await commit.planOf(args.sessionId)
+      if (!outcome.ok) return { ok: false as const, error: outcome.error }
+      return { ok: true as const, ...outcome.plan }
+    },
+    /**
+     * 原生提交：只提交给定路径（host 先 status 重查，再按开关自动 add/delete）。
+     * @author ddj 2026年11月15号
+     * @param args.paths 勾选路径 @param args.message 提交信息 @param args.changelist 限定分组
+     * @param args.keepLocks 保持锁定（映射 --no-unlock 的反面） @param args.autoAdd 自动 add
+     * @param args.autoDelete 自动 delete
+     * @returns 新修订号 / 逐文件动作 / 冲突 / 跳过项
+     */
+    'svn.commit': async (args: { sessionId?: string; paths?: string[]; message?: string; changelist?: string; keepLocks?: boolean; autoAdd?: boolean; autoDelete?: boolean }) => {
+      const outcome = await commit.commitOf({
+        sessionId: args.sessionId,
+        paths: Array.isArray(args.paths) ? args.paths : [],
+        message: typeof args.message === 'string' ? args.message : '',
+        changelist: args.changelist,
+        keepLocks: args.keepLocks === true,
+        autoAdd: args.autoAdd,
+        autoDelete: args.autoDelete,
+      })
+      if (!outcome.ok) return { ok: false as const, error: outcome.error }
+      return { ...outcome, ok: true as const }
+    },
+    'svn.aiPlan': async (args: { sessionId?: string; paths?: string[] }) => {
       const sc = await requireSvnSession(ctx, args.sessionId)
       if ('err' in sc) return { ok: false as const, error: sc.err }
       const status = await statusOf(sc.cwd)
       if (!status.managed || !status.wcRoot) return { ok: false as const, error: '当前工作区不受 SVN 管理' }
       if (!status.svnCli) return { ok: false as const, error: 'svn 命令不可用（可在设置页配置 svn 路径）' }
+      const root = status.wcRoot
+      const cwd = sc.cwd
       try {
         // 方案必须基于最新清单：强制重查，不吃 TTL 缓存
-        const { entries } = await changesOf(status.wcRoot, true)
-        // diff 上下文：单次 spawn（-x -U0 零上下文行压缩载荷）；失败/近上限（收集器超限留尾，
-        // 按长度近似判超限）降级 paths-only，不阻塞分析
+        const { entries } = await changesOf(root, true)
+        // 范围：paths 缺省 = 全部变更；给出时只分析这些文件（对齐「AI 只分析提交范围」）
+        const wanted = Array.isArray(args.paths) && args.paths.length
+          ? new Set(args.paths.map((item) => String(item ?? '').trim()).filter(Boolean))
+          : null
+        const scoped = wanted ? entries.filter((entry) => wanted.has(entry.path)) : entries
+        if (!scoped.length) return { ok: false as const, error: wanted ? '所选范围内没有变更可分析' : '当前没有变更可分析' }
+        // diff 上下文：单次 spawn（-x -U0 零上下文行压缩载荷）；失败/近上限降级 paths-only
         let diffText: string | null = null
         try {
-          const outcome = await runSvn(status.wcRoot, ['diff', '-x', '-U0'], READ_GRACE_MS, AI_PLAN_DIFF_CAP)
+          const targets = scoped
+            .map((entry) => svnPathOf(cwd, root, entry.path))
+            .filter((item): item is string => Boolean(item))
+          const argv = wanted ? ['diff', '-x', '-U0', '--', ...targets] : ['diff', '-x', '-U0']
+          const outcome = await runSvn(root, argv, READ_GRACE_MS, AI_PLAN_DIFF_CAP)
           if (outcome.code === 0 && outcome.stdout.trim() && outcome.stdout.length < AI_PLAN_DIFF_CAP) diffText = outcome.stdout
         } catch { /* 降级 paths-only */ }
         // 条目上限：超 AI_PLAN_PATHS_CAP 只喂前缀并标记截断，diff 不再附带
-        const capped = entries.length > AI_PLAN_PATHS_CAP
-        const used = capped ? entries.slice(0, AI_PLAN_PATHS_CAP) : entries
+        const capped = scoped.length > AI_PLAN_PATHS_CAP
+        const used = capped ? scoped.slice(0, AI_PLAN_PATHS_CAP) : scoped
         const diffIncluded = diffText !== null && !capped
         const prompt = buildAiPrompt(used, diffIncluded ? diffText : null, capped)
         const cfg = settings.ai ? settings.ai() : { enabled: true, provider: '', model: '', effort: '' }
-        const result = await svnAiPlanOf(ctx, cfg, prompt)
-        const { plan, dropped } = normalizeAiPlan(result.raw, entries)
-        return { ok: true as const, plan, entriesCount: entries.length, diffIncluded, dropped, model: result.model }
+        // 会话身份：部分 provider（opencode-go 等）据此生成路由头，缺省会 400 MissingSessionID
+        const result = await svnAiPlanOf(ctx, cfg, prompt, sessionOf(ctx, args.sessionId)?.id)
+        const { plan, dropped } = normalizeAiPlan(result.raw, scoped)
+        const claimed = [...plan.reverts.map((item) => item.path), ...plan.ignores.map((item) => item.path)]
+        const commitGroups = commitGroupsOf(result.raw, scoped, claimed)
+        plan.commitGroups = commitGroups.groups
+        return {
+          ok: true as const,
+          plan,
+          entriesCount: entries.length,
+          analyzedCount: scoped.length,
+          diffIncluded,
+          dropped: dropped + commitGroups.dropped,
+          model: result.model,
+        }
+      } catch (error) {
+        return { ok: false as const, error: String(error instanceof Error ? error.message : error) }
+      }
+    },
+    /**
+     * AI 生成提交信息：**只分析给定路径**（提交范围），产出 subject/body 草稿。
+     * 绝不提交——结果只回填提交框，由人确认后再走 svn.commit。
+     * @author ddj 2026年11月15号
+     * @param args.paths 提交范围（必须非空，未勾选文件不进 prompt）
+     * @param args.style 覆盖设置里的提交信息风格
+     * @returns 首行/正文/完整信息/模型/统计
+     */
+    'svn.aiCommitMsg': async (args: { sessionId?: string; paths?: string[]; style?: 'plain' | 'conventional' }) => {
+      const sc = await requireSvnSession(ctx, args.sessionId)
+      if ('err' in sc) return { ok: false as const, error: sc.err }
+      const status = await statusOf(sc.cwd)
+      if (!status.managed || !status.wcRoot) return { ok: false as const, error: '当前工作区不受 SVN 管理' }
+      if (!status.svnCli) return { ok: false as const, error: 'svn 命令不可用（可在设置页配置 svn 路径）' }
+      const root = status.wcRoot
+      const cwd = sc.cwd
+      const paths = Array.isArray(args.paths)
+        ? [...new Set(args.paths.map((item) => String(item ?? '').trim()).filter(Boolean))]
+        : []
+      if (!paths.length) return { ok: false as const, error: '未选择任何文件（AI 只分析提交范围）' }
+      if (paths.length > COMMIT_PATHS_CAP) return { ok: false as const, error: '一次最多分析 ' + COMMIT_PATHS_CAP + ' 个路径' }
+      try {
+        const { entries } = await changesOf(root, true)
+        const byPath = new Map(entries.map((entry) => [entry.path, entry]))
+        const scoped = paths
+          .map((path) => byPath.get(path))
+          .filter((entry): entry is SvnChangeEntry => Boolean(entry))
+        if (!scoped.length) return { ok: false as const, error: '所选文件没有待提交变更（AI 只分析提交范围）' }
+        let diffText: string | null = null
+        let diffBytes = 0
+        try {
+          const targets = scoped
+            .map((entry) => svnPathOf(cwd, root, entry.path))
+            .filter((item): item is string => Boolean(item))
+          const outcome = await runSvn(root, ['diff', '-x', '-U0', '--', ...targets], READ_GRACE_MS, AI_PLAN_DIFF_CAP)
+          if (outcome.code === 0 && outcome.stdout.trim() && outcome.stdout.length < AI_PLAN_DIFF_CAP) {
+            diffText = outcome.stdout
+            diffBytes = outcome.stdout.length
+          }
+        } catch { /* 降级 paths-only */ }
+        const style = args.style === 'conventional' || args.style === 'plain'
+          ? args.style
+          : (settings.aiUi?.().commitStyle ?? 'plain')
+        const cfg = settings.ai ? settings.ai() : { enabled: true, provider: '', model: '', effort: '' }
+        const outcome = await runJsonTask(ctx, cfg, {
+          system: commitSystemPrompt(style),
+          prompt: buildCommitPrompt(scoped, diffText, false),
+          timeoutMs: AI_COMMIT_TIMEOUT_MS,
+          maxTokens: AI_COMMIT_MAX_TOKENS,
+          temperature: 0.2,
+          ...(sessionOf(ctx, args.sessionId)?.id ? { sessionId: sessionOf(ctx, args.sessionId)?.id as string } : {}),
+        })
+        if (!outcome.ok) return { ok: false as const, error: outcome.error }
+        const normalized = normalizeCommitMsg(outcome.raw, style)
+        if ('error' in normalized) return { ok: false as const, error: normalized.error }
+        return {
+          ok: true as const,
+          subject: normalized.subject,
+          body: normalized.body,
+          message: commitMsgText(normalized.subject, normalized.body),
+          model: outcome.model,
+          stats: { files: scoped.length, diffBytes, diffIncluded: diffText !== null },
+        }
       } catch (error) {
         return { ok: false as const, error: String(error instanceof Error ? error.message : error) }
       }
@@ -1530,7 +1674,11 @@ export function createSvnRpc(deps: SvnRpcDeps): { handlers: Record<string, unkno
       try {
         const { entries } = await changesOf(status.wcRoot, true)
         const { plan, dropped } = normalizeAiPlan(args.plan, entries)
+        const claimed = [...plan.reverts.map((item) => item.path), ...plan.ignores.map((item) => item.path)]
+        const commitGroups = commitGroupsOf(args.plan, entries, claimed)
+        plan.commitGroups = commitGroups.groups
         const accepted = plan.reverts.length + plan.ignores.length + plan.groups.reduce((n, group) => n + group.paths.length, 0)
+          + commitGroups.groups.reduce((n, group) => n + group.paths.length, 0)
         if (!accepted) return { ok: false as const, error: '方案为空：无任何路径通过白名单校验（丢弃 ' + dropped + ' 项）' }
         planInbox.set(status.wcRoot, { plan, dropped, at: now() })
         return { ok: true as const, accepted, dropped }
@@ -1667,5 +1815,15 @@ export function createSvnRpc(deps: SvnRpcDeps): { handlers: Record<string, unkno
       }
     },
   }
-  return { handlers, dispose: () => { explorerScopes.dispose(); explorerCache.clear(); updateJobs.dispose(); updateRootCache.clear() } }
+  return {
+    handlers,
+    api: {
+      handlers: handlers as unknown as SvnToolApi['handlers'],
+      run: runSvn,
+      scopeOf: toolScopeOf,
+      targetOf: svnPathOf,
+      relOf: safeRel,
+    },
+    dispose: () => { explorerScopes.dispose(); explorerCache.clear(); updateJobs.dispose(); updateRootCache.clear() },
+  }
 }

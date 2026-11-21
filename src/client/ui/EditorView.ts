@@ -40,6 +40,8 @@ import { bindEditActions, runEditAction } from '../monaco/editActions.js'
 import { addReloadGuard } from '../pageReload.js'
 import { clampZoom, clearZoomMem, dataUrlOf, isImagePath, isSvgPath, recallZoom, rememberZoom, zoomKeyOf, zoomStepOf } from '../imagePreview.js'
 import { isMarkdownPath } from '../markdownPreview.js'
+import { hasOfficialHtmlPreview, isHtmlPath } from '../htmlPreview.js'
+import { HtmlPlanPanel } from '../htmlPlan/HtmlPlanPanel.js'
 import { isExcelPath } from '../excel/model.js'
 import { isUniverPath, isOfficePath } from '../../shared/univer.js'
 import { routesUniver } from '../univer/routing.js'
@@ -127,6 +129,7 @@ import { promptName } from './PromptDialog.js'
 import { openWithDialog } from '../openWithDialog.js'
 import { copyText as copyClipText } from '../copyText.js'
 import { SvnLogDialog } from './SvnLogDialog.js'
+import { SvnCommitDialog } from './SvnCommitDialog.js'
 import { SvnUpdateDialog } from './SvnUpdateDialog.js'
 import { sameUpdateOwner, updateDone } from './svnUpdateModel.js'
 import { IconRefreshOutline16 } from './icons.js'
@@ -385,6 +388,7 @@ export function EditorView(props) {
   const [svnLogData, setSvnLogData] = React.useState(null) // 日志条目（null=未加载）
   const [svnLogBusy, setSvnLogBusy] = React.useState(false) // 日志在途
   const [svnLogError, setSvnLogError] = React.useState('') // 日志错误文案
+  const [commitSeed, setCommitSeed] = React.useState(null) // 提交对话框 { paths?, message? }（null=关闭）
   const [svnLogWcRev, setSvnLogWcRev] = React.useState(null) // P1-9：文件目标的工作副本版号（null = 不加粗）
   const [dlogOpen, setDlogOpen] = React.useState(false) // 诊断日志弹窗（自取数据，null 语义无需状态层）
   const [svnUpdateDialog, setSvnUpdateDialog] = React.useState(null) // {path,sessionId,scope,resumeJobId?}；窗口内自取增量
@@ -677,6 +681,7 @@ export function EditorView(props) {
   }, [excelScope, active, isExcelActive])
   // 当前 tab 是否为可预览的 Markdown，以及是否正处于预览态（预览态替换 Monaco host，只读）
   const isMdActive = !!active && isMarkdownPath(active)
+  const isHtmlActive = !!active && isHtmlPath(active)
   const mdPreviewing = isMdActive && mdPreviewRef.current.has(active)
   const regions = React.useMemo(() => {
     // #region debug log
@@ -2082,6 +2087,7 @@ export function EditorView(props) {
         if (!isMarkdownPath(path)) { setStatus('当前文件不是 Markdown'); return }
         toggleMdPreviewRef.current?.(path)
       }],
+      ['edrv.command.previewHtml', () => { previewHtmlOf(activeRef.current) }],
       ['edrv.command.navigateBack', () => navBackRef.current?.()],
       ['edrv.command.navigateForward', () => navForwardRef.current?.()],
       ['edrv.command.nextTab', () => cycleTabRef.current?.(1)],
@@ -2121,6 +2127,7 @@ export function EditorView(props) {
       ['edrv.command.svnDiffBase', () => runSvnDiffBase(activeRef.current)],
       ['edrv.command.svnAdd', () => runSvnAdd(activeRef.current)],
       ['edrv.command.svnRevertCli', () => runSvnRevertCli(activeRef.current)],
+      ['edrv.command.svnCommit', () => openSvnCommit({ paths: activeRef.current ? [activeRef.current] : [] })],
       ['edrv.command.svnLog', () => openSvnLog(activeRef.current || undefined)],
       ['edrv.command.svnCreatePatch', () => runSvnAction(SVN_ACTION_BY_ID['create-patch'], {
         sessionId,
@@ -2347,6 +2354,7 @@ export function EditorView(props) {
             openSvnDiff: (p) => runSvnDiffBase(p),
             openSvnLocalPair: runSvnDiffLocalPair,
             openSvnLog: (p) => openSvnLog(p ?? relPath),
+            openCommitDialog: (seed) => openSvnCommit(seed),
             refreshChanges: () => refreshSvnChanges(sessionId, scope),
           })
         },
@@ -3263,6 +3271,24 @@ export function EditorView(props) {
   }
   toggleMdPreviewRef.current = toggleMdPreview
 
+  /**
+   * 用官方 HTML 渲染器预览当前网页（按钮/快捷键/命令栏同一动作）。
+   *
+   * 先 flushSave：官方预览读的是磁盘内容，防抖窗口内未落盘的改动必须先生效；
+   * 再交给原生打开 handler（session 域 file 地址 → 官方 documentpreviews 的 html body）。
+   * 旧版 DSH 无官方渲染器时只提示，不改动当前文本编辑态。
+   * @author ddj 2026年11月21号
+   * @param path 当前文件路径
+   */
+  function previewHtmlOf(path) {
+    if (!isHtmlPath(path)) { setStatus('当前文件不是 HTML'); return }
+    if (!hasOfficialHtmlPreview()) { setStatus('当前 DSH 不支持 HTML 渲染预览'); return }
+
+    flushSave()
+    saveViewState(path)
+    if (!tryNativeOpen(path)) { setStatus('打开官方 HTML 预览失败，请在对话中打开该文件'); return }
+    setStatus('已在官方查看器打开网页预览')
+  }
   /** 当前图片的会话+路径级缩放记忆键（页签切换回来保留同一缩放）。 */
   const imgZoomKey = zoomKeyOf(sessionId, active)
 
@@ -4059,6 +4085,15 @@ export function EditorView(props) {
    * @author ddj 2026年09月16号
    * @param relPath 目标相对路径（缺省 = 工作区根）
    */
+  /**
+   * 打开原生提交对话框（种子 = 预选路径/预填信息；来自 AI 逐组提交或动作入口）。
+   * @author ddj 2026年11月15号
+   * @param seed 预填载荷（缺省 = 按面板默认勾选）
+   */
+  const openSvnCommit = (seed) => {
+    setCommitSeed(seed && typeof seed === 'object' ? seed : {})
+  }
+
   const openSvnLog = (relPath) => {
     const target = relPath || ''
     dshTrace('svnLog.open', { target, scope, hasSession: Boolean(sessionId) })
@@ -4184,6 +4219,7 @@ export function EditorView(props) {
         openSvnDiff: (p) => runSvnDiffBase(p),
         openSvnLocalPair: runSvnDiffLocalPair,
         openSvnLog: (p) => openSvnLog(p ?? path),
+        openCommitDialog: (seed) => openSvnCommit(seed),
         refreshChanges: () => refreshSvnChanges(sessionId, scope),
       })
     }
@@ -4785,7 +4821,13 @@ export function EditorView(props) {
       onClick: () => toggleMdPreview(active),
     }, mdPreviewing ? '源码' : '预览') : null),
     (mdPreviewing ? React.createElement('span', { className: 'edrv-pb-meta' }, '预览') : null),
-    (active && !isImageActive && langOf(active) ? React.createElement('span', { className: 'edrv-pb-meta' }, langOf(active)) : null),
+    // HTML 网页预览：交给官方 HTML 渲染器；按钮在渲染器不可用时禁用并说明原因。
+    (isHtmlActive ? React.createElement('button', {
+      className: 'edrv-pill edrv-pill-ghost edrv-pb-mdbtn',
+      title: (hasOfficialHtmlPreview() ? '用官方渲染器预览网页' : '当前 DSH 不支持 HTML 渲染预览') + '（' + (chordOf('edrv.previewHtml') ?? '未绑定') + '）',
+      disabled: !hasOfficialHtmlPreview(),
+      onClick: () => previewHtmlOf(active),
+    }, '预览网页') : null),    (active && !isImageActive && langOf(active) ? React.createElement('span', { className: 'edrv-pb-meta' }, langOf(active)) : null),
     (isImageActive && imgSize ? React.createElement('span', { className: 'edrv-pb-meta' }, imgSize.w + '×' + imgSize.h) : null),
     (cursor ? React.createElement('span', { className: 'edrv-pb-meta' }, cursor) : null),
     (status ? React.createElement('span', { className: 'edrv-pb-meta edrv-pb-status' }, status) : null))
@@ -4951,17 +4993,36 @@ export function EditorView(props) {
       React.createElement('button', { className: 'edrv-pill edrv-pill-ghost', onClick: retry }, '重试'),
       React.createElement('button', { className: 'edrv-pill edrv-pill-ghost', onClick: close }, '关闭标签页')))
 
-  let body
-  if (activePlan) {
-    const labels = PLAN_MD_LABELS
-    const text = activePlan.markdown
+  /**
+   * 计划页的 Markdown 渲染（HTML 计划页缺失/未声明时的回退）。
+   * @author ddj 2026年11月21号
+   * @param plan 计划文档
+   * @returns 只读 Markdown 元素
+   */
+  function planMarkdownBody(plan) {
+    const text = plan.markdown
     const render = isComponentType(MarkdownText)
       ? React.createElement(MarkdownDelegateProvider, {
           openFile: (path, options) => options?.line != null ? openFileAt(path, options.line) : openFile(path, false),
-        }, React.createElement(MarkdownText, { text, streaming: false, labels, variant: 'body' }))
+        }, React.createElement(MarkdownText, { text, streaming: false, labels: PLAN_MD_LABELS, variant: 'body' }))
       : React.createElement('pre', { className: 'edrv-mdview-pre' }, text)
+    return React.createElement('div', { className: 'edrv-mdview-stage' }, React.createElement('div', { className: 'edrv-mdview-doc' }, render))
+  }
+
+  let body
+  if (activePlan) {
     body = React.createElement('div', { className: 'edrv-mdview', ref: planHostRef, 'data-plan-address': activePlan.address },
-      React.createElement('div', { className: 'edrv-mdview-stage' }, React.createElement('div', { className: 'edrv-mdview-doc' }, render)))
+      activePlan.htmlPath
+        ? React.createElement(HtmlPlanPanel, {
+            key: activePlan.address,
+            sessionId,
+            cwd,
+            address: activePlan.address,
+            title: activePlan.title,
+            htmlPath: activePlan.htmlPath,
+            markdown: activePlan.markdown,
+          })
+        : planMarkdownBody(activePlan))
   } else if (pageChanged === pageIdentity && largeCandidate === pageIdentity) {
     body = React.createElement('div', { className: 'edrv-empty', role: 'status' },
       React.createElement('div', null, '文件已变化，请重新读取'),
@@ -5210,6 +5271,7 @@ export function EditorView(props) {
     openSvnLocalPair: runSvnDiffLocalPair,
     refreshSvnChanges: () => refreshSvnChanges(sessionId, scope),
     openSvnLog: (p) => openSvnLog(p),
+    openSvnCommit: (seed) => openSvnCommit(seed),
     confirm: (message) => (typeof window === 'undefined' ? false : window.confirm(message)),
     notify: (message) => setStatus(message),
     // 名称输入弹窗（资源管理器右键的新建文件/新建文件夹/重命名）
@@ -5473,6 +5535,20 @@ export function EditorView(props) {
         },
       })
     : null
+  // 原生提交对话框（22-agent-tools-and-commit）：portal 到 body，与日志/更新弹窗同一挂载方式
+  const svnCommitEl = commitSeed
+    ? React.createElement(SvnCommitDialog, {
+        key: 'edrv-svn-commit',
+        sessionId,
+        seed: commitSeed,
+        notify: (message) => setStatus(message),
+        onClose: () => setCommitSeed(null),
+        onCommitted: (result) => {
+          refreshSvnChanges(sessionId, scope)
+          setStatus(result?.revision !== undefined ? '提交成功：r' + result.revision : '提交完成')
+        },
+      })
+    : null
   /**
    * 更新终态只刷新一次目录树与变更缓存，切到日志再返回不重复执行。
    * @author ddj 2026年09月24号
@@ -5632,6 +5708,7 @@ export function EditorView(props) {
         tabMenuEl,
         paletteEl,
         svnLogEl,
+        svnCommitEl,
         svnUpdateEl,
         svnDiffEl,
         patchDialogEl,
@@ -5645,6 +5722,7 @@ export function EditorView(props) {
         tabMenuEl,
         paletteEl,
         svnLogEl,
+        svnCommitEl,
         svnUpdateEl,
         svnDiffEl,
         patchDialogEl,

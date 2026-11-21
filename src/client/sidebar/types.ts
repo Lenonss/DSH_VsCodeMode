@@ -52,6 +52,8 @@ export interface SidebarCtx {
   openSvnUpdate?: (path: string) => void
   /** 打开 SVN 日志弹窗（P3；菜单/命令栏「查看日志」）。 */
   openSvnLog?: (path?: string) => void
+  /** 打开原生提交对话框（seed = 预选路径/预填信息）。 */
+  openSvnCommit?: (seed?: { paths?: string[]; message?: string }) => void
   /** 确认对话框（破坏性动作守卫；缺省走 window.confirm，测试可注入）。 */
   confirm?: (message: string) => boolean
   /** 面板动作反馈（如右键菜单操作结果 → 编辑区路径栏状态）。 */

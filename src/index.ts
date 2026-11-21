@@ -30,9 +30,11 @@ import { disposeAllServers, hookExitReclaim } from './lsp/transport.js'
 import { createAiRpc } from './ai/rpc.js'
 import { createFileVersions } from './fileVersions.js'
 import { createSvnRpc } from './svn.js'
+import { installSvnTools } from './svnTools.js'
 import { createDapRpc } from './dap/rpc.js'
 import { installRulesSection } from './rules.js'
 import { installSkillGroup } from './skills.js'
+import { installHtmlPlanCommand } from './htmlPlanCommand.js'
 import type { RpcHandlerMap, RpcMethod, RpcRequestMap } from './shared/rpc.js'
 import type { Registry } from './registry.js'
 import type { Ctx } from './store.js'
@@ -119,6 +121,7 @@ function attachRuntime(ctx: Ctx, runtime: Runtime): void {
 function installContent(ctx: Ctx): void {
   if (!installRulesSection(ctx)) log.warn('未检测到 systemPrompt 服务，规则仅可管理不注入')
   if (!installSkillGroup(ctx)) log.warn('技能组未调度，插件技能组不可用')
+  if (!installHtmlPlanCommand(ctx)) log.warn('/html-plan 命令未调度（官方 /plan 不可用时该命令不可用）')
 }
 // #endregion
 
@@ -156,6 +159,7 @@ export async function apply(ctx: Ctx, config?: unknown): Promise<void> {
   /** @author ddj 2026年09月28号 @param args Session-bound plan. @returns Validated inbox result. */
   function submitPlan(args: RpcRequestMap['svn.aiPlanSubmit']) { return dispatch('svn.aiPlanSubmit', args) }
   await installPlanTool(ctx, submitPlan)
+  await installSvnTools(ctx, runtime.svnRpc.api)
   ctx.effect(mountInbox, 'vscode-mode:open-inbox')
   ctx.effect(() => shellMenuLifecycle(ctx), 'vscode-mode:integration')
   /** @author ddj 2026年10月12号 @returns Active-profile bridge disposer; failures never block boot. */

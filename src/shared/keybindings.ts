@@ -22,6 +22,9 @@ export const KEYBINDING_DEFAULTS: Record<string, string> = {
   // Markdown 预览切换：VS Code 同款 (Ctrl+K V 为分栏，此处取单键 Ctrl+Shift+V)。
   // 仅当活动文件是 .md 时才吞键，其余情况放行给浏览器/输入框（保留「粘贴为纯文本」语义）。
   'edrv.toggleMarkdownPreview': 'Ctrl+Shift+V',
+  // HTML 网页预览：交给官方 HTML 渲染器，Ctrl+Alt+V 与 Markdown 预览分工。
+  // 仅当活动文件是 .html/.htm 且官方渲染器可用时才吞键，其余情况放行。
+  'edrv.previewHtml': 'Ctrl+Alt+V',
   'edrv.navigateBack': 'Alt+ArrowLeft|Ctrl+Alt+-',
   'edrv.navigateForward': 'Alt+ArrowRight|Ctrl+Shift+-',
   // 页签循环：主候选避开浏览器保留键（Ctrl+Tab / Ctrl+PgUp/PgDn 会被浏览器截获）
@@ -249,6 +252,14 @@ export const SHORTCUT_PROFILES: Record<string, ShortcutProfiles> = {
     'desktop:windows': bind('KeyV', ['primary', 'shift']),
     'web:macos': bind('KeyV', ['primary', 'shift']),
     'web:windows': bind('KeyV', ['primary', 'shift']),
+  },
+  // HTML 预览用 primary+alt+KeyV：避开 Markdown 的 primary+shift+V；
+  // linux 的 primary+KeyV 属官方保留键，两个 linux profile 都不声明（用户可自设）。
+  'edrv.previewHtml': {
+    'desktop:macos': bind('KeyV', ['primary', 'alt']),
+    'desktop:windows': bind('KeyV', ['primary', 'alt']),
+    'web:macos': bind('KeyV', ['primary', 'alt']),
+    'web:windows': bind('KeyV', ['primary', 'alt']),
   },
   // 导航历史：主候选 Alt+Arrow 在 linux/web 为保留或白名单外；web 取第二候选（Ctrl+Alt+- / Ctrl+Shift+-）
   'edrv.navigateBack': {

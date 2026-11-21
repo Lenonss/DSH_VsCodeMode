@@ -2,7 +2,7 @@
  * client officialSidebar 纯函数与装配测试（不触 DOM/窗口事件，mock ctx/slots）。
  * 作者 ddj 2026-09-09
  */
-import { describe, expect, it, beforeEach } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   detectOfficial,
   installOfficial,
@@ -29,6 +29,7 @@ import {
 } from '../src/client/officialSidebar.js'
 import { routeSideEditor, setEnsureSideEditor } from '../src/client/sidebarBridge.js'
 import { setNativeCsv, resetNativeOpen } from '../src/client/nativeOpenStore.js'
+import { resetHtmlPreviewProbe, setOfficialHtmlPreview } from '../src/client/htmlPreview.js'
 
 /** 构造探测用 ctx：name→value 映射，可注入抛错。 */
 function ctxOf(map: Record<string, unknown>, boom = false): { get: (name: string) => unknown } {
@@ -455,5 +456,38 @@ describe('restoreEditorTab', () => {
     timer.flush(); timer.flush(); timer.flush(); timer.flush()
     expect(calls).toBe(3)
     expect(timer.delays).toEqual([150, 150])
+  })
+})
+
+describe('HTML 让位（官方 HTML 渲染器探针）', () => {
+  afterEach(() => { resetHtmlPreviewProbe(); resetNativeOpen() })
+
+  it('探针可用时 html/htm 让位官方（大小写/反斜杠）', () => {
+    setOfficialHtmlPreview(true)
+    expect(deferToOfficial('a.html')).toBe(true)
+    expect(deferToOfficial('A.HTM')).toBe(true)
+    expect(deferToOfficial('dir\\sub\\x.html')).toBe(true)
+  })
+
+  it('探针不可用时不让位（旧版 DSH 回退到本插件文本编辑）', () => {
+    setOfficialHtmlPreview(false)
+    expect(deferToOfficial('a.html')).toBe(false)
+    expect(deferToOfficial('a.htm')).toBe(false)
+  })
+
+  it('claim canOpen：session 域让位，绝对域仍由本插件打开（官方 fallback 只认 session 域）', () => {
+    resetNativeOpen()
+    const definitions: unknown[] = []
+    const tabs = { register: (d: unknown) => { definitions.push(d); return () => {} } }
+    const slots = { inject: (_n: string, register: () => unknown) => { register(); return () => {} }, register: () => () => {} }
+    const dispose = registerOfficialFileClaim({ tabs, slots, renderTab: () => null })
+    const canOpen = (definitions[0] as { canOpen: (a: string) => boolean }).canOpen
+    setOfficialHtmlPreview(false)
+    expect(canOpen('dsh-resource://file/session/s1/a.html')).toBe(true)
+    setOfficialHtmlPreview(true)
+    expect(canOpen('dsh-resource://file/session/s1/a.html')).toBe(false)
+    expect(canOpen('dsh-resource://file/absolute/C:/repo/a.html')).toBe(true)
+    expect(canOpen('dsh-resource://file/session/s1/a.md')).toBe(true)
+    dispose!()
   })
 })

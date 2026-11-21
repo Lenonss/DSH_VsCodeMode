@@ -27,7 +27,7 @@
 | 懂代码 | LSP：定义 / 引用 / Peek / 补全 / 签名帮助，按文件语言自动选后端 |
 | 调问题 | DAP：断点、调用堆栈、变量、监视、调试控制台 REPL（Lua attach / .NET） |
 | 管文件 | 活动栏 + 资源管理器 + 右键菜单 + 工作区搜索 + SVN 状态徽标 + 远程下载 |
-| 看文档 | Markdown 预览、PDF 注释编辑、Excel 基础编辑与只读数据预览 |
+| 看文档 | Markdown 预览、HTML 网页预览（官方渲染器）、HTML 计划页、PDF 注释编辑、Excel 基础编辑与只读数据预览 |
 
 ## 目录
 
@@ -72,6 +72,21 @@
   引用/KaTeX），「以源码打开」切回编辑。渲染走官方 `MarkdownText` 原语，零新增依赖、
   自动跟随 DSH 主题；旧版 DSH 缺该原语时降级为纯文本预览。活动文件不是 Markdown 时
   不吞 `Ctrl+Shift+V`（保留「粘贴为纯文本」）。
+- **HTML 网页预览**（v0.31.0）：`.html`/`.htm` 默认仍是 Monaco 源码编辑；路径栏「预览网页」、
+  `Ctrl+Alt+V` 或命令栏「预览网页（官方渲染器）」在官方右侧栏打开 HTML 预览页签。渲染交给官方
+  `dsh-client-ui-sidebar-documentpreview` 的内置 html body（沙箱 iframe；静态模式 DOMPurify + CSP，
+  开 设置 → 通用 → 开发者工具 后执行脚本并内联相对 CSS/JS）。会话文件链接的 `.html` 由插件让位给
+  官方渲染；旧版 DSH 无该渲染器时预览入口禁用、文件仍进文本编辑，绝不把源码送进纯文本查看器。
+  相对图片不加载（官方只内联 script/link），需用 data URI。
+- **HTML 计划模式**（v0.31.0）：输入 `/html-plan <任务>` 一键进入计划模式，agent 用随包技能
+  `dsh-vscodemode-html-plan` 产出单文件交互式计划页（`plans/<slug>/plan.packed.html`，主张树 + 图示 + 决策），
+  `exit_plan_mode` 正文写一行「HTML 计划页：<path>」即可让计划页签以沙箱 iframe 呈现；也可先 `/plan`
+  再要求用 HTML 计划页。只输入 `/html-plan`（不带任务）也会进入计划模式，模型会先问你要规划什么；
+  加 `--delegate` 可把写页委派给子 agent（默认不委派，阈值与摘要模板见技能第 7 节）。页签顶部显示计划状态（计划中 / 待审批 /
+  已批准 / 继续规划 / 已退出），提供「同意执行」「继续规划」（走官方 `userQuestions` 答案通道）、
+  「退出计划模式」（官方 `/plan off`）与「去对话审批」兜底；答复面板点「回复」直接发送给 agent，有待审批时同时「同意执行」，复制仍可兜底手动粘贴。
+  页面缺少标记、文件缺失或未打包时回退 Markdown 计划预览。运行时按上游 html-plan 的 MIT 许可 vendor
+  （作者 Thariq Shihipar，见 `skills/dsh-vscodemode-html-plan/LICENSE`）。
 - **DSH 计划模式接入**：工作区 `plans/`、DSH `.dsh/plans/` 下的 Markdown 计划文件，
   以及成功生成且以 `# 计划：` / `# 计划:` 标题显式关联的 Markdown，默认以预览打开；
   指定行号的链接仍进入源码定位，普通 Markdown 的既有打开方式不变。
@@ -355,9 +370,10 @@ cmaps 支持中文渲染）；工具条进入注释编辑：✎ 文本框 / 🖌
 
 一组 `SKILL.md` 随包分发并注册进 DSH 技能系统（自定义 skill provider，
 `ctx.skills.registerProvider`）——**装了本插件即可用**，无需手工放到
-`~/.dsh/skills`。当前收录 **`dsh-vscodemode-mcp`**（MCP 配置与使用指南：
-两种作用域 / `.mcp.json` 写法 / `mcp.*` RPC / 命名与冲突 / 工作区隔离 /
-故障排查表）。装载状态见 设置 → VSCodeMode →「兼容性」→「插件技能组」；
+`~/.dsh/skills`。当前收录两个技能：**`dsh-vscodemode-mcp`**（MCP 配置与使用指南：
+两种作用域 / `.mcp.json` 写法 / `mcp.*` RPC / 命名与冲突 / 工作区隔离 / 故障排查表）
+与 **`dsh-vscodemode-html-plan`**（HTML 计划页：主张树 + 图示 + 决策，运行时按上游
+html-plan 的 MIT 许可随包）。装载状态见 设置 → VSCodeMode →「兼容性」→「插件技能组」；
 编辑 SKILL.md 即时生效（fs.watch → invalidate）。
 
 - **命名硬约束**：技能名必须 kebab-case（`/^[a-z0-9]+(?:-[a-z0-9]+)*$/`），
@@ -485,6 +501,23 @@ TortoiseSVN（`TortoiseProc.exe`）仅作 Windows 过渡增强：自研能力覆
   文件树行尾同步显示状态徽标。
 - **动作**：更新、刷新变更、与基线比较、加入版本控制、还原（**破坏性动作均带确认**）、
   清理工作副本（默认只清锁）；未覆盖的项回落 TortoiseSVN。
+- **原生提交**（v0.31.0）：侧栏「提交…」/ 命令栏 / 文件树与页签右键 / 编辑区右键打开提交对话框——
+  按 changelist 分区勾选（未版本控制与 `ignore-on-commit` 组默认不勾）、多行信息 + 最近信息、
+  `✨ AI 生成日志`、提交前 `svn status` 重查（只提交仍有变更的路径）、未版本化 `?` 自动 add、
+  缺失 `!` 自动 delete（两个开关可在设置关闭，关闭后这些文件进「跳过」不提交）、
+  UTF-8 临时文件 + `--encoding utf-8` 提交中文日志、结果区给出新版本号与逐文件动作；
+  冲突**不自动解决**，只列路径并提示先更新。
+- **agent 工具**（v0.31.0）：19 个 `svn_*` 工具（`svn_status/info/diff/log/blame/list/cat/propget/proplist`
+  + `svn_add/delete/revert/commit/update/resolve/cleanup/propset/propdel/changelist`）：会话绑定、
+  路径白名单、只读工具可并行、写工具受只读设置拦截，输出统一归一无损 JSON（0.2.x 不会因
+  `undefined`/NaN 整次失败）。
+- **AI 提交信息**（v0.31.0）：`✨ AI 生成日志` 只分析**提交范围**（未勾选文件不进 prompt），
+  首行 ≤72 字符，`plain`（中文「<模块>：<标题>」）/ `conventional` 两种风格；
+  结果只回填信息框，**绝不自动提交**。AI 整理新增「建议拆分提交」段：每组带信息草稿，
+  「逐组提交…」只预填提交对话框。
+- **只读与超时**（v0.31.0）：设置可开**只读模式**（host 拒绝全部写操作 + 客户端置灰）与
+  **命令超时倍数**（0.2–20）；服务器不可达（`E170013`）/无版本库（`E210005`）给可读文案
+  而不是原始 stderr。
 - **页面内非模态浮窗**（v0.15.4）：SVN 更新、日志、统计、补丁、目录对比及智能整理窗口与文件编辑共用浮窗外壳，可拖动标题栏移动、拖动右下角调整大小、点击置顶；窗口外仍可操作 DSH。文件对比独立浮出，不再替换主编辑区，打开其他文件时保留对比；关闭来源于更新窗口的对比时回到同一更新任务。确认与区间选择仍使用模态弹窗，日志快捷键只在日志窗口内处理。
 - **更新窗口**（v0.11.0）：`SVN 更新` 打开插件内窗口——实时逐文件列表与动作着色（A/U/D/G/C/E/R）、
   完成汇总（版本号 / 计数 / 耗时 / 截断告警）、按右键目标限定**路径作用域**（只更新该子目录）、
@@ -507,7 +540,8 @@ TortoiseSVN（`TortoiseProc.exe`）仅作 Windows 过渡增强：自研能力覆
   排查白屏 / 加载失败时先看它。
 - **RPC**：`svn.status / changes / diffBase / revert / add / log / diffRev / diffPair /
   diffWorking / wcRev / cleanup / update / tortoise`；更新窗口新增 `svn.updateStart /
-  updatePoll / updateCancel / updateActive`（`svn.update` 保留兼容）。
+  updatePoll / updateCancel / updateActive`（`svn.update` 保留兼容）；
+  v0.31.0 新增 `svn.commitPlan / svn.commit / svn.aiCommitMsg`，`svn.aiPlan` 支持 `paths` 限定分析范围。
 
 > 说明：`plans/`（含对标蓝图与实测结论）为本地开发资料，不入库。
 
@@ -650,13 +684,13 @@ profile 请替换为实际目标，不要把示例目录当成当前运行 profi
 
 ```bash
 # ① Git 安装（clone + prepare 构建；推荐打固定 tag）
-dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.30.0
+dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.31.0
 
 # ② npm 注册表（发布到 npm 后）
-dsh plugin --profile web add dsh-vscode-mode@0.30.0
+dsh plugin --profile web add dsh-vscode-mode@0.31.0
 
 # ③ GitHub Release tgz 直装（Release asset 可用后）
-dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.30.0/dsh-vscode-mode-0.30.0.tgz
+dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.31.0/dsh-vscode-mode-0.31.0.tgz
 ```
 
 > **DSH 版本政策（0.17.0 起）**：六项 DSH peer 仍统一声明为 `*`，另以
@@ -727,6 +761,7 @@ bundles 层后重启 DSH 即自动把插件行挂进 loader 树。**不要**再�
 | 自定义键位 | 切换文件管理侧边栏（`Ctrl+B` 与 DSH 自身侧栏命令冲突，插件默认不绑定） |
 | 以当前官方目录为准（Web 采用平台允许的组合） | 工作区搜索（有选中则填入搜索框）；不保证所有平台都使用 `Ctrl+Shift+F` |
 | `Ctrl+Shift+V` | 切换 Markdown 预览（仅活动文件为 .md 时生效） |
+| `Ctrl+Alt+V` | 预览网页（官方 HTML 渲染器；仅活动文件为 .html/.htm 且渲染器可用时生效） |
 | `Ctrl+F4` | 关闭当前页签 |
 | `Alt+←` / `Alt+→` | 后退 / 前进（跨文件恢复焦点位置） |
 | `Ctrl+Alt+-` / `Ctrl+Shift+-` | 后退 / 前进（同导航历史） |
@@ -874,7 +909,8 @@ src/
     ├── state/        records.ts（摘要/计数/空差异）+ regions.ts（差异区域/行裁剪）
     ├── monaco/       loader.ts（AMD 加载/语言映射）+ diffRender.ts（差异自绘渲染）
     ├── pdf/          pdfLoader.ts + pdfPanel.ts（PDFViewer 接线/注释/保存回写）
-    ├── pdfPreview.ts / imagePreview.ts / diffDock.ts（纯函数，可单测）
+    ├── pdfPreview.ts / imagePreview.ts / htmlPreview.ts / diffDock.ts（纯函数，可单测）
+    ├── htmlPlan/     planPage.ts（标记/打包/状态/答案纯逻辑）+ planActions.ts（官方动作桥）+ HtmlPlanPanel.ts
     ├── sidebar/      ★ 面板系统：registry.ts + SidebarView.ts + panels/（文件树/搜索/规则）
     ├── styles/editor.css  编辑区样式（tsdown CSS-inline 注入）
     └── ui/           EditorView / OfficialSideTab / QuickOpen / DiffBox /
@@ -883,7 +919,8 @@ src/
 
 随包目录（`package.json` 的 `files`）：`lib/`（构建产物）、`assets/`（Monaco /
 pdf.js vendor + 图标 + launcher）、`skills/`（插件技能组）、`src/`（随包发布，
-便于阅读实现）、`unity/`（内嵌 UPM 包）、`cordis.patch.yml`。
+便于阅读实现）、`unity/`（内嵌 UPM 包）、`cordis.patch.yml`。`skills/dsh-vscodemode-html-plan/` 内含上游 html-plan 运行时
+（MIT，作者 Thariq Shihipar；许可见该目录 `LICENSE`）。
 
 ### 架构要点
 
@@ -1038,6 +1075,7 @@ Keep All / Undo All 却是亮的。修复：单文件 Keep / Undo 覆盖冲突�
 
 | 版本 | 要点 |
 | --- | --- |
+| v0.31.0 | SVN agent 工具（19 个 `svn_*`：只读门禁、路径白名单、无损 JSON）+ 原生提交（勾选清单、单块提交、中文日志、不自动 resolve）+ AI 提交信息（只分析勾选范围、只产草稿）+ 提交对话框；HTML 网页预览转接官方渲染器（一键预览 / 链接让位 / 旧版回退，不新增路由）；HTML 计划模式（`/html-plan <任务>`、`--delegate` 可委派写页，单文件计划页 + 官方审批/退出 + 答复「回复并执行」）；上游 html-plan 按 MIT vendor |
 | v0.30.0 | 模板语言高亮（EJS/ERB/Nunjucks/Jinja2/Blade/Haml/Slim）+ 语言映射审计；搜索面板全局替换（预览确认、落盘前置、逐文件版本守卫、CRLF/BOM 保真）；会话引用接入（拖文件/复制行引用/粘贴文件，多义不瞎插）；设置新增「交互」开关 |
 | v0.29.2 | 设置界面优化：轻量分组、字段说明与控件对齐、官方输入原语及状态提示；MCP 加载/失败不再遮挡其他分类 |
 | v0.29.1 | 待审行差异引擎精准化：唯一行锚点切分 + 小窗口 LCS，千行文件不再整段替换；修正多 hunk 行号偏移 |
@@ -1059,6 +1097,12 @@ Keep All / Undo All 却是亮的。修复：单文件 Keep / Undo 覆盖冲突�
 
 <details>
 <summary>完整版本记录（v0.30.0 → v0.1.5x，点击展开）</summary>
+
+- **v0.31.0**：SVN 侧新增 19 个 agent 工具与原生提交链路（提交计划、勾选清单、UTF-8 日志、
+  AI 提交信息草稿、提交对话框；冲突不自动 resolve、超限不分块），详见第 16 节；
+  HTML 侧新增网页预览（委托官方渲染器，路径栏 / Ctrl+Alt+V）与 HTML 计划模式
+  （`/html-plan`，`--delegate` 可选委派写页，计划页答复「回复并执行」），
+  详见 [0.31.0 发布说明](docs/release-0.31.0.md)。
 
 - **v0.30.0**：新增模板语言高亮（EJS/Eta、ERB、Nunjucks、Jinja2、Blade、Haml、Slim 注册进
   Monaco，注册时机固定在 `editor.main` 回调内）；`langOf` 改为点文件 → 复合后缀 → 末段扩展名

@@ -275,10 +275,11 @@ describe('buildSettingsSchema 字段全集', () => {
     // zStub 的 z.object(shape) 返回 {default} 包装：取 shape 须经 .default() 展开
     const keys = Object.keys(shapeOf(buildSettingsSchema(zStub()))).sort()
     expect(keys).toEqual([
-      'aiEffort', 'aiInline', 'aiModel', 'aiProvider',
+      'aiCommitStyle', 'aiEffort', 'aiInline', 'aiModel', 'aiProvider',
       'aiTaskEffort', 'aiTaskModel', 'aiTaskProvider',
       'fileOpenTool', 'integrationBaseUrl', 'keybindings', 'maxOpenEditors',
       'nativeOpenExts', 'refIntake', 'searchReplace', 'sidebarMinWidth', 'svnPath', 'tortoisePath',
+      'svnAutoAddUnversioned', 'svnAutoDeleteMissing', 'svnCommandTimeoutScale', 'svnReadOnly',
     ].sort())
   })
 })
@@ -286,14 +287,14 @@ describe('buildSettingsSchema 字段全集', () => {
 describe('buildSettingsSchema volatile（0.1.7 Config 语义）', () => {
   beforeEach(() => resetConfigVolatileState())
 
-  it('Config 模式：17 个顶层字段全部标记，观测态记 17/17', () => {
+  it('Config 模式：22 个顶层字段全部标记，观测态记 22/22', () => {
     const shape = shapeOf(buildSettingsSchema(zStub({ volatile: true }), { volatile: true }))
     const fields = Object.entries(shape)
-    expect(fields).toHaveLength(17)
+    expect(fields).toHaveLength(22)
     for (const [name, field] of fields) {
       expect(field.volatileMarked, name).toBe(true)
     }
-    expect(configVolatileState()).toEqual({ requested: true, marked: 17, total: 17 })
+    expect(configVolatileState()).toEqual({ requested: true, marked: 22, total: 22 })
   })
 
   it('keybindings 整个 object 标记、子键不标（volatile 路径约束）', () => {
@@ -315,9 +316,9 @@ describe('buildSettingsSchema volatile（0.1.7 Config 语义）', () => {
     expect(configVolatileState()).toEqual({ requested: false, marked: 0, total: 0 })
   })
 
-  it('z 无 .volatile()（旧 schemastery）：降级不抛错，观测记 0/17', () => {
+  it('z 无 .volatile()（旧 schemastery）：降级不抛错，观测记 0/22', () => {
     expect(() => buildSettingsSchema(zStub(), { volatile: true })).not.toThrow()
-    expect(configVolatileState()).toEqual({ requested: true, marked: 0, total: 17 })
+    expect(configVolatileState()).toEqual({ requested: true, marked: 0, total: 22 })
   })
 
   it('.volatile() 抛错时保持原字段（模块加载绝不炸）', () => {
@@ -328,7 +329,7 @@ describe('buildSettingsSchema volatile（0.1.7 Config 语义）', () => {
       number: () => ({ default: () => ({ volatile: () => { throw new Error('boom') } }) }),
     }
     expect(() => buildSettingsSchema(explosive as never, { volatile: true })).not.toThrow()
-    expect(configVolatileState()).toEqual({ requested: true, marked: 0, total: 17 })
+    expect(configVolatileState()).toEqual({ requested: true, marked: 0, total: 22 })
   })
 
   it('真实 schemastery：字段 meta.volatile + cordis 校验路径产出引用可解包、未知键保留', () => {
@@ -337,7 +338,7 @@ describe('buildSettingsSchema volatile（0.1.7 Config 语义）', () => {
       '~standard': { validate: (value: unknown) => { value?: Record<string, unknown>; issues?: unknown } }
     }
     const fields = Object.values(cfg.dict)
-    expect(fields).toHaveLength(17)
+    expect(fields).toHaveLength(22)
     expect(fields.every((field) => field.meta.volatile === true)).toBe(true)
     // 复刻 cordis resolveConfig 的标准校验路径：空配置 → 默认值字段被包成 volatile 引用
     const result = cfg['~standard'].validate({ imageDir: '/icons' })

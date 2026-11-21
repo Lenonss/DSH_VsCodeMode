@@ -67,6 +67,7 @@ describe('createDefaultFileMenuItems', () => {
       'svn-diff-base',
       'svn-add',
       'svn-revert-cli',
+      'svn-commit',
       'svn-log',
       'svn-tortoise-commit',
       'svn-tortoise-log',
@@ -199,6 +200,18 @@ describe('SVN 组显隐（动态能力守卫）', () => {
 
   it('Tortoise 提交对根空白区可用（等价 Commit Workspace）', () => {
     expect(byId()['svn-tortoise-commit'].visible({ path: '', type: 'directory' }, svnCtx())).toBe(true)
+  })
+
+  it('「SVN 提交…」：文件/目录/根空白区常驻（资源管理器右键入口，不按变更状态过滤）', () => {
+    const item = byId()['svn-commit']
+    expect(item).toMatchObject({ label: 'SVN 提交…', order: 218.5, group: 7 })
+    // 提交清单由提交对话框给出：干净文件 / 目录 / 根空白区都要能看到入口
+    expect(item.visible({ path: 'src/a.ts', type: 'file' }, svnCtx())).toBe(true)
+    expect(item.visible({ path: 'src', type: 'directory' }, svnCtx())).toBe(true)
+    expect(item.visible({ path: '', type: 'directory' }, svnCtx())).toBe(true)
+    // 未受管理 / CLI 不可用时整项隐藏
+    expect(item.visible({ path: 'src', type: 'directory' }, svnCtx({ managed: false }))).toBe(false)
+    expect(item.visible({ path: 'src', type: 'directory' }, svnCtx({ svnCli: false }))).toBe(false)
   })
 
   it('Tortoise 还原条目带 danger 标记；Tortoise 段另起分组（分隔线由分组号驱动）', () => {

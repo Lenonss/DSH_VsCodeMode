@@ -11,6 +11,7 @@ import { pageKeysAllowed } from '../pageReload.js'
 import { hasEditorModel, hasOpenTabs } from '../editorModelState.js'
 import { activeEditorPath } from '../activePathStore.js'
 import { isMarkdownPath } from '../markdownPreview.js'
+import { hasOfficialHtmlPreview, isHtmlPath } from '../htmlPreview.js'
 import { svnCurrentStatus } from '../svnStatus.js'
 import { dapStore } from '../dap/store.js'
 import { svnActionOn, svnActionsFor } from '../../shared/svnActions.js'
@@ -175,6 +176,7 @@ function svnEventOf(action: SvnActionDef): string {
     'diff-base': 'svnDiffBase',
     add: 'svnAdd',
     revert: 'svnRevertCli',
+    commit: 'svnCommit',
     log: 'svnLog',
     'create-patch': 'svnCreatePatch',
     'diff-summarize': 'svnDiffSum',
@@ -239,6 +241,15 @@ export const EDITOR_COMMANDS: readonly CommandDef[] = [
       return typeof path === 'string' && isMarkdownPath(path)
     },
     run: () => emit('toggleMarkdownPreview'),
+  },
+  {
+    id: 'edrv.previewHtml', label: '预览网页（官方渲染器）', category: '视图', order: 26,
+    // 仅活动文件是 .html/.htm 且官方 HTML 渲染器可用时出现；不可用时让官方派发放行。
+    available: () => {
+      const path = activeEditorPath()
+      return typeof path === 'string' && isHtmlPath(path) && hasOfficialHtmlPreview()
+    },
+    run: () => emit('previewHtml'),
   },
   {
     id: 'edrv.showLogs', label: '查看诊断日志', category: '视图', order: 30,

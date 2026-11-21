@@ -312,6 +312,8 @@ export interface SvnAiPlanOutcome {
   plan?: SvnAiPlan
   /** 分析所依据的变更条目总数。 */
   entriesCount?: number
+  /** 本次实际分析范围条目数（paths 限定时的条数）。 */
+  analyzedCount?: number
   /** 是否附带 diff 上下文（false = paths-only 降级）。 */
   diffIncluded?: boolean
   /** AI 被丢弃的候选路径数（幻觉/状态不符/互斥落选）。 */
@@ -328,14 +330,15 @@ export interface SvnAiPlanOutcome {
  * @param sessionId 会话 id
  * @returns 三段方案与分析元信息
  */
-export async function svnAiPlan(sessionId: string | undefined): Promise<SvnAiPlanOutcome> {
+export async function svnAiPlan(sessionId: string | undefined, paths?: string[]): Promise<SvnAiPlanOutcome> {
   try {
-    const res = await rpc('svn.aiPlan', { sessionId })
+    const res = await rpc('svn.aiPlan', { sessionId, ...(paths && paths.length ? { paths } : {}) })
     if (!res.ok) return { ok: false, message: 'AI 分析失败：' + res.error }
     return {
       ok: true,
       plan: res.plan,
       entriesCount: res.entriesCount,
+      analyzedCount: res.analyzedCount,
       diffIncluded: res.diffIncluded,
       dropped: res.dropped,
       model: res.model,

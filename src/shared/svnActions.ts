@@ -64,6 +64,7 @@ export interface SvnActionDef {
  * - diff-base：需「可比较」——文本文件（图片/PDF 无文本差异）
  * - add：仅未纳入版本控制的目标
  * - revert：仅受版本控制且有本地改动的目标
+ * - commit：受管理且 CLI 可用即可（目标限文件/目录/根/编辑器，不看变更状态——提交清单由对话框给出）
  * - log：受版本控制的目标（含目录）
  * - cleanup：不受目标状态限制（修工作副本锁）
  * - Tortoise 组：仅 Windows 且 TortoiseProc 可用
@@ -122,6 +123,19 @@ export const SVN_ACTIONS: readonly SvnActionDef[] = [
     needsEditorModel: true,
   },
   {
+    // order 取 18.5：插在「还原(18)」与「日志(19)」之间，避免改动既有动作的 order 值
+    id: 'commit',
+    commandId: 'edrv.svnCommit',
+    label: 'SVN 提交…',
+    order: 18.5,
+    surfaces: ['palette', 'tree', 'tab'],
+    capability: 'cli',
+    targets: ['file', 'directory', 'root', 'editor'],
+    // 故意不设状态门禁：提交范围由提交对话框的清单决定，而命令栏 / 页签 / 编辑区的求值
+    // 上下文不携带目标状态（命令栏恒 versioned=true 且无 status），一旦按 changed 判，
+    // 资源管理器右键与命令栏的「SVN 提交」会整体消失。
+  },
+  {
     id: 'log',
     commandId: 'edrv.svnLog',
     label: '查看日志',
@@ -168,6 +182,8 @@ export const SVN_ACTIONS: readonly SvnActionDef[] = [
     capability: 'tortoise',
     targets: ['file', 'directory', 'root', 'editor'],
     separator: true,
+    // 原生提交就绪后隐藏本过渡项（自研替换时间线）
+    coveredBy: 'commit',
   },
   {
     id: 'tortoise-log',

@@ -989,7 +989,7 @@ describe('foregroundHelperArgv / processNameOf（前台置顶助手）', () => {
 describe('svnEditorActions（编辑区右键动作表）', () => {
   const base = { wcRoot: '/wc', svnPath: 'svn', tortoiseExe: 'C:\\T\\TortoiseProc.exe' }
   /** 自研已就绪的能力集合（P2 差异/还原 + P3 日志）。 */
-  const features = ['diff', 'revert', 'log'] as const
+  const features = ['diff', 'revert', 'log', 'commit'] as const
 
   it('未加载/未受管理返回空数组（整组隐藏）', () => {
     expect(svnEditorActions(null)).toEqual([])
@@ -998,7 +998,7 @@ describe('svnEditorActions（编辑区右键动作表）', () => {
 
   it('受管理且仅 CLI 可用：自研项（更新 + 比较 + 日志），无 Tortoise 项', () => {
     const actions = svnEditorActions({ ...base, managed: true, svnCli: true, tortoise: false, svnFeatures: features })
-    expect(actions.map((item) => item.id)).toEqual(['edrv.svnEditorUpdate', 'edrv.svnEditorDiff', 'edrv.svnEditorLog'])
+    expect(actions.map((item) => item.id)).toEqual(['edrv.svnEditorUpdate', 'edrv.svnEditorDiff', 'edrv.svnEditorcommit', 'edrv.svnEditorLog'])
     expect(actions[0].kind).toBe('update')
     expect(actions[1]).toMatchObject({ kind: 'cli', actionId: 'diff-base' })
   })
@@ -1008,13 +1008,13 @@ describe('svnEditorActions（编辑区右键动作表）', () => {
     expect(actions.map((item) => item.id)).toEqual([
       'edrv.svnEditorUpdate',
       'edrv.svnEditorDiff',
+      // 原生提交已就绪 → Tortoise 提交隐藏；追溯仍无自研实现
+      'edrv.svnEditorcommit',
       'edrv.svnEditorLog',
-      // 提交与追溯无自研实现 → 保留官方入口
-      'edrv.svnEditorCommit',
       'edrv.svnEditorBlame',
     ])
-    const commit = actions.find((item) => item.id === 'edrv.svnEditorCommit')
-    expect(commit).toMatchObject({ kind: 'tortoise', tortoiseAction: 'commit' })
+    const commit = actions.find((item) => item.id === 'edrv.svnEditorcommit')
+    expect(commit).toMatchObject({ kind: 'cli', actionId: 'commit' })
     // 被自研覆盖的三项不再出现（这正是用户「点到官方弹窗」的根因）
     expect(actions.some((item) => item.id === 'edrv.svnEditorTortoiseDiff')).toBe(false)
     expect(actions.some((item) => item.id === 'edrv.svnEditorTortoiseRevert')).toBe(false)
@@ -1035,10 +1035,10 @@ describe('svnEditorActions（编辑区右键动作表）', () => {
     expect(ids).toContain('edrv.svnEditorLog')
   })
 
-  it('受管理但 CLI 不可用且 Tortoise 可用：仅未被覆盖的 Tortoise 项（提交/追溯）', () => {
+  it('受管理但 CLI 不可用且 Tortoise 可用：只剩未被覆盖的追溯项', () => {
     const actions = svnEditorActions({ ...base, managed: true, svnCli: false, tortoise: true, svnFeatures: features })
-    expect(actions.map((item) => item.kind)).toEqual(['tortoise', 'tortoise'])
-    expect(actions.map((item) => item.tortoiseAction)).toEqual(['commit', 'blame'])
+    expect(actions.map((item) => item.kind)).toEqual(['tortoise'])
+    expect(actions.map((item) => item.tortoiseAction)).toEqual(['blame'])
   })
 
   it('状态门禁渗透到编辑区：未版本控制文件只出「加入版本控制」', () => {
@@ -1183,7 +1183,7 @@ describe('createSvnRpc svn.aiPlan（AI 智能整理分析）', () => {
     const { handlers } = createSvnRpc(deps)
     const res = await (handlers as Record<string, (a: never) => unknown>)['svn.aiPlan']({} as never) as { ok: boolean; error?: string }
     expect(res.ok).toBe(false)
-    expect(res.error).toContain('模型流失败')
+    expect(res.error).toContain('调用失败')
   })
 
   it('diff 失败降级 paths-only（diffIncluded=false，分析不中断）', async () => {

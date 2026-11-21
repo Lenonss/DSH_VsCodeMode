@@ -135,6 +135,19 @@
 [data-edrv-view] .edrv-editor-area > .edrv-diffbar { max-height: calc(100% - 20px); }
 [data-edrv-view] .edrv-diffbar-row { display: flex; align-items: center; gap: 6px; height: 36px; padding: 4px 5px 4px 12px; flex-wrap: nowrap; }
 [data-edrv-view] .edrv-diffbar-count { font-size: 12px; font-weight: 600; color: var(--dsw-alias-label-primary, #1f2933); min-width: 42px; text-align: center; white-space: nowrap; cursor: pointer; }
+
+/* HTML 计划页签（计划模式）：状态条 + 官方动作 + 沙箱 iframe。
+   iframe 采用 allow-scripts 但不给 allow-same-origin，页面与宿主隔离。 */
+[data-edrv-view] .edrv-htmlplan { flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--dsw-alias-bg-base, #fff); }
+[data-edrv-view] .edrv-htmlplan-bar { display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 10px; flex: 0 0 auto; border-bottom: 1px solid var(--dsw-alias-border-l1, rgba(0,0,0,.08)); }
+[data-edrv-view] .edrv-htmlplan-title { font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 42%; }
+[data-edrv-view] .edrv-htmlplan-state { font-size: 11px; padding: 1px 8px; border-radius: 9px; border: 1px solid var(--dsw-alias-border-l1, rgba(0,0,0,.12)); color: var(--dsw-alias-label-secondary, #6b7280); white-space: nowrap; }
+[data-edrv-view] .edrv-htmlplan-state-reviewing { color: var(--dsw-alias-state-warning-primary, #b45309); border-color: currentColor; }
+[data-edrv-view] .edrv-htmlplan-state-approved { color: var(--dsw-alias-state-success-primary, #15803d); border-color: currentColor; }
+[data-edrv-view] .edrv-htmlplan-state-planning, [data-edrv-view] .edrv-htmlplan-state-revising { color: var(--dsw-alias-state-accent-primary, #2563eb); border-color: currentColor; }
+[data-edrv-view] .edrv-htmlplan-notice { flex: 0 0 auto; padding: 3px 10px; font-size: 11px; color: var(--dsw-alias-label-secondary, #6b7280); }
+[data-edrv-view] .edrv-htmlplan-warn { flex: 0 0 auto; padding: 4px 10px; font-size: 11px; color: var(--dsw-alias-state-warning-primary, #b45309); background: var(--dsw-alias-bg-layer-1, rgba(255,193,7,.1)); border-bottom: 1px solid var(--dsw-alias-border-l1, rgba(0,0,0,.08)); }
+[data-edrv-view] .edrv-htmlplan-frame { flex: 1 1 auto; width: 100%; min-height: 0; border: none; background: #fff; }
 [data-edrv-view] .edrv-diffbar-count.edrv-count-file { min-width: 64px; cursor: default; }
 [data-edrv-view] .edrv-diffbar-file { flex: 1; min-width: 0; font-size: 11px; color: var(--dsw-alias-label-tertiary, #9aa5b1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 [data-edrv-view] .edrv-pill { font-size: 11px; padding: 3px 10px; border: none; border-radius: 999px; cursor: pointer; white-space: nowrap; font-weight: 600; }
@@ -760,6 +773,70 @@
   [data-edrv-view] .edrv-update-path { white-space: normal !important; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
   [data-edrv-view] .edrv-update-foot { flex-wrap: wrap; padding: 8px; }
   [data-edrv-view] .edrv-update-counts { flex-basis: 100%; }
+}
+
+/* 原生 SVN 提交窗口：勾选范围是主信息，骨架与更新窗口一致；本前缀规则独立，不覆盖侧栏 .edrv-svn-*。 */
+[data-edrv-view] .edrv-floating-content.edrv-svncommit-dialog { padding: 0; gap: 0; overflow: hidden; }
+[data-edrv-view] .edrv-svncommit-close { display: grid; place-items: center; flex: none; width: 24px; height: 22px; border: 0; border-radius: 4px; background: none; color: var(--dsw-alias-label-secondary, #485762); font-size: 12px; line-height: 1; cursor: pointer; }
+[data-edrv-view] .edrv-svncommit-close:disabled { opacity: .35; cursor: default; }
+[data-edrv-view] .edrv-svncommit-close:not(:disabled):hover { background: var(--dsw-alias-interactive-bg-hover, #e7edf0); color: var(--dsw-alias-label-primary, #1f2933); }
+[data-edrv-view] .edrv-svncommit-close:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary, #2869b4); outline-offset: 1px; }
+[data-edrv-view] .edrv-svncommit-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; flex: none; min-height: 34px; padding: 6px 14px; border-bottom: 1px solid var(--dsw-alias-border-l1, #d9e0e4); background: var(--dsw-alias-bg-layer-1, #fff); }
+[data-edrv-view] .edrv-svncommit-ctl { flex: none; max-width: 160px; height: 24px; padding: 0 8px; font-size: 11px; line-height: 22px; }
+[data-edrv-view] .edrv-svncommit-bar .edrv-svn-check { flex: none; gap: 4px; font-size: 11px; color: var(--dsw-alias-label-secondary, #485762); }
+[data-edrv-view] .edrv-svncommit-badge { flex: none; margin-left: auto; padding: 1px 8px; border: 1px solid var(--dsw-alias-border-l1, #d9e0e4); border-radius: 10px; background: var(--dsw-alias-bg-layer-2, #f1f4f5); color: var(--dsw-alias-label-secondary, #485762); font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+[data-edrv-view] .edrv-svncommit-table { display: flex; flex-direction: column; flex: 1; min-height: 120px; margin: 10px 14px 0; border: 1px solid var(--dsw-alias-border-l1, #d9e0e4); border-radius: 5px; overflow: hidden; background: var(--dsw-alias-bg-layer-1, #fff); }
+[data-edrv-view] .edrv-svncommit-cols, [data-edrv-view] .edrv-svncommit-row { display: grid; grid-template-columns: 34px 24px minmax(0, 1fr); align-items: center; }
+[data-edrv-view] .edrv-svncommit-cols { flex: none; height: 28px; padding: 0 10px; background: var(--dsw-alias-bg-layer-2, #f1f4f5); border-bottom: 1px solid var(--dsw-alias-border-l1, #d9e0e4); color: var(--dsw-alias-label-secondary, #485762); font-size: 11px; font-weight: 600; }
+[data-edrv-view] .edrv-svncommit-cols > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+[data-edrv-view] .edrv-svncommit-list { flex: 1; min-height: 0; overflow: auto; scrollbar-width: thin; }
+[data-edrv-view] .edrv-svncommit-group { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: 8px; height: 26px; padding: 0 10px; background: var(--dsw-alias-bg-layer-2, #f1f4f5); border-bottom: 1px solid var(--dsw-alias-border-l1, #d9e0e4); color: var(--dsw-alias-label-secondary, #485762); font-size: 11px; font-weight: 600; }
+[data-edrv-view] .edrv-svncommit-gname { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+[data-edrv-view] .edrv-svncommit-gnote { flex: none; padding: 0 6px; border-radius: 8px; background: var(--dsw-alias-interactive-bg-hover, #e7edf0); color: var(--dsw-alias-state-warn-primary, #a05d22); font-size: 10px; font-weight: 400; }
+[data-edrv-view] .edrv-svncommit-gcount { flex: none; margin-left: auto; color: var(--dsw-alias-label-tertiary, #65737c); font-size: 10px; font-weight: 400; font-variant-numeric: tabular-nums; }
+[data-edrv-view] .edrv-svncommit-row { height: 26px; padding: 0 10px; font-size: 12px; color: var(--dsw-alias-label-primary, #202932); }
+[data-edrv-view] .edrv-svncommit-row:hover { background: var(--dsw-alias-interactive-bg-hover, #ecf3f9); }
+[data-edrv-view] .edrv-svncommit-pick { display: flex; align-items: center; }
+[data-edrv-view] .edrv-svncommit-path { min-width: 0; padding-right: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--ds-font-family-code, ui-monospace, monospace); font-size: 11px; }
+[data-edrv-view] .edrv-svncommit-empty { display: grid; place-items: center; flex: 1; padding: 24px; color: var(--dsw-alias-label-tertiary, #65737c); font-size: 12px; }
+[data-edrv-view] .edrv-svncommit-cb { position: relative; flex: none; box-sizing: border-box; width: 13px; height: 13px; margin: 0; border: 1px solid var(--dsw-alias-border-l2, #cdd6da); border-radius: 3px; background: var(--dsw-alias-bg-layer-1, #fff); cursor: pointer; appearance: none; -webkit-appearance: none; }
+[data-edrv-view] .edrv-svncommit-cb:checked, [data-edrv-view] .edrv-svncommit-cb:indeterminate { border-color: var(--dsw-alias-brand-primary, #2869b4); background: var(--dsw-alias-brand-primary, #2869b4); }
+/* 勾/半勾用 SVG 背景绘制：::after 在 input 上不生成。 */
+[data-edrv-view] .edrv-svncommit-cb:checked { background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'><path d='M2.4 6.3 4.7 8.5 9.6 3.3' fill='none' stroke='%23fff' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/></svg>"); background-size: 12px 12px; background-position: center; background-repeat: no-repeat; }
+[data-edrv-view] .edrv-svncommit-cb:indeterminate { background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'><rect x='2.4' y='5' width='7.2' height='2' rx='1' fill='%23fff'/></svg>"); background-size: 12px 12px; background-position: center; background-repeat: no-repeat; }
+[data-edrv-view] .edrv-svncommit-cb:disabled { opacity: .45; cursor: default; }
+[data-edrv-view] .edrv-svncommit-cb:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary, #2869b4); outline-offset: 1px; }
+[data-edrv-view] .edrv-svncommit-compose { display: flex; flex-direction: column; gap: 4px; flex: none; padding: 10px 14px 0; }
+[data-edrv-view] .edrv-svncommit-composehead { display: flex; align-items: baseline; gap: 10px; min-width: 0; font-size: 11px; }
+[data-edrv-view] .edrv-svncommit-label { flex: none; font-weight: 600; color: var(--dsw-alias-label-primary, #1f2933); }
+[data-edrv-view] .edrv-svncommit-hint { flex: none; color: var(--dsw-alias-label-tertiary, #65737c); font-variant-numeric: tabular-nums; }
+[data-edrv-view] .edrv-svncommit-error { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dsw-alias-state-error-primary, #b93b43); }
+[data-edrv-view] .edrv-svncommit-warn { color: var(--dsw-alias-state-warn-primary, #a05d22); }
+[data-edrv-view] .edrv-svncommit-msg { box-sizing: border-box; flex: none; width: 100%; min-height: 76px; max-height: 30vh; padding: 7px 9px; border: 1px solid var(--dsw-alias-border-l1, #d9e0e4); border-radius: 6px; background: var(--dsw-alias-bg-layer-1, #fff); color: var(--dsw-alias-label-primary, #202932); font-family: var(--ds-font-family-code, ui-monospace, monospace); font-size: 12px; line-height: 1.6; resize: vertical; }
+[data-edrv-view] .edrv-svncommit-msg:focus { outline: none; border-color: var(--dsw-alias-brand-primary, #2869b4); box-shadow: 0 0 0 1px var(--dsw-alias-brand-primary, #2869b4); }
+[data-edrv-view] .edrv-svncommit-msg::placeholder { color: var(--dsw-alias-label-tertiary, #9aa5b1); }
+[data-edrv-view] .edrv-svncommit-result { flex: none; max-height: 96px; margin: 8px 14px 0; padding: 6px 10px; overflow: auto; border: 1px solid var(--dsw-alias-border-l1, #d9e0e4); border-left-width: 3px; border-radius: 5px; background: var(--dsw-alias-bg-layer-2, #f1f4f5); color: var(--dsw-alias-label-secondary, #485762); font-family: var(--ds-font-family-code, ui-monospace, monospace); font-size: 11px; line-height: 1.6; user-select: text; }
+[data-edrv-view] .edrv-svncommit-result.is-ok { border-left-color: var(--dsw-alias-state-success-primary, #23704e); color: var(--dsw-alias-label-primary, #202932); }
+[data-edrv-view] .edrv-svncommit-telemetry { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 14px; flex: none; min-height: 26px; padding: 6px 14px; font-size: 11px; color: var(--dsw-alias-label-secondary, #485762); font-variant-numeric: tabular-nums; }
+[data-edrv-view] .edrv-svncommit-ai { max-width: 34ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dsw-alias-label-tertiary, #65737c); }
+[data-edrv-view] .edrv-svncommit-foot { display: flex; align-items: center; gap: 8px; flex: none; padding: 10px 14px; border-top: 1px solid var(--dsw-alias-border-l1, #d9e0e4); font-size: 11px; }
+[data-edrv-view] .edrv-svncommit-counts { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dsw-alias-label-secondary, #485762); font-variant-numeric: tabular-nums; }
+[data-edrv-view] .edrv-svncommit-foot .edrv-svn-act { flex: none; min-width: 74px; height: 26px; padding: 0 10px; font-size: 11px; line-height: 24px; }
+[data-edrv-view] .edrv-svncommit-foot .edrv-svncommit-primary { border-color: var(--dsw-alias-brand-primary, #2869b4); background: var(--dsw-alias-brand-primary, #2869b4); color: #fff; font-weight: 600; }
+[data-edrv-view] .edrv-svncommit-foot .edrv-svncommit-primary:not(:disabled):hover { background: var(--dsw-alias-brand-primary-hover, #1f5aa0); color: #fff; }
+[data-edrv-view] .edrv-svncommit-foot .edrv-svn-act:focus-visible, [data-edrv-view] .edrv-svncommit-ctl:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary, #2869b4); outline-offset: 2px; }
+[data-edrv-view] .edrv-svncommit-foot .edrv-svn-act:disabled { opacity: .45; cursor: default; }
+@media (max-width: 620px) {
+  [data-edrv-view] .edrv-svncommit-bar { padding: 6px 8px; }
+  [data-edrv-view] .edrv-svncommit-badge { margin-left: 0; }
+  [data-edrv-view] .edrv-svncommit-table { margin: 8px 8px 0; }
+  [data-edrv-view] .edrv-svncommit-cols, [data-edrv-view] .edrv-svncommit-row { grid-template-columns: 26px 24px minmax(0, 1fr); }
+  [data-edrv-view] .edrv-svncommit-row { height: auto; min-height: 34px; padding: 3px 8px; }
+  [data-edrv-view] .edrv-svncommit-path { white-space: normal; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+  [data-edrv-view] .edrv-svncommit-compose { padding: 8px 8px 0; }
+  [data-edrv-view] .edrv-svncommit-telemetry { padding: 6px 8px; }
+  [data-edrv-view] .edrv-svncommit-foot { flex-wrap: wrap; padding: 8px; }
+  [data-edrv-view] .edrv-svncommit-counts { flex-basis: 100%; }
 }
 
 /* ===== 侧栏形态（betterSidebar 面板内编辑区） ===== */

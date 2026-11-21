@@ -543,6 +543,7 @@ function treeRunCtx(target: TreeMenuTarget, ctx: SidebarCtx): SvnActionRunCtx {
     openSvnDiff: (p) => ctx.openSvnDiff?.(p),
     openSvnUpdate: (p) => ctx.openSvnUpdate?.(p),
     openSvnLog: ctx.openSvnLog,
+    openCommitDialog: (seed) => ctx.openSvnCommit?.(seed),
     refreshChanges: ctx.refreshSvnChanges,
     // 确认对话框可注入（测试/宿主可替换；缺省走 window.confirm）
     confirm: ctx.confirm,

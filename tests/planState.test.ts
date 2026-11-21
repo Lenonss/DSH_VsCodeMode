@@ -26,6 +26,13 @@ describe('plan identities', () => {
   })
   it('requires a complete Markdown heading and never invents a disk path', () => {
     expect(planDocument('dsh-resource://plan/s/c', { markdown: '# 实施计划\n内容' })).toEqual({ address: 'dsh-resource://plan/s/c', markdown: '# 实施计划\n内容', title: '实施计划' })
+    // HTML 计划页标记：命中时文档携带 htmlPath（计划页签切到 iframe 渲染）。
+    expect(planDocument('dsh-resource://plan/s/c', { markdown: '# 实施计划\nHTML 计划页：plans/a/plan.packed.html' })).toEqual({
+      address: 'dsh-resource://plan/s/c',
+      markdown: '# 实施计划\nHTML 计划页：plans/a/plan.packed.html',
+      title: '实施计划',
+      htmlPath: 'plans/a/plan.packed.html',
+    })
     expect(planDocument('dsh-resource://plan/s/c', { markdown: 'partial' })).toBeUndefined()
   })
 })

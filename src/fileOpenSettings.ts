@@ -20,7 +20,28 @@ import { log } from './log.js'
 
 export const FILE_OPEN_SETTINGS_NS = 'dsh-vscode-mode'
 export const FILE_OPEN_DEFAULT = 'auto'
-export interface FileOpenSettings { fileOpenTool: string; integrationBaseUrl: string; svnPath: string; tortoisePath: string }
+/** SVN 命令超时倍数默认值（1 = 不放大）。 */
+export const SVN_SCALE_DEFAULT = 1
+/** SVN 超时倍数范围。 */
+export const SVN_SCALE_MIN = 0.2
+export const SVN_SCALE_MAX = 20
+
+export interface FileOpenSettings {
+  fileOpenTool: string
+  integrationBaseUrl: string
+  svnPath: string
+  tortoisePath: string
+  /** SVN 命令超时倍数（0.2–20，默认 1）。 */
+  svnCommandTimeoutScale?: number
+  /** 提交前对未版本化文件自动 svn add（默认 true）。 */
+  svnAutoAddUnversioned?: boolean
+  /** 提交前对缺失文件自动 svn delete（默认 true）。 */
+  svnAutoDeleteMissing?: boolean
+  /** 只读模式：host 拒绝全部写操作（默认 false）。 */
+  svnReadOnly?: boolean
+  /** AI 提交信息风格（默认 plain）。 */
+  aiCommitStyle?: 'plain' | 'conventional'
+}
 export interface FileOpenSettingsState { value: string; revision?: number; update: (value: string, expectedRevision?: number) => Promise<void> }
 
 /** AI 配置默认值（补全默认关；路由空 = 自动；档位空 = 跟随模型默认；任务模型空 = 跟随补全配置）。 */
@@ -429,6 +450,13 @@ export function buildSettingsSchema(z: SettingsDeps['z'], options?: { volatile?:
     // SVN 能力：svn CLI 覆盖（空 = PATH）与 TortoiseSVN 目录（Windows 过渡增强）
     svnPath: withVol(z.string().default('')),
     tortoisePath: withVol(z.string().default(TORTOISE_DIR_DEFAULT)),
+    // SVN 执行与提交（22-agent-tools-and-commit）：超时倍数 / 提交前自动整理 / 只读门禁
+    svnCommandTimeoutScale: withVol(z.number().default(SVN_SCALE_DEFAULT)),
+    svnAutoAddUnversioned: withVol(z.boolean().default(true)),
+    svnAutoDeleteMissing: withVol(z.boolean().default(true)),
+    svnReadOnly: withVol(z.boolean().default(false)),
+    // AI：提交信息风格（plain = 中文模板 / conventional = Conventional Commits）
+    aiCommitStyle: withVol(z.string().default('plain')),
     // 原生打开范围（逗号分隔后缀；默认 = 让位清单并集，csv/tsv 决策见 shared/nativeOpen.ts）
     nativeOpenExts: withVol(z.string().default(DEFAULT_NATIVE_CSV)),
     // 交互特性开关（默认开）：拖拽/粘贴/复制的引用接入；搜索面板的全局替换
@@ -533,6 +561,25 @@ function tortoiseDirValueOf(config: unknown): string {
   return typeof raw === 'string' && raw.trim() ? raw.trim() : TORTOISE_DIR_DEFAULT
 }
 
+/** 布尔设置读取（缺省/非布尔 → 默认值）。 */
+function boolValueOf(stored: unknown, key: string, fallback: boolean): boolean {
+  const raw = configField(stored, key)
+  return typeof raw === 'boolean' ? raw : fallback
+}
+
+/** 超时倍数读取（越界夹到 0.2–20；非数值回落默认）。 */
+function scaleValueOf(stored: unknown): number {
+  const raw = configField(stored, 'svnCommandTimeoutScale')
+  const value = typeof raw === 'number' ? raw : Number(raw)
+  if (!Number.isFinite(value)) return SVN_SCALE_DEFAULT
+  return Math.min(SVN_SCALE_MAX, Math.max(SVN_SCALE_MIN, value))
+}
+
+/** AI 提交信息风格读取（未知值回落 plain）。 */
+function commitStyleValueOf(stored: unknown): 'plain' | 'conventional' {
+  return configField(stored, 'aiCommitStyle') === 'conventional' ? 'conventional' : 'plain'
+}
+
 /**
  * 安装设置 section（版本自适应；任一策略不可用返回 false 不抛错）。
  * @author ddj 2026年08月24号 / 2026年09月02号
@@ -579,6 +626,46 @@ function aiValueOf(stored: unknown): { enabled: boolean; provider: string; model
   }
 }
 
+/** SVN 执行设置视图（host 执行器/提交/工具共用）。 */
+export interface PluginSvnSettings {
+  /** svn 可执行文件（空 = PATH）。 */
+  svnPath: string
+  /** TortoiseSVN 目录（Windows 过渡增强）。 */
+  tortoisePath: string
+  /** 只读模式（写操作统一拒绝）。 */
+  readOnly: boolean
+  /** 命令超时倍数（0.2–20）。 */
+  commandTimeoutScale: number
+}
+
+/** 提交前自动整理默认开关。 */
+export interface PluginSvnCommitDefaults {
+  /** 未版本化文件自动 add。 */
+  autoAdd: boolean
+  /** 缺失文件自动 delete。 */
+  autoDelete: boolean
+}
+
+/** AI 界面设置视图。 */
+export interface PluginAiUiSettings {
+  /** 提交信息风格。 */
+  commitStyle: 'plain' | 'conventional'
+}
+
+/** setupOpenSettings 句柄（设置读写 + 分面视图读取）。 */
+export interface OpenSettingsHandle extends FileOpenSettingsState {
+  /** AI 补全配置。 */
+  ai: () => AiConfigView
+  /** 写 AI 补全配置。 */
+  aiUpdate: (patch: AiConfigPatch, expectedRevision?: number) => Promise<AiConfigView>
+  /** SVN 执行设置。 */
+  svn: () => PluginSvnSettings
+  /** 提交自动整理默认值。 */
+  svnCommitDefaults: () => PluginSvnCommitDefaults
+  /** AI 界面设置。 */
+  aiUi: () => PluginAiUiSettings
+}
+
 /**
  * 注册设置命名空间，并提供 host 侧的读取与更新状态。
  * @author ddj 2026年08月24号
@@ -587,7 +674,7 @@ function aiValueOf(stored: unknown): { enabled: boolean; provider: string; model
  * @param onChange 设置变化回调
  * @returns 设置状态（fileOpenTool 值 + AI 补全配置读写）
  */
-export function setupOpenSettings(ctx: Ctx, config: unknown, onChange: (value: string) => void): FileOpenSettingsState & { ai: () => AiConfigView; aiUpdate: (patch: AiConfigPatch, expectedRevision?: number) => Promise<AiConfigView>; svn: () => { svnPath: string; tortoisePath: string } } {
+export function setupOpenSettings(ctx: Ctx, config: unknown, onChange: (value: string) => void): OpenSettingsHandle {
   let current = configValue(config)
   let revision: number | undefined
   let provider: SettingsProvider | undefined
@@ -605,13 +692,27 @@ export function setupOpenSettings(ctx: Ctx, config: unknown, onChange: (value: s
     aiCurrent = stored !== undefined ? aiValueOf(stored) : aiCurrent
   }
 
-  /** SVN 路径当前值（settings 未就绪回退配置值）。 */
-  let svnCurrent: { svnPath: string; tortoisePath: string } = {
+  /** SVN 执行设置当前值（settings 未就绪回退配置值；只读/倍数/自动整理在此汇总）。 */
+  let svnCurrent: PluginSvnSettings & { autoAdd: boolean; autoDelete: boolean } = {
     svnPath: svnPathValueOf(config),
     tortoisePath: tortoiseDirValueOf(config),
+    readOnly: boolValueOf(config, 'svnReadOnly', false),
+    commandTimeoutScale: scaleValueOf(config),
+    autoAdd: boolValueOf(config, 'svnAutoAddUnversioned', true),
+    autoDelete: boolValueOf(config, 'svnAutoDeleteMissing', true),
   }
+  /** AI 界面设置当前值（提交信息风格 / 整理是否默认按勾选范围）。 */
+  let aiUiCurrent: PluginAiUiSettings = { commitStyle: commitStyleValueOf(config) }
   const svnSync = (stored: unknown): void => {
-    svnCurrent = { svnPath: svnPathValueOf(stored), tortoisePath: tortoiseDirValueOf(stored) }
+    svnCurrent = {
+      svnPath: svnPathValueOf(stored),
+      tortoisePath: tortoiseDirValueOf(stored),
+      readOnly: boolValueOf(stored, 'svnReadOnly', false),
+      commandTimeoutScale: scaleValueOf(stored),
+      autoAdd: boolValueOf(stored, 'svnAutoAddUnversioned', true),
+      autoDelete: boolValueOf(stored, 'svnAutoDeleteMissing', true),
+    }
+    aiUiCurrent = { commitStyle: commitStyleValueOf(stored) }
   }
   /** 读取 settings 存储值（describe 未就绪返回 undefined）。 */
   const storedValue = (): unknown => {
@@ -623,6 +724,11 @@ export function setupOpenSettings(ctx: Ctx, config: unknown, onChange: (value: s
     integrationBaseUrl: baseValueOf(config),
     svnPath: svnCurrent.svnPath,
     tortoisePath: svnCurrent.tortoisePath,
+    svnCommandTimeoutScale: svnCurrent.commandTimeoutScale,
+    svnAutoAddUnversioned: svnCurrent.autoAdd,
+    svnAutoDeleteMissing: svnCurrent.autoDelete,
+    svnReadOnly: svnCurrent.readOnly,
+    aiCommitStyle: aiUiCurrent.commitStyle,
   }, {
     setSource: (source) => {
       notify(source().fileOpenTool)
@@ -656,6 +762,8 @@ export function setupOpenSettings(ctx: Ctx, config: unknown, onChange: (value: s
     },
     ai: () => aiCurrent,
     svn: () => svnCurrent,
+    svnCommitDefaults: () => ({ autoAdd: svnCurrent.autoAdd, autoDelete: svnCurrent.autoDelete }),
+    aiUi: () => aiUiCurrent,
     aiUpdate: async (patch: AiConfigPatch, expectedRevision?: number): Promise<AiConfigView> => {
       const stored = { ...aiCurrent }
       const body: Record<string, unknown> = {}

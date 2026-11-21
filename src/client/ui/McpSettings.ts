@@ -410,6 +410,11 @@ function SvnSettingsSection() {
   const [svnDraft, setSvnDraft] = React.useState(null)
   const [tortoisePath, setTortoisePath] = React.useState('')
   const [tortoiseDraft, setTortoiseDraft] = React.useState(null)
+  const [readOnly, setReadOnly] = React.useState(false)
+  const [scale, setScale] = React.useState(1)
+  const [autoAdd, setAutoAdd] = React.useState(true)
+  const [autoDelete, setAutoDelete] = React.useState(true)
+  const [commitStyle, setCommitStyle] = React.useState('plain')
   const [svnInfo, setSvnInfo] = React.useState(null)
   const [busy, setBusy] = React.useState(false)
   const [error, setError] = React.useState('')
@@ -418,6 +423,11 @@ function SvnSettingsSection() {
       const snap = settings?.getSnapshot?.()
       setSvnPath(typeof snap?.value?.svnPath === 'string' ? snap.value.svnPath : '')
       setTortoisePath(typeof snap?.value?.tortoisePath === 'string' ? snap.value.tortoisePath : '')
+      setReadOnly(snap?.value?.svnReadOnly === true)
+      setScale(typeof snap?.value?.svnCommandTimeoutScale === 'number' ? snap.value.svnCommandTimeoutScale : 1)
+      setAutoAdd(snap?.value?.svnAutoAddUnversioned !== false)
+      setAutoDelete(snap?.value?.svnAutoDeleteMissing !== false)
+      setCommitStyle(snap?.value?.aiCommitStyle === 'conventional' ? 'conventional' : 'plain')
     }
     onChange()
     return settings?.subscribe?.(onChange)
@@ -452,6 +462,12 @@ function SvnSettingsSection() {
     setTortoiseDraft(null)
     savePath('tortoisePath', next, () => setTortoisePath(next))
   }
+  /** 通用设置写入（布尔/数字/枚举；失败就地报错，不吞）。 */
+  const saveValue = (key, value, apply) => {
+    setBusy(true); setError('')
+    if (!settings?.set) { setError('设置服务不可用'); setBusy(false); return }
+    settings.set(key, value).then(() => { apply() }).catch((e) => setError(String(e))).finally(() => setBusy(false))
+  }
   const disabled = loading || unavailable || notReady || busy || snapshot?.writable === false
   return React.createElement('section', { className: 'vsm-panel' },
     React.createElement('h3', { className: 'vsm-panel-title' }, 'SVN'),
@@ -477,6 +493,49 @@ function SvnSettingsSection() {
           onBlur: commitTortoise,
           onKeyDown: (event) => { if (event.key === 'Enter') commitTortoise() },
         })),
+      React.createElement('label', { className: 'vsm-general-row' },
+        React.createElement('span', null, '超时倍数'),
+        React.createElement('input', {
+          value: String(scale), placeholder: '1', disabled, title: 'SVN 命令超时倍数（0.2–20；仓库慢或工作副本大时调到 2–3）',
+          onChange: (event) => {
+            const next = Number(event.target.value)
+            if (Number.isFinite(next)) setScale(next)
+          },
+          onBlur: () => saveValue('svnCommandTimeoutScale', Math.min(20, Math.max(0.2, scale)), () => {}),
+        })),
+      React.createElement('label', { className: 'vsm-general-row' },
+        React.createElement('span', null, '只读模式'),
+        React.createElement('input', {
+          type: 'checkbox', checked: readOnly, disabled,
+          title: '开启后拒绝全部写操作（提交/还原/更新/属性写入），只保留查看与比对',
+          onChange: () => saveValue('svnReadOnly', !readOnly, () => setReadOnly(!readOnly)),
+        })),
+      React.createElement('label', { className: 'vsm-general-row' },
+        React.createElement('span', null, '提交前自动加入'),
+        React.createElement('input', {
+          type: 'checkbox', checked: autoAdd, disabled,
+          title: '提交时对勾选的未版本控制文件自动 svn add（关闭后这些文件会被跳过并在结果里列出）',
+          onChange: () => saveValue('svnAutoAddUnversioned', !autoAdd, () => setAutoAdd(!autoAdd)),
+        })),
+      React.createElement('label', { className: 'vsm-general-row' },
+        React.createElement('span', null, '提交前自动删除'),
+        React.createElement('input', {
+          type: 'checkbox', checked: autoDelete, disabled,
+          title: '提交时对勾选的已删除文件自动 svn delete（关闭后这些文件会被跳过并在结果里列出）',
+          onChange: () => saveValue('svnAutoDeleteMissing', !autoDelete, () => setAutoDelete(!autoDelete)),
+        })),
+      React.createElement('label', { className: 'vsm-general-row' },
+        React.createElement('span', null, 'AI 提交信息风格'),
+        React.createElement('select', {
+          value: commitStyle, disabled,
+          title: 'plain = 中文「<模块>：<标题>」；conventional = type(scope): subject',
+          onChange: (event) => {
+            const next = event.target.value === 'conventional' ? 'conventional' : 'plain'
+            saveValue('aiCommitStyle', next, () => setCommitStyle(next))
+          },
+        },
+          React.createElement('option', { value: 'plain' }, '中文模板'),
+          React.createElement('option', { value: 'conventional' }, 'Conventional Commits'))),
     ),
   )
 }

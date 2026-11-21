@@ -125,3 +125,14 @@
 **收尾情况**：夹具目录 `.validation/accept-030/` 已删除；验收打开的 7 个页签已关闭；
 composer 草稿已清空；`src/search/ripgrep.ts`（flush 测试用）已 `git checkout` 还原。
 与本轮功能无关的另一处 404（`dsh-notify-me/host-bridge`、`changes.summary`）来自其他插件，未计入结论。
+
+### v0.31.0 · 2026-11-15 · SVN 提交对话框 UI 重做（静态夹具验收）
+
+| 项 | 结果 | 证据 |
+| --- | --- | --- |
+| 结构与版式 | ✅（夹具） | 用真实 `src/client/styles/editor.css` 渲染新结构夹具，880×680 与 500×680 两档截图：无横向滚动、页脚主按钮可见、分组头吸顶且三态勾选可见 |
+| 换行与溢出 | ✅（夹具） | 实测内容高度 646px 与容器 646px 相等（`scrollHeight` 一致，不再裁掉页脚）；500px 档触发紧凑媒体查询，工具带与页脚按规则换行 |
+| 类型 / 单测 / 构建 | ✅ | `tsc --noEmit` 0 error；`vitest run tests/svnCommitModel.test.ts` 11/11；`pnpm build` 通过，`lib/client.js` 含 `edrv-svncommit-group` |
+| 真机（SVN 工作副本） | — | 本会话工作区不是受管 SVN 工作副本，未能在运行中的 GUI 打开真实提交对话框 |
+
+**未覆盖**：暗色主题实测（新规则全部使用 `--dsw-alias-*` 令牌且声明处自带兜底，无硬编码底色）、真实清单规模下的吸顶分组、AI 生成与真实提交结果回填。夹具与截图均为临时产物，验收后已删除。

@@ -179,7 +179,8 @@ describe('buildTabMenu SVN 组（动态能力守卫）', () => {
   })
 
   it('svnReady + tortoiseReady 时追加完整 SVN 组（更新 + 比较 + 查看日志 + Tortoise 五项）', () => {
-    // 目标不在变更清单（干净文件）→ 无「加入版本控制」「SVN 还原」（状态门禁），仅比较与日志
+    // 目标不在变更清单（干净文件）→ 无「加入版本控制」「SVN 还原」（状态门禁）；
+    // 「SVN 提交…」不设状态门禁（提交清单由对话框给出），干净文件同样出现
     expect(ids(buildTabMenu(state(svnState)))).toEqual([
       'add-to-conversation',
       'close', 'close-others', 'close-right', 'close-saved', 'close-all',
@@ -188,6 +189,7 @@ describe('buildTabMenu SVN 组（动态能力守卫）', () => {
       'toggle-pinned',
       'svn-update',
       'svn-diff-base',
+      'svn-commit',
       'svn-log',
       'svn-tortoise-commit', 'svn-tortoise-log', 'svn-tortoise-diff', 'svn-tortoise-blame', 'svn-tortoise-revert',
     ])

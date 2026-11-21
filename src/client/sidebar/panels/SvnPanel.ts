@@ -445,6 +445,12 @@ function svnToolbarEl(props) {
             className: 'edrv-svn-act', title: '导出当前列表为 HTML 报表（仅本地查看，不外发）',
             onClick: handlers.onExportHtml,
           }, '导出 HTML'),
+          React.createElement('button', {
+            className: 'edrv-svn-act edrv-svnplan-primary',
+            disabled: handlers.busy,
+            title: '打开原生提交对话框（勾选文件 → 写信息 → 提交；未版本控制默认不勾）',
+            onClick: () => handlers.commit?.(),
+          }, '提交…'),
           ((paths.unversioned.length || paths.revert.length)
             ? React.createElement('span', { className: 'edrv-svn-sep' })
             : null),
@@ -997,6 +1003,8 @@ export function SvnPanel(props) {
       onExportHtml: () => onExport('html'),
       add: onAdd,
       revert: onRevert,
+      // 提交入口：只打开对话框（提交范围与信息由人在对话框里确认）
+      commit: () => ctxRef.current?.openSvnCommit?.({}),
     }),
   })
   /** @private @author ddj 2026年10月15号 Open the shared update window independently of selection and local changes. */
@@ -1051,6 +1059,15 @@ export function SvnPanel(props) {
         onResume: aiResume,
         onCancelRest: aiCancelRest,
         onClose: closeAiPlan,
+        // 逐组提交只预填提交对话框（绝不自动提交）
+        onCommitGroup: (group) => {
+          closeAiPlan()
+          const body = group.body ?? ''
+          ctxRef.current?.openSvnCommit?.({
+            paths: group.paths,
+            message: body ? group.subject + '\n\n' + body : group.subject,
+          })
+        },
       })
     : null
 

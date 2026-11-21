@@ -46,6 +46,7 @@ describe('keybindings shared defaults', () => {
       'edrv.toggleSidebar': 'Ctrl+B',
       'edrv.searchInFiles': 'Ctrl+Shift+F',
       'edrv.toggleMarkdownPreview': 'Ctrl+Shift+V',
+      'edrv.previewHtml': 'Ctrl+Alt+V',
       'edrv.navigateBack': 'Alt+ArrowLeft|Ctrl+Alt+-',
       'edrv.navigateForward': 'Alt+ArrowRight|Ctrl+Shift+-',
       'edrv.nextTab': 'Ctrl+Alt+ArrowRight|Ctrl+PageDown',

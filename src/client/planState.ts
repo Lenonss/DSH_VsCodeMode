@@ -1,5 +1,7 @@
 /** Plan identities and live-only event reduction. @author ddj 2026年10月08号 */
-export interface PlanDocument { address: string; markdown: string; title: string }
+import { planPagePathOf } from './htmlPlan/planPage.js'
+
+export interface PlanDocument { address: string; markdown: string; title: string; htmlPath?: string }
 export interface PlanOpen { path?: string; plan?: PlanDocument }
 export interface PlanEntry { type?: string; event: { type: string; seq?: number; data: unknown } }
 export interface PlanWindow { revision: number; entries: readonly PlanEntry[]; change: { kind: string; entries?: readonly PlanEntry[] } }
@@ -51,7 +53,11 @@ export function planDocument(address: string, value: unknown): PlanDocument | un
   if (!isPlanAddress(address) || typeof data.markdown !== 'string') return undefined
   const title = /^#\s+(\S[^\r\n]*)/.exec(data.markdown.trim())?.[1]
   if (!title) return undefined
-  return { address, markdown: data.markdown, title }
+  // HTML 计划页：正文标记行命中时随文档携带路径，计划页签据此切到 iframe 渲染。
+  const htmlPath = planPagePathOf(data.markdown)
+  return htmlPath
+    ? { address, markdown: data.markdown, title, htmlPath }
+    : { address, markdown: data.markdown, title }
 }
 /** @private @author ddj 2026年10月08号 @param sessionId Current session. @param path Explicit plan path. @param cwd Workspace. Stores bounded associations, not file contents. */
 function associate(sessionId: string, path: string, cwd: string): void {

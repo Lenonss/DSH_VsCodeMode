@@ -22,8 +22,8 @@ const ready = (over: Partial<SvnActionContext> = {}): SvnActionContext => ({
   managed: true, svnCli: true, tortoise: true, target: 'file', versioned: true, diffable: true, ...over,
 })
 
-/** 自研已就绪的能力（P2 差异/还原 + P3 日志）——与 host 的 SVN_FEATURES 保持同一口径。 */
-const FEATURES: readonly SvnFeature[] = ['diff', 'revert', 'log']
+/** 自研已就绪的能力（P2 差异/还原 + P3 日志 + P4 提交）——与 host 的 SVN_FEATURES 保持同一口径。 */
+const FEATURES: readonly SvnFeature[] = ['diff', 'revert', 'log', 'commit']
 
 describe('动作目录结构', () => {
   it('动作 id 唯一（重复会让执行器表与显隐规则互相覆盖）', () => {
@@ -48,8 +48,12 @@ describe('动作目录结构', () => {
     expect(SVN_ACTION_BY_ID.cleanup?.surfaces).toEqual(['palette'])
   })
 
-  it('P4 预留：提交动作尚未加入（本阶段不做提交）', () => {
-    expect(SVN_ACTION_BY_ID.commit).toBeUndefined()
+  it('P4 提交动作在册：命令栏 / 文件树 / 页签三入口 + 命令 id', () => {
+    const commit = SVN_ACTION_BY_ID.commit
+    expect(commit?.commandId).toBe('edrv.svnCommit')
+    expect(commit?.surfaces).toEqual(['palette', 'tree', 'tab'])
+    // 不设状态门禁：命令栏/页签/编辑区的求值上下文不带 status，设了会让四入口整项消失
+    expect(commit?.gates ?? []).toEqual([])
   })
 
   it('Tortoise 组首条带分隔线（与 CLI 组视觉分离）', () => {
@@ -132,17 +136,17 @@ describe('入口动作表', () => {
   it('求值结果保持目录顺序（面板/菜单渲染稳定）', () => {
     // 不传 svnFeatures → 自研未声明覆盖，Tortoise 项全部可见（降级口径）
     const visible = visibleSvnActions('tree', ready({ status: 'modified' })).map((a) => a.id)
-    expect(visible).toEqual(['update', 'diff-base', 'revert-cli', 'log', 'tortoise-commit', 'tortoise-log', 'tortoise-diff', 'tortoise-blame', 'tortoise-revert'])
+    expect(visible).toEqual(['update', 'diff-base', 'revert-cli', 'commit', 'log', 'tortoise-commit', 'tortoise-log', 'tortoise-diff', 'tortoise-blame', 'tortoise-revert'])
   })
 })
 
 describe('自研替换时间线（自研就绪项隐藏对应 Tortoise 项）', () => {
-  it('覆盖声明齐备：差异/还原/日志三项声明 coveredBy，提交与追溯不声明', () => {
+  it('覆盖声明齐备：差异/还原/日志/提交四项声明 coveredBy，追溯不声明', () => {
     expect(SVN_ACTION_BY_ID['tortoise-diff']?.coveredBy).toBe('diff')
     expect(SVN_ACTION_BY_ID['tortoise-revert']?.coveredBy).toBe('revert')
     expect(SVN_ACTION_BY_ID['tortoise-log']?.coveredBy).toBe('log')
-    // 提交（P4 未做）与追溯（无自研计划）必须保留官方入口
-    expect(SVN_ACTION_BY_ID['tortoise-commit']?.coveredBy).toBeUndefined()
+    expect(SVN_ACTION_BY_ID['tortoise-commit']?.coveredBy).toBe('commit')
+    // 追溯无自研计划，必须保留官方入口
     expect(SVN_ACTION_BY_ID['tortoise-blame']?.coveredBy).toBeUndefined()
   })
 
@@ -152,17 +156,19 @@ describe('自研替换时间线（自研就绪项隐藏对应 Tortoise 项）', 
     expect(svnActionCovered(diff, [])).toBe(false)
     expect(svnActionCovered(diff, undefined)).toBe(false)
     expect(svnActionCovered(diff, ['revert'])).toBe(false)
+    expect(svnActionCovered(SVN_ACTION_BY_ID['tortoise-commit'], FEATURES)).toBe(true)
     // 未声明 coveredBy 的动作永不被覆盖
-    expect(svnActionCovered(SVN_ACTION_BY_ID['tortoise-commit'], FEATURES)).toBe(false)
+    expect(svnActionCovered(SVN_ACTION_BY_ID['tortoise-blame'], FEATURES)).toBe(false)
   })
 
-  it('自研就绪时：三入口的 Tortoise 差异/还原/日志全部隐藏，提交与追溯保留', () => {
+  it('自研就绪时：三入口的 Tortoise 差异/还原/日志/提交全部隐藏，只剩追溯', () => {
     for (const surface of ['palette', 'tree', 'tab'] as const) {
       const ids = visibleSvnActions(surface, ready({ svnFeatures: FEATURES, status: 'modified' })).map((a) => a.id)
       expect(ids, surface).not.toContain('tortoise-diff')
       expect(ids, surface).not.toContain('tortoise-revert')
       expect(ids, surface).not.toContain('tortoise-log')
-      expect(ids, surface).toContain('tortoise-commit')
+      expect(ids, surface).not.toContain('tortoise-commit')
+      expect(ids, surface).toContain('commit')
       expect(ids, surface).toContain('tortoise-blame')
     }
   })

@@ -43,6 +43,8 @@ import { clientSummary } from './compatSummary.js'
 import { detectSidebarService, hasSideRoute, installSideEditor, routeSideEditor, setEnsureSideEditor, SIDEBAR_INSTALL_CMD } from './sidebarBridge.js'
 import { detectOfficial, installOfficial, registerOfficialFileClaim, OFFICIAL_TAB_KIND, OFFICIAL_TAB_TITLE, isEditorTabActive, markEditorActive, restoreEditorTab, buildFileAddress, readSavedTab, setEditorTabScope } from './officialSidebar.js'
 import { setNativeCsv, setNativeOpenHandler, resetNativeOpen } from './nativeOpenStore.js'
+import { hasOfficialHtmlPreview, installHtmlPreviewProbe, isHtmlPath } from './htmlPreview.js'
+import { installHtmlPlanActions } from './htmlPlan/planActions.js'
 import { setFeaturePrefs } from './featurePrefs.js'
 import { SideEditorTab } from './ui/SideEditorTab.js'
 import { OfficialSideTab } from './ui/OfficialSideTab.js'
@@ -326,6 +328,10 @@ export async function apply(ctx: any): Promise<void> {
   let claimDisposer: (() => void) | null = null
   /** 「添加到对话」动作集：编辑区/Tab 右键菜单注入文件引用与代码块（conversation 服务缺失时各动作安全降级）。 */
   const addToConversation = createAddToConversation(ctx)
+  // 官方 HTML 渲染器探针：可选服务，缺失/旧版一律回退文本编辑，不阻断装配。
+  ctx.effect(() => installHtmlPreviewProbe(ctx, { schedule }), 'vscode-mode: html preview probe')
+  // HTML 计划页动作桥：状态读取 / 官方审批作答 / /plan off / 回填输入框（全部可选服务）。
+  ctx.effect(() => installHtmlPlanActions(ctx), 'vscode-mode: html plan actions')
 
   /**
    * 读取规则列表（rules.list；失败抛错，由快捷菜单按「未校验」降级）。
@@ -772,6 +778,8 @@ export async function apply(ctx: any): Promise<void> {
       //（claim 的 canOpen 同步让位该范围，否则地址又被认领转发回本插件）；形态撤下时解绑
       ctx.effect(() => {
         setNativeOpenHandler((path) => {
+          // 旧版/无官方 HTML 渲染器：不调 openResource，回退本插件文本编辑。
+          if (isHtmlPath(path) && !hasOfficialHtmlPreview()) return false
           const scope = readSessionScope(ctx)
           if (!scope.sessionId) return false
           official.service.openResource?.(buildFileAddress(path, scope.sessionId))

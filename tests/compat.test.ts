@@ -194,7 +194,7 @@ describe('能力检查与 Config volatile 告警', () => {
   it('volatile 标记不完整且在 0.1.7 线 → 显式告警 + 适配行红', async () => {
     resetConfigVolatileState()
     buildSettingsSchema(zLegacy as never, { volatile: true })
-    expect(configVolatileState()).toEqual({ requested: true, marked: 0, total: 17 })
+    expect(configVolatileState()).toEqual({ requested: true, marked: 0, total: 22 })
     const report = await buildReport(ctx, { depsAvailable: true, version: '9.9.9', dshVersion: '0.1.7-alpha.2' })
     expect(report.warnings.some((w) => w.includes('volatile'))).toBe(true)
     const row = versionAdapters('0.1.7-alpha.2').find((item) => item.name.includes('volatile'))
@@ -211,7 +211,7 @@ describe('能力检查与 Config volatile 告警', () => {
     expect(report.warnings.some((w) => w.includes('volatile'))).toBe(false)
     const row = versionAdapters('0.1.7-alpha.2').find((item) => item.name.includes('volatile'))
     expect(row?.active).toBe(true)
-    expect(row?.note).toContain('17/17')
+    expect(row?.note).toContain('22/22')
     resetConfigVolatileState()
     expect(versionAdapters('0.1.7-alpha.2').some((item) => item.name.includes('volatile'))).toBe(false)
   })

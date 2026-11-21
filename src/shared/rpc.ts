@@ -22,7 +22,7 @@ import type { SnippetEntry, SnippetInfo, SnippetProject, SnippetRefInput, Snippe
 import type { QuickMenuDoc } from './quickMenu.js'
 import type { LspCompletionItem, LspCompletionList, LspEnvInstallState, LspExtInfo, LspExtUpdate, LspHover, LspLocation, LspMarketItem, LspPosition, LspSemanticTokens, LspServerStatus, LspSignatureHelp, LspSymbol } from './lsp.js'
 import type { AiConfigPatch, AiConfigView, AiDirectoryView, AiInlineRequest, AiInlineResult } from './ai.js'
-import type { SvnAction, SvnAiPlan, SvnChangeEntry, SvnConflictArtifact, SvnDiffRevResult, SvnIgnoreItem, SvnLogEntry, SvnRemoteOutdatedEntry, SvnStatusPayload, SvnSumEntry, SvnUpdatePoll, SvnUpdateResult, SvnUpdateState } from './svn.js'
+import type { SvnAction, SvnAiPlan, SvnChangeEntry, SvnCommitPlan, SvnCommitResult, SvnConflictArtifact, SvnDiffRevResult, SvnIgnoreItem, SvnLogEntry, SvnRemoteOutdatedEntry, SvnStatusPayload, SvnSumEntry, SvnUpdatePoll, SvnUpdateResult, SvnUpdateState } from './svn.js'
 import type { DapAction, DapAdapterInfo, DapBreakpointAck, DapBreakpointInput, DapConfigSnippet, DapConfigSource, DapDebugConfig, DapFrameView, DapPhase, DapPollResult, DapProcessInfo, DapScopeView, DapVariableView } from './dap.js'
 import { DAP_ACTIONS } from './dap.js'
 import { transportUrl } from './remoteChannel.js'
@@ -539,14 +539,20 @@ export interface RpcRequestMap {
   'svn.conflictArtifacts': { sessionId?: string; path: string }
   'svn.diffLocalPair': { sessionId?: string; left: string; right: string }
   'svn.fileSizes': { sessionId?: string; paths: string[] }
-  /** AI 智能整理：只读分析全部变更，产出分组/还原/忽略三段方案（不写工作副本）。 */
-  'svn.aiPlan': { sessionId?: string }
+  /** AI 智能整理：只读分析变更（paths 限定范围，缺省 = 全部），产出分组/还原/忽略/拆分提交方案。 */
+  'svn.aiPlan': { sessionId?: string; paths?: string[] }
   /** AI 智能整理执行段：按目录合并写入 svn:ignore 属性（propget 合并，不整体覆盖）。 */
   'svn.ignore': { sessionId?: string; items: SvnIgnoreItem[] }
   /** 混合通道投递口：会话 agent 深度分析后把方案 POST 回面板收件箱（免鉴权本地 RPC）。 */
   'svn.aiPlanSubmit': { sessionId?: string; plan: unknown }
   /** 混合通道取件口：面板轮询取收件箱方案（since = 注入时刻，早于它的旧投递不算新件）。 */
   'svn.aiPlanPending': { sessionId?: string; since?: number }
+  /** 提交计划：变更清单 + 既有 changelist + 最近提交信息（只读）。 */
+  'svn.commitPlan': { sessionId?: string }
+  /** 原生提交：仅提交给定路径；host 先 status 重查再按开关自动 add/delete。 */
+  'svn.commit': { sessionId?: string; paths: string[]; message: string; changelist?: string; keepLocks?: boolean; autoAdd?: boolean; autoDelete?: boolean }
+  /** AI 生成提交信息：只分析给定路径（提交范围），产出 subject/body（不提交）。 */
+  'svn.aiCommitMsg': { sessionId?: string; paths: string[]; style?: 'plain' | 'conventional' }
   'edrv.dap.configs': { workspacePath: string }
   'edrv.dap.snippets': {}
   'edrv.dap.processes': { processName?: string }
@@ -732,11 +738,14 @@ export interface RpcOkMap {
   'svn.conflictArtifacts': { artifacts: SvnConflictArtifact[] }
   'svn.diffLocalPair': SvnDiffRevResult
   'svn.fileSizes': { sizes: Array<{ path: string; size: number | null }> }
-  'svn.aiPlan': { plan: SvnAiPlan; entriesCount: number; diffIncluded: boolean; dropped: number; model?: string }
+  'svn.aiPlan': { plan: SvnAiPlan; entriesCount: number; analyzedCount: number; diffIncluded: boolean; dropped: number; model?: string }
   'svn.ignore': { count: number; summary: string; output: string }
   /** accepted = 归一后三段总路径数（0 = ok:false 拒收）；dropped = 幻觉/落选丢弃数。 */
   'svn.aiPlanSubmit': { accepted: number; dropped: number }
   'svn.aiPlanPending': { plan: SvnAiPlan | null; dropped: number; at: number }
+  'svn.commitPlan': SvnCommitPlan
+  'svn.commit': SvnCommitResult
+  'svn.aiCommitMsg': { subject: string; body: string; message: string; model: string; stats: { files: number; diffBytes: number; diffIncluded: boolean } }
   'edrv.dap.configs': { configs: DapDebugConfig[]; adapters: DapAdapterInfo[]; source: DapConfigSource }
   'edrv.dap.snippets': { snippets: DapConfigSnippet[] }
   'edrv.dap.processes': { items: DapProcessInfo[] }

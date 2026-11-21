@@ -14,6 +14,7 @@ import { setEnsureSideEditor } from './sidebarBridge.js'
 import { CACHE_KEY } from './paths.js'
 import { OFFICE_EXT, BLIND_EXT, suffixOf } from '../shared/nativeOpen.js'
 import { inNativePath } from './nativeOpenStore.js'
+import { hasOfficialHtmlPreview, isHtmlPath } from './htmlPreview.js'
 import { univerCapability } from './univer/store.js'
 import { isOfficePath, isUniverPath } from '../shared/univer.js'
 
@@ -46,16 +47,20 @@ export const OFFICIAL_FILE_KIND = 'edrvEditorFile'
 const DEFER_EXT_SET: Set<string> = new Set([...OFFICE_EXT, ...BLIND_EXT])
 
 /**
- * 该路径是否应让位官方查看器（Office 文档 + 官方不可预览的二进制容器）。
+ * 该路径是否应让位官方查看器（Office 文档 / 官方不可预览的二进制容器 / 可渲染的 HTML）。
  * 命中即不认领 `dsh-resource://file/**`，回落官方预览/提示。
+ * HTML 仅在官方 HTML 渲染器确实可用时让位：旧版 DSH 缺少 documentPreviews 的
+ * html body 时继续由本插件文本编辑，避免把可编辑源码送进官方纯文本查看器。
  * 注：用户经设置 nativeOpenExts 追加的范围不走本函数，由 claim 的 canOpen 与
  * 文件树 openFile 叠加 nativeOpenStore 判定（见 registerOfficialFileClaim）。
- * @author ddj 2026年09月18号
+ * @author ddj 2026年09月18号 / 2026年11月21号
  * @param path 文件路径（工作区相对或绝对）
  * @returns 是否让位官方
  */
 export function deferToOfficial(path: unknown): boolean {
-  return suffixOf(path) !== 'xlsx' && DEFER_EXT_SET.has(suffixOf(path))
+  const ext = suffixOf(path)
+  if (ext === 'html' || ext === 'htm') return hasOfficialHtmlPreview()
+  return ext !== 'xlsx' && DEFER_EXT_SET.has(ext)
 }
 
 /** 官方 Tab 打开参数（官方运行时不校验的 JSON，正文经 navigation.params 读回）。 */
@@ -369,6 +374,9 @@ export function registerOfficialFileClaim(options: {
         if (parsed === null) return false
         if (parsed.sessionId && univerCapability(parsed.sessionId)?.available && (isUniverPath(parsed.path) || isOfficePath(parsed.path))) return true
         if (isUniverPath(parsed.path)) return false
+        // 绝对域地址没有 session 段，官方 fallback 的 canOpen 只认 session 域；
+        // HTML 让位会变成无人接手的死路，故绝对域仍由本插件打开（文本编辑）。
+        if (isHtmlPath(parsed.path) && !parsed.sessionId) return true
         return !deferToOfficial(parsed.path) && (suffixOf(parsed.path) === 'xlsx' || !inNativePath(parsed.path))
       },
       title: (address: string) => officialFileTitle(address),
