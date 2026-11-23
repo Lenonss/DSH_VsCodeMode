@@ -10,9 +10,10 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { entriesOf } from './mcp.js'
+import { routeAuthMode } from './httpGuard.js'
 import { loadSettingsDeps, schemaLibName, settingsInstallNote, settingsInstallStrategy, configVolatileState } from './fileOpenSettings.js'
 import { readDevForm } from './devForm.js'
-import { compareDshVersions, detectDshVersion, familyLabel, parseDshVersion } from './dshVersion.js'
+import { compareDshVersions, detectVersionLive, familyLabel, parseDshVersion, versionSourceOf } from './dshVersion.js'
 import { SKILL_PREFIXES, skillGroupState } from './skills.js'
 import type { CompatAdapter, CompatReport } from './shared/compat.js'
 import type { Ctx } from './store.js'
@@ -121,22 +122,37 @@ export function duplicateEntries(ctx: Ctx): string[] {
   return []
 }
 
-/** 护栏适配状态：路由前缀唯一性 + 插件装配唯一性。 */
+/** 护栏适配状态：路由前缀唯一性 + 插件装配唯一性 + 路由授权归属。 */
 export function detectGuards(ctx: Ctx): CompatAdapter[] {
   const web = ctx.get('webServer')
   const conflict = web ? routeConflict(web, ROUTE_PREFIX) : null
   const duplicates = duplicateEntries(ctx)
+  const authored = routeAuthMode(ctx)
   return [
     { name: '路由前缀 ' + ROUTE_PREFIX, active: !conflict, note: conflict ?? '无冲突' },
     { name: '插件装配唯一性', active: duplicates.length === 0, note: duplicates[0] ?? '唯一装配' },
+    // 追加在末尾：既有下标被 tests/compat.test.ts 断言，不得前插。
+    {
+      name: '路由授权归属',
+      active: authored === 'framework',
+      note: authored === 'framework'
+        ? '0.2.3+ 由框架按 WebRoute.auth 执行（插件注册 required）'
+        : '旧版宿主：仍由 connection.requestRejection 闸门执行',
+    },
   ]
 }
 
 /** Config volatile 标记起效的版本线（此前设置走 section 安装，与 volatile 无关）。 */
 const CONFIG_VOLATILE_MIN = '0.1.7-alpha.1'
 
-/** 版本适配机制状态行：DSH 版本探测 + 设置 section 安装策略 + Config volatile 标记。 */
-export function versionAdapters(dshVersion: string): CompatAdapter[] {
+/**
+ * 版本适配机制状态行：DSH 版本探测 + 设置 section 安装策略 + Config volatile 标记。
+ * @author ddj 2026年09月02号 / 2026年11月23号
+ * @param dshVersion 已探测的 DSH 版本
+ * @param source 版本来源：运行时 getDshRuntimeVersion 或包版本嗅探
+ * @returns 适配状态行
+ */
+export function versionAdapters(dshVersion: string, source: 'runtime' | 'package' = 'package'): CompatAdapter[] {
   const adapters: CompatAdapter[] = []
   const parsed = parseDshVersion(dshVersion)
   if (dshVersion === '') {
@@ -146,6 +162,14 @@ export function versionAdapters(dshVersion: string): CompatAdapter[] {
   } else {
     adapters.push({ name: 'DSH 版本', active: true, note: dshVersion + ' · ' + familyLabel(dshVersion) })
   }
+  // 追加在末尾（既有下标有断言）：0.2.2+ 的权威来源，旧版回落到包版本嗅探
+  adapters.push({
+    name: '版本来源',
+    active: source === 'runtime' || dshVersion === '',
+    note: source === 'runtime'
+      ? '运行时 getDshRuntimeVersion（与 cordis_inspect Runtime.getVersion 同源）'
+      : '包版本嗅探（运行时无该导出，见于 0.2.1 及更早）',
+  })
   const strategy = settingsInstallStrategy()
   adapters.push({
     name: '设置 section 安装（版本适配）',
@@ -179,10 +203,12 @@ export async function buildReport(
   options?: { depsAvailable?: boolean; version?: string; dshVersion?: string },
 ): Promise<CompatReport> {
   const deps = options?.depsAvailable ?? (await loadSettingsDeps()) !== null
-  const dshVersion = options?.dshVersion ?? detectDshVersion()
+  // 0.2.2+ 问运行时要版本；旧版或测试固定值时回落包版本嗅探
+  const dshVersion = options?.dshVersion ?? (await detectVersionLive())
+  const source = options?.dshVersion === undefined && versionSourceOf() === 'runtime' ? 'runtime' : 'package'
   const external = detectExternal(ctx, deps)
   const guards = detectGuards(ctx)
-  const adapters = versionAdapters(dshVersion)
+  const adapters = versionAdapters(dshVersion, source)
   const warnings: string[] = []
   if (!deps) warnings.push('未安装 @deepseek-ai/dsh-settings：文件打开工具设置持久化不可用（降级为配置值）')
   const strategy = settingsInstallStrategy()

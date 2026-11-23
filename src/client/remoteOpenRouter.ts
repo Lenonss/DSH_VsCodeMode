@@ -9,6 +9,7 @@
  * 作者 ddj 2026年09月08号
  */
 import { isAvailable, selectOpener, type FileOpenContext, type FileOpenerRegistry } from './fileOpeners.js'
+import { memberDescriptor } from './compat.js'
 import { absoluteOf, isAbsolutePath } from './tabActions.js'
 
 /** session.openWorkspacePath 的结果形状（host 返回 { opened: true }；客户端不做输出校验）。 */
@@ -63,9 +64,10 @@ export function probeRemoteOpen(ctx: { get: (name: string) => unknown }): object
  * @returns 恢复函数；目标属性缺失时返回 null（调用方停止安装并告警）
  */
 export function patchRemoteOpen(service: object, options: RemoteOpenRouterOptions): (() => void) | null {
-  const descriptor = Object.getOwnPropertyDescriptor(service, 'openWorkspacePath')
+  const own = Object.getOwnPropertyDescriptor(service, 'openWorkspacePath')
+  const descriptor = own ?? memberDescriptor(service, 'openWorkspacePath')
   const original = Reflect.get(service, 'openWorkspacePath', service)
-  if (!descriptor || !descriptor.configurable || typeof original !== 'function') return null
+  if (!descriptor || (own && !own.configurable) || typeof original !== 'function') return null
   const fallback: RemoteOpen = original.bind(service)
   const owner = { open: fallback, context: options.context }
   nativeOwner = owner
@@ -84,12 +86,13 @@ export function patchRemoteOpen(service: object, options: RemoteOpenRouterOption
       return fallback(request)
     }
   }
+  // 原型链上的方法：在实例上装自有属性覆盖，卸载时删掉自有属性即恢复
   Object.defineProperty(service, 'openWorkspacePath', { configurable: true, enumerable: descriptor.enumerable, value: route })
   return () => {
     if (nativeOwner === owner) nativeOwner = undefined
-    if (Object.getOwnPropertyDescriptor(service, 'openWorkspacePath')?.value === route) {
-      Object.defineProperty(service, 'openWorkspacePath', descriptor)
-    }
+    if (Object.getOwnPropertyDescriptor(service, 'openWorkspacePath')?.value !== route) return
+    if (own) Object.defineProperty(service, 'openWorkspacePath', own)
+    else delete (service as unknown as Record<string, unknown>).openWorkspacePath
   }
 }
 

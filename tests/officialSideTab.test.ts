@@ -1,11 +1,21 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 const effects = vi.hoisted(() => [] as Array<() => void | (() => void)>)
-vi.mock('react', () => ({ default: {
-  useRef: (value: unknown) => ({ current: value }),
-  useEffect: (effect: () => void) => { effects.push(effect) },
-  createElement: () => null,
-} }))
+vi.mock('react', () => {
+  /** 最小 Component 替身：正文错误边界要 extends，测试只关心挂载/清理副作用。 */
+  class Component {
+    props: Record<string, unknown>
+    state: Record<string, unknown> = {}
+    constructor(props: Record<string, unknown>) { this.props = props }
+    setState(patch: unknown) { this.state = { ...this.state, ...(typeof patch === 'function' ? (patch as (state: unknown) => object)(this.state) : patch as object) } }
+  }
+  return { default: {
+    Component,
+    useRef: (value: unknown) => ({ current: value }),
+    useEffect: (effect: () => void) => { effects.push(effect) },
+    createElement: () => null,
+  } }
+})
 vi.mock('../src/client/ui/EditorView.js', () => ({ EditorView: () => null }))
 import { OfficialSideTab } from '../src/client/ui/OfficialSideTab.js'
 import { isEditorTabActive, markEditorActive, markEditorMounted } from '../src/client/officialSidebar.js'

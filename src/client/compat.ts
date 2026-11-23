@@ -229,19 +229,39 @@ export function patchMethod<T extends object, K extends keyof T>(
 export type PatchWrapper = (original: (...args: never[]) => unknown, ...args: never[]) => unknown
 
 /**
+ * 沿原型链找属性描述符：0.2.3 的 remote 命名空间方法可能定义在类原型上，
+ * 只查自有属性会让补丁静默失效。
+ * @public @author ddj 2026年11月23号
+ * @param owner 目标对象
+ * @param key 属性名
+ * @returns 最近的属性描述符（自有优先）
+ */
+export function memberDescriptor(owner: object, key: string): PropertyDescriptor | undefined {
+  let target: object | null = owner
+  while (target) {
+    const descriptor = Object.getOwnPropertyDescriptor(target, key)
+    if (descriptor) return descriptor
+    target = Object.getPrototypeOf(target)
+  }
+  return undefined
+}
+
+/**
  * accessor 感知的链式补丁：DSH 0.1.3+ 的 remote 命名空间方法（如
  * remote.session.openWorkspacePath）是 getter-only accessor（Object.defineProperty
  * 仅定义 get，直接赋值在严格模式下抛 TypeError），须整体替换属性描述符。
  * 新 getter 每次访问现场调用原 getter 取最新一次性函数作 original，天然跟随
  * DSH 内部 methods 表变化；data 属性降级走 patchMethod；属性缺失返回 null。
- * @author ddj 2026年09月08号
+ * 描述符可能在原型链上（0.2.3 的类方法），此时在 owner 上装自有属性覆盖。
+ * @author ddj 2026年09月08号 / 2026年11月23号
  * @param owner 目标对象
  * @param key 属性名
  * @param wrapper 包装实现（original 为补丁前的实时实现）
  * @returns 恢复函数（幂等、带归属校验）；属性缺失时返回 null
  */
 export function patchAccessor(owner: object, key: string, wrapper: PatchWrapper): (() => void) | null {
-  const descriptor = Object.getOwnPropertyDescriptor(owner, key)
+  const own = Object.getOwnPropertyDescriptor(owner, key)
+  const descriptor = own ?? memberDescriptor(owner, key)
   if (!descriptor) return null
   if (typeof descriptor.get !== 'function') return patchMethod(owner, key as never, wrapper as never)
   const rawGet = descriptor.get as (this: object) => unknown
@@ -252,6 +272,8 @@ export function patchAccessor(owner: object, key: string, wrapper: PatchWrapper)
   Object.defineProperty(owner, key, { configurable: true, enumerable: descriptor.enumerable, get: patchedGet })
   return () => {
     const current = Object.getOwnPropertyDescriptor(owner, key)
-    if (current?.get === patchedGet) Object.defineProperty(owner, key, descriptor)
+    if (current?.get !== patchedGet) return
+    if (own) Object.defineProperty(owner, key, own)
+    else delete (owner as unknown as Record<string, unknown>)[key]
   }
 }

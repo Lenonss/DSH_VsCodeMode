@@ -8,6 +8,8 @@ export interface McpDraft {
   cwd: string
   url: string
   headers: string
+  /** 官方 mcpManager 的按需加载策略（0.2.3+ 生效；缺省随连接加载）。 */
+  toolLoading?: 'eager' | 'on-demand'
 }
 
 /**
@@ -67,6 +69,7 @@ export function parsePairs(text: string): Record<string, string> {
  */
 export function configOf(draft: McpDraft): MpcConfig {
   const config: MpcConfig = { serverName: draft.serverName.trim(), transport: draft.transport }
+  if (draft.toolLoading === 'on-demand' || draft.toolLoading === 'eager') config.toolLoading = draft.toolLoading
   if (draft.transport === 'stdio') {
     config.command = draft.command.trim()
     config.args = parseArgs(draft.args)

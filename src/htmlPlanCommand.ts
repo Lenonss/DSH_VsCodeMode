@@ -30,10 +30,10 @@ export const HTML_PLAN_DELEGATE_FLAG = '--delegate'
 export const HTML_PLAN_NO_DELEGATE_FLAG = '--no-delegate'
 
 /** 委派写页的指令段（用户在 --delegate 下已授权）。 */
-export const HTML_PLAN_DELEGATE_INSTRUCTION = '5. 写页方式：本次已获用户授权，写页阶段用一个 subagent_fork 专门写 plans/<slug>/plan.html 并打包。调研与主张树由你定稿后，给子级一份摘要（目标、主张列表、图示要点、决策、页路径与 pack 命令），要求它只写页与 pack，返回 packed 路径、lint 结果与主张/决策计数；父级只验 lint、计数与三处抽查，不读全文。子级失败则自己写。'
+export const HTML_PLAN_DELEGATE_INSTRUCTION = '写页方式：本次已获用户授权，写页阶段用一个 subagent_fork 专门写 plans/<slug>/plan.html 并打包。调研与主张树由你定稿后，给子级一份摘要（目标、主张列表、图示要点、决策、页路径与 plan.mjs 命令），要求它只写页与打包、返回 packed 路径与 lint 结果；父级只验 lint、计数与三处抽查，不读全文。子级失败则自己写。'
 
 /** 明确不委派的指令段（--no-delegate）。 */
-export const HTML_PLAN_SINGLE_AGENT_INSTRUCTION = '5. 写页方式：本次不要委派子 agent，由你自己写计划页并打包。'
+export const HTML_PLAN_SINGLE_AGENT_INSTRUCTION = '写页方式：本次不要委派子 agent，由你自己写计划页并用 plan.mjs 打包。'
 /** 官方命令运行时最小结构面（宿主服务，鸭子类型）。 */interface CommandsLike {
   register?: (definition: unknown) => unknown
   execute?: (agent: unknown, line: string, attachments: readonly unknown[], signal: AbortSignal) => Promise<{ result?: { kind?: string; text?: string } } | undefined>
@@ -85,15 +85,15 @@ export function parseHtmlPlanInput(rawInput: unknown): HtmlPlanInput {
  */
 export function buildHtmlPlanInstruction(task: string, delegate: boolean | null = null): string {
   const objective = String(task ?? '').trim()
-  const lines = [    HTML_PLAN_INSTRUCTION_HEAD,
+  const steps = [
     '1. 先读相关代码与文件，按技能规则写 plans/<slug>/plan.html（slug 用 kebab-case）。',
-    '2. 把技能目录的 runtime/（htmlplan.css、htmlplan.js、pack.mjs）复制到 plans/<slug>/runtime/，运行 pack.mjs 生成 plan.packed.html，成功后删除 runtime/ 与未打包的 plan.html。',
-    '3. 调用 exit_plan_mode：正文第一行必须是「# 计划：<标题>」，并包含一行「HTML 计划页：plans/<slug>/plan.packed.html」。',
-    '4. 计划正文同时给出 3~6 行摘要与待决策清单；不要绕过计划模式直接开工。',
-    '',
-    '任务：' + objective,
+    '2. 用一条命令打包：node <技能目录>/runtime/plan.mjs <slug> --root <工作区>，它会复制运行时、pack、清理；再跑 plan.mjs <slug> --check 确认 plan.packed.html 在位。',
+    '3. 计划模式允许写 plans/ 下的计划文件：不要因为「在计划模式」跳过写页面，更不要让我退出计划模式来生成。',
+    '4. 页面确认生成后，才调用 exit_plan_mode：正文第一行必须是「# 计划：<标题>」，并单独一行「HTML 计划页：plans/<slug>/plan.packed.html」；没生成成功就别写这一行，改交 Markdown 计划并说明原因。',
+    '5. 计划正文同时给出 3~6 行摘要与待决策清单；不要绕过计划模式直接开工。',
   ]
-  if (delegate !== null) lines.splice(5, 0, delegate ? HTML_PLAN_DELEGATE_INSTRUCTION : HTML_PLAN_SINGLE_AGENT_INSTRUCTION)
+  const extra = delegate === null ? '' : (delegate ? HTML_PLAN_DELEGATE_INSTRUCTION : HTML_PLAN_SINGLE_AGENT_INSTRUCTION)
+  const lines = [HTML_PLAN_INSTRUCTION_HEAD, ...steps, ...(extra ? [`${steps.length + 1}. ${extra}`] : []), '', '任务：' + objective]
   return lines.join('\n')
 }
 

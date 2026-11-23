@@ -40,6 +40,7 @@ import { isSnippetFilePath, snippetsEntries, snippetsList, snippetsRead, snippet
 import { patchLauncher, readQuickMenu, saveQuickMenu } from './quickMenu.js'
 import { runtimeOf } from './mcpRuntime.js'
 import { listMcp, refreshMcp, removeMcp, saveMcp, toggleMcp } from './mcp.js'
+import { managerPort } from './mcpManagerBridge.js'
 import { listProjects, projectRefresh, projectRemove, projectSave, projectToggle, mcpSnapshot } from './mcpProject.js'
 import { normalizeFileOpenTool, FILE_OPEN_DEFAULT, FILE_OPEN_SETTINGS_NS, sectionOf, updateSection } from './fileOpenSettings.js'
 import { INTEGRATION_BASE_DEFAULT } from './shared/integration.js'
@@ -50,6 +51,8 @@ import { buildReport } from './compat.js'
 import { findProfileDir, readDevForm, setDevForm } from './devForm.js'
 import { checkUpdate, startSelfUpdate } from './selfUpdate.js'
 import { normalizeRel } from './tree.js'
+import type { EncodingVerdict } from './textEncoding.js'
+import { backupPathOf, classifyEncoding, decodePreview, isEncodingError, lossyCountOf, repairBytes } from './textEncoding.js'
 import { baseNameOf, checkNewName, checkRenameName, isSubPath, joinRelPath, parentRelOf } from './shared/fsNames.js'
 import { invalidateIndex, listDirCached } from './treeIndex.js'
 import { findRemoteWs, remoteDisplayOf, type RemoteWs } from './remoteWorkspace.js'
@@ -219,6 +222,119 @@ function targetErrOf(prep: { err: string; resolvedPath?: string; code?: 'file-to
   return { ok: false, error: prep.err,
     ...(prep.resolvedPath !== undefined ? { resolvedPath: prep.resolvedPath } : {}),
     ...(prep.code ? { code: prep.code } : {}) }
+}
+
+/**
+ * 按推荐方式把 GB18030 文件转成 UTF-8：先写同级备份，再经版本守卫覆盖正文。
+ * @private @author ddj 2026年11月21号
+ * @param ctx 宿主上下文
+ * @param sc 会话与工作区
+ * @param path 客户端相对路径
+ * @param prep 解析后的目标与 fs 句柄
+ * @param bytes 原始字节
+ * @param verdict 判定结果
+ * @returns 新版本与备份相对路径；不可修复或写入被拒时给稳定 code
+ */
+async function applyCompat(
+  ctx: Ctx, sc: { session: Session; cwd: string }, path: string, prep: ReadTargetOk, bytes: Uint8Array, verdict: EncodingVerdict,
+) {
+  const repaired = repairBytes(bytes, verdict)
+  if (!repaired.ok) return { ok: false as const, error: repaired.reason, code: 'not-repairable' as const }
+
+  const written = await writeUtf8Backup(ctx, sc, path, prep, bytes, repaired.text)
+  if (!written.ok) return written
+  return { ok: true as const, mode: 'repair' as const, verdict, version: written.version, backup: written.backup }
+}
+
+/**
+ * 用户在只读/可编辑视图里改好后显式保存：仍含 U+FFFD 占位就拒绝，避免把坏字节覆盖掉。
+ * @private @author ddj 2026年11月21号
+ * @param ctx 宿主上下文
+ * @param sc 会话与工作区
+ * @param path 客户端相对路径
+ * @param prep 解析后的目标与 fs 句柄
+ * @param bytes 原始字节（备份用）
+ * @param text 用户编辑后的正文
+ * @returns 新版本与备份路径；占位未清或写入被拒时给稳定 code
+ */
+async function commitCompat(
+  ctx: Ctx, sc: { session: Session; cwd: string }, path: string, prep: ReadTargetOk, bytes: Uint8Array, text: string,
+) {
+  const lossy = lossyCountOf(text)
+  if (lossy > 0) {
+    return { ok: false as const, error: '正文还有 ' + lossy + ' 处未处理的坏字节（显示为乱码占位），先改好再保存', code: 'not-repairable' as const }
+  }
+
+  const written = await writeUtf8Backup(ctx, sc, path, prep, bytes, text)
+  if (!written.ok) return written
+  return { ok: true as const, mode: 'commit' as const, version: written.version, backup: written.backup }
+}
+
+/**
+ * 先落同级备份，再按读取时的版本守卫写入 UTF-8 正文。
+ * @private @author ddj 2026年11月21号
+ * @param ctx 宿主上下文
+ * @param sc 会话与工作区
+ * @param path 客户端相对路径
+ * @param prep 解析后的目标与 fs 句柄
+ * @param bytes 原始字节
+ * @param text 待写入的 UTF-8 正文
+ * @returns 新版本与备份相对路径
+ */
+async function writeUtf8Backup(
+  ctx: Ctx, sc: { session: Session; cwd: string }, path: string, prep: ReadTargetOk, bytes: Uint8Array, text: string,
+) {
+  const backupRel = backupPathOf(path)
+  const backupTarget = await resolveTargetIn(ctx, sc.cwd, backupRel)
+  const rootTarget = await prep.fs.resolve(policyOf(ctx, sc.session)?.workspaceRoot ?? '.', {})
+  if (!prep.fs.contains(rootTarget, backupTarget)) {
+    return { ok: false as const, error: '拒绝写入备份：目标不在会话工作区内' }
+  }
+  await writeFile(prep.fs.processPath(backupTarget), bytes)
+
+  const version = String(prep.info.version ?? '')
+  try {
+    const outcome = await prep.fs.writeText(prep.target, text, { kind: 'replaceIfVersion', version }, void 0, policyOf(ctx, sc.session))
+    return { ok: true as const, version: String(outcome?.version ?? ''), backup: backupRel }
+  } catch (error) {
+    return { ok: false as const, error: '写入失败：' + String(error), code: 'enc-conflict' as const }
+  }
+}
+
+/**
+ * 撤销一次编码修复：备份存在且正文版本匹配时还原原始字节，然后删除备份。
+ * @private @author ddj 2026年11月21号
+ * @param ctx 宿主上下文
+ * @param sc 会话与工作区
+ * @param path 客户端相对路径
+ * @param prep 解析后的目标与 fs 句柄
+ * @param rev 修复后的版本（不匹配则拒绝还原）
+ * @returns 还原后的版本；缺备份或版本不匹配时给稳定 code
+ */
+async function undoCompat(
+  ctx: Ctx, sc: { session: Session; cwd: string }, path: string, prep: ReadTargetOk, rev?: string,
+) {
+  const backupRel = backupPathOf(path)
+  const backupTarget = await resolveTargetIn(ctx, sc.cwd, backupRel)
+  const backupInfo = await prep.fs.stat(backupTarget).catch(() => null)
+  if (!backupInfo || backupInfo.type !== 'file') {
+    return { ok: false as const, error: '找不到备份文件 ' + backupRel + '，无法撤销', code: 'not-repairable' as const }
+  }
+
+  const current = await prep.fs.stat(prep.target)
+  const currentVersion = String(current?.version ?? '')
+  if (rev && rev !== currentVersion) return { ok: false as const, error: '文件在修复后被改过，已停止还原', code: 'enc-conflict' as const }
+
+  const rootTarget = await prep.fs.resolve(policyOf(ctx, sc.session)?.workspaceRoot ?? '.', {})
+  if (!prep.fs.contains(rootTarget, backupTarget) || !prep.fs.contains(rootTarget, prep.target)) {
+    return { ok: false as const, error: '拒绝还原：目标不在会话工作区内' }
+  }
+
+  const bytes = await readFile(prep.fs.processPath(backupTarget))
+  await writeFile(prep.fs.processPath(prep.target), bytes)
+  await rm(prep.fs.processPath(backupTarget), { force: true })
+  const after = await prep.fs.stat(prep.target).catch(() => null)
+  return { ok: true as const, mode: 'undo' as const, version: String(after?.version ?? currentVersion) }
 }
 
 /**
@@ -785,6 +901,39 @@ export function buildHandlers(
         return readTextPage({ identity: JSON.stringify([sc.cwd, targetKey]), stat: statPage, readRange }, args)
       } catch (error) { return { ok: false, error: '读取失败：' + String(error), reason: 'read-failed' } }
     },
+    /**
+     * 非 UTF-8 文本的探测、只读预览、按推荐方式修复与撤销。
+     * probe/preview 只读；repair 先落同级备份再经版本守卫写入；mixed 一律拒绝写盘。
+     * @author ddj 2026年11月21号
+     * @param args 会话、目标路径、模式与撤销版本
+     * @returns 判定、预览文本、新版本与备份路径；失败给稳定 code
+     */
+    'edrv.textCompat': async (args) => {
+      const sc = await requireSession(ctx, args.sessionId)
+      if ('err' in sc) return { ok: false, error: sc.err }
+      const prep = await readTargetOf(ctx, sc, args.path)
+      if ('err' in prep) return targetErrOf(prep)
+
+      try {
+        const size = prep.info.size ?? 0
+        if (size > READ_CAP) return { ok: false, error: '文件过大（>8MB），不支持编码探测', code: 'file-too-large' as const }
+        if (args.mode === 'undo') return await undoCompat(ctx, sc, args.path, prep, args.rev)
+
+        const bytes = new Uint8Array(await prep.fs.readBytes(prep.target, undefined, READ_CAP))
+        const verdict = classifyEncoding(bytes)
+        const version = String(prep.info.version ?? '')
+        if (args.mode === 'probe') return { ok: true, mode: 'probe' as const, verdict, version, size }
+
+        if (args.mode === 'preview') {
+          const preview = decodePreview(bytes, verdict)
+          return { ok: true, mode: 'preview' as const, verdict, version, size, text: preview.text, truncated: preview.truncated }
+        }
+        if (args.mode === 'commit') return await commitCompat(ctx, sc, args.path, prep, bytes, String(args.text ?? ''))
+        return await applyCompat(ctx, sc, args.path, prep, bytes, verdict)
+      } catch (error) {
+        return { ok: false, error: '编码探测失败：' + String(error) }
+      }
+    },
     'edrv.read': async (args) => {
       const settingsTarget = settingsTargetOf(ctx, args.path)
       if (settingsTarget && args.encoding !== 'base64') {
@@ -825,7 +974,9 @@ export function buildHandlers(
         const content = await prep.fs.readText(prep.target)
         return { ok: true, content, size: content.length, version: String(prep.info.version ?? '') }
       } catch (error) {
-        return { ok: false, error: '读取失败：' + String(error) }
+        // 编码失败给稳定 code：客户端据此进入兼容面板，而不是当成普通读取失败
+        const encoding = isEncodingError(String(error)) ? ('invalid-utf8' as const) : undefined
+        return { ok: false, error: '读取失败：' + String(error), ...(encoding ? { code: encoding } : {}) }
       }
     },
     'edrv.readBinary': async (args) => {
@@ -1350,6 +1501,31 @@ export function buildHandlers(
     },
     'mcp.projectRefresh': async (args) => {
       try { return { ok: true, project: await projectRefresh(ctx, args.workspacePath, args.serverName) } }
+      catch (error) { return { ok: false, error: String(error) } }
+    },
+    // 官方 mcpManager 控制面（0.2.3+）：只读状态 + 委派授权/重启/探测，凭据不进插件
+    'mcp.manager.views': async () => {
+      const port = managerPort(ctx as never)
+      return port.available() ? { ok: true, available: true, views: port.list() } : { ok: true, available: false, views: [] }
+    },
+    'mcp.manager.restart': async (args) => {
+      try { await managerPort(ctx as never).restart(args.name); return { ok: true } }
+      catch (error) { return { ok: false, error: String(error) } }
+    },
+    'mcp.manager.probe': async (args) => {
+      try { return { ok: true, result: await managerPort(ctx as never).probe(args.name) } }
+      catch (error) { return { ok: false, error: String(error) } }
+    },
+    'mcp.manager.authorize': async (args) => {
+      try { return { ok: true, attempt: await managerPort(ctx as never).authorize(args.name) } }
+      catch (error) { return { ok: false, error: String(error) } }
+    },
+    'mcp.manager.cancel': async (args) => {
+      try { await managerPort(ctx as never).cancelAuthorize(args.name, args.id); return { ok: true } }
+      catch (error) { return { ok: false, error: String(error) } }
+    },
+    'mcp.manager.signout': async (args) => {
+      try { await managerPort(ctx as never).signOut(args.name); return { ok: true } }
       catch (error) { return { ok: false, error: String(error) } }
     },
     'vscode.fileOpenSettingsGet': async () => {

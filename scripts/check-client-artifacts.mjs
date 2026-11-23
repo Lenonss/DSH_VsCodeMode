@@ -6,11 +6,11 @@ import { createContext, runInContext } from 'node:vm'
 import ts from 'typescript'
 
 const OWNER = 'dsh-vscode-mode'
-/** Per-chunk contract: root shared keys it must consume and the exports it must publish. */
+/** Per-chunk contract: root shared keys it must consume, the exports it must publish, and the stylesheet it must declare. */
 const CHUNK_SPECS = [
   { name: 'client.rules.js', shared: ['rpc'], exports: ['RulesPanel'] },
   { name: 'client.debug.js', shared: ['dapStore', 'BP_MODE', 'MODES', 'fieldOfMode', 'ContextMenu', 'rpc'], exports: ['DebugPanel'] },
-  { name: 'client.excel.js', shared: ['editExcel', 'exportExcel', 'notifyExcel', 'openOriginal'], exports: ['excelPanel'] },
+  { name: 'client.excel.js', shared: ['editExcel', 'exportExcel', 'notifyExcel', 'openOriginal'], exports: ['excelPanel'], style: 'src/client/excel/panel.css' },
   { name: 'client.excelcodec.js', shared: [], exports: ['decodeExcel', 'downloadExcel'] },
 ]
 const CHUNKS = CHUNK_SPECS.map((spec) => spec.name)
@@ -36,6 +36,31 @@ function registration(source, filename) {
   assert.equal(rows[0].id, OWNER, `${filename}: wrong owner`)
   assert.equal(typeof rows[0].factory, 'function', `${filename}: missing factory`)
   return rows[0]
+}
+
+/**
+ * Validate the registration's deferred stylesheet metadata (DSH 0.2.3+).
+ * @private @author ddj 2026年11月23号
+ * @param row Captured registration.
+ * @param filename Diagnostic filename.
+ * @param expected Optional stylesheet path that must be present.
+ * @returns Declared stylesheet paths.
+ * @throws Missing or malformed meta, or an undeclared expected stylesheet.
+ */
+function verifyMeta(row, filename, expected) {
+  assert.equal(typeof row.meta, 'function', `${filename}: missing meta factory; styles must ride in meta.stylesheets`)
+  const stylesheets = row.meta()?.stylesheets ?? {}
+  const paths = Object.keys(stylesheets)
+  for (const path of paths) {
+    assert.match(path, /^[A-Za-z0-9_@./-]+\.css$/, `${filename}: stylesheet path "${path}" is not a package-relative css path`)
+    assert.ok(!path.includes('..') && !path.startsWith('/'), `${filename}: stylesheet path "${path}" escapes the package`)
+    const descriptor = stylesheets[path]
+    assert.equal(typeof descriptor?.text, 'function', `${filename}: stylesheet "${path}" has no text(context)`)
+    const text = descriptor.text({ asset: (reference) => reference })
+    assert.ok(typeof text === 'string' && text.trim().length > 0, `${filename}: stylesheet "${path}" produced no text`)
+  }
+  if (expected) assert.ok(paths.includes(expected), `${filename}: missing stylesheet ${expected} (declared: ${paths.join(', ') || 'none'})`)
+  return paths
 }
 
 /** @private @author ddj 2026年10月22号 @returns Explicit platform seeds; unknown externals never silently resolve. */
@@ -140,10 +165,16 @@ export async function inspectArtifacts(libDir, options = {}) {
   }
   const root = registration(sources['client.js'], 'client.js')
   assert.equal(root.chunk, undefined, 'root must not register as a chunk')
+  // 0.2.3 起样式由框架按 meta.stylesheets 安装：产物里不能再有自注入的 style 标签。
+  // 旧注入代码的唯一标识是 dataset.pluginCss 赋值；filesCssCompat 读的是官方选择器字符串
+  // "data-plugin-css=…"（带连字符），不会与这个标识撞上。
+  for (const name of ['client.js', ...CHUNKS]) assert.doesNotMatch(sources[name], /pluginCss/, `${name}: still injects its own style tag; styles must ride in meta.stylesheets`)
+  verifyMeta(root, 'client.js', 'src/client/styles/editor.css')
   const chunks = CHUNK_SPECS.map((spec) => {
     const name = spec.name
     const row = registration(sources[name], name)
     assert.equal(row.chunk, name, `${name}: wrong chunk registration`)
+    verifyMeta(row, name, spec.style)
     if (spec.shared.length) {
       // Minified chunks reach the root through a renamed local require, so match the module id, not the call form.
       assert.ok(sources[name].includes(`"${OWNER}"`) || sources[name].includes(`'${OWNER}'`) || sources[name].includes('`' + OWNER + '`'), `${name}: missing shared root dependency`)

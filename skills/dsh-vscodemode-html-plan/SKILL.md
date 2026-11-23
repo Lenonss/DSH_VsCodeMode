@@ -22,22 +22,33 @@ whenToUse: 用户输入 /html-plan；或 plan 模式下要求给出可逐项作�
 
 ## 2. 产出约定（DSH 特有，必读）
 
+**先落盘，再声明。** 计划模式允许写 `plans/` 下的计划交付物（`plan.html`、`plan.packed.html`、`00-plan.md`），
+不需要用户退出计划模式。**绝不要**要求用户「点退出计划模式 / 点同意执行」才能生成页面。
+
 1. 位置：plans/<slug>/plan.html。slug 用 kebab-case，例如 plans/html-plan/plan.html。
-2. 复制运行时：把本技能目录的 runtime/htmlplan.css、runtime/htmlplan.js、runtime/pack.mjs
-   复制到 plans/<slug>/runtime/。
-3. 页面引用（相对路径）：
+2. 页面引用（相对路径，运行时由第 3 步的脚本自动放到位）：
    <link rel="stylesheet" href="runtime/htmlplan.css">
    <script src="runtime/htmlplan.js" defer></script>
-4. 打包：node plans/<slug>/runtime/pack.mjs plans/<slug>/plan.html --root <工作区绝对路径>。
-   产物为 plans/<slug>/plan.packed.html（单文件、可离线）。按 pack 报告逐条修错误与警告。
-5. 清理：打包成功后删除 plans/<slug>/runtime/ 与未打包的 plan.html，只留 packed 单文件，避免仓库噪声。
-6. 提交审批：调用 exit_plan_mode。plan 正文第一行必须是「# 计划：<标题>」，并且**必须包含一行**：
+3. 一条命令打包（推荐）：
+   `node <本技能目录>/runtime/plan.mjs <slug> --root <工作区绝对路径>`
+   它复制运行时 → 跑 pack.mjs → 成功后删除 runtime/ 与 plan.html，只留 plans/<slug>/plan.packed.html。
+   pack 报 error 时它会保留现场，按报告逐条修再跑；`--keep` 可保留中间文件。
+   手动等价步骤：把 runtime/htmlplan.css、htmlplan.js、pack.mjs 复制到 plans/<slug>/runtime/，
+   运行 `node plans/<slug>/runtime/pack.mjs plans/<slug>/plan.html --root <工作区>`，成功后删掉那两样。
+4. 提交前自检（必做）：`node <本技能目录>/runtime/plan.mjs <slug> --check` 打印 ✓ 才提交。
+   页面没生成成功**不要**写「HTML 计划页：」那一行——宁可只交付 Markdown 计划并说明失败原因，
+   也不要留下指向不存在文件的路径（界面会打开失败，用户拿不到任何东西）。
+5. 提交审批：调用 exit_plan_mode。plan 正文第一行必须是「# 计划：<标题>」，并且**必须包含一行**：
 
    HTML 计划页：plans/<slug>/plan.packed.html
 
    插件据这一行在计划页签渲染 HTML；缺少该行则回落 Markdown 计划预览。
-7. 正文同时写 3~6 行摘要与决策清单：官方审批卡片只显示标题与两行纯文本摘要，
+6. 正文同时写 3~6 行摘要与决策清单：官方审批卡片只显示标题与两行纯文本摘要，
    正文是官方「查看全文」与历史卡片的内容来源。
+7. 顺序固定：写 plan.html → 打包 → `--check` 通过 → 才写那一行并调 exit_plan_mode。
+   顺序颠倒或漏打包，是本技能最常见的失败：界面只剩一句「文件不存在」。
+8. 用户在计划页签点「生成 HTML 计划页」时，你会收到一条同样的修复指令：照第 3、4 步做完再重提交。
+   不要回「计划模式不能写文件」——能写，写的是 `plans/` 下的计划交付物。
 
 ## 3. 主张树（沿用上游）
 
@@ -124,6 +135,9 @@ HTML 骨架（可复制后改写）：
 - 用户点 Respond 后出现一份 markdown 答复；点「回复」直接发送给 agent（等同把答复发回对话）。
 - 发送失败时插件会恢复按钮并提示原因；此时可用 Copy response 或计划页签顶部「填入对话输入框」。
 - 有待审批卡片时，「回复」= 先「同意执行」再发送答复（agent 从下一步开始执行）；要改计划请先点页签「继续规划」，再回复反馈。
+- 带单选或复选的决策末尾自带「自己写一条」输入框（运行时注入，不用自己写 `<textarea>`）：写了文字就清掉上面的单选，答复里是 `_(no selection)_` 加 `custom:` 行，这个决策也算已变更。
+- 只有文本框、刻度或排序的决策不加这个输入框。
+- 收到带 `custom:` 的答复时，把自定义内容当作读者的实际选择，按它重规划；要在某条决策上关掉输入框，给 `<doc-ask custom="off">`。
 
 ## 6. DSH 计划页签与状态
 

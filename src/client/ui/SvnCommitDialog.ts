@@ -9,11 +9,18 @@
  * @author ddj 2026年11月15号
  */
 import React from 'react'
+import { ContextMenu } from './ContextMenu.js'
+import { copyText } from '../copyText.js'
+import { runSvnAction } from '../svnActions.js'
 import { FloatingWindow } from './FloatingWindow.js'
 import { AI_COMMIT_STYLE_LABEL, AI_COMMIT_IDLE, runAiCommit } from '../aiCommit.js'
 import { svnCommitNow, svnCommitPlan } from '../svnCommit.js'
+import { SVN_ACTION_BY_ID } from '../../shared/svnActions.js'
+import type { SvnChangeEntry } from '../../shared/svn.js'
 import { SVN_STATUS_LABEL, SVN_STATUS_LETTER, SVN_STATUS_TONE } from '../../shared/svn.js'
+import { updateParent } from './svnUpdateModel.js'
 import {
+  commitActs,
   commitHintOf,
   commitMessageErrorOf,
   commitResultLinesOf,
@@ -21,6 +28,7 @@ import {
   commitStatsOf,
   defaultCheckedOf,
   groupTriStateOf,
+  nextRowPick,
 } from './svnCommitModel.js'
 
 /** 状态分级的展示顺序（页脚计数同序，避免数字跳动）。 */
@@ -100,15 +108,250 @@ function sectionHeadEl(section, tri, onToggle) {
     React.createElement('span', { className: 'edrv-svncommit-gcount' }, section.entries.length + ' 项'))
 }
 
+/** 右键菜单目标：文件行（row）或提交信息框（msg）；msg 额外带着打开时的选区。 */
+interface CommitMenu {
+  x: number
+  y: number
+  kind: 'row' | 'msg'
+  entry: SvnChangeEntry | null
+  node: HTMLTextAreaElement | null
+  start: number
+  end: number
+  /** 右键瞬间生效的选中路径（多选批量动作的作用域）。 */
+  paths: string[]
+}
+
 /**
- * 单条待提交文件（勾选 / 状态字母 / 路径）。
- * @author ddj 2026年11月15号
- * @param entry 变更条目 @param checked 是否勾选 @param onToggle 切换
+ * 右键菜单状态（坐标 + 目标）；同一事件内可切换目标，关闭由 ContextMenu 的 capture 监听发起。
+ * @author ddj 2026年11月21号
+ * @returns 菜单状态、打开与关闭
+ */
+function useCommitMenu() {
+  const [menu, setMenu] = React.useState(null)
+  /** @private @author ddj 2026年11月21号 @param event 右键事件 @param kind 目标种类 @param entry 行条目 @param node 文本框 @returns void */
+  const open = (event, kind, entry, node, paths) => {
+    event.preventDefault()
+    event.stopPropagation()
+
+    // 选区在打开时定格：菜单点击后焦点已移走，再读 selectionStart 会丢范围
+    const start = node && typeof node.selectionStart === 'number' ? node.selectionStart : 0
+    const end = node && typeof node.selectionEnd === 'number' ? node.selectionEnd : start
+    setMenu({ x: event.clientX, y: event.clientY, kind, entry: entry ?? null, node: node ?? null, start, end, paths: paths ?? [] })
+  }
+
+  return { menu, open, close: () => setMenu(null) }
+}
+
+/**
+ * 行选中（Ctrl 切换 / Shift 范围）：与更新窗口同一套手势，纯逻辑在 nextRowPick 里可单测。
+ * @author ddj 2026年11月21号
+ * @param order 当前显示顺序（路径）
+ * @returns 选中路径与选择动作
+ */
+function useRowPick(order) {
+  const [pick, setPick] = React.useState({ selected: [], anchor: null })
+  const orderRef = React.useRef(order)
+  orderRef.current = order
+
+  // 清单重载后丢弃已不存在的路径，避免批量动作打到过期目标
+  React.useEffect(() => {
+    setPick((current) => {
+      const selected = current.selected.filter((path) => order.includes(path))
+      return selected.length === current.selected.length ? current : { selected, anchor: null }
+    })
+  }, [order])
+
+  /** @private @author ddj 2026年11月21号 @param event 点击事件 @param path 目标路径 @returns void */
+  const choose = (event, path) => {
+    const mode = event.shiftKey ? 'range' : (event.ctrlKey || event.metaKey) ? 'toggle' : 'single'
+    setPick((current) => nextRowPick(current, orderRef.current, path, mode))
+  }
+
+  return { selected: pick.selected, choose }
+}
+
+/**
+ * 右键瞬间的生效选中：目标已在选中集合里就批量，否则先把选中改成该行。
+ * @author ddj 2026年11月21号
+ * @param rowPick 行选中状态 @param entry 右键目标
+ * @returns 生效选中路径
+ */
+function pickPathsOf(rowPick, entry) {
+  if (!entry) return []
+  if (rowPick.selected.includes(entry.path)) return rowPick.selected
+
+  rowPick.choose({}, entry.path)
+  return [entry.path]
+}
+
+/**
+ * 键盘唤起菜单（Shift+F10 / 菜单键），锚到该行左下角（对齐文件树 menuKey）。
+ * @author ddj 2026年11月21号
+ * @param event 键盘事件 @param entry 该行条目 @param onOpen 打开菜单回调
+ * @returns void
+ */
+function openMenuByKey(event, entry, onOpen) {
+  if (event.key !== 'ContextMenu' && !(event.shiftKey && event.key === 'F10')) return
+
+  event.preventDefault()
+  const rect = event.currentTarget.getBoundingClientRect()
+  onOpen({ preventDefault: () => {}, stopPropagation: () => {}, clientX: rect.left, clientY: rect.bottom }, 'row', entry)
+}
+
+/**
+ * 执行文本框编辑命令：原生 execCommand 优先（保住浏览器撤销栈），不可用时提示而不静默。
+ * @author ddj 2026年11月21号
+ * @param s 视图状态 @param node 目标文本框 @param command undo | redo | cut | copy | selectAll
+ * @returns void
+ */
+function runEditCommand(s, node, command) {
+  if (!node) return
+  node.focus()
+
+  if (command === 'selectAll') { node.select(); return }
+
+  let ok = false
+  try { ok = typeof document !== 'undefined' && document.execCommand(command) } catch { ok = false }
+  if (!ok) { s.notify?.('该操作不可用，请用键盘快捷键'); return }
+
+  // execCommand 只改 DOM 值：读回来同步受控状态，否则下一次渲染把这次编辑回滚掉
+  s.setMessage(node.value)
+}
+
+/**
+ * 粘贴：读剪贴板后按打开时的选区插入（浏览器默认拒绝 execCommand('paste')）。
+ * @author ddj 2026年11月21号
+ * @param s 视图状态 @param menu 菜单目标（含文本框与选区）
+ * @returns void
+ */
+async function pasteInto(s, menu) {
+  const node = menu.node
+  if (!node) return
+
+  const clip = typeof navigator === 'undefined' ? null : navigator.clipboard
+  if (!clip || typeof clip.readText !== 'function') { s.notify?.('剪贴板读取不可用，请用 Ctrl+V'); return }
+
+  let text = ''
+  try { text = await clip.readText() } catch { s.notify?.('粘贴失败，请用 Ctrl+V'); return }
+
+  const value = s.message ?? ''
+  s.setMessage(value.slice(0, menu.start) + text + value.slice(menu.end))
+  requestAnimationFrame(() => {
+    const caret = menu.start + text.length
+    node.focus()
+    node.setSelectionRange?.(caret, caret)
+  })
+}
+
+/**
+ * 多选菜单：只做勾选与复制；破坏性动作仍限单行，避免一次误点还原多份本地改动。
+ * @author ddj 2026年11月21号
+ * @param s 视图状态 @param paths 选中路径
+ * @returns 菜单条目
+ */
+function multiRowMenuOf(s, paths) {
+  const busy = Boolean(s.busy || s.aiBusy)
+  return [
+    { id: 'pick-on', label: '勾选选中 ' + paths.length + ' 项', disabled: busy, onClick: () => s.setPickChecked(paths, true) },
+    { id: 'pick-off', label: '取消勾选选中 ' + paths.length + ' 项', disabled: busy, onClick: () => s.setPickChecked(paths, false) },
+    { id: 'copy', label: '复制 ' + paths.length + ' 条路径', separator: true, disabled: busy,
+      onClick: () => { void copyText(paths.join('\n'), '已复制路径', s.notify) } },
+  ]
+}
+
+/**
+ * 单选菜单：核对 / 打开 / 勾选 / 写动作 / 复制；可用性全部来自 commitActs。
+ * @author ddj 2026年11月21号
+ * @param s 视图状态 @param entry 目标条目
+ * @returns 菜单条目
+ */
+function oneRowMenuOf(s, entry) {
+  const acts = commitActs(entry, Boolean(s.busy || s.aiBusy))
+  const picked = s.checked.has(entry.path)
+  return [
+    { id: 'compare', label: '与基线比较', disabled: !acts.compare, onClick: () => s.onCompare?.(entry.path) },
+    { id: 'log', label: '查看日志', disabled: !acts.log, onClick: () => s.onShowLog?.(entry.path) },
+    { id: 'open', label: '打开文件', separator: true, disabled: !acts.open, onClick: () => s.onOpenFile?.(entry.path) },
+    { id: 'parent', label: '打开父目录', disabled: !acts.openParent, onClick: () => s.onOpenParent?.(updateParent(entry.path)) },
+    { id: 'toggle', label: picked ? '取消勾选此项' : '勾选此项', separator: true, disabled: !acts.toggle, onClick: () => s.toggle(entry.path) },
+    { id: 'add', label: '加入版本控制', disabled: !acts.add, onClick: () => s.rowAction('add', entry.path) },
+    { id: 'revert', label: '还原（放弃本地改动）…', danger: true, disabled: !acts.revert, onClick: () => s.rowAction('revert-cli', entry.path) },
+    { id: 'copy', label: '复制路径', separator: true, disabled: !acts.copyPath, onClick: () => { void copyText(entry.path, '已复制路径', s.notify) } },
+  ]
+}
+
+/**
+ * 行菜单入口：多选走批量条目，单选走完整条目。
+ * @author ddj 2026年11月21号
+ * @param s 视图状态 @param menu 菜单目标（含打开时的选中路径）
+ * @returns 菜单条目
+ */
+function rowMenuEntriesOf(s, menu) {
+  const entry = menu && menu.entry
+  if (!entry) return []
+
+  const paths = menu.paths && menu.paths.length ? menu.paths : [entry.path]
+  if (paths.length > 1) return multiRowMenuOf(s, paths)
+  return oneRowMenuOf(s, entry)
+}
+
+/**
+ * 菜单条目装配的唯一入口（渲染处与单测共用）。
+ *
+ * 这里必须吞掉装配异常：条目只是投影，抛出去会让 React 卸载整个 EditorView，
+ * 表现为「右键后弹窗与编辑页一起白屏」——失败时给一条可读的禁用项即可。
+ * @author ddj 2026年11月21号
+ * @param s 视图状态 @param menu 菜单目标（缺省 = 无菜单）
+ * @returns 菜单条目
+ */
+export function commitMenuEntriesOf(s, menu) {
+  if (!menu) return []
+  try {
+    return menu.kind === 'row' ? rowMenuEntriesOf(s, menu) : msgMenuEntriesOf(s, menu)
+  } catch {
+    return [{ id: 'menu-error', label: '菜单装配失败：请关闭窗口重开', disabled: true }]
+  }
+}
+
+/**
+ * 提交信息框菜单条目：撤销 / 重做 / 剪切 / 复制 / 粘贴 / 全选（对齐官方提交框的编辑五项）。
+ * @author ddj 2026年11月21号
+ * @param s 视图状态 @param menu 菜单目标（含文本框与选区）
+ * @returns 菜单条目
+ */
+function msgMenuEntriesOf(s, menu) {
+  const node = menu.node
+  const hasRange = menu.end > menu.start
+  return [
+    { id: 'undo', label: '撤销', hint: 'Ctrl+Z', onClick: () => runEditCommand(s, node, 'undo') },
+    { id: 'redo', label: '重做', hint: 'Ctrl+Y', onClick: () => runEditCommand(s, node, 'redo') },
+    { id: 'cut', label: '剪切', hint: 'Ctrl+X', separator: true, disabled: !hasRange, onClick: () => runEditCommand(s, node, 'cut') },
+    { id: 'copy', label: '复制', hint: 'Ctrl+C', disabled: !hasRange, onClick: () => runEditCommand(s, node, 'copy') },
+    { id: 'paste', label: '粘贴', hint: 'Ctrl+V', onClick: () => { void pasteInto(s, menu) } },
+    { id: 'select-all', label: '全选', hint: 'Ctrl+A', separator: true, disabled: !s.message, onClick: () => runEditCommand(s, node, 'selectAll') },
+  ]
+}
+
+/**
+ * 单条待提交文件（勾选 / 状态字母 / 路径），支持右键与键盘唤起菜单。
+ * @author ddj 2026年11月15号 / 2026年11月21号
+ * @param entry 变更条目 @param checked 是否勾选 @param onToggle 切换 @param s 视图状态（菜单与动作）
  * @returns 行元素
  */
-function rowEl(entry, checked, onToggle) {
+function rowEl(entry, checked, onToggle, s) {
   const tone = SVN_STATUS_TONE[entry.status] ?? 'plain'
-  return React.createElement('div', { className: 'edrv-svncommit-row', role: 'row', key: entry.path },
+  const opened = Boolean(s.menu && s.menu.kind === 'row' && s.menu.entry && s.menu.entry.path === entry.path)
+  const selected = Boolean(s.selection && s.selection.includes(entry.path))
+  return React.createElement('div', {
+    className: 'edrv-svncommit-row' + (opened ? ' is-menu' : '') + (selected ? ' is-selected' : ''),
+    role: 'row',
+    'aria-selected': selected,
+    tabIndex: 0,
+    key: entry.path,
+    onClick: (event) => s.pickRow(event, entry.path),
+    onContextMenu: (event) => s.menuOpen(event, 'row', entry),
+    onKeyDown: (event) => openMenuByKey(event, entry, s.menuOpen),
+  },
     React.createElement('span', { className: 'edrv-svncommit-pick', role: 'cell' }, checkBoxEl(checked, onToggle, entry.path)),
     React.createElement('span', {
       className: 'edrv-svn-ch edrv-svn-ch-' + tone,
@@ -133,8 +376,14 @@ function tableEl(s) {
   const body = []
   for (const section of s.sections) {
     body.push(sectionHeadEl(section, groupTriStateOf(section, s.checked), () => s.toggleSection(section)))
+    // 空分区（只登记过分区、当前无改动）：留一行说明，别让人以为列表被截断
+    if (!section.entries.length) {
+      body.push(React.createElement('div', { className: 'edrv-svncommit-emptyrow', key: section.key + ':empty' },
+        '该分区当前没有待提交改动（分区已登记）'))
+      continue
+    }
     for (const entry of section.entries) {
-      body.push(rowEl(entry, s.checked.has(entry.path), () => s.toggle(entry.path)))
+      body.push(rowEl(entry, s.checked.has(entry.path), () => s.toggle(entry.path), s))
     }
   }
   return React.createElement('div', { className: 'edrv-svncommit-table' },
@@ -220,6 +469,7 @@ function composeEl(s) {
       spellCheck: false,
       placeholder: '首行是提交标题，例如：修复删除道具后背包不刷新。空一行可写正文。',
       onChange: (event) => s.setMessage(event.target.value),
+      onContextMenu: (event) => s.menuOpen(event, 'msg', null, event.currentTarget),
     }))
 }
 
@@ -288,6 +538,23 @@ function useCommitLoad(sessionId, seed) {
   const [message, setMessage] = React.useState(() => seed?.message ?? '')
   const seeded = React.useRef(Boolean(seed?.paths?.length))
 
+  /**
+   * 重读清单（还原 / 加入之后）：保留仍存在条目的勾选，丢弃已消失的路径。
+   * @author ddj 2026年11月21号
+   * @returns void
+   */
+  const reload = React.useCallback(() => {
+    void svnCommitPlan(sessionId).then((outcome) => {
+      if (!outcome.ok || !outcome.plan) { setLoadError(outcome.message); return }
+
+      const next = commitSectionsOf(outcome.plan.entries, outcome.plan.changelists)
+      setPlan(outcome.plan)
+      setSections(next)
+      const live = new Set(next.flatMap((section) => section.entries.map((entry) => entry.path)))
+      setChecked((current) => new Set([...current].filter((path) => live.has(path))))
+    })
+  }, [sessionId])
+
   React.useEffect(() => {
     let alive = true
     void svnCommitPlan(sessionId).then((outcome) => {
@@ -295,7 +562,7 @@ function useCommitLoad(sessionId, seed) {
       if (!outcome.ok || !outcome.plan) { setLoadError(outcome.message); return }
 
       setPlan(outcome.plan)
-      const next = commitSectionsOf(outcome.plan.entries)
+      const next = commitSectionsOf(outcome.plan.entries, outcome.plan.changelists)
       setSections(next)
       if (!seeded.current) setChecked(defaultCheckedOf(next))
       if (!seeded.current && !message && outcome.plan.recent?.length) setMessage(outcome.plan.recent[0])
@@ -303,7 +570,7 @@ function useCommitLoad(sessionId, seed) {
     return () => { alive = false }
   }, [sessionId])
 
-  return { plan, loadError, sections, checked, setChecked, message, setMessage }
+  return { plan, loadError, sections, checked, setChecked, message, setMessage, reload }
 }
 
 /**
@@ -372,8 +639,8 @@ function useCommitWrite(ctx) {
  * @param onCommitted 提交成功回调（刷新变更清单）
  * @returns 视图状态
  */
-function useCommitState(sessionId, seed, notify, onCommitted) {
-  const { plan, loadError, sections, checked, setChecked, message, setMessage } = useCommitLoad(sessionId, seed)
+function useCommitState(sessionId, seed, notify, onCommitted, onChanged) {
+  const { plan, loadError, sections, checked, setChecked, message, setMessage, reload } = useCommitLoad(sessionId, seed)
   const [keepLocks, setKeepLocks] = React.useState(false)
   const [style, setStyle] = React.useState('plain')
   const paths = React.useMemo(() => [...checked], [checked])
@@ -410,9 +677,41 @@ function useCommitState(sessionId, seed, notify, onCommitted) {
     setChecked(next)
   }
 
+  // 显示顺序（分区 + 组内次序）：Shift 范围选择与批量动作都按这个顺序取
+  const rowOrder = React.useMemo(
+    () => sections.flatMap((section) => section.entries.map((entry) => entry.path)),
+    [sections],
+  )
+
+  /**
+   * 批量勾选 / 取消勾选（多选右键）：一次性写入集合，避免逐条 setChecked 互相覆盖。
+   * @author ddj 2026年11月21号
+   * @param targets 目标路径 @param on 勾选还是取消
+   */
+  const setPickChecked = (targets, on) => {
+    const next = new Set(checked)
+    for (const path of targets) {
+      if (on) next.add(path)
+      else next.delete(path)
+    }
+    setChecked(next)
+  }
+
+  /**
+   * 行菜单的 SVN 写动作（还原 / 加入）：走动作目录执行器，确认守卫与刷新口径与树/页签菜单一致。
+   * @author ddj 2026年11月21号
+   * @param actionId 动作 id @param path 目标路径
+   */
+  const rowAction = (actionId, path) => {
+    if (write.busy || write.aiBusy) return
+    const def = SVN_ACTION_BY_ID[actionId]
+    if (!def) return
+    runSvnAction(def, { sessionId, path, notify, refreshChanges: () => { reload(); onChanged?.() } })
+  }
+
   return {
     plan, loadError, sections, checked, message, setMessage, keepLocks, setKeepLocks, style, setStyle,
-    paths, stats, messageError, toggle, toggleSection,
+    paths, stats, messageError, toggle, toggleSection, rowOrder, setPickChecked, rowAction,
     ai: write.ai, aiBusy: write.aiBusy, busy: write.busy, result: write.result, failed: write.failed,
     generate: write.generate, submit: write.submit,
   }
@@ -430,8 +729,17 @@ function useCommitState(sessionId, seed, notify, onCommitted) {
  */
 export function SvnCommitDialog(props) {
   const { sessionId, seed, onClose, onCommitted, notify } = props
-  const s = useCommitState(sessionId, seed, notify, onCommitted)
-  const view = { ...s, onClose }
+  const s = useCommitState(sessionId, seed, notify, onCommitted, props.onChanged)
+  const context = useCommitMenu()
+  const rowPick = useRowPick(s.rowOrder)
+  const view = {
+    ...s, onClose, notify, selection: rowPick.selected, pickRow: rowPick.choose,
+    menu: context.menu,
+    menuOpen: (event, kind, entry, node) => context.open(event, kind, entry, node, pickPathsOf(rowPick, entry)),
+    onCompare: props.onCompare, onShowLog: props.onShowLog,
+    onOpenFile: props.onOpenFile, onOpenParent: props.onOpenParent,
+  }
+  const entries = commitMenuEntriesOf(view, context.menu)
   return React.createElement(FloatingWindow, {
     title: 'SVN 提交',
     dialogClass: 'edrv-svncommit-dialog',
@@ -454,5 +762,8 @@ export function SvnCommitDialog(props) {
     composeEl(view),
     resultEl(s.result),
     telemetryEl(view),
-    footEl(view))
+    footEl(view),
+    context.menu ? React.createElement(ContextMenu, {
+      x: context.menu.x, y: context.menu.y, entries, zIndex: 193, onClose: context.close,
+    }) : null)
 }

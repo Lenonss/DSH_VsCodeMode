@@ -7,6 +7,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   IGNORE_ON_COMMIT,
+  commitActs,
   commitHintOf,
   commitMessageErrorOf,
   commitResultLinesOf,
@@ -15,6 +16,7 @@ import {
   commitStatsOf,
   defaultCheckedOf,
   groupTriStateOf,
+  nextRowPick,
 } from '../src/client/ui/svnCommitModel.js'
 
 const entries = [
@@ -110,5 +112,76 @@ describe('提交信息与结果', () => {
     const seed = commitSeedOf({ name: 'core', paths: ['a.txt'], subject: 'fix: x', body: '正文' })
     expect(seed.paths).toEqual(['a.txt'])
     expect(seed.message).toBe('fix: x\n\n正文')
+  })
+})
+
+describe('右键菜单动作可用性', () => {
+  it('受版本控制的改动行：比较 / 日志 / 打开 / 勾选 / 还原可用，加入不可用', () => {
+    const acts = commitActs({ path: 'a.cs', status: 'modified', versioned: true }, false)
+    expect(acts).toEqual({ compare: true, log: true, open: true, openParent: true, copyPath: true, toggle: true, revert: true, add: false })
+  })
+
+  it('未版本控制行：加入可用、还原与日志不可用', () => {
+    const acts = commitActs({ path: 'c.txt', status: 'unversioned', versioned: false }, false)
+    expect(acts.add).toBe(true)
+    expect(acts.revert).toBe(false)
+    expect(acts.log).toBe(false)
+  })
+
+  it('不可文本比较的文件（二进制）不给比较', () => {
+    expect(commitActs({ path: 'icon.png', status: 'modified', versioned: true }, false).compare).toBe(false)
+  })
+
+  it('提交进行中一律不可用，且无目标时不抛错', () => {
+    const idle = commitActs({ path: 'a.cs', status: 'modified', versioned: true }, true)
+    expect(Object.values(idle).every((value) => value === false)).toBe(true)
+    expect(Object.values(commitActs(null, false)).every((value) => value === false)).toBe(true)
+  })
+})
+
+describe('行选中', () => {
+  const order = ['a', 'b', 'c', 'd']
+  const none = { selected: [], anchor: null }
+
+  it('单击只选一行，并更新锚点', () => {
+    expect(nextRowPick({ selected: ['a', 'b'], anchor: 'a' }, order, 'c', 'single')).toEqual({ selected: ['c'], anchor: 'c' })
+    expect(nextRowPick(none, order, 'zzz', 'single')).toEqual({ selected: [], anchor: 'zzz' })
+  })
+
+  it('Ctrl 点击切换单行，结果恒按显示顺序', () => {
+    let pick = nextRowPick({ selected: ['c'], anchor: 'c' }, order, 'a', 'toggle')
+    expect(pick).toEqual({ selected: ['a', 'c'], anchor: 'a' })
+    pick = nextRowPick(pick, order, 'c', 'toggle')
+    expect(pick).toEqual({ selected: ['a'], anchor: 'c' })
+  })
+
+  it('Shift 从锚点取连续范围，反向同样成立', () => {
+    expect(nextRowPick({ selected: ['a'], anchor: 'a' }, order, 'c', 'range').selected).toEqual(['a', 'b', 'c'])
+    expect(nextRowPick({ selected: ['d'], anchor: 'd' }, order, 'b', 'range').selected).toEqual(['b', 'c', 'd'])
+    // 目标不在显示顺序里（不存在该行）时退化为单击，不留过期选中
+    expect(nextRowPick({ selected: ['b'], anchor: 'b' }, order, 'zzz', 'range')).toEqual({ selected: [], anchor: 'zzz' })
+    expect(nextRowPick({ selected: ['b'], anchor: null }, order, 'c', 'range')).toEqual({ selected: ['c'], anchor: 'c' })
+  })
+})
+
+describe('空分区（仅登记过 changelist）', () => {
+  it('计划里的组名即使没有可提交条目也出空分区，并按名字排在未分组之前', () => {
+    const sections = commitSectionsOf([{ path: 'a.txt', status: 'modified', versioned: true, changelist: 'core' }], ['ui', 'core', 'zeta'])
+    expect(sections.map((section) => section.key)).toEqual(['changelist:core', 'changelist:ui', 'changelist:zeta'])
+    expect(sections.find((section) => section.key === 'changelist:ui').entries).toEqual([])
+  })
+
+  it('空分区不产生勾选、不参与统计，分组三态为未选', () => {
+    const sections = commitSectionsOf([{ path: 'a.txt', status: 'modified', versioned: true }], ['ui'])
+    const checked = defaultCheckedOf(sections)
+    expect([...checked]).toEqual(['a.txt'])
+    expect(commitStatsOf(sections, checked).total).toBe(1)
+    expect(groupTriStateOf(sections.find((section) => section.key === 'changelist:ui'), new Set())).toBe('none')
+  })
+
+  it('已有可提交条目的分区不会重复出空分区', () => {
+    const sections = commitSectionsOf([{ path: 'a.txt', status: 'modified', versioned: true, changelist: 'core' }], ['core'])
+    expect(sections.filter((section) => section.key === 'changelist:core')).toHaveLength(1)
+    expect(sections[0].entries).toHaveLength(1)
   })
 })

@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { installFilesCss, patchFilesCss } from '../src/client/filesCssCompat.js'
+import { installFilesCss, navSelectorOf, patchFilesCss } from '../src/client/filesCssCompat.js'
 
 const desktop = ':has(>.k-1LKG_navigator.k-1LKG_fill)>:not(.k-1LKG_navigator){visibility:hidden}'
 const mobile = ':has(>.k-1LKG_navigator:not(.k-1LKG_wholePage))>:not(.k-1LKG_navigator){visibility:hidden}'
 const original = `.before{color:red}${desktop}@media(width<768px){${mobile}}`
+const current = '.x{color:red}[data-files-navigator-row]>:not(.k-1LKG_navigator){visibility:var(--files-navigator-covered,inherit)}'
 const marker = 'data-edrv-files-peer'
 
 /** @private @author ddj 2026年11月09号 @description Minimal DOM with real parent/reparent semantics for compatibility ownership tests. */
@@ -55,6 +56,19 @@ describe('official FilesBody CSS compatibility', () => {
     expect(patched).toContain(`@media(width<768px){${mobile.replace('>:not(', '>:where([data-edrv-files-peer]):not(')}}`)
     expect(patched.startsWith('.before{color:red}')).toBe(true)
     expect(patchFilesCss(patched)).toBeNull()
+  })
+
+  it('redirects the 0.2.3 row-marker rule, including an unknown class hash', () => {
+    expect(patchFilesCss(current)).toBe(current.replace('>:not(', `>:where([${marker}]):not(`))
+    expect(patchFilesCss(patchFilesCss(current)!)).toBeNull()
+    const rehashed = current.replace(/k-1LKG/g, 'a-9XYZ')
+    expect(patchFilesCss(rehashed)).toBe(rehashed.replace('>:not(', `>:where([${marker}]):not(`))
+  })
+
+  it('reads the navigator class from the stylesheet revision', () => {
+    expect(navSelectorOf(original)).toBe('.k-1LKG_navigator')
+    expect(navSelectorOf(current.replace(/k-1LKG/g, 'a-9XYZ'))).toBe('.a-9XYZ_navigator')
+    expect(navSelectorOf('.nothing{}')).toBe('.k-1LKG_navigator')
   })
 
   it.each([desktop, original + desktop, original.replace('visibility:hidden', 'visibility:collapse')])('skips unknown or ambiguous versions', css => {

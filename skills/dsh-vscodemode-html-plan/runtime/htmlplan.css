@@ -394,6 +394,13 @@ doc-ask ol.rank li::before { content: counter(rk); font: 600 12px var(--mono); c
 doc-ask ol.rank li.dragging { opacity: .4; } doc-ask ol.rank li .grip { margin-left: auto; color: var(--ink-3); font-family: var(--mono); }
 doc-ask ol.rank li button { border: 0; background: none; color: var(--ink-3); cursor: pointer; font: 14px var(--mono); padding: 0 4px; }
 doc-ask > :last-child { margin-bottom: 2px; }
+/* the free-text answer the runtime adds under every decision */
+doc-ask .nw-own { margin: 10px 0 2px; padding-top: 10px; border-top: 1px dashed var(--line-2); }
+doc-ask .nw-own > .lbl { font: 550 12px/1.6 var(--sans); color: var(--ink-2); }
+doc-ask .nw-own > .lbl small { margin-left: 6px; font-weight: 430; color: var(--ink-3); }
+doc-ask .nw-own.on > .lbl { color: var(--accent); }
+doc-ask .nw-own textarea { min-height: 44px; margin: 6px 0 0; }
+doc-ask .nw-own textarea::placeholder { color: var(--ink-3); }
 
 /* ── comments + response bar ──────────────────────── */
 [data-nw-t] { position: relative; }

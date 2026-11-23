@@ -133,8 +133,9 @@ function assetHandler(directory: string, prefix?: string, filename?: string): Ht
 // #endregion
 
 /**
- * Register one owned route, enforcing authentication before any asset or RPC access.
- * @author ddj 2026年09月28号
+ * Register one owned route; authorization is the framework's (auth: 'required') unless
+ * the host still exposes the legacy connection fence.
+ * @author ddj 2026年09月28号 / 2026年11月23号
  * @param ctx Host context.
  * @param route Plugin route descriptor.
  * @param warning Optional registration diagnostic sink.
@@ -151,7 +152,8 @@ function mountRoute(ctx: Ctx, route: PluginRoute, warning?: (text: string) => vo
   /** @author ddj 2026年09月28号 @returns Route disposer, or undefined on a registration conflict. */
   function install(): (() => void) | undefined {
     try {
-      const dispose = ctx.get('webServer').register({ kind: route.kind, path: route.path, handler: guarded })
+      // 0.2.3: the framework admits the route and hands the handler its peer; older hosts ignore the field.
+      const dispose = ctx.get('webServer').register({ kind: route.kind, path: route.path, handler: guarded, auth: 'required' })
       noteOwnRoute(route.kind, route.path)
       return dispose
     } catch (error) {

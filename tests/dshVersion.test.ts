@@ -129,4 +129,18 @@ describe('familyLabel', () => {
     expect(familyLabel('0.1.4-rc.1')).toContain('0.1.3-alpha')
     expect(familyLabel('0.1.3-alpha.2')).toContain('0.1.3-alpha')
   })
+
+  it('0.2.2 与 0.2.3 线各自标注，不落进 0.2.0 的兜底', () => {
+    for (const version of ['0.2.2-alpha.1', '0.2.2-rc.5']) {
+      expect(familyLabel(version)).toContain('0.2.2')
+      expect(familyLabel(version)).toContain('按能力探测')
+      expect(familyLabel(version)).not.toContain('0.2.0 及更新')
+    }
+    for (const version of ['0.2.3-alpha.1', '0.2.3-alpha.2', '0.2.3']) {
+      expect(familyLabel(version)).toContain('0.2.3')
+      expect(familyLabel(version)).toContain('框架 auth')
+      expect(familyLabel(version)).not.toContain('0.2.2')
+    }
+    expect(familyLabel('0.2.1-rc.2')).not.toContain('框架 auth')
+  })
 })

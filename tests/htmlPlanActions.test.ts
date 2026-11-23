@@ -11,6 +11,7 @@ import {
   readPendingReview,
   readPlanProjection,
   revealPlanReview,
+  sendPlanMessage,
   submitPlanResponse,
   subscribePlanFaces,
 } from '../src/client/htmlPlan/planActions.js'
@@ -49,6 +50,7 @@ function fakeCtx(overrides: Record<string, unknown> = {}) {
         return { reveal: (...args: unknown[]) => { calls.reveal.push(args); return true } }
       }
       if (name === 'uiSession' && overrides.uiSession !== undefined) return overrides.uiSession
+      if (name === 'uiSession.sessionStatus' && overrides.statusService !== undefined) return overrides.statusService
       return undefined
     },
   }
@@ -303,8 +305,96 @@ describe('submitPlanResponse（一键回复）', () => {
     expect(sequence).toEqual(['approve', 'send'])
     d2()
   })
-  it('动作桥未安装时失败', async () => {
+})
+
+describe('可选服务读取绝不抛给渲染层（0.2.3 root hook 需要 inject）', () => {
+  it('uiSession.sessionStatus 属性读抛错时降级到投影', () => {
+    const hostile = Object.defineProperty({}, 'sessionStatus', {
+      get() { throw new Error('cannot get property "uiSession.sessionStatus" without inject') },
+      enumerable: true,
+    })
+    const { ctx } = fakeCtx({ questions: REVIEW, uiSession: hostile })
+    const dispose = installHtmlPlanActions(ctx, { appendText: async () => 'ok' })
+    expect(() => readPendingReview('s1')).not.toThrow()
+    expect(readPendingReview('s1')?.callId).toBe('c1')
+    dispose()
+  })
+
+  it('按服务名取到会话状态时走在线卡片（免 inject 路径）', () => {
+    const answers: unknown[] = []
+    const pending = livePending(answers)
+    const { ctx } = fakeCtx({
+      questions: [],
+      statusService: { getSnapshot: () => new Map([['s1', { pendingInteraction: pending }]]) },
+    })
+    const dispose = installHtmlPlanActions(ctx, { appendText: async () => 'ok' })
+    const review = readPendingReview('s1')
+    expect(review?.approveLabel).toBe('Approve')
+    expect(review?.keepLabel).toBe('Keep planning')
+    dispose()
+  })
+
+  it('投影取快照抛错时读状态返回空值而不抛', () => {
+    const boom = () => { throw new Error('projection boom') }
+    const ctx = {
+      get: (name: string) => (name === 'sessions'
+        ? { binding: () => ({ session: { projections: { faceOf: () => ({ getSnapshot: boom }) } } }) }
+        : undefined),
+    }
+    const dispose = installHtmlPlanActions(ctx, { appendText: async () => 'ok' })
+    expect(readPlanProjection('s1')).toBeUndefined()
+    expect(readPendingReview('s1')).toBeNull()
+    dispose()
+  })
+
+  it('会话状态服务读快照抛错时读状态仍不抛', () => {
+    const { ctx } = fakeCtx({
+      questions: [],
+      statusService: { getSnapshot: () => { throw new Error('status boom') } },
+    })
+    const dispose = installHtmlPlanActions(ctx, { appendText: async () => 'ok' })
+    expect(() => readPendingReview('s1')).not.toThrow()
+    expect(readPendingReview('s1')).toBeNull()
+    dispose()
+  })
+})
+
+describe('动作桥未安装时失败', () => {
+  it('submitPlanResponse 返回失败', async () => {
     const result = await submitPlanResponse('s1', '答复')
     expect(result.ok).toBe(false)
+  })
+})
+
+describe('sendPlanMessage（生成计划页指令，不结算审批）', () => {
+  it('有待审批时也只发消息：不替用户点同意执行', async () => {
+    const ran: string[] = []
+    const pending = livePending([])
+    const { ctx } = fakeCtx({
+      questions: [],
+      statusService: { getSnapshot: () => new Map([['s1', { pendingInteraction: pending }]]) },
+    })
+    const dispose = installHtmlPlanActions(ctx, {
+      appendText: async () => 'ok',
+      sendTask: async (_sid, text) => { ran.push(text); return { status: 'accepted' } },
+    })
+    expect(await sendPlanMessage('s1', '请生成计划页')).toEqual({ ok: true })
+    expect(ran).toEqual(['请生成计划页'])
+    expect(readPendingReview('s1')?.callId).toBe('c1')
+    dispose()
+  })
+
+  it('空指令与发送拒绝都给可读失败', async () => {
+    const { ctx } = fakeCtx({ questions: [] })
+    const dispose = installHtmlPlanActions(ctx, { appendText: async () => 'ok', sendTask: async () => ({ status: 'rejected', message: '忙' }) })
+    expect((await sendPlanMessage('s1', '  ')).ok).toBe(false)
+    const rejected = await sendPlanMessage('s1', '请生成计划页')
+    expect(rejected.ok).toBe(false)
+    expect(String(rejected.error)).toContain('忙')
+    dispose()
+  })
+
+  it('桥未安装时失败', async () => {
+    expect((await sendPlanMessage('s1', '请生成计划页')).ok).toBe(false)
   })
 })

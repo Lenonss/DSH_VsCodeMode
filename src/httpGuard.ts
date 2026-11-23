@@ -23,20 +23,56 @@ export function replyJson(res: ServerResponse, status: number, value: unknown): 
 }
 
 /**
- * Admit a request through the Host connection fence before inspecting its body.
- * @author ddj 2026年09月28号
- * @param ctx Host context; connection is an optional capability on older hosts.
+ * Resolve the legacy Host connection fence, or undefined when the host no longer has one.
+ * DSH 0.2.3 removed connection.requestRejection: the framework now authorizes a route
+ * through WebRoute.auth (default required) before dispatch, so a host without the fence
+ * must admit here and leave the decision to the framework.
+ * @author ddj 2026年11月23号
+ * @param ctx Host context.
+ * @param req Original Node request, including authentication headers.
+ * @returns The rejection status, or undefined when the host has no legacy fence.
+ */
+function legacyRejection(ctx: Ctx, req: IncomingMessage): number | undefined {
+  let reject: unknown
+  try {
+    reject = (ctx.get('connection') as { requestRejection?: unknown } | undefined)?.requestRejection
+  } catch {
+    reject = undefined
+  }
+  if (typeof reject !== 'function') return undefined
+  try {
+    return (reject as (request: IncomingMessage) => number | undefined)(req)
+  } catch {
+    return 503
+  }
+}
+
+/**
+ * Report which party authorizes this plugin's routes on the running host.
+ * @author ddj 2026年11月23号
+ * @param ctx Host context.
+ * @returns 'legacy' when the old connection fence exists, else the framework route auth.
+ */
+export function routeAuthMode(ctx: Ctx): 'legacy' | 'framework' {
+  try {
+    const reject = (ctx.get('connection') as { requestRejection?: unknown } | undefined)?.requestRejection
+    return typeof reject === 'function' ? 'legacy' : 'framework'
+  } catch {
+    return 'framework'
+  }
+}
+
+/**
+ * Admit a request before inspecting its body, then enforce this route's methods.
+ * @author ddj 2026年09月28号 / 2026年11月23号
+ * @param ctx Host context; the legacy connection fence is optional and absent from 0.2.3.
  * @param req Original Node request, including authentication headers.
  * @param res Response receiving a refusal when unavailable or unauthorized.
  * @param methods Allowed HTTP methods for this route.
  * @returns Whether the request may proceed.
  */
 export function admitRoute(ctx: Ctx, req: IncomingMessage, res: ServerResponse, methods: string[]): boolean {
-  let rejection: number | undefined = 503
-  try {
-    const connection = ctx.get('connection')
-    if (typeof connection?.requestRejection === 'function') rejection = connection.requestRejection(req)
-  } catch { /* A missing or failed authentication service must not admit the request. */ }
+  const rejection = legacyRejection(ctx, req)
   if (rejection !== undefined) {
     const status = rejection === 401 || rejection === 403 ? rejection : 503
     replyJson(res, status, { ok: false, error: status === 503 ? 'Host authentication service unavailable' : 'Host authentication rejected this request' })

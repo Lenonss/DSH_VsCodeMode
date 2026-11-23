@@ -245,6 +245,9 @@ export function changePathOf(raw: string): string {
 export function parseStatusXml(xml: string, cap: number = CHANGES_CAP): { entries: SvnChangeEntry[]; truncated: boolean } {
   const entries: SvnChangeEntry[] = []
   let truncated = false
+  // ignored 与非 ignored 各有一份预算（见下方 isIgnored 分支）
+  let plainCount = 0
+  let ignoredCount = 0
   if (typeof xml !== 'string' || !xml) return { entries, truncated }
   let changelist = ''
   let pendingPath: string | null = null
@@ -267,8 +270,14 @@ export function parseStatusXml(xml: string, cap: number = CHANGES_CAP): { entrie
       ? 'conflicted' : (KNOWN_ITEM_STATUS.has(item) ? item : 'modified')
     const path = changePathOf(pendingPath)
     if (!path) { pendingPath = null; continue }
-    if (entries.length >= cap) { truncated = true }
+    // ignored 单独预算：`--no-ignore` 在 Unity 工程里常有数千条（实测 4201 条中 4071 条 ignored），
+    // 与真实改动共用同一个上限时，末尾的 <changelist> 块会连同整组一起被截掉，
+    // 表现为「提交窗/面板看不到其它 changelist 组」。
+    const isIgnored = status === 'ignored'
+    if ((isIgnored ? ignoredCount : plainCount) >= cap) { truncated = true }
     else {
+      if (isIgnored) ignoredCount += 1
+      else plainCount += 1
       const props = attrOf(hit.attrs, 'props')
       const revision = numAttrOf(hit.attrs, 'revision')
       entries.push({

@@ -684,13 +684,13 @@ profile 请替换为实际目标，不要把示例目录当成当前运行 profi
 
 ```bash
 # ① Git 安装（clone + prepare 构建；推荐打固定 tag）
-dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.31.0
+dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.33.0
 
 # ② npm 注册表（发布到 npm 后）
-dsh plugin --profile web add dsh-vscode-mode@0.31.0
+dsh plugin --profile web add dsh-vscode-mode@0.33.0
 
 # ③ GitHub Release tgz 直装（Release asset 可用后）
-dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.31.0/dsh-vscode-mode-0.31.0.tgz
+dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.33.0/dsh-vscode-mode-0.33.0.tgz
 ```
 
 > **DSH 版本政策（0.17.0 起）**：六项 DSH peer 仍统一声明为 `*`，另以
@@ -1075,6 +1075,7 @@ Keep All / Undo All 却是亮的。修复：单文件 Keep / Undo 覆盖冲突�
 
 | 版本 | 要点 |
 | --- | --- |
+| v0.33.0 | DSH 0.2.3 适配（路由授权交框架、运行时版本探测、文件链接宿主探测、cordis 根上下文）；项目 MCP 交官方 `mcpManager` 托管（注册名 = 工作区哈希，状态/重启/授权走官方）；官方变更视图行级注解；非 UTF-8 文件兼容（GB18030 判定、只读预览、转码修复与撤销）；SVN 提交对话框右键菜单与 Ctrl/Shift 多选批量；`/html-plan` 改一条 `plan.mjs` 打包命令并支持缺口现生成；侧栏正文错误边界 |
 | v0.31.0 | SVN agent 工具（19 个 `svn_*`：只读门禁、路径白名单、无损 JSON）+ 原生提交（勾选清单、单块提交、中文日志、不自动 resolve）+ AI 提交信息（只分析勾选范围、只产草稿）+ 提交对话框；HTML 网页预览转接官方渲染器（一键预览 / 链接让位 / 旧版回退，不新增路由）；HTML 计划模式（`/html-plan <任务>`、`--delegate` 可委派写页，单文件计划页 + 官方审批/退出 + 答复「回复并执行」）；上游 html-plan 按 MIT vendor |
 | v0.30.0 | 模板语言高亮（EJS/ERB/Nunjucks/Jinja2/Blade/Haml/Slim）+ 语言映射审计；搜索面板全局替换（预览确认、落盘前置、逐文件版本守卫、CRLF/BOM 保真）；会话引用接入（拖文件/复制行引用/粘贴文件，多义不瞎插）；设置新增「交互」开关 |
 | v0.29.2 | 设置界面优化：轻量分组、字段说明与控件对齐、官方输入原语及状态提示；MCP 加载/失败不再遮挡其他分类 |
@@ -1096,7 +1097,16 @@ Keep All / Undo All 却是亮的。修复：单文件 Keep / Undo 覆盖冲突�
 | v0.23.0 | 快捷菜单：可拖动悬浮按钮 + 自定义菜单树 |
 
 <details>
-<summary>完整版本记录（v0.30.0 → v0.1.5x，点击展开）</summary>
+<summary>完整版本记录（v0.33.0 → v0.1.5x，点击展开）</summary>
+
+- **v0.33.0**：DSH 0.2.3 适配——路由授权交回框架（`auth: 'required'`）、运行时版本探测、
+  文件链接宿主从 `workspaces` 迁到 `remote.session`（探测不到就不接管）、cordis 根上下文改用
+  `Symbol.for('cordis.root')`；项目 MCP 交官方 `mcpManager` 托管（注册名带工作区哈希前缀，
+  状态/重启/授权走官方通道），MCP 表单新增「工具加载」开关且默认值不落盘；官方变更视图接行级
+  注解（新增/修改落新侧、纯删除落旧侧）；非 UTF-8 文件兼容（GB18030 严格判定、只读预览、
+  推荐方式转码修复与撤销、坏字节不写盘）；SVN 提交对话框补右键菜单、Ctrl/Shift 多选与批量勾选；
+  `/html-plan` 改一条 `plan.mjs`（复制运行时 + 打包 + 校验），计划页缺口可由面板直接让 agent 现生成；
+  侧栏正文加错误边界。详见 [0.33.0 发布说明](docs/release-0.33.0.md)。
 
 - **v0.31.0**：SVN 侧新增 19 个 agent 工具与原生提交链路（提交计划、勾选清单、UTF-8 日志、
   AI 提交信息草稿、提交对话框；冲突不自动 resolve、超限不分块），详见第 16 节；

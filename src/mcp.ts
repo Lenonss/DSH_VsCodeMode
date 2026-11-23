@@ -10,8 +10,10 @@ import {
   PROJECT_ENTRY_PREFIX,
   isProjectEntryId,
 } from './compat.js'
-import type { MpcConfig, MpcServer, MpcTool } from './shared/mcp.js'
+import type { MpcConfig, MpcServer, MpcStatus, MpcTool } from './shared/mcp.js'
+import { managerPort } from './mcpManagerBridge.js'
 import type { Ctx } from './store.js'
+import { hostRootOf } from './hostRoot.js'
 import { checkMcpName } from './mcpProject.js'
 import { runtimeOf } from './mcpRuntime.js'
 
@@ -51,7 +53,7 @@ const edits = new WeakMap<object, Promise<unknown>>()
  * @returns Operation result; a rejection never poisons the next edit.
  */
 export function mcpEdit<T>(ctx: Ctx, action: () => Promise<T>): Promise<T> {
-  const owner = ctx.root ?? ctx
+  const owner = hostRootOf(ctx)
   const next = (edits.get(owner) ?? Promise.resolve()).then(action, action)
   edits.set(owner, next)
   return next
@@ -202,7 +204,52 @@ function validatePairs(values: unknown, field: string): void {
 
 /** 列出全局（profile）MCP 服务，过滤掉新旧格式的项目级条目。 */
 export function listMcp(ctx: Ctx): { servers: MpcServer[] } {
-  return { servers: entriesOf(ctx).filter((entry) => !isProjectEntryId(String(entry.id ?? entry.options?.id ?? ''))).map((entry) => serverOf(ctx, entry)) }
+  const servers = entriesOf(ctx).filter((entry) => !isProjectEntryId(String(entry.id ?? entry.options?.id ?? ''))).map((entry) => serverOf(ctx, entry))
+  return { servers: [...servers, ...managerServers(ctx, new Set(servers.map((server) => server.serverName)))] }
+}
+
+/** 官方 manager 状态到插件状态的映射（未知状态按 configured 处理，不假装连上）。 */
+const MANAGER_STATE: Record<string, MpcStatus> = {
+  connected: 'connected',
+  connecting: 'connecting',
+  disabled: 'disabled',
+  failed: 'error',
+  unknown: 'configured',
+}
+
+/**
+ * 列出官方 mcpManager 托管、且不属于 loader 条目的服务器（只读展示）。
+ * 0.2.3 之前没有该服务时返回空数组，面板行为不变。
+ * @public @author ddj 2026年11月23号
+ * @param ctx Host services.
+ * @param known 已由 loader 条目覆盖的服务器名（避免重复展示）。
+ * @returns 仅由 manager 托管的服务器视图。
+ */
+export function managerServers(ctx: Ctx, known: Set<string>): MpcServer[] {
+  const port = managerPort(ctx as never)
+  if (!port.available()) return []
+  // 插件自己托管的项目注册由 mcp.snapshot 的项目分区展示，这里不重复列。
+  const managed = runtimeOf(ctx).managedNames()
+  return port.list()
+    .filter((view) => view.name && !known.has(view.name) && !managed.has(view.name))
+    .map((view) => {
+      const status = MANAGER_STATE[view.state] ?? 'configured'
+      const server: MpcServer = {
+        id: 'manager:' + view.name,
+        serverName: view.name,
+        enabled: status !== 'disabled',
+        transport: 'stdio',
+        config: { serverName: view.name, transport: 'stdio' },
+        status,
+        toolCount: 0,
+        tools: [],
+        managed: true,
+        managerState: view.state,
+      }
+      if (view.error) server.error = view.error
+      if (view.phase) server.phase = view.phase
+      return server
+    })
 }
 
 /**

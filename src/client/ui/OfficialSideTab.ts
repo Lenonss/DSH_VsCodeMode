@@ -10,6 +10,7 @@
 import React from 'react'
 import { pickSessionScope } from '../sessionScope.js'
 import { EditorView } from './EditorView.js'
+import { SideTabBoundary } from './SideTabBoundary.js'
 import { setSideEditorMounted } from '../sidebarBridge.js'
 import { editorMountEpoch, markEditorActive, markEditorMounted, parseOfficialFileAddress, resolveNavLine, resolveNavColumn, resolveNavOpen } from '../officialSidebar.js'
 
@@ -84,7 +85,7 @@ export function OfficialSideTab(props) {
     }))
   })
 
-  return React.createElement(EditorView, {
+  return React.createElement(SideTabBoundary, null, React.createElement(EditorView, {
     key: sessionId,
     sessionId,
     layout: 'side',
@@ -99,5 +100,5 @@ export function OfficialSideTab(props) {
     forge: props?.forge,
     fileOpeners: props?.fileOpeners,
     sessions: props?.sessions,
-  })
+  }))
 }

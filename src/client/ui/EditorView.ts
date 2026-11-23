@@ -13,6 +13,9 @@ import { createRoot } from 'react-dom/client'
 import { EditorPane, EditorSplit, PassiveEditor, GroupPathbar } from './EditorPane.js'
 import { FloatingEditor } from './FloatingEditor.js'
 import { LargeTextView } from './LargeTextView.js'
+import { TextCompatPanel } from './TextCompatPanel.js'
+import { CompatTextView } from './CompatTextView.js'
+import { probeText, repairText, undoRepair } from '../textCompat.js'
 import { FloatingWindow } from './FloatingWindow.js'
 import { createLayout, parseLayout, syncTabs, ownerOf, focusGroup, moveTab, returnGroup, GROUP_LIMIT, MAIN_GROUP } from '../state/editorLayout.js'
 import { createTabDrag, hitTarget } from '../tabDrag.js'
@@ -359,11 +362,16 @@ export function EditorView(props) {
   const aiStatusTimer = React.useRef(null)
   const [error, setError] = React.useState(null)
   const [loadError, setLoadError] = React.useState(null)
+  // 非 UTF-8 兼容面板：读取失败后自动探测一次的判定与用户选择（决策 1/2/3）
+  const [compat, setCompat] = React.useState(null)
+  // 只读查看器开关：解码文本只进 Monaco 只读模型，不写盘（决策 3）
+  const [compatView, setCompatView] = React.useState(false)
   // 缺失文件的终态：{ path, sessionId, title, message, official }。
   // 与 loadError 区分开——加载失败可以重试，磁盘删除是终态，不能一直卡在进度条 0%。
   const [goneFile, setGoneFile] = React.useState(null)
   const missingReadRef = React.useRef(new Map()) // path → 已重读次数（防 文件缺失↔重现 抖动死循环）
   const goneNow = goneFile && goneFile.path === active && goneFile.sessionId === sessionId ? goneFile : null
+  const compatNow = compat && compat.path === active && compat.sessionId === sessionId ? compat : null
   const [largeCandidate, setLargeCandidate] = React.useState(null)
   const [pagedFile, setPagedFile] = React.useState(null)
   const [pageChanged, setPageChanged] = React.useState(null)
@@ -1259,6 +1267,64 @@ export function EditorView(props) {
     } catch (cause) { if (loadCurrent(path, seq)) failLoad(path, sid, seq, String(cause)) }
   }
 
+  /**
+   * 读取失败后探测编码：非 UTF-8 才停在兼容面板，其余仍走通用失败面板。
+   * @private @author ddj 2026年11月21号
+   * @param path 目标文件
+   * @param sid 会话 id
+   * @param seq 加载序号
+   */
+  function openCompat(path, sid, seq) {
+    void probeText(sid, path).then((probed) => {
+      if (!loadCurrent(path, seq)) return
+      if (!probed.ok) { failLoad(path, sid, seq, probed.error); return }
+      // 清掉上一个文件留下的正文，保证兼容面板稳定接管空态
+      setContent(null)
+      setContentPath(null)
+      // 能解码就直接只读打开：先让人看见内容，再决定修不修（binary 无法解码，留在诊断页）
+      const decodable = probed.state.verdict.kind !== 'binary'
+      setCompatView(decodable)
+      setCompat(probed.state)
+      setStatus('文件不是 UTF-8 · 已按 ' + probed.state.verdict.kind + ' 只读打开')
+    }, (error) => { if (loadCurrent(path, seq)) failLoad(path, sid, seq, String(error)) })
+  }
+
+  /** @private @author ddj 2026年11月21号 @param target 面板状态 @param patch 局部更新 @returns 仅当仍是同一文件时更新面板 */
+  function patchCompat(target, patch) {
+    setCompat((current) => (!current || current.path !== target.path ? current : { ...current, ...patch }))
+  }
+
+  /** @private @author ddj 2026年11月21号 @param target 面板状态 @returns 按推荐方式写盘；成功后停在已修复态并给出撤销 */
+  function applyCompatFix(target) {
+    patchCompat(target, { busy: true, error: null })
+    void repairText(target.sessionId, target.path, target.version).then((result) => {
+      if (!result.ok) { patchCompat(target, { busy: false, error: result.error }); return }
+      setCompat({ ...target, busy: false, error: null, preview: null, backup: result.backup, repairedVersion: result.version })
+      setStatus('已转为 UTF-8 · 备份 ' + result.backup)
+    })
+  }
+
+  /** @private @author ddj 2026年11月21号 @param target 面板状态 @returns 把备份字节还原回文件并重新探测 */
+  function undoCompatFix(target) {
+    if (!target.repairedVersion) return
+    patchCompat(target, { busy: true, error: null })
+    void undoRepair(target.sessionId, target.path, target.repairedVersion).then((result) => {
+      if (!result.ok) { patchCompat(target, { busy: false, error: result.error }); return }
+      setCompatView(false)
+      setCompat(null)
+      setStatus('已撤销修复 · 原字节已还原')
+      loadContent(target.path, target.sessionId, true)
+    })
+  }
+
+  /** @private @author ddj 2026年11月21号 @param target 面板状态 @returns 暂不处理：回到通用失败面板 */
+  function cancelCompat(target) {
+    setCompatView(false)
+    setCompat(null)
+    setLoadError('文件不是 UTF-8（' + target.verdict.kind + '），已暂不处理')
+    setStatus('文件不是 UTF-8 · 已暂不处理')
+  }
+
   const loadContent = (path, sid, force, version) => {
     const seq = ++loadSeqRef.current
     setReceiptLoad({ path, cwd, sessionId: sid, sequence: seq, status: 'loading' })
@@ -1350,6 +1416,7 @@ export function EditorView(props) {
         setStatus('已加载')
       } else {
         if (res?.code === 'file-missing') { void loadMissing(path, sid, seq); return }
+        if (res?.code === 'invalid-utf8') { openCompat(path, sid, seq); return }
         if (res?.code === 'file-too-large') setLargeCandidate(JSON.stringify([scope, sid, path]))
         const base = res?.error ? String(res.error) : '读取失败'
         dapTrace('read-failed', { path, error: base, resolvedPath: res?.resolvedPath, cwd })
@@ -5058,6 +5125,32 @@ export function EditorView(props) {
         setLoadStage({ progress: 10, message: '重新读取文件…' })
         loadContent(active, sessionId)
       } }, '重试'))
+  } else if (content === null && compatNow && compatView) {
+    body = React.createElement(CompatTextView, {
+      key: 'compat-view-' + compatNow.path,
+      sessionId,
+      path: compatNow.path,
+      verdict: compatNow.verdict,
+      version: compatNow.version,
+      canRepair: compatNow.verdict.kind === 'gb18030',
+      onBack: () => setCompatView(false),
+      onSaved: () => {
+        setCompat(null)
+        setCompatView(false)
+        setStatus('已保存为 UTF-8 · 备份 ' + compatNow.path + '.utf8bak')
+        loadContent(compatNow.path, sessionId, true)
+      },
+      onRepair: () => { setCompatView(false); applyCompatFix(compatNow) },
+    })
+  } else if (content === null && compatNow) {
+    body = React.createElement(TextCompatPanel, {
+      state: compatNow,
+      onOpen: () => setCompatView(true),
+      onRepair: () => applyCompatFix(compatNow),
+      onUndo: () => undoCompatFix(compatNow),
+      onReload: () => { setCompat(null); setCompatView(false); loadContent(active, sessionId, true) },
+      onCancel: () => cancelCompat(compatNow),
+    })
   } else if (content === null && loadError) {
     body = React.createElement(React.Fragment, null, loadingBody('文件加载失败：' + loadError, 0, () => {
       setLoadError(null)
@@ -5546,6 +5639,16 @@ export function EditorView(props) {
         onCommitted: (result) => {
           refreshSvnChanges(sessionId, scope)
           setStatus(result?.revision !== undefined ? '提交成功：r' + result.revision : '提交完成')
+        },
+        // 行右键：比较/日志/打开在提交窗口之上打开，不关窗（关窗会丢勾选与信息草稿）
+        onChanged: () => refreshSvnChanges(sessionId, scope),
+        onCompare: (path) => runSvnDiffBase(path),
+        onShowLog: (path) => openSvnLog(path),
+        onOpenFile: (path) => openFile(path, false),
+        onOpenParent: (path) => {
+          void revealPathInExplorer(sessionId, path).then((outcome) => {
+            setStatus(outcome.ok ? '已打开父目录' : '打开父目录失败：' + (outcome.error ?? '未知错误'))
+          })
         },
       })
     : null

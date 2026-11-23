@@ -42,13 +42,29 @@ function ok(): PlanActionResult {
   return { ok: true }
 }
 
-/** 结构化探测可选服务（缺失/抛错一律 undefined）。 */
-function serviceOf(ctx: PlanActionCtx, name: string): unknown {
+/**
+ * 可选读取：动作抛错一律按「不可用」处理。
+ *
+ * 本模块读的都是可选服务，且约定「绝不抛给渲染层」——计划页在侧栏 slot 里渲染，
+ * 一次未捕获的异常会被 slot 宿主整片刷掉（表现为侧栏正文空白，连编辑器一起消失）。
+ * DSH 0.2.3 起 root hook 属性（如 `uiSession.sessionStatus`）只有 inject 过才可读，
+ * 而本插件不 inject 可选服务（旧版 DSH 无此服务，进 inject 会让入口永久停等），
+ * 故嵌套属性读取必须经这里兜住。
+ * @author ddj 2026年11月23号
+ * @param read 读取动作
+ * @returns 读取结果；抛错时 undefined
+ */
+function probe<T>(read: () => T): T | undefined {
   try {
-    return ctx.get(name)
+    return read()
   } catch {
     return undefined
   }
+}
+
+/** 结构化探测可选服务（缺失/抛错一律 undefined）。 */
+function serviceOf(ctx: PlanActionCtx, name: string): unknown {
+  return probe(() => ctx.get(name))
 }
 
 /** 取会话绑定（sessions.binding）；服务缺失返回 undefined。 */
@@ -74,16 +90,18 @@ function faceOf(ctx: PlanActionCtx, sessionId: string, key: string): unknown {
   }
 }
 
-/** 投影 face 快照（无 face 返回 undefined）。 */
+/** 投影 face 快照（无 face 或取快照抛错返回 undefined）。 */
 function faceSnapshot(face: unknown): unknown {
   const getSnapshot = (face as { getSnapshot?: () => unknown } | undefined)?.getSnapshot
-  return typeof getSnapshot === 'function' ? getSnapshot.call(face) : undefined
+  if (typeof getSnapshot !== 'function') return undefined
+  return probe(() => (getSnapshot as () => unknown).call(face))
 }
 
 /** 读 plan 投影快照（{ active, pending } 或 undefined）。 */
 export function readPlanProjection(sessionId: string): unknown {
   if (!host) return undefined
-  return faceSnapshot(faceOf(host.ctx, sessionId, 'plan'))
+  const ctx = host.ctx
+  return probe(() => faceSnapshot(faceOf(ctx, sessionId, 'plan')))
 }
 
 /** 在线待审批的会话卡片（PendingQuestion 实例：带 answer 与 intent）。 */
@@ -91,6 +109,28 @@ interface LiveReview {
   pending: { answer: (answer: unknown) => Promise<unknown> }
   labels: { questionId: string; approveLabel: string; keepLabel: string | null }
   callId: string
+}
+
+/**
+ * 取会话状态服务（DSH 0.2.3+）：按全名 `uiSession.sessionStatus` 取服务实例。
+ *
+ * 该名称同时被注册成服务与 root hook 属性：服务名可 `ctx.get` 免 inject 拿到，
+ * 而 `ctx.get('uiSession').sessionStatus` 这种命名空间属性读法在 0.2.3 会抛
+ * 「cannot get property … without inject」。旧版 DSH 没有这个服务，按属性读仍可用。
+ * @author ddj 2026年11月23号
+ * @param ctx 客户端上下文
+ * @returns 会话状态服务；两种取法都不可用时 undefined
+ */
+function statusServiceOf(ctx: PlanActionCtx): { getSnapshot?: () => unknown } | undefined {
+  const statusShape = (value: unknown): { getSnapshot?: () => unknown } | undefined =>
+    value !== null && typeof value === 'object' ? value as { getSnapshot?: () => unknown } : undefined
+
+  // 0.2.3+：独立服务（首选，免 inject）
+  const direct = statusShape(serviceOf(ctx, 'uiSession.sessionStatus'))
+  if (direct) return direct
+
+  // 旧版：uiSession 命名空间上的普通属性（0.2.3 读这里会抛错，由 probe 兜住）
+  return statusShape(probe(() => (serviceOf(ctx, 'uiSession') as { sessionStatus?: unknown } | undefined)?.sessionStatus))
 }
 
 /**
@@ -102,16 +142,11 @@ interface LiveReview {
  */
 function liveReviewOf(sessionId: string): LiveReview | null {
   if (!host) return null
-  const ui = serviceOf(host.ctx, 'uiSession') as { sessionStatus?: { getSnapshot?: () => unknown } } | undefined
-  const snapshot = ui?.sessionStatus?.getSnapshot?.()
+  const service = statusServiceOf(host.ctx)
+  const snapshot = probe(() => service?.getSnapshot?.())
   const get = (snapshot as { get?: (id: string) => unknown } | undefined)?.get
   if (typeof get !== 'function') return null
-  let status: unknown
-  try {
-    status = get.call(snapshot, sessionId)
-  } catch {
-    return null
-  }
+  const status = probe(() => get.call(snapshot, sessionId))
   const pending = status !== null && typeof status === 'object'
     ? (status as { pendingInteraction?: unknown }).pendingInteraction
     : undefined
@@ -128,11 +163,14 @@ function liveReviewOf(sessionId: string): LiveReview | null {
 /** 读当前待审批的 plan-review（先看在线卡片，再退回投影）。 */
 export function readPendingReview(sessionId: string): PendingReview | null {
   if (!host) return null
-  const live = liveReviewOf(sessionId)
-  if (live) {
-    return { callId: live.callId, questionId: live.labels.questionId, approveLabel: live.labels.approveLabel, keepLabel: live.labels.keepLabel }
-  }
-  return findPendingReview(faceSnapshot(faceOf(host.ctx, sessionId, 'userQuestions')))
+  const ctx = host.ctx
+  return probe(() => {
+    const live = liveReviewOf(sessionId)
+    if (live) {
+      return { callId: live.callId, questionId: live.labels.questionId, approveLabel: live.labels.approveLabel, keepLabel: live.labels.keepLabel }
+    }
+    return findPendingReview(faceSnapshot(faceOf(ctx, sessionId, 'userQuestions')))
+  }) ?? null
 }
 
 /** 订阅 plan 与 userQuestions 投影变化；返回合并的退订器。 */
@@ -301,6 +339,28 @@ export async function submitPlanResponse(sessionId: string, text: string): Promi
     const approved = await answerPlanReview(sessionId, true)
     if (!approved.ok) return fail('先同意执行失败，答复未发送：' + String(approved.error ?? ''))
   }
+  try {
+    return await host.sendTask(sessionId, body)
+  } catch (error) {
+    return fail('发送失败：' + messageOf(error))
+  }
+}
+
+/**
+ * 把一条计划修复指令发给 agent：只发消息，不结算审批、不动计划状态。
+ *
+ * 用途：计划正文声明了 HTML 页路径但文件没生成时，面板直接让 agent 去生成；
+ * 与 submitPlanResponse 不同，这条路径不会替用户点「同意执行」。
+ * @author ddj 2026年11月23号
+ * @param sessionId 会话 id
+ * @param text 指令正文
+ * @returns 动作结果
+ */
+export async function sendPlanMessage(sessionId: string, text: string): Promise<PlanActionResult> {
+  if (!host) return fail('计划动作桥未就绪')
+  if (!sessionId) return fail('当前没有活动会话')
+  const body = String(text ?? '').trim()
+  if (!body) return fail('指令为空')
   try {
     return await host.sendTask(sessionId, body)
   } catch (error) {

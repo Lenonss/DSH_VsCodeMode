@@ -7,6 +7,7 @@ import { clearLegacy, runtimeOf } from './mcpRuntime.js'
 import type { ProjectDef } from './mcpRuntime.js'
 import { parseMcpPolicy, type McpPolicy, type MpcConfig, type MpcProject, type MpcServer } from './shared/mcp.js'
 import type { Ctx } from './store.js'
+import { hostRootOf } from './hostRoot.js'
 
 const FILE_NAME = '.mcp.json'
 const projectStates = new WeakMap<object, Map<string, { fileError?: string; missingDir?: boolean }>>()
@@ -259,7 +260,7 @@ async function projectOf(ctx: Ctx, workspacePath: string, title: string, wait = 
     missingDir = isMissingFile(error) || undefined
     fileError = String(error)
   }
-  const owner = ctx.root ?? ctx
+  const owner = hostRootOf(ctx)
   const states = projectStates.get(owner) ?? new Map()
   states.set(workspacePath, { missingDir, fileError })
   projectStates.set(owner, states)
@@ -285,7 +286,7 @@ export async function listProjects(ctx: Ctx, wait = true): Promise<{ projects: M
  * @returns Masked global/project snapshots with last configuration diagnostics.
  */
 export function mcpSnapshot(ctx: Ctx): { servers: MpcServer[]; projects: MpcProject[] } {
-  const states = projectStates.get(ctx.root ?? ctx)
+  const states = projectStates.get(hostRootOf(ctx))
   const projects: MpcProject[] = (ctx.get('workspaceRegistry')?.list?.() ?? []).map((ws: { path: string; title?: string }) => ({
     workspacePath: ws.path, title: ws.title ?? '', source: 'project' as const,
     servers: runtimeOf(ctx).views(ws.path), ...states?.get(ws.path),
@@ -404,5 +405,7 @@ async function refreshProject(ctx: Ctx, workspacePath: string, serverName: strin
   const data = await readProjectJson(ctx, workspacePath)
   if (!Object.hasOwn(serversOf(data), serverName)) throw new Error('项目中不存在该 MCP')
   await reconcileProject(ctx, workspacePath, serverName)
+  // 托管后端的连接由官方 manager 持有，重连只能走 restart；连接池后端已由 replace 重挂载。
+  await runtimeOf(ctx).refresh(workspacePath, serverName)
   return projectOf(ctx, workspacePath, workspace.title ?? '')
 }

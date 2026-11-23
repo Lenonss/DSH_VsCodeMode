@@ -6,7 +6,7 @@
  * @author ddj 2026年11月15号
  */
 import type { SvnAiPlanCommit, SvnChangeEntry, SvnCommitEntry, SvnCommitResult, SvnStatusTone } from '../../shared/svn.js'
-import { COMMIT_SUBJECT_MAX, SVN_STATUS_TONE, commitMsgErrorOf, isSvnChange } from '../../shared/svn.js'
+import { COMMIT_SUBJECT_MAX, SVN_STATUS_TONE, commitMsgErrorOf, isSvnChange, isSvnDiffable } from '../../shared/svn.js'
 
 /** 提交对话框里的一个分区。 */
 export interface CommitSection {
@@ -34,11 +34,16 @@ export const IGNORE_ON_COMMIT = 'ignore-on-commit'
 /**
  * 变更清单 → 分区（changelist 组 / 未分组 / 未版本控制）。
  * 默认勾选：changelist 组与未分组为是；未版本控制与 ignore-on-commit 为否。
- * @author ddj 2026年11月15号
+ *
+ * 只登记过分区、当前没有可提交改动的组也要出现在清单里：svn status 会把这些条目
+ * 以 item="normal" 返回，而 `isSvnChange` 只收可提交条目，组会被整体过滤掉；
+ * 故用计划里的 changelists 名补出空分区（0 条目），避免「看不到其它提交组」。
+ * @author ddj 2026年11月15号 / 2026年11月21号
  * @param entries 变更清单
+ * @param knownChangelists 空分区兜底用的 changelist 名（来自提交计划）
  * @returns 分区列表（顺序：分组按名字、未分组、未版本控制）
  */
-export function commitSectionsOf(entries: readonly SvnChangeEntry[]): CommitSection[] {
+export function commitSectionsOf(entries: readonly SvnChangeEntry[], knownChangelists: readonly string[] = []): CommitSection[] {
   const groups = new Map<string, SvnChangeEntry[]>()
   const ungrouped: SvnChangeEntry[] = []
   const unversioned: SvnChangeEntry[] = []
@@ -53,8 +58,9 @@ export function commitSectionsOf(entries: readonly SvnChangeEntry[]): CommitSect
     }
     ungrouped.push(entry)
   }
+  const names = [...new Set([...groups.keys(), ...knownChangelists.filter(Boolean)])].sort((a, b) => a.localeCompare(b))
   const sections: CommitSection[] = []
-  for (const name of [...groups.keys()].sort((a, b) => a.localeCompare(b))) {
+  for (const name of names) {
     sections.push({
       key: 'changelist:' + name,
       label: name,
@@ -201,4 +207,80 @@ export function commitSeedOf(group: SvnAiPlanCommit): CommitSeed {
 export function commitEntryLinesOf(entries: readonly SvnCommitEntry[]): Array<{ text: string; tone: string }> {
   const tone: Record<SvnCommitEntry['action'], string> = { M: 'modified', A: 'added', D: 'deleted', R: 'added' }
   return entries.map((entry) => ({ text: entry.action + ' ' + entry.path, tone: tone[entry.action] ?? 'plain' }))
+}
+
+/** 提交行右键菜单的动作可用性（纯投影：不可用即不执行）。 */
+export interface CommitActs {
+  /** 与基线比较（仅可文本比较的文件）。 */
+  compare: boolean
+  /** 查看日志（仅受版本控制的目标）。 */
+  log: boolean
+  /** 打开工作区文件。 */
+  open: boolean
+  /** 打开父目录。 */
+  openParent: boolean
+  /** 复制路径。 */
+  copyPath: boolean
+  /** 勾选 / 取消勾选该行。 */
+  toggle: boolean
+  /** SVN 还原该行。 */
+  revert: boolean
+  /** 加入版本控制（仅未版本控制的目标）。 */
+  add: boolean
+}
+
+/**
+ * 计算提交行在右键菜单里的动作可用性。
+ *
+ * 提交进行中一律不可用：此时改勾选会改变已发出的提交范围，读写都会与结果打架。
+ * @author ddj 2026年11月21号
+ * @param entry 待提交条目（缺省 = 无目标，全部不可用）
+ * @param busy 提交或 AI 生成进行中
+ * @returns 各动作可用性
+ */
+export function commitActs(entry: SvnChangeEntry | null | undefined, busy: boolean): CommitActs {
+  if (!entry) {
+    return { compare: false, log: false, open: false, openParent: false, copyPath: false, toggle: false, revert: false, add: false }
+  }
+
+  const usable = !busy
+  return {
+    compare: usable && isSvnDiffable(entry.path, entry.status),
+    log: usable && entry.versioned,
+    open: usable,
+    openParent: usable,
+    copyPath: usable,
+    toggle: usable,
+    revert: usable && entry.versioned,
+    add: usable && !entry.versioned,
+  }
+}
+
+/** 行选中（多选）状态：提交范围仍由复选框决定，选中只服务批量菜单。 */
+export interface RowPick {
+  /** 选中路径（恒按显示顺序）。 */
+  selected: string[]
+  /** Shift 范围锚点。 */
+  anchor: string | null
+}
+
+/**
+ * 行选中变更：单击选中、Ctrl 切换、Shift 从锚点取范围。
+ * @author ddj 2026年11月21号
+ * @param pick 当前选中 @param order 显示顺序 @param path 目标路径 @param mode single | toggle | range
+ * @returns 新的选中状态（顺序恒按显示顺序）
+ */
+export function nextRowPick(pick: RowPick, order: readonly string[], path: string, mode: 'single' | 'toggle' | 'range'): RowPick {
+  if (mode === 'range' && pick.anchor) {
+    const from = order.indexOf(pick.anchor)
+    const to = order.indexOf(path)
+    if (from >= 0 && to >= 0) return { selected: order.slice(Math.min(from, to), Math.max(from, to) + 1), anchor: pick.anchor }
+  }
+
+  if (mode === 'toggle') {
+    const next = pick.selected.includes(path) ? pick.selected.filter((item) => item !== path) : [...pick.selected, path]
+    return { selected: order.filter((item) => next.includes(item)), anchor: path }
+  }
+
+  return { selected: order.includes(path) ? [path] : [], anchor: path }
 }

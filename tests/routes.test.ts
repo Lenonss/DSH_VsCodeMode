@@ -3,7 +3,7 @@ import { Readable } from 'node:stream'
 import { createServer, request as httpRequest } from 'node:http'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { describe, expect, it, vi } from 'vitest'
-import { admitRoute, readRpc, RPC_BODY_CAP } from '../src/httpGuard.js'
+import { admitRoute, readRpc, routeAuthMode, RPC_BODY_CAP } from '../src/httpGuard.js'
 import { registerRoutes } from '../src/routes.js'
 import { handleRpc } from '../src/rpc.js'
 import { BINARY_READ_CAP, READ_CAP } from '../src/store.js'
@@ -24,13 +24,14 @@ function response() {
   return { output, headers, res: output as unknown as ServerResponse }
 }
 
-/** @author ddj 2026年09月28号 @param rejection Host admission result. @returns Route registry and business call spy. */
+/** @author ddj 2026年09月28号 / 2026年11月23号 @param rejection Legacy fence result, absent for a 0.2.3 host. @returns Route registry and business call spy. */
 function setup(rejection?: number) {
-  const routes = new Map<string, { handler: (req: IncomingMessage, res: ServerResponse) => Promise<void> }>()
+  const routes = new Map<string, { handler: (req: IncomingMessage, res: ServerResponse) => Promise<void>; auth?: string }>()
   const dispatch = vi.fn(async () => ({ ok: true }))
   const trust = vi.fn(() => rejection)
   const web = { register: vi.fn((route) => { routes.set(route.path, route); return vi.fn() }) }
-  const ctx = { get: (name: string) => name === 'webServer' ? web : name === 'connection' ? { requestRejection: trust } : undefined, effect: (run: () => unknown) => run() }
+  const connection = rejection === undefined ? undefined : { requestRejection: trust }
+  const ctx = { get: (name: string) => name === 'webServer' ? web : name === 'connection' ? connection : undefined, effect: (run: () => unknown) => run() }
   registerRoutes(ctx, undefined, dispatch)
   return { routes, dispatch, trust }
 }
@@ -52,20 +53,32 @@ describe('plugin HTTP admission', () => {
     req.destroy()
   })
 
-  it('fails closed when the host has no authentication capability', () => {
+  it('admits on a host whose framework authorizes the route', async () => {
+    const { routes, dispatch, trust } = setup()
     const { res, output } = response()
-    const req = request('{}')
-    expect(admitRoute({ get: () => undefined }, req, res, ['POST'])).toBe(false)
-    expect(output.statusCode).toBe(503)
-    req.destroy()
+    await routes.get('/edrv/rpc')!.handler(request('{"method":"compat","args":{}}'), res)
+    expect(trust).not.toHaveBeenCalled()
+    expect(dispatch).toHaveBeenCalledWith('compat', {})
+    expect(output.statusCode).toBe(200)
   })
 
-  it('does not admit requests when authentication throws', () => {
+  it('declares required auth so the framework fences every route', () => {
+    const { routes } = setup()
+    expect([...routes.values()].map((route) => route.auth)).toEqual(routes.size ? expect.arrayContaining(['required']) : [])
+    for (const route of routes.values()) expect(route.auth).toBe('required')
+  })
+
+  it('does not admit requests when the legacy fence throws', () => {
     const { res, output } = response()
     const req = request('{}')
     expect(admitRoute({ get: () => ({ requestRejection: () => { throw new Error('offline') } }) }, req, res, ['POST'])).toBe(false)
     expect(output.statusCode).toBe(503)
     req.destroy()
+  })
+
+  it('reports which party owns route authorization', () => {
+    expect(routeAuthMode({ get: () => undefined })).toBe('framework')
+    expect(routeAuthMode({ get: () => ({ requestRejection: () => undefined }) })).toBe('legacy')
   })
 
   it('allows only POST for RPC', async () => {

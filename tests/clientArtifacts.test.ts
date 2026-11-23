@@ -6,10 +6,23 @@ import { checkArtifacts, inspectArtifacts, verifyNativeLoader } from '../scripts
 
 const directories: string[] = []
 const OWNER = 'dsh-vscode-mode'
+
+/**
+ * Registration `meta` with one stylesheet (or none), mirroring the real build.
+ * @author ddj 2026年11月23号
+ * @param path Package-relative stylesheet path; omitted for an empty set.
+ * @returns JavaScript source of the meta field.
+ */
+function metaOf(path?: string): string {
+  const sheets = path ? `{'${path}':{text:()=>'body{}'}}` : '{}'
+  return `,meta:()=>({stylesheets:${sheets}})`
+}
+
+const ROOT_META = metaOf('src/client/styles/editor.css')
 const root = `window.__ModuleLoader__.load({id:'${OWNER}',factory:(require)=>{
   const exports = { __lazyShared: {rpc(){},dbg(){},dapStore:{},BP_MODE:{},MODES:[],fieldOfMode(){},ContextMenu(){},editExcel(){},exportExcel(){},notifyExcel(){},openOriginal(){}}, __setPanelImport(){} };
   exports.__setPanelImport(require.async?.bind(require)); return exports;
-}});`
+}${ROOT_META}});`
 
 /** Root keys each chunk is contracted to consume. */
 const CHUNK_KEYS: Record<string, string[]> = {
@@ -19,14 +32,24 @@ const CHUNK_KEYS: Record<string, string[]> = {
   'client.excelcodec.js': [],
 }
 
-/** @private @author ddj 2026年10月22号 @param name Chunk resource. @param exported Expected chunk export. @returns Native chunk wrapper using root singleton bridge. */
+/** Chunk stylesheet each chunk must declare (only the engine carries CSS today). */
+const CHUNK_STYLES: Record<string, string | undefined> = {
+  'client.excel.js': 'src/client/excel/panel.css',
+}
+
+/**
+ * @private @author ddj 2026年10月22号
+ * @param name Chunk resource.
+ * @param exported Expected chunk export.
+ * @returns Native chunk wrapper using root singleton bridge.
+ */
 function chunk(name: string, exported: string): string {
   const keys = CHUNK_KEYS[name] ?? []
   const bridge = keys.length ? `const {${keys.join(',')}} = require('${OWNER}').__lazyShared;` : ''
   return `window.__ModuleLoader__.load({id:'${OWNER}',chunk:'${name}',factory:(require)=>{
     ${bridge}
     return {${exported}:function(){return 1}};
-  }});`
+  }${metaOf(CHUNK_STYLES[name])}});`
 }
 
 /** @private @author ddj 2026年10月22号 @returns Isolated fixture artifacts; no project lib changes. */
@@ -39,7 +62,7 @@ async function fixture(): Promise<string> {
     writeFile(join(directory, 'client.rules.js'), chunk('client.rules.js', 'RulesPanel')),
     writeFile(join(directory, 'client.debug.js'), chunk('client.debug.js', 'DebugPanel')),
     writeFile(join(directory, 'client.excel.js'), chunk('client.excel.js', 'excelPanel')),
-    writeFile(join(directory, 'client.excelcodec.js'), `window.__ModuleLoader__.load({id:'${OWNER}',chunk:'client.excelcodec.js',factory:(require)=>({decodeExcel:function(){return 1},downloadExcel:function(){return 1}})});`),
+    writeFile(join(directory, 'client.excelcodec.js'), `window.__ModuleLoader__.load({id:'${OWNER}',chunk:'client.excelcodec.js',factory:(require)=>({decodeExcel:function(){return 1},downloadExcel:function(){return 1}})${metaOf()}});`),
   ])
   return directory
 }
@@ -123,6 +146,21 @@ describe('client artifact registration contract', () => {
     const directory = await fixture()
     await writeFile(join(directory, 'client.rules.js'), 'export const RulesPanel = () => null')
     await expect(inspectArtifacts(directory)).rejects.toThrow()
+  })
+  it('rejects a registration that carries no stylesheet meta', async () => {
+    const directory = await fixture()
+    await writeFile(join(directory, 'client.js'), root.replace(ROOT_META, ''))
+    await expect(inspectArtifacts(directory)).rejects.toThrow('missing meta factory')
+  })
+  it('rejects a chunk that does not declare the stylesheet it installed before', async () => {
+    const directory = await fixture()
+    await writeFile(join(directory, 'client.excel.js'), chunk('client.excel.js', 'excelPanel').replace(metaOf('src/client/excel/panel.css'), metaOf()))
+    await expect(inspectArtifacts(directory)).rejects.toThrow('missing stylesheet src/client/excel/panel.css')
+  })
+  it('rejects artifacts that still inject their own style tags', async () => {
+    const directory = await fixture()
+    await writeFile(join(directory, 'client.js'), root + "\nvar legacy = { pluginCss: 'dsh-vscode-mode/editor.css' };")
+    await expect(inspectArtifacts(directory)).rejects.toThrow('still injects its own style tag')
   })
 })
 

@@ -7,7 +7,10 @@ import {
   buildPlanSrcDoc,
   derivePlanUiState,
   findPendingReview,
+  isMissingPage,
   planPagePathOf,
+  planRepairInstruction,
+  planSlugOf,
   resolvePlanPagePath,
   reviewAnswerOf,
   unresolvedRuntimeRefs,
@@ -51,6 +54,42 @@ describe('unresolvedRuntimeRefs', () => {
     expect(unresolvedRuntimeRefs(raw)).toEqual(['runtime/htmlplan.css', 'runtime/htmlplan.js'])
     expect(unresolvedRuntimeRefs('<style>body{}</style><script>1</script>')).toEqual([])
     expect(unresolvedRuntimeRefs(undefined)).toEqual([])
+  })
+
+  it('引用运行时代码的 doc-code 不算「未打包」', () => {
+    const packed = '<style data-htmlplan>a{}</style><script data-htmlplan>1</script>' +
+      '<doc-code src="skills/x/runtime/htmlplan.js" lines="1-2"></doc-code>'
+    expect(unresolvedRuntimeRefs(packed)).toEqual([])
+  })
+})
+
+describe('isMissingPage', () => {
+  it('按 code 与文案识别「页面还没生成」，其它读取失败不误判', () => {
+    expect(isMissingPage({ ok: false, code: 'file-missing', error: '文件不存在' })).toBe(true)
+    expect(isMissingPage({ ok: false, error: '打开失败：ENOENT' })).toBe(true)
+    expect(isMissingPage({ ok: false, error: '读取失败：EACCES' })).toBe(false)
+    expect(isMissingPage({ ok: false, error: '文件过大（>8MB）' })).toBe(false)
+    expect(isMissingPage({ ok: true, content: 'x' })).toBe(false)
+    expect(isMissingPage(undefined)).toBe(false)
+  })
+})
+
+describe('planSlugOf / planRepairInstruction', () => {
+  it('从声明的路径取 slug，取不到回落 html-plan', () => {
+    expect(planSlugOf('plans/html-plan-own-answer/plan.packed.html')).toBe('html-plan-own-answer')
+    expect(planSlugOf('C:/ws/plans\\x/plan.html')).toBe('x')
+    expect(planSlugOf('')).toBe('html-plan')
+    expect(planSlugOf('docs/a.md')).toBe('html-plan')
+  })
+
+  it('修复指令要求先落盘再声明，并禁止让用户退出计划模式', () => {
+    const text = planRepairInstruction('plans/a-b/plan.packed.html')
+    expect(text).toContain('plans/a-b/plan.html')
+    expect(text).toContain('runtime/plan.mjs a-b')
+    expect(text).toContain('HTML 计划页：plans/a-b/plan.packed.html')
+    expect(text).toContain('exit_plan_mode')
+    expect(text).toContain('不要让我退出计划模式')
+    expect(text).toContain('不要只写路径不生成文件')
   })
 })
 

@@ -400,6 +400,7 @@ export interface RpcRequestMap {
   'edrv.missingReview': { sessionId?: string; path: string }
   'edrv.missingDecide': { sessionId?: string; token: string; operationId: string; undo: boolean }
   'edrv.read': { sessionId?: string; path: string; encoding?: 'base64' }
+  'edrv.textCompat': import('../textEncoding.js').TextCompatArgs
   'edrv.readBinary': { sessionId?: string; path: string }
   'edrv.versions': { sessionId?: string; paths: string[] }
   'edrv.original': { sessionId?: string; path: string }
@@ -439,6 +440,12 @@ export interface RpcRequestMap {
   'mcp.projectRemove': { workspacePath: string; serverName: string }
   'mcp.projectToggle': { workspacePath: string; serverName: string; enabled: boolean }
   'mcp.projectRefresh': { workspacePath: string; serverName: string }
+  'mcp.manager.views': {}
+  'mcp.manager.restart': { name: string }
+  'mcp.manager.probe': { name: string }
+  'mcp.manager.authorize': { name: string }
+  'mcp.manager.cancel': { name: string; id: string }
+  'mcp.manager.signout': { name: string }
   'vscode.fileOpenSettingsGet': {}
   'vscode.settingsDocumentPath': {}
   'vscode.fileOpenSettingsUpdate': { fileOpenTool: string; integrationBaseUrl?: string; expectedRevision?: number }
@@ -599,6 +606,7 @@ export interface RpcOkMap {
   'edrv.missingReview': { review: import('./types.js').MissingReview | null }
   'edrv.missingDecide': { callIds: string[] }
   'edrv.read': { content: string; size: number; encoding?: 'base64'; mime?: string; version?: string }
+  'edrv.textCompat': import('../textEncoding.js').TextCompatOk
   'edrv.readBinary': { binary: BinaryReadPayload }
   'edrv.versions': { items: FileVersionItem[] }
   'edrv.original': { content: string; size: number; stale: StaleHunk[]; fallback: boolean }
@@ -638,6 +646,12 @@ export interface RpcOkMap {
   'mcp.projectRemove': { project: MpcProject }
   'mcp.projectToggle': { project: MpcProject }
   'mcp.projectRefresh': { project: MpcProject }
+  'mcp.manager.views': object
+  'mcp.manager.restart': object
+  'mcp.manager.probe': object
+  'mcp.manager.authorize': object
+  'mcp.manager.cancel': object
+  'mcp.manager.signout': object
   'vscode.fileOpenSettingsGet': { fileOpenTool: string; integrationBaseUrl: string; revision?: number }
   'vscode.settingsDocumentPath': { path: string }
   'vscode.fileOpenSettingsUpdate': { fileOpenTool: string; integrationBaseUrl: string; revision?: number }
@@ -768,7 +782,7 @@ export type MissingRefusal = 'official-covered' | 'official-decided' | 'no-recor
 /** 统一响应：{ok:true, ...payload} 或 {ok:false, error}。 */
 export type RpcResult<M extends RpcMethod> =
   | ({ ok: true } & RpcOkMap[M])
-  | { ok: false; error: string; code?: 'file-too-large' | 'file-missing' | MissingRefusal; reason?: Extract<import('./textPages.js').TextPageResult, { ok: false }>['reason'] }
+  | { ok: false; error: string; code?: 'file-too-large' | 'file-missing' | 'invalid-utf8' | 'not-repairable' | 'enc-conflict' | MissingRefusal; reason?: Extract<import('./textPages.js').TextPageResult, { ok: false }>['reason'] }
 
 /** 每个方法的 handler 签名（host 分发表与 client 类型检查共用）。 */
 export type RpcHandler<M extends RpcMethod> = (

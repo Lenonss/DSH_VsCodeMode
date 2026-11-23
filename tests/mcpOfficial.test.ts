@@ -96,6 +96,8 @@ async function setupHost(ctx: any, files: Map<string, string>, agents: any[]): P
   ctx.provide('workspaceRegistry', { list: () => [{ path: '/alpha' }, { path: '/beta' }] })
   ctx.provide('agents', { list: () => agents })
   ctx.provide('loader', { entries: () => [] })
+  // 这套用例守护连接池后端（旧版宿主契约）：显式钉住后端，免得测试宿主哪天也装上 mcpManager。
+  runtimeOf(ctx).forcePool()
   ctx.provide('fs', {
     resolve: async (path: string, opts?: any) => opts?.cwd ? opts.cwd + '/' + path : path,
     stat: async () => ({ type: 'directory' }),

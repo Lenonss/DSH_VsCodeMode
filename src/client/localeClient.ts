@@ -21,6 +21,11 @@ export const LOCALE_DICTS: Record<string, Record<string, string>> = {
     'slot.settings': 'VSCodeMode',
     'guide.title': '文件编辑',
     'guide.description': 'Monaco 文件编辑器：对话与编辑同屏（差异审查/跳转/大纲）',
+    'review.openEditor': '在 VSCodeMode 打开',
+    'review.openFile': '在编辑器打开',
+    'review.addPending': '插入对话草稿',
+    'review.pendingBlock': '待审',
+    'review.commentAction': '插入对话草稿',
   },
   en: {
     'slot.fileEditor': 'File editor',
@@ -29,6 +34,11 @@ export const LOCALE_DICTS: Record<string, Record<string, string>> = {
     'slot.settings': 'VSCodeMode',
     'guide.title': 'File editor',
     'guide.description': 'Monaco file editor: chat and editing side by side (diff review, jump, outline)',
+    'review.openEditor': 'Open in VSCodeMode',
+    'review.openFile': 'Open in editor',
+    'review.addPending': 'Insert into draft',
+    'review.pendingBlock': 'pending',
+    'review.commentAction': 'Insert into draft',
   },
 }
 

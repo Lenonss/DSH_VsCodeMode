@@ -32,7 +32,8 @@ import { loadMonaco } from './monaco/loader.js'
 import { observeScheme, schemeOfSnapshot } from './monaco/theme.js'
 import { createFileOpenerRegistry, scanSidebar, officialSidebarOpener, shouldClaimFiles, type FileOpenContext } from './fileOpeners.js'
 import type { FileOpenerRegistry } from './fileOpeners.js'
-import { installOpenPathRouter, vscodeOpener, autoValue } from './openPathRouter.js'
+import { installOpenPathRouter, resolveOpenPathOwner, vscodeOpener, autoValue } from './openPathRouter.js'
+import { installOfficialReview } from './officialReview.js'
 import { openOriginal, patchRemoteOpen, probeRemoteOpen } from './remoteOpenRouter.js'
 import { patchSettingsDoc, probeSettingsDoc } from './settingsDocRouter.js'
 import { openEditorView } from './events.js'
@@ -332,6 +333,22 @@ export async function apply(ctx: any): Promise<void> {
   ctx.effect(() => installHtmlPreviewProbe(ctx, { schedule }), 'vscode-mode: html preview probe')
   // HTML 计划页动作桥：状态读取 / 官方审批作答 / /plan off / 回填输入框（全部可选服务）。
   ctx.effect(() => installHtmlPlanActions(ctx), 'vscode-mode: html plan actions')
+  // 官方代码审阅扩展位（0.2.3+）：变更视图工具条与文件菜单加两条动作。
+  // 服务/slot 缺失时零注册，不影响自有 diff 面板。
+  ctx.effect(() => installOfficialReview(ctx, {
+    openInEditor: (path: string) => openEditorView(path),
+    addPending: (path: string) => {
+      void addToConversation.appendReference(readSessionScope(ctx).sessionId, path)
+    },
+    labels: {
+      toolbar: t('review.openEditor'),
+      openFile: t('review.openFile'),
+      addPending: t('review.addPending'),
+      annotation: t('review.pendingBlock'),
+      comment: t('review.commentAction'),
+    },
+    logger: routeLogger,
+  }), 'vscode-mode: official review actions')
 
   /**
    * 读取规则列表（rules.list；失败抛错，由快捷菜单按「未校验」降级）。
@@ -656,9 +673,12 @@ export async function apply(ctx: any): Promise<void> {
       disposeCatalog?.()
     }
   }, 'vscode-mode: official shortcuts')
-  if (workspaces?.openPath) {
+  // 0.2.3 把 openPath 从客户端 workspaces 移到 host 侧：先探测真实宿主再安装，
+  // 探测不到就不装（旧代码在此处会往服务上新建一个永远没人调用的死属性）。
+  const openTarget = resolveOpenPathOwner(ctx)
+  if (openTarget) {
     ctx.effect(() => installOpenPathRouter({
-      workspaces,
+      target: openTarget,
       registry,
       selected: () => selected,
       context: openContext,

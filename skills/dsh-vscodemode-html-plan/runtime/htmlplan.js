@@ -542,6 +542,7 @@ const askNames = (ask) => [...new Set($$('input[name], textarea[name], select[na
 const askChanged = (ask, ans) => askNames(ask).some((nm) => !same(ans[nm], S.defaults[nm]));
 const askTodo = (ask, ans) => !S.seen[ask.id] && !askChanged(ask, ans);       // not opened and not answered
 function askPick(ask, ans) {                                                   // the current answer, in a few words
+  const own = ownText(ask, ans); if (own) return '✎ ' + words(own, 9);          // a typed answer outranks the picked option
   for (const nm of askNames(ask)) { const c = ask.querySelector(`[name="${CSS.escape(nm)}"]`); const v = ans[nm]; if (!c) continue;
     if (c.type === 'radio' && v != null) return optionLabel(nm, v);
     if (c.type === 'checkbox' && Array.isArray(v) && v.length) return v.map((x) => optionLabel(nm, x)).join(', ');
@@ -566,6 +567,7 @@ function buildResponse() {
     asks.forEach((ask, i) => {
       const q = ask.querySelector(':scope > p, :scope > h3, :scope > h4')?.textContent.trim() || ask.id || `Question ${i + 1}`;
       const names = [...new Set($$('input[name], textarea[name], select[name], ol.rank[data-name]', ask).map((c) => c.name || c.dataset.name))];
+      const own = ownName(ask); const multi = names.filter((nm) => nm !== own).length > 1;   // the auto text box must not rename the options
       const parts = []; let changed = false;
       names.forEach((nm) => {
         const v = ans[nm], d = S.defaults[nm]; const ch = !same(v, d); if (ch) changed = true;
@@ -579,7 +581,7 @@ function buildResponse() {
         else s = String(v || '').trim() ? '\n' + String(v).trim().split('\n').map((x) => '   > ' + x).join('\n') : null;
         if (s == null) return;                                   // empty free-text adds nothing
         const isText = c.matches('textarea, input[type=text]');
-        const tag = isText ? `${nm.includes('.') ? nm.split('.').pop() : (names.length > 1 ? nm : 'note')}:` : names.length > 1 ? `${nm}: ` : '';
+        const tag = isText ? `${nm.includes('.') ? nm.split('.').pop() : (multi ? nm : 'note')}:` : multi ? `${nm}: ` : '';
         let line = tag + s;
         if (ch && c.type === 'radio' && d != null) line += `  ✎ (was: ${optionLabel(nm, d)})`;
         else if (ch && !c.matches('textarea, input[type=text]')) line += '  ✎';
@@ -1247,8 +1249,35 @@ define('doc-changes', (el) => {
 });
 
 /* ── doc-ask ──────────────────────────────────────── */
+/* A decision with options also takes a typed answer: it replaces the pick instead of sitting beside it.
+   addOwnAnswer() · ddj 2026年11月23号 · 给带单选/复选的 doc-ask 末尾补自定义输入框；custom="off" 时跳过 */
+const OWN_OFF = new Set(['off', 'none', 'no', 'false']);
+const OWN_TEXT = {
+  zh: { label: '自己写一条', hint: '会清掉上面的选择，作为 custom 行进答复', ph: '自己写一条答案…' },
+  en: { label: 'Or write your own', hint: 'clears the picks above; goes into the response as custom', ph: 'Type your own answer…' },
+};
+function ownName(ask) { const ta = ask.querySelector(':scope > .nw-own > textarea[name]'); return ta ? ta.name : ''; }
+function ownText(ask, ans) {
+  const nm = ownName(ask);
+  return nm ? String(ans[nm] ?? '').trim() : '';
+}
+function addOwnAnswer(el) {
+  if (OWN_OFF.has(String(el.getAttribute('custom') || '').trim().toLowerCase())) return;
+  if (!el.querySelector('input[type=radio], input[type=checkbox]')) return;   // no pick to replace
+  if (el.querySelector(':scope > .nw-own')) return;
+  const t = OWN_TEXT[/^zh/i.test(document.documentElement.lang || '') ? 'zh' : 'en'];
+  const ta = h('textarea', { name: `${el.id || 'ask'}.custom`, rows: '2', placeholder: t.ph });
+  const box = h('div', { class: 'nw-own' }, h('div', { class: 'lbl' }, t.label, h('small', null, t.hint)), ta);
+  ta.addEventListener('input', () => {
+    const filled = !!ta.value.trim();
+    box.classList.toggle('on', filled);
+    if (filled) $$('input[type=radio]:checked, input[type=checkbox]:checked', el).forEach((r) => { r.checked = false; });   // a typed answer wins
+  });
+  el.append(box);
+}
 define('doc-ask', (el) => {
   if (el.getAttribute('q') && !el.querySelector(':scope > p')) el.prepend(h('p', null, el.getAttribute('q')));
+  addOwnAnswer(el);
   $$('label', el).forEach((lab) => { const inp = lab.querySelector(':scope > input[type=radio], :scope > input[type=checkbox]'); if (!inp) return; const span = h('span'); [...lab.childNodes].forEach((n) => { if (n !== inp) span.append(n); }); lab.append(span); if (inp.checked && !el.hasAttribute('neutral')) { const first = span.querySelector('small'); const tag = h('span', { class: 'sug' }, 'Suggested'); first ? span.insertBefore(tag, first) : span.append(tag); } });
   $$('input[type=range]', el).forEach((r) => { if (r.parentElement.classList.contains('range-row')) return; const row = h('div', { class: 'range-row' }); r.replaceWith(row); row.append(h('span', null, r.min || '0'), r, h('span', null, r.max || '100'), h('output', null, r.value)); });
   $$('ol.rank', el).forEach((ol) => { let drag = null; $$(':scope > li', ol).forEach((li) => { li.draggable = true; if (!li.dataset.value) li.dataset.value = li.textContent.trim(); li.append(h('button', { title: 'up', onclick: (e) => { e.preventDefault(); li.previousElementSibling && ol.insertBefore(li, li.previousElementSibling); onFormChange(); } }, '↑'), h('button', { title: 'down', onclick: (e) => { e.preventDefault(); li.nextElementSibling && ol.insertBefore(li.nextElementSibling, li); onFormChange(); } }, '↓'), h('span', { class: 'grip' }, '⋮⋮'));
@@ -1273,6 +1302,7 @@ function boot() {
   $$('doc-ask input[data-play]:checked').forEach((inp) => { lastPlay[inp.name || inp.dataset.play] = inp.dataset.play; });   // a pre-checked option must not autoplay on load
   S.defaults = readAnswers();
   if (S.loaded?.answers) writeAnswers(S.loaded.answers);
+  $$('doc-ask .nw-own').forEach((box) => { const ta = box.querySelector('textarea'); box.classList.toggle('on', !!ta?.value.trim()); });   // restored text keeps its highlight
   // block-level comment buttons
   $$('main h2, main h3, main > p, main > section > p, section > p, article > p, main li, doc-note, doc-quote, main > .cols > .card, .tldr').forEach((el, i) => {
     if (el.closest('doc-ask, doc-mock, template, .nw-sheet, doc-quote .q-body, nav') && !el.matches('doc-quote')) return;

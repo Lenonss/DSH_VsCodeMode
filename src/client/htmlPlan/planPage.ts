@@ -38,8 +38,8 @@ const BRIDGE_MARK = 'data-edrv-htmlplan-bridge'
 /** 计划页标记行：HTML 计划页：<path>（中英文冒号都接受）。 */
 const PAGE_LINE = /^[ \t]*HTML[ \t]*计划页[ \t]*[:：][ \t]*(.+?)[ \t]*$/im
 
-/** 相对未打包页面的运行时引用（存在即说明还没 pack）。 */
-const RUNTIME_REF = /(?:href|src)\s*=\s*["']([^"']*htmlplan\.(?:css|js))(?:[?#][^"']*)?["']/gi
+/** 相对未打包页面的运行时引用（存在即说明还没 pack）；只看 link/script 标签，`.doc-code src=` 这种引用不算。 */
+const RUNTIME_REF = /<(?:link|script)\b[^>]*?\s(?:href|src)\s*=\s*["']([^"']*htmlplan\.(?:css|js))[^>]*>/gi
 
 /** 桥接脚本：拦截 iframe 内剪贴板写入并转发给父级；失败不影响页面。 */
 const BRIDGE_SCRIPT = [
@@ -193,6 +193,51 @@ export function buildPlanSrcDoc(html: unknown): string {
   if (text.includes(BRIDGE_MARK)) return text
   if (/<\/body\s*>/i.test(text)) return text.replace(/<\/body\s*>/i, BRIDGE_SCRIPT + '\n</body>')
   return text + '\n' + BRIDGE_SCRIPT
+}
+
+/**
+ * 读取计划页的失败是否属于「文件还没生成」（而不是路径非法/权限等其它原因）。
+ * @author ddj 2026年11月23号
+ * @param result edrv.read 的返回
+ * @returns true 表示页面文件不存在
+ */
+export function isMissingPage(result: unknown): boolean {
+  if (result === null || typeof result !== 'object') return false
+  const row = result as { ok?: unknown; code?: unknown; error?: unknown }
+  if (row.ok === true) return false
+  if (row.code === 'file-missing') return true
+  return /文件不存在|no such file|ENOENT/i.test(typeof row.error === 'string' ? row.error : '')
+}
+
+/**
+ * 从计划正文声明的页面路径里取 slug（plans/<slug>/… 的第二段）。
+ * @author ddj 2026年11月23号
+ * @param declared 声明的路径（可能为空或不是 plans/ 结构）
+ * @returns slug；取不到时用 html-plan
+ */
+export function planSlugOf(declared: unknown): string {
+  const parts = String(declared ?? '').replace(/\\/g, '/').split('/').filter(Boolean)
+  const at = parts.indexOf('plans')
+  const raw = at >= 0 && parts.length > at + 1 ? parts[at + 1] : ''
+  return /^[a-z0-9][a-z0-9-]*$/i.test(raw) ? raw : 'html-plan'
+}
+
+/**
+ * 让 agent 生成/重打包 HTML 计划页的修复指令（计划页签「生成 HTML 计划页」按钮发给 agent）。
+ * 计划模式允许写 plans/ 下的计划交付物，所以这里明确禁止「请用户退出计划模式」的做法。
+ * @author ddj 2026年11月23号
+ * @param declared 计划正文声明的页面路径（可为空）
+ * @returns 发给 agent 的用户消息
+ */
+export function planRepairInstruction(declared: unknown): string {
+  const slug = planSlugOf(declared)
+  return [
+    '请按 dsh-vscodemode-html-plan 技能生成并打包 HTML 计划页，然后重新提交计划：',
+    '1. 计划模式里允许写 plans/ 下的计划交付物：直接在计划模式里写页面，不要让我退出计划模式。',
+    `2. 先写 plans/${slug}/plan.html，再运行该技能的 runtime/plan.mjs ${slug}（自带复制运行时、pack、清理）。`,
+    `3. 确认 plans/${slug}/plan.packed.html 存在后，再调用 exit_plan_mode：正文第一行「# 计划：<标题>」，并单独一行「HTML 计划页：plans/${slug}/plan.packed.html」。`,
+    '不要只写路径不生成文件；页面确实生成失败就说清原因，并交付纯 Markdown 计划。',
+  ].join('\n')
 }
 
 /**

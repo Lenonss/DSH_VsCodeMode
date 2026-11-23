@@ -9,6 +9,7 @@
  */
 import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
+import { loadHostModule } from './hostImport.js'
 
 /** 归一化版本：主/次/补丁 + 预发布标识数组（0.1.2-alpha.2 → pre=['alpha','2']）。 */
 export interface DshVersion {
@@ -92,6 +93,8 @@ export function inDshRange(version: DshVersion | null | undefined, range: DshRan
 export function familyLabel(input: string): string {
   const version = parseDshVersion(input)
   if (!version) return '未知'
+  if (inDshRange(version, { from: '0.2.3-0' })) return '0.2.3 及更新（路由授权=框架 auth；Cordis 4.2；mcpManager/forgeChanges 按能力探测）'
+  if (inDshRange(version, { from: '0.2.2-0', to: '0.2.3-0' })) return '0.2.2 线（客户端样式元信息 + 会话状态新包；按能力探测）'
   if (inDshRange(version, { from: '0.2.1-rc.2', to: '0.2.1-rc.2' })) return '0.2.1-rc.2（设置=profile Config；workingDirectory 投影跟随 cd；plugins.detail 扩展位；按能力探测）'
   if (inDshRange(version, { from: '0.2.1-0', to: '0.2.1' })) return '0.2.1 线（rc.2 已逐版适配，其余按能力探测）'
   if (inDshRange(version, { from: '0.2.0-rc.2', to: '0.2.0-rc.2' })) return '0.2.0-rc.2（设置=profile Config；按能力探测）'
@@ -164,4 +167,54 @@ export function detectDshVersion(): string {
     }
   }
   return detectedVersion
+}
+
+/** 运行时版本探测结果（进程内只探一次）。 */
+let runtimeProbe: Promise<string> | undefined
+/** 最近一次版本判定是否来自运行时（供兼容报告标注来源）。 */
+let runtimeHit = false
+
+/**
+ * 问运行时自己的版本号：0.2.2 起 `@deepseek-ai/dsh-app-boot` 导出 getDshRuntimeVersion，
+ * 与 cordis_inspect 的 Runtime.getVersion 同源，比包版本嗅探更权威。
+ * 旧版无该导出或取值非法时返回空串，由调用方回落嗅探。
+ * @private @author ddj 2026年11月23号
+ * @returns 运行时版本串或空串（不抛错）
+ */
+async function probeRuntimeVersion(): Promise<string> {
+  try {
+    const module = await loadHostModule('@deepseek-ai/dsh-app-boot') as { getDshRuntimeVersion?: unknown }
+    const read = module?.getDshRuntimeVersion
+    if (typeof read !== 'function') return ''
+    const value = (read as () => unknown)()
+    return typeof value === 'string' && parseDshVersion(value) ? value : ''
+  } catch {
+    // 旧版无该包/导出：回落包版本嗅探
+    return ''
+  }
+}
+
+/**
+ * 读运行中 DSH 版本：运行时值为准，失败回落包版本嗅探（结果进同一缓存）。
+ * @public @author ddj 2026年11月23号
+ * @returns 版本串；两种来源都失败时为空串
+ */
+export async function detectVersionLive(): Promise<string> {
+  if (detectedVersion) return detectedVersion
+  runtimeProbe ??= probeRuntimeVersion()
+  const runtime = await runtimeProbe
+  if (runtime) {
+    runtimeHit = true
+    return (detectedVersion = runtime)
+  }
+  return detectDshVersion()
+}
+
+/**
+ * 最近一次版本判定来自哪里，供兼容报告标注。
+ * @public @author ddj 2026年11月23号
+ * @returns 'runtime' 表示运行时权威来源，'package' 表示包版本嗅探
+ */
+export function versionSourceOf(): 'runtime' | 'package' {
+  return runtimeHit ? 'runtime' : 'package'
 }

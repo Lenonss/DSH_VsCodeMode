@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createFileOpenerRegistry, selectOpener, officialSidebarOpener, shouldClaimFiles, OFFICIAL_OPEN_TOOL } from '../src/client/fileOpeners.js'
-import { installOpenPathRouter } from '../src/client/openPathRouter.js'
+import { installOpenPathRouter, resolveOpenPathOwner } from '../src/client/openPathRouter.js'
 
 describe('file opener registry', () => {
   it('sorts available openers and falls back from unavailable selection', () => {
@@ -27,7 +27,7 @@ describe('open path router', () => {
     const registry = createFileOpenerRegistry()
     registry.register({ id: 'selected', label: 'Selected', open: selected })
     const dispose = installOpenPathRouter({
-      workspaces,
+      target: { owner: workspaces, key: 'openPath' },
       registry,
       selected: () => 'selected',
       context: () => ({ sessionId: 's1' }),
@@ -36,6 +36,21 @@ describe('open path router', () => {
     expect(selected).toHaveBeenCalledWith('a.ts', { sessionId: 's1' })
     dispose()
     expect(workspaces.openPath).toBe(original)
+  })
+
+  it('probes the live host before patching and skips a missing host', async () => {
+    const remoteSession = { openPath: vi.fn(async () => {}) }
+    const workspaces = { openPath: vi.fn(async () => {}) }
+    const services = { 'remote.session': remoteSession, workspaces }
+    expect(resolveOpenPathOwner({ get: (name) => services[name] })).toEqual({ owner: remoteSession, key: 'openPath' })
+    expect(resolveOpenPathOwner({ get: () => undefined })).toBeUndefined()
+
+    const logger = vi.fn()
+    const dispose = installOpenPathRouter({ registry: createFileOpenerRegistry(), selected: () => 'selected', context: () => ({ sessionId: 's1' }), logger })
+    dispose()
+    expect(logger).toHaveBeenCalledTimes(1)
+    expect(remoteSession.openPath).not.toHaveBeenCalled()
+    expect(workspaces.openPath).not.toHaveBeenCalled()
   })
 })
 

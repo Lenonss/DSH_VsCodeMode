@@ -163,6 +163,7 @@ export async function assertUnderLimit(userId: string) {
 - The first `<p>` is the question, 15 words at most.
 - **`checked` is your recommendation.** It gets a “suggested” tag, and “I changed nothing” is then a full answer. Never leave a radio group without one.
 - Control names must be unique on the page.
+- A `doc-ask` with radios or checkboxes gets a free-text box under its options at load (name `<id>.custom`): typing there clears the pick, and the response shows `_(no selection)_` plus a `custom:` line. Asks with only text, a range or a rank get no box. Do not hand-write a second textarea; `custom="off"` drops the box. The box is outside `data-if` — pack cannot see it, so do not point a `data-if` at it.
 - `data-if="name=value"` (`!=`, `~` contains, `&&`) on any element shows it only under that answer. Use it for consequences.
 
 ## `doc-quote` — who asked, in their words

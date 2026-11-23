@@ -836,6 +836,7 @@ function McpForm({ title, draft, busy, edit, save, close, project }) {
     project && React.createElement('label', null, '启动策略', React.createElement('select', { disabled: !!busy, value: draft.startup, onChange: change('startup') }, React.createElement('option', { value: 'on-demand' }, '按需启动（默认）'), React.createElement('option', { value: 'background' }, '后台预热'))),
     project && React.createElement('label', null, '连接模式', React.createElement('select', { disabled: !!busy, value: draft.sharing, onChange: change('sharing') }, React.createElement('option', { value: 'agent' }, '逐会话隔离（默认）'), React.createElement('option', { value: 'workspace' }, '工作区共享（共享服务内部状态）'))),
     project && React.createElement('label', null, '初始化预算（毫秒，1000–300000）', input('startupTimeoutMs', '60000')),
+    React.createElement('label', null, '工具加载（DSH 0.2.3+）', React.createElement('select', { disabled: !!busy, value: draft.toolLoading ?? 'eager', onChange: change('toolLoading') }, React.createElement('option', { value: 'eager' }, '随连接加载（默认）'), React.createElement('option', { value: 'on-demand' }, '按需加载（省上下文）'))),
     project && React.createElement('small', null, '新对话不等待连接。共享必须确认服务适合共享状态；不为 CodeGraph 自动启用。'),
     React.createElement('div', { className: 'vsm-mcp-dialog-actions' }, React.createElement('button', { disabled: !!busy, onClick: close }, '取消'), React.createElement('button', { className: 'vsm-primary', disabled: !!busy, onClick: save }, '保存配置')),
   ))

@@ -207,3 +207,100 @@
 `npm run build` 成功。构建中 `src/client/monaco/lsp/providers.ts` 的
 `INVALID_ANNOTATION` 是本轮之前就存在的 Rolldown 告警，非本次引入。
 以上为源码与自动化验证，**不等于** 0.2.1 全功能现场验收。
+
+## 12. 0.32.0 对 DSH 0.2.3 的吸纳（2026-11-23）
+
+本轮基线为 Web profile 运行的 `@deepseek-ai/dsh@0.2.3-alpha.2`（`cordis` 4.2.0-alpha.1），
+证据来自安装树 `D:\Application\Tools\DeepSeekHarness\node_modules` 与运行中 host 的实测，
+不只看 release notes。
+
+| 吸纳项 | 官方来源 | 本插件落点 | 边界 |
+| --- | --- | --- | --- |
+| 路由授权交回框架 | 0.2.3 移除 `connection.requestRejection`；`WebRoute.auth` 缺省 `required`，由 connection 插件的 `webserver/authorize` 判定（cookie 鉴权） | `src/httpGuard.ts` 只保留方法校验与旧版闸门复用；`src/routes.ts` 注册时显式 `auth: 'required'` | 旧版宿主仍有 `requestRejection` → 沿用原闸门（401/403/503 语义不变）；两者都没有时按框架放行，绝不恢复自建 503 |
+| 版本来源改问运行时 | `@deepseek-ai/dsh-app-boot` 的 `getDshRuntimeVersion()`（与 `cordis_inspect` 的 `Runtime.getVersion` 同源） | 新增 `detectVersionLive()` / `versionSourceOf()`；`buildReport` 优先运行时值，失败回落包版本嗅探；兼容报告新增「版本来源」与「路由授权归属」两行 | 旧版无该导出 → 动态 import 失败即回落；`detectDshVersion()` 同步契约不变 |
+| 官方文件树样式重定向 | 0.2.3 的 style 元素改为 `data-plugin` + `data-path`（不再有 `data-plugin-css`）；官方 CSS 改挂 `[data-files-navigator-row]` 行标记与 CSS 变量 | `src/client/filesCssCompat.ts` 双选择器 + 双规则集，类名哈希变化时按正则重定向；`navSelectorOf()` 从样式文本取导航器类名 | 任何未知修订版本仍返回 `null`（识别不了就不改）；旧格式选择器与规则保留回落 |
+| 死补丁点清理 | 0.2.3 客户端 `workspaces` 服务已无 `openPath`（`patchMethod` 会新建死属性） | `src/client/openPathRouter.ts` 新增 `resolveOpenPathOwner()`；探测不到就不安装并记日志 | 会话文件链接真正的主路径是 `remote.session.openWorkspacePath`（`src/client/remoteOpenRouter.ts`），本轮另把补丁的描述符查找扩展到原型链，类方法形态也能装 |
+| root hook 属性要 inject | 0.2.3 起 `uiSession.sessionStatus` 这类 `provideRoot({hooks})` 属性只在 `inject` 声明过才可读，直接读抛 `cannot get property "…" without inject`；该名称同时是服务名 | `src/client/htmlPlan/planActions.ts` 改按服务全名 `ctx.get('uiSession.sessionStatus')` 取，所有嵌套读取经 `probe()` 兜底；新增 `src/client/ui/SideTabBoundary.ts` 就地隔离编辑器子树异常 | 可选服务一律不进 `inject`（旧版 DSH 没有该服务，进了入口会永久停等）；读不到时降级到 `userQuestions` 投影，审批回落到对话卡片。未修前一次读取异常会让 `sidebar.right.pane.tab` 整片空白（计划页与编辑器一起消失） |
+| 官方代码审阅扩展位 | `@deepseek-ai/dsh-experimental-client-ui-forge` 的 `forge.changes.toolbar` / `forge.changes.file.menu` 等 slot，与 `ctx.forgeChanges.registerAnnotations()` | 新增 `src/client/officialReview.ts`，在官方变更视图加「在 VSCodeMode 打开」「在编辑器打开」「插入对话草稿」 | slot 服务缺失或注册抛错 → 零注册/跳过，不影响自有 diff 面板；未接行注解与审阅视图（下一批） |
+| 官方 MCP 框架接入 | `@deepseek-ai/dsh-mcp-manager` 的 `ctx.mcpManager`（`register/list/watch/restart/startAuthorization/signOut`，条目含 `oauth.credentialKey` 与 `toolLoading`） | 新增 `src/mcpManagerBridge.ts`（端口 + 条目/视图映射 + 凭据键派生）；`mcp.list`/`mcp.snapshot` 合并 manager 托管服务器；新增 `mcp.manager.*` 控制 RPC；表单新增「工具加载（0.2.3+）」开关 | 只做**读状态 + 委派控制**：项目级 `.mcp.json` 仍走插件自有 mcpRuntime（逐 agent 作用域与共享池在 manager 上没有对等物，硬切会丢隔离），迁移列为下一批 |
+| 样式产物格式 | 0.2.3 客户端产物把样式改由框架挂载时安装（`meta.stylesheets`） | 本批**保持旧格式**：旧产物仍可加载，代价是热替换后样式残留到刷新 | 自研 `meta.stylesheets` 需要改 `tsdown.config.ts` 与资源 URL 解析，风险大于收益，单列后续 |
+
+**未吸纳并记录理由**：
+
+- `dsh-upstream-skills`：给 CLI 应用插件共用上游技能下载；本插件自带 `skills/` 目录并按
+  `SKILL_PREFIXES` 挂载，接入会形成两套来源。
+- `ctx.connection.rpc` / `ctx.connection.fetch`：官方新的 host↔client 通道，适合统一鉴权与
+  远端配对；迁移要改路由前缀与客户端 URL，与本次 P0 修复叠加风险高。
+- 审阅行注解与 `forge.review.conversation`：见上方第 5 行，留作下一批（需先有稳定的注解数据源）。
+
+**验证范围**：`pnpm typecheck` 0 error；目标测试 135 passed / 6 skipped；`pnpm build` 成功。
+现场验收（`/edrv/rpc` 200、文件链接、审阅按钮、MCP 状态）需在 DSH 重启后执行，见
+`docs/release-0.32.0.md` 的「验收」一节。
+
+## 13. 0.33.0 对 DSH 0.2.3 的吸纳（第二批，2026-11-23）
+
+做完 0.32.0 留作「下一批」的三件事：项目级 MCP 迁到官方 manager 托管、官方变更视图行注解、
+客户端样式改 `meta.stylesheets`。
+
+### 13.1 项目 MCP：agent 作用域留在插件侧，挂载原语换 manager.register
+
+| 能力 | 旧路径（连接池） | 新路径（官方 manager） |
+| --- | --- | --- |
+| 传输挂载 | 私有 scope 里挂 `@deepseek-ai/dsh-mcp-client`（`src/mcpPool.ts:205`） | `ctx.mcpManager.register(name, entry)`，返回 disposer（`src/mcpManaged.ts`） |
+| 连接归属 | 逐 agent 实例 + 共享池（`sharing: agent/workspace`） | 注册即启用：一个注册名一条官方实例；`sharing` 在托管路径上不再生效 |
+| 工具可见 | 私有 scope 收集后按 agent 重注册代理 | `toolLoading: 'on-demand'`：官方不把工具放进任何会话表；某 agent 调加载器后工具进它自己的 scope |
+| 启动时机 | `startup: on-demand`（首次工具调用）/ `background`（会话创建） | 工作区出现首个会话即注册；「首次工具调用才连」无法保留（注册前不存在工具名） |
+| 状态 | 池条目 `phase` | `list()` / `watch()` 视图 → 插件状态（`connected/connecting/failed`） |
+| 重连 | 重挂载私有 scope | `ctx.mcpManager.restart(name)`（`mcp.projectRefresh` 落到这里） |
+| OAuth | 无 | `oauth.credentialKey = mcp-client/vsm-<8 位哈希>`，只有 streamable-http 才登记 |
+| 隔离 | 按 agent deny 外部命名空间 + prompt 影子 + 执行守卫 | 同一套机制；归属表多一份「托管注册名 → 工作区」（`runtime.owners()`） |
+
+安装树实测的事实（不是 release notes）：
+
+- `register` 与 `Config.servers` 或既有注册同名即抛；注册条目强制 `enabled: true`，没有
+  「注册但禁用」态（`dsh-mcp-manager/src/index.ts:242-259`）。
+- `oauth.credentialKey` 必须匹配 `^mcp-client/`（`dsh-mcp-client/src/oauth-options.ts:24`），
+  且 OAuth 只能配 `streamable-http`；格式错、跨条目重复、配在 stdio 上都在 `register` 时抛。
+- `toolLoading: 'on-demand'` 的加载器把工具注册进调用它的 agent 作用域
+  （`tool-loading.ts:127-149`），逐 agent 隔离由官方语义承担。
+- `watch(signal)` 是 async iterable，`list()` 同步返回（`:268`、`:220`）。
+
+回落与硬约束：装配时探一次能力（`probeBackend()`），之后固定；托管路径要求旧 loader
+项目条目已清空，清理未完就 `forcePool()` 回落连接池并记警告，绝不双写。旧版宿主行为不变。
+
+### 13.2 官方审阅第二批
+
+| 扩展位 | 落点 | 说明 |
+| --- | --- | --- |
+| `ctx.forgeChanges.registerAnnotations(source)` | `src/client/officialAnnotations.ts` | 行级：会话待审页 → `edrv.review.detail` → 未决差异块 → `{side, startLine, endLine}`；新增/修改落 R 侧、纯删除落 L 侧 |
+| `forge.diff.line.annotation`（keyed） | `src/client/officialReview.ts` | key 必须等于注解源 id `dsh-vscode-mode`；注解源注册成功才注册该槽 |
+| `forge.diff.comment.actions`（list） | 同上 | 一行「插入对话草稿」，复用加待审能力 |
+| `forge.review.conversation`（single） | 不注册 | 官方在 `review-mount.ts:217` 自己注册且是单例，插件再注册会抛 |
+
+同批修正：官方 slot 的组件契约是返回 ReactNode，0.32.0 的两条 slot 返回 DOM 元素
+（React 渲染时报错），本批统一改 `React.createElement`。
+
+成本与上限：详情是按条目拉的，一轮最多 40 条、每批并发 4，缓存按「条目 + 修订号」失效；
+单文件最多发 8 条块注解。官方按 `annotationLimit` 截断并显示剩余数
+（`DiffFile.tsx:222-236`），宿主未报上限时一条都不画。
+
+已知偏差：块的行号来自插件自己的待审差异，不是官方 forge 视图那份 diff；两套来源的
+上下文行数可能不同，行号可能整体偏移。因此注解**不带 `digest`**：不冒充「同一份改动」，
+也不会进「较早改动」区，宁可画在当前文件上。
+
+### 13.3 客户端样式：meta.stylesheets
+
+- 形状：`window.__ModuleLoader__.load({ id, chunk?, factory, meta })`，`meta` 是工厂，返回
+  `{ stylesheets: { '<包内路径>': { text(context) } } }`（`dsh-package-manifest/src/client-module.ts:4-18`）。
+- 安装：框架在记录挂载时建 `<style data-plugin="包名" data-path="包内路径">`，记录消失即删
+  （`document-styles.ts:155-171`）；热替换后不再残留到刷新。
+- 路径：本包文件用 `src/client/...`；node_modules 里的第三方 CSS 统一 `vendor/<包名>/<路径>`，
+  不把 pnpm store 哈希写进产物。
+- `url()`：`data:`/`blob:`/`http(s):`/片段等自包含地址原样内联；**相对地址构建期直接失败**，
+  逼迫改走 `context.asset()`。当前 `editor.css` 只有两处 `data:image/svg+xml` 勾选框图标。
+- 自检：`scripts/check-client-artifacts.mjs` 断言每次注册都带 `meta`、路径是包内相对路径、
+  `text` 可调用，并断言产物里不再有 `dataset.pluginCss` 自注入。
+
+**本批验证**：`pnpm typecheck` 0 error；目标 15 个测试文件 228 passed / 9 skipped；
+`pnpm build` 产出 host + 5 个 chunk，`check-client-artifacts` 通过。现场验收需重启 DSH，
+见 `docs/release-0.33.0.md`。

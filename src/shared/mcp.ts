@@ -65,6 +65,10 @@ export interface MpcConfig {
   maxInstructionBytes?: number
   failOnStartupError?: boolean
   reconnect?: Record<string, unknown>
+  /** 官方 mcpManager 的按需加载策略（0.2.3+；缺省 eager）。 */
+  toolLoading?: 'eager' | 'on-demand'
+  /** 显式登记 OAuth 授权（0.2.3+；凭据由官方客户端保存，插件只记存在性）。 */
+  oauth?: Record<string, unknown>
 }
 
 export interface MpcServer {
@@ -81,6 +85,14 @@ export interface MpcServer {
   toolCount: number
   tools: MpcTool[]
   error?: string
+  /** 官方 mcpManager 报告的运行时状态（0.2.3+；未接入时 undefined）。 */
+  managerState?: string
+  /** 该条目是否由官方 mcpManager 托管。 */
+  managed?: boolean
+  /** 托管注册名（官方 manager 的 name，同时是工具命名空间）；未托管时 undefined。 */
+  registrationName?: string
+  /** OAuth 授权阶段（manager 报告时才有）。 */
+  phase?: string
 }
 
 /** 项目级 MCP：绑定到一个 workspace 路径，配置存于该项目根 .mcp.json。 */

@@ -149,6 +149,38 @@ describe('parseStatusXml', () => {
   })
 })
 
+describe('ignored 预算与 changelist 组', () => {
+  /**
+   * 造一份「ignored 挤满上限 + 末尾 changelist 块」的 XML（真实 WLaking 形态）。
+   * @author ddj 2026年11月21号
+   * @param ignored ignored 条数 @param changelist 组名 @param rows 组内条目数
+   * @returns status --xml 文本
+   */
+  function xmlOf(ignored, changelist, rows) {
+    const noise = []
+    for (let i = 0; i < ignored; i += 1) noise.push('<entry path="Temp/i' + i + '.tmp"><wc-status item="ignored" revision="1" props="none"/></entry>')
+    const inside = []
+    for (let i = 0; i < rows; i += 1) inside.push('<entry path="cl/f' + i + '.cs"><wc-status item="modified" revision="1" props="none"/></entry>')
+    return '<status><target path=".">' + noise.join('') + '</target>'
+      + '<changelist name="' + changelist + '">' + inside.join('') + '</changelist></status>'
+  }
+
+  it('ignored 占满预算不会挤掉末尾 changelist 块', () => {
+    const { entries, truncated } = parseStatusXml(xmlOf(8, 'core', 2), 3)
+    expect(truncated).toBe(true)
+    expect(entries.filter((entry) => entry.status === 'ignored')).toHaveLength(3)
+    const grouped = entries.filter((entry) => entry.changelist === 'core')
+    expect(grouped).toHaveLength(2)
+    expect(grouped[0].status).toBe('modified')
+  })
+
+  it('非 ignored 条目仍按原预算截断（行为不变）', () => {
+    const { entries, truncated } = parseStatusXml(xmlOf(0, 'core', 5), 3)
+    expect(truncated).toBe(true)
+    expect(entries.filter((entry) => entry.changelist === 'core')).toHaveLength(3)
+  })
+})
+
 describe('batchResultOf', () => {
   it('成功：按 Reverted/Adding 行计数并给中文摘要', () => {
     const out = "Reverted 'a.txt'\nReverted 'b.txt'\n"
