@@ -12,8 +12,9 @@ import type { UserConfig } from 'tsdown'
  *           window.__ModuleLoader__.load({id, factory}) with react / cordis
  *           resolved through the injected require (loader module table).
  * Plain .css imports become the registration's `meta.stylesheets` (DSH 0.2.3+
- * installs them when the record mounts and removes them when it unloads), so
- * nothing is injected into the document from module code anymore.
+ * installs them when the record mounts and removes them when it unloads), and each
+ * artifact additionally carries a guarded self-injection fallback for hosts that
+ * predate `meta.stylesheets` (0.2.2 及以前：不认 meta，只认模块自己插的 style 标签)。
  */
 
 /** Package id stamped into the __ModuleLoader__ handoff and style tags.
@@ -104,8 +105,52 @@ function metaSourceOf(styles: Styles): string {
   return '() => ({ stylesheets: { ' + rows.join(', ') + ' } })'
 }
 
+/** 回退注入块的开始/结束标记：审计脚本按它切出可执行片段做真域名验证。 */
+export const FALLBACK_BEGIN = '/*dsh-style-fallback*/'
+export const FALLBACK_END = '/*dsh-style-fallback-end*/'
+
 /**
- * Wrap a rendered chunk in the loader registration, with styles in `meta`.
+ * 为 DSH 0.2.2 及更早宿主生成样式自注入片段。
+ *
+ * 为什么要它：0.2.3 才由宿主按 `meta.stylesheets` 安装插件样式；旧宿主只认模块自己在
+ * 物化期插入的 `<style data-plugin-css>`。缺了这段，旧宿主上插件样式全丢（悬浮按钮的
+ * 鲸鱼标记会按 SVG 原始尺寸铺满整屏、弹窗退化成无样式文本）。
+ *
+ * @private @author ddj 2026年11月23号
+ * @param styles 本产物的样式表集合。
+ * @returns 可直接插入 factory 体的自注入片段；无样式时返回空串。
+ */
+function styleFallbackOf(styles: Styles): string {
+  const texts = [...styles.values()].filter((text) => text.trim().length > 0)
+  if (texts.length === 0) return ''
+  const css = texts.join('\n')
+  // 指纹取样式文本开头：宿主注入的那份与本插件注入的那份内容相同，命中即已装好。
+  const witness = css.trim().slice(0, 48)
+  return FALLBACK_BEGIN + '\n'
+    + 'try {\n'
+    + '  if (typeof document !== "undefined" && document && document.head) {\n'
+    + '    var probe = ' + JSON.stringify(witness) + ';\n'
+    + '    var installed = document.querySelectorAll ? document.querySelectorAll("style") : [];\n'
+    + '    var idx = 0;\n'
+    + '    for (; idx < installed.length; idx += 1) {\n'
+    + '      var body = installed[idx] && installed[idx].textContent;\n'
+    + '      if (typeof body === "string" && body.indexOf(probe) >= 0) { installed = null; break; }\n'
+    + '    }\n'
+    + '    if (installed) {\n'
+    + '      var tag = document.createElement("style");\n'
+    + '      tag.setAttribute("data-plugin", ' + JSON.stringify(ID) + ');\n'
+    + '      tag.setAttribute("data-plugin-css", ' + JSON.stringify(ID + ':fallback') + ');\n'
+    + '      tag.textContent = ' + JSON.stringify(css) + ';\n'
+    + '      document.head.appendChild(tag);\n'
+    + '    }\n'
+    + '  }\n'
+    + '} catch (error) {}\n'
+    + ';\n' + FALLBACK_END + '\n'
+}
+
+/**
+ * Wrap a rendered chunk in the loader registration, with styles in `meta` and the
+ * 0.2.2 fallback installer in the factory body.
  * @private @author ddj 2026年11月23号
  * @param code Rendered chunk code.
  * @param chunk Package-local chunk name, or undefined for the root entry.
@@ -115,10 +160,11 @@ function metaSourceOf(styles: Styles): string {
 function registrationOf(code: string, chunk: string | undefined, styles: Styles): string {
   const head = 'window.__ModuleLoader__.load({ id: ' + JSON.stringify(ID)
     + (chunk === undefined ? '' : ', chunk: ' + JSON.stringify(chunk)) + ', factory: (require) => {\n'
+  const body = 'var module = { exports: {} }; var exports = module.exports;\n' + styleFallbackOf(styles) + code
   const tail = chunk === undefined
     ? 'module.exports.__setPanelImport(require.async?.bind(require)); return module.exports; }'
     : 'return module.exports; }'
-  return head + 'var module = { exports: {} }; var exports = module.exports;\n' + code + '\n' + tail
+  return head + body + '\n' + tail
     + ', meta: ' + metaSourceOf(styles) + ' });\n'
 }
 

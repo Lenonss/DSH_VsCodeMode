@@ -143,7 +143,7 @@ function assetHandler(directory: string, prefix?: string, filename?: string): Ht
 function mountRoute(ctx: Ctx, route: PluginRoute, warning?: (text: string) => void): void {
   /** @author ddj 2026年09月28号 @param req Original HTTP request. @param res HTTP response. */
   async function guarded(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    if (!admitRoute(ctx, req, res, route.methods)) return
+    if (!admitRoute(ctx, req, res, route.methods, warning)) return
     try { await route.handler(req, res) } catch {
       if (!res.headersSent) replyJson(res, 500, { ok: false, error: 'Plugin request failed' })
       else res.end()

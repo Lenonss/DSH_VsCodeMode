@@ -8,6 +8,16 @@ export const RPC_BODY_CAP = Math.max(READ_CAP * 6, Math.ceil(BINARY_READ_CAP / 3
 export interface RpcInput { method: string; args: Record<string, unknown> }
 type InputResult = { input: RpcInput } | { status: number; error: string }
 
+/** Host 连接服务的旧版围栏（DSH 0.2.3 起已移除；存在时由插件自己调用）。 */
+interface LegacyConnection {
+  /**
+   * 类方法：必须带服务实例作为 this 调用，方法体内部会读 this.admit()。
+   * @param request 原始 Node 请求（含认证头）。
+   * @returns 拒绝状态码；undefined 表示放行。
+   */
+  requestRejection?: (request: IncomingMessage) => number | undefined
+}
+
 /**
  * Send a JSON response without allowing credential-dependent results to be cached.
  * @author ddj 2026年09月28号
@@ -22,6 +32,9 @@ export function replyJson(res: ServerResponse, status: number, value: unknown): 
   res.end(JSON.stringify(value))
 }
 
+/** 围栏异常只报一次：客户端会重试，逐次刷日志只会淹没真正的原因。 */
+let fenceWarned = false
+
 /**
  * Resolve the legacy Host connection fence, or undefined when the host no longer has one.
  * DSH 0.2.3 removed connection.requestRejection: the framework now authorizes a route
@@ -32,17 +45,25 @@ export function replyJson(res: ServerResponse, status: number, value: unknown): 
  * @param req Original Node request, including authentication headers.
  * @returns The rejection status, or undefined when the host has no legacy fence.
  */
-function legacyRejection(ctx: Ctx, req: IncomingMessage): number | undefined {
-  let reject: unknown
+function legacyRejection(ctx: Ctx, req: IncomingMessage, warning?: (text: string) => void): number | undefined {
+  let connection: LegacyConnection | undefined
   try {
-    reject = (ctx.get('connection') as { requestRejection?: unknown } | undefined)?.requestRejection
+    connection = ctx.get('connection') as LegacyConnection | undefined
   } catch {
-    reject = undefined
+    connection = undefined
   }
+  const reject = connection?.requestRejection
   if (typeof reject !== 'function') return undefined
   try {
-    return (reject as (request: IncomingMessage) => number | undefined)(req)
-  } catch {
+    // 必须以服务实例为接收者调用：requestRejection 是类方法，内部要走 this.admit()。
+    // 取出方法再裸调（v0.33.0 的写法）会在 0.2.3 之前的宿主上抛 TypeError → 503。
+    return reject.call(connection, req)
+  } catch (error) {
+    // 围栏本身坏掉时不再静默：把原因留给宿主日志，界面侧只看到 503。
+    if (!fenceWarned) {
+      fenceWarned = true
+      warning?.('兼容性：旧版 connection.requestRejection 调用失败（' + String(error) + '）')
+    }
     return 503
   }
 }
@@ -69,10 +90,11 @@ export function routeAuthMode(ctx: Ctx): 'legacy' | 'framework' {
  * @param req Original Node request, including authentication headers.
  * @param res Response receiving a refusal when unavailable or unauthorized.
  * @param methods Allowed HTTP methods for this route.
+ * @param warning Optional diagnostic sink for a broken legacy fence.
  * @returns Whether the request may proceed.
  */
-export function admitRoute(ctx: Ctx, req: IncomingMessage, res: ServerResponse, methods: string[]): boolean {
-  const rejection = legacyRejection(ctx, req)
+export function admitRoute(ctx: Ctx, req: IncomingMessage, res: ServerResponse, methods: string[], warning?: (text: string) => void): boolean {
+  const rejection = legacyRejection(ctx, req, warning)
   if (rejection !== undefined) {
     const status = rejection === 401 || rejection === 403 ? rejection : 503
     replyJson(res, status, { ok: false, error: status === 503 ? 'Host authentication service unavailable' : 'Host authentication rejected this request' })

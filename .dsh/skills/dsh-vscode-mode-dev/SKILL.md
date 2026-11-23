@@ -7,6 +7,30 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
 
 > updated: 2026-11-23 · 维护者：ddj（AI 会话按文末协议更新，保持精炼、去重）
 > **发布时先读「发布流程」与「失败恢复」**；下方实录是历史证据，不授权当前重跑发布、改 tag 或部署。冲突旧口径以更新后的规则为准。
+- 2026-11-23 实录（v0.33.1 紧急修复：旧宿主（桌面端 0.2.2-rc.5）上 `/edrv/rpc` 全量 503 + 插件样式全丢；
+  基线 v0.33.0 @ `299e992`）。两个坑都是 0.2.3 适配引入、且**只在 <0.2.3 宿主上现形**：
+  **坑①（往宿主服务塞回调时丢 this，代价最高）**：把 `ctx.get('connection').requestRejection` 取出到局部变量
+  再裸调（`const reject = conn?.requestRejection; reject(req)`）→ 类方法内部 `this.admit()` 为 undefined →
+  每次调用抛 TypeError → 闸门兜底成 503，桌面端 `/edrv/rpc` 全灭、客户端重试风暴（14 分钟 1.4 万条）。
+  0.2.3 已移除该围栏，所以 Web 端完全看不出。规矩：**跨宿主兼容层里从服务对象上取方法，一律
+  `method.call(service, …)` 或整体保留对象**，并写一条「服务方法必须带接收者」的回归测试（本次
+  `tests/httpGuard.test.ts`）。同类风险点：任何 `ctx.get(x)?.fn` 再调用的写法。
+  **坑②（`meta.stylesheets` 是 0.2.3-only 通道）**：0.2.3 起插件 CSS 由宿主按 `meta.stylesheets` 安装，
+  于是把运行期 `<style>` 注入整段删掉；但 0.2.2 的客户端模块系统是 `claimStyles()`——只认模块在物化期
+  自己插的 `<style data-plugin-css>`。旧宿主上结果：鲸鱼 SVG 按原始尺寸铺满整屏（悬浮按钮）、设置弹窗
+  退化成无样式文本、巨幅浮层还吞掉所有点击。修法 = 双通道：`meta.stylesheets` 保留给 0.2.3+，每个产物
+  在 factory 体前置一段守卫式自注入（按样式文本指纹探测宿主是否已装，装了跳过）；审计脚本要真跑两态
+  （缺失→注入 / 已装→不重复），不能只断言「产物里没有自注入」。
+  **新事实（诊断入口）**：桌面端 `dsh-app://app/*` 的非静态请求由 Electron 主进程转发，`hostUrl`/`hostCookie`
+  缺失时**由外壳直接回 503 空体**；插件闸门回的是 503 + JSON `{"ok":false,"error":"Host authentication service
+  unavailable"}`。区分法：只看 `/edrv` 失败而 `/api` 正常，就别怀疑外壳（外壳挂了整站都挂）。
+  **事实（本地核验链路，可复用）**：Electron 安装包的 DSH 版本在
+  `resources/runtime/primary-runtime/runtime.json` 的 `desktopVersion`；
+  用 `resources/app.asar` 做二分证据——按字节流搜 `requestRejection` / `stylesheets` /
+  `authentication unavailable`，能直接判定该宿主有没有围栏、有没有 `meta.stylesheets` 消费方。
+  **沙箱坑**：`npm run …`（npm.ps1 内部用管道抓子进程输出）与 `git log | Out-String`、`node … 2>&1`
+  在 workspace-write 下都报 `\\.\pipe\LOCAL\dotnet_…` denied → 直接 `node node_modules/<pkg>/…` 裸跑、
+  不接管道/重定向即可；vitest 仍需一次性升 danger-full-access（esbuild spawn EPERM）。
 - 2026-11-23 实录（v0.33.0 发布：DSH 0.2.3 适配 + 官方 `mcpManager` 托管 + 审阅行注解 + 非 UTF-8 文本兼容；
   基线 v0.31.0 @ `8519ca5`）：本地三门 typecheck 0 / **335 文件通过 + 2 跳过（4194 passed / 22 skipped，31.61s）** /
   `node --test` fail 0 / build `index.js` 1,265,238 B + `client.js` 1,055,081 B（另有 rules/debug/excel/excelcodec）。

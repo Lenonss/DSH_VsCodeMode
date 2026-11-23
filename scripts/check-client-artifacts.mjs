@@ -6,6 +6,9 @@ import { createContext, runInContext } from 'node:vm'
 import ts from 'typescript'
 
 const OWNER = 'dsh-vscode-mode'
+/** 样式自注入回退块的标记（与 tsdown.config.ts 的 FALLBACK_BEGIN/FALLBACK_END 一一对应）。 */
+const FALLBACK_BEGIN = '/*dsh-style-fallback*/'
+const FALLBACK_END = '/*dsh-style-fallback-end*/'
 /** Per-chunk contract: root shared keys it must consume, the exports it must publish, and the stylesheet it must declare. */
 const CHUNK_SPECS = [
   { name: 'client.rules.js', shared: ['rpc'], exports: ['RulesPanel'] },
@@ -61,6 +64,44 @@ function verifyMeta(row, filename, expected) {
   }
   if (expected) assert.ok(paths.includes(expected), `${filename}: missing stylesheet ${expected} (declared: ${paths.join(', ') || 'none'})`)
   return paths
+}
+
+/** @private @author ddj 2026年11月23号 @param filename Diagnostic filename. @param row Captured registration. @param source Bundle source. @returns Nothing. @throws When the pre-0.2.3 style fallback is missing, drops styles or double-installs. */
+function verifyStyleFallback(filename, row, source) {
+  const stylesheets = row.meta()?.stylesheets ?? {}
+  const texts = Object.values(stylesheets).map((descriptor) => descriptor.text({ asset: (reference) => reference }))
+  const begin = source.indexOf(FALLBACK_BEGIN)
+  const end = source.indexOf(FALLBACK_END)
+  if (texts.length === 0) {
+    assert.equal(begin, -1, `${filename}: fallback block without any stylesheet`)
+    return
+  }
+  assert.ok(begin >= 0 && end > begin, `${filename}: missing pre-0.2.3 style fallback (hosts before meta.stylesheets would render unstyled)`)
+  const code = source.slice(begin + FALLBACK_BEGIN.length, end)
+  const firstRun = []
+  runInContext(code, createContext({ document: fakeDocument(firstRun) }), { filename: `${filename}#fallback-absent` })
+  assert.equal(firstRun.length, 1, `${filename}: fallback did not install a style tag when no styles were present`)
+  for (const text of texts) assert.ok(firstRun[0].textContent.includes(text), `${filename}: fallback dropped a stylesheet`)
+  assert.equal(firstRun[0].attributes.get('data-plugin'), OWNER, `${filename}: fallback style tag is not owned by ${OWNER}`)
+  const secondRun = []
+  runInContext(code, createContext({ document: fakeDocument(secondRun, texts[0].trim().slice(0, 48)) }), { filename: `${filename}#fallback-present` })
+  assert.equal(secondRun.length, 0, `${filename}: fallback duplicated styles the host already installed`)
+}
+
+/**
+ * Minimal DOM stub for the generated fallback block.
+ * @private @author ddj 2026年11月23号
+ * @param installed Collected style tags, appended by the block itself.
+ * @param existingStylesheetText Text of an already installed style, when the host did inject.
+ * @returns Document stub with the four members the block touches.
+ */
+function fakeDocument(installed, existingStylesheetText) {
+  const existing = typeof existingStylesheetText === 'string' ? [{ textContent: existingStylesheetText }] : []
+  return {
+    head: { appendChild: (tag) => { installed.push(tag) } },
+    querySelectorAll: () => existing.slice(),
+    createElement: () => ({ attributes: new Map(), textContent: '', setAttribute(name, value) { this.attributes.set(name, value) } }),
+  }
 }
 
 /** @private @author ddj 2026年10月22号 @returns Explicit platform seeds; unknown externals never silently resolve. */
@@ -165,16 +206,16 @@ export async function inspectArtifacts(libDir, options = {}) {
   }
   const root = registration(sources['client.js'], 'client.js')
   assert.equal(root.chunk, undefined, 'root must not register as a chunk')
-  // 0.2.3 起样式由框架按 meta.stylesheets 安装：产物里不能再有自注入的 style 标签。
-  // 旧注入代码的唯一标识是 dataset.pluginCss 赋值；filesCssCompat 读的是官方选择器字符串
-  // "data-plugin-css=…"（带连字符），不会与这个标识撞上。
-  for (const name of ['client.js', ...CHUNKS]) assert.doesNotMatch(sources[name], /pluginCss/, `${name}: still injects its own style tag; styles must ride in meta.stylesheets`)
+  // 两条样式通道都要在：meta.stylesheets 给 0.2.3+，守卫过的自注入片段给 0.2.2 及以前。
+  verifyMeta(root, 'client.js', 'src/client/styles/editor.css')
+  verifyStyleFallback('client.js', root, sources['client.js'])
   verifyMeta(root, 'client.js', 'src/client/styles/editor.css')
   const chunks = CHUNK_SPECS.map((spec) => {
     const name = spec.name
     const row = registration(sources[name], name)
     assert.equal(row.chunk, name, `${name}: wrong chunk registration`)
     verifyMeta(row, name, spec.style)
+    verifyStyleFallback(name, row, sources[name])
     if (spec.shared.length) {
       // Minified chunks reach the root through a renamed local require, so match the module id, not the call form.
       assert.ok(sources[name].includes(`"${OWNER}"`) || sources[name].includes(`'${OWNER}'`) || sources[name].includes('`' + OWNER + '`'), `${name}: missing shared root dependency`)

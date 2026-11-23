@@ -19,7 +19,28 @@ function metaOf(path?: string): string {
 }
 
 const ROOT_META = metaOf('src/client/styles/editor.css')
+
+/**
+ * 0.2.2 及以前的样式自注入回退块（与 tsdown 生成的形状一致，只做契约校验用）。
+ * @author ddj 2026年11月23号
+ * @param css 本产物样式文本；省略表示不带回退块。
+ * @returns JavaScript 片段，含审计脚本识别的起止标记。
+ */
+function fallbackOf(css?: string): string {
+  if (!css) return ''
+  const probe = JSON.stringify(css.trim().slice(0, 48))
+  return `/*dsh-style-fallback*/try{if(typeof document!=="undefined"&&document&&document.head){var p=${probe};`
+    + `var s=document.querySelectorAll("style"),i=0;for(;i<s.length;i+=1){var t=s[i]&&s[i].textContent;`
+    + `if(t&&t.indexOf(p)>=0){s=null;break}}if(s){var g=document.createElement("style");`
+    + `g.setAttribute("data-plugin","${OWNER}");g.textContent=${JSON.stringify(css)};`
+    + `document.head.appendChild(g)}}}catch(e){};/*dsh-style-fallback-end*/`
+}
+
+/** Fixture stylesheet text carried by both channels. */
+const SHEET_TEXT = 'body{}'
+
 const root = `window.__ModuleLoader__.load({id:'${OWNER}',factory:(require)=>{
+  ${fallbackOf(SHEET_TEXT)}
   const exports = { __lazyShared: {rpc(){},dbg(){},dapStore:{},BP_MODE:{},MODES:[],fieldOfMode(){},ContextMenu(){},editExcel(){},exportExcel(){},notifyExcel(){},openOriginal(){}}, __setPanelImport(){} };
   exports.__setPanelImport(require.async?.bind(require)); return exports;
 }${ROOT_META}});`
@@ -46,10 +67,12 @@ const CHUNK_STYLES: Record<string, string | undefined> = {
 function chunk(name: string, exported: string): string {
   const keys = CHUNK_KEYS[name] ?? []
   const bridge = keys.length ? `const {${keys.join(',')}} = require('${OWNER}').__lazyShared;` : ''
+  const sheet = CHUNK_STYLES[name]
   return `window.__ModuleLoader__.load({id:'${OWNER}',chunk:'${name}',factory:(require)=>{
     ${bridge}
+    ${fallbackOf(sheet ? SHEET_TEXT : undefined)}
     return {${exported}:function(){return 1}};
-  }${metaOf(CHUNK_STYLES[name])}});`
+  }${metaOf(sheet)}});`
 }
 
 /** @private @author ddj 2026年10月22号 @returns Isolated fixture artifacts; no project lib changes. */
@@ -157,10 +180,19 @@ describe('client artifact registration contract', () => {
     await writeFile(join(directory, 'client.excel.js'), chunk('client.excel.js', 'excelPanel').replace(metaOf('src/client/excel/panel.css'), metaOf()))
     await expect(inspectArtifacts(directory)).rejects.toThrow('missing stylesheet src/client/excel/panel.css')
   })
-  it('rejects artifacts that still inject their own style tags', async () => {
+  it('rejects artifacts without the pre-0.2.3 style fallback', async () => {
     const directory = await fixture()
-    await writeFile(join(directory, 'client.js'), root + "\nvar legacy = { pluginCss: 'dsh-vscode-mode/editor.css' };")
-    await expect(inspectArtifacts(directory)).rejects.toThrow('still injects its own style tag')
+    await writeFile(join(directory, 'client.js'), root.replace(fallbackOf(SHEET_TEXT), ''))
+    await expect(inspectArtifacts(directory)).rejects.toThrow('missing pre-0.2.3 style fallback')
+  })
+  it('rejects a fallback block that drops a declared stylesheet or ignores installed styles', async () => {
+    const directory = await fixture()
+    await writeFile(join(directory, 'client.js'), root.replace('g.textContent="body{}"', 'g.textContent="other{}"'))
+    await expect(inspectArtifacts(directory)).rejects.toThrow('fallback dropped a stylesheet')
+    // 去掉「已装跳过」后，宿主已注入时会被检出错插。
+    const ignoring = fallbackOf(SHEET_TEXT).replace('if(t&&t.indexOf(p)>=0){s=null;break}', '')
+    await writeFile(join(directory, 'client.js'), root.replace(fallbackOf(SHEET_TEXT), ignoring))
+    await expect(inspectArtifacts(directory)).rejects.toThrow('duplicated styles')
   })
 })
 

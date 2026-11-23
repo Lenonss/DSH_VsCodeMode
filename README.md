@@ -684,13 +684,13 @@ profile 请替换为实际目标，不要把示例目录当成当前运行 profi
 
 ```bash
 # ① Git 安装（clone + prepare 构建；推荐打固定 tag）
-dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.33.0
+dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.33.1
 
 # ② npm 注册表（发布到 npm 后）
-dsh plugin --profile web add dsh-vscode-mode@0.33.0
+dsh plugin --profile web add dsh-vscode-mode@0.33.1
 
 # ③ GitHub Release tgz 直装（Release asset 可用后）
-dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.33.0/dsh-vscode-mode-0.33.0.tgz
+dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.33.1/dsh-vscode-mode-0.33.1.tgz
 ```
 
 > **DSH 版本政策（0.17.0 起）**：六项 DSH peer 仍统一声明为 `*`，另以
@@ -1075,6 +1075,7 @@ Keep All / Undo All 却是亮的。修复：单文件 Keep / Undo 覆盖冲突�
 
 | 版本 | 要点 |
 | --- | --- |
+| v0.33.1 | 旧宿主兼容修复：`connection.requestRejection` 恢复以服务实例为接收者调用（v0.33.0 裸调导致 DSH 0.2.2 桌面端 `/edrv/rpc` 全量 503）；客户端样式补守卫式自注入（旧宿主不认 `meta.stylesheets`，缺了会让悬浮按钮鲸鱼按原始尺寸铺满屏幕），注入按文本指纹判重 |
 | v0.33.0 | DSH 0.2.3 适配（路由授权交框架、运行时版本探测、文件链接宿主探测、cordis 根上下文）；项目 MCP 交官方 `mcpManager` 托管（注册名 = 工作区哈希，状态/重启/授权走官方）；官方变更视图行级注解；非 UTF-8 文件兼容（GB18030 判定、只读预览、转码修复与撤销）；SVN 提交对话框右键菜单与 Ctrl/Shift 多选批量；`/html-plan` 改一条 `plan.mjs` 打包命令并支持缺口现生成；侧栏正文错误边界 |
 | v0.31.0 | SVN agent 工具（19 个 `svn_*`：只读门禁、路径白名单、无损 JSON）+ 原生提交（勾选清单、单块提交、中文日志、不自动 resolve）+ AI 提交信息（只分析勾选范围、只产草稿）+ 提交对话框；HTML 网页预览转接官方渲染器（一键预览 / 链接让位 / 旧版回退，不新增路由）；HTML 计划模式（`/html-plan <任务>`、`--delegate` 可委派写页，单文件计划页 + 官方审批/退出 + 答复「回复并执行」）；上游 html-plan 按 MIT vendor |
 | v0.30.0 | 模板语言高亮（EJS/ERB/Nunjucks/Jinja2/Blade/Haml/Slim）+ 语言映射审计；搜索面板全局替换（预览确认、落盘前置、逐文件版本守卫、CRLF/BOM 保真）；会话引用接入（拖文件/复制行引用/粘贴文件，多义不瞎插）；设置新增「交互」开关 |
@@ -1097,7 +1098,14 @@ Keep All / Undo All 却是亮的。修复：单文件 Keep / Undo 覆盖冲突�
 | v0.23.0 | 快捷菜单：可拖动悬浮按钮 + 自定义菜单树 |
 
 <details>
-<summary>完整版本记录（v0.33.0 → v0.1.5x，点击展开）</summary>
+<summary>完整版本记录（v0.33.1 → v0.1.5x，点击展开）</summary>
+
+- **v0.33.1**：修两个只在旧宿主上现形的 0.33.0 回归——① `httpGuard` 取出
+  `connection.requestRejection` 后裸调，`this` 丢失 → 0.2.2 桌面端每个 `/edrv/rpc` 都 503
+  （改回以服务实例为接收者调用，异常只报一次并留日志）；② 客户端样式只走 `meta.stylesheets`
+  （0.2.3+ 才有），旧宿主上插件 CSS 全丢 → 悬浮按钮鲸鱼铺满屏幕、设置弹窗无样式；现在每个产物
+  在 factory 体里多一段守卫式自注入，按样式文本指纹判重，宿主已装就跳过。详见
+  [0.33.1 发布说明](docs/release-0.33.1.md)。
 
 - **v0.33.0**：DSH 0.2.3 适配——路由授权交回框架（`auth: 'required'`）、运行时版本探测、
   文件链接宿主从 `workspaces` 迁到 `remote.session`（探测不到就不接管）、cordis 根上下文改用
