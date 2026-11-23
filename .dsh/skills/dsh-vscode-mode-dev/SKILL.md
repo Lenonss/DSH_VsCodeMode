@@ -8,7 +8,25 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
 > updated: 2026-11-23 · 维护者：ddj（AI 会话按文末协议更新，保持精炼、去重）
 > **发布时先读「发布流程」与「失败恢复」**；下方实录是历史证据，不授权当前重跑发布、改 tag 或部署。冲突旧口径以更新后的规则为准。
 - 2026-11-23 实录（v0.33.1 紧急修复：旧宿主（桌面端 0.2.2-rc.5）上 `/edrv/rpc` 全量 503 + 插件样式全丢；
-  基线 v0.33.0 @ `299e992`）。两个坑都是 0.2.3 适配引入、且**只在 <0.2.3 宿主上现形**：
+  基线 v0.33.0 @ `299e992`，发布提交 `728a19d`）。本地门禁：typecheck 0 / vitest 338 文件（336 通过 + 2 跳过）
+  **4199 通过 / 23 跳过**，其中 2 例失败均为已知计时抖动（`archiveDb.test.ts:211` 15s 超时、
+  `treeIndex.test.ts:328` 自愈轮询；隔离重跑 33/33 全绿，且不在本次 diff）/ `node --test` 9/9 /
+  build `index.js` 1,265,687 B + `client.js` 1,273,159 B。CI `45150222279` 绿（2m5s）；
+  Release `45150244890` **首跑 Test 挂在 `dapFakeAdapter.test.ts:26` waitFor 超时（publish 未尝试）**→
+  `gh run rerun --failed` 一次全绿。闭环：registry `0.33.1`、`gitHead=728a19d`、latest=0.33.1、
+  SRI `sha512-zJqj1h…` 与实包一致、入口 `lib/index.js`+`lib/client.js` 齐全。**两端产物仍不同字节**
+  （npm 17,256,093 B / sha256 `617e61f9…`；GitHub asset 17,256,407 B / sha256 `591caa74…`）：
+  逐文件比 764 条里只有 `lib/client.js`(+14 B) 与 `lib/client.excel.js`(+1 B) 不同、`index.js` 完全相同——
+  `npm publish` 的 `prepare` 会重新构建一次，压缩产物顺序不定，属既有已知差异，功能等价（两包都带
+  `meta.stylesheets` 与 fallback 块）。
+  **坑（桌面 profile 装包走不通 registry 时）**：profile 内 `pnpm add dsh-vscode-mode@X --save-exact`
+  可能 `GET …tgz error (23) / TimeoutError`（本次实测）；本地已有 npm 实包时改为「解包整目录铺进
+  `profiles/<p>/node_modules/dsh-vscode-mode` + 手工把 profile `package.json` 里依赖钉到同版本」，
+  一样能让重启后加载新产物（记得先核 `(Get-Content …\package.json).version`）。
+  **坑（worktree 里的 node_modules 是 junction）**：`git worktree remove` 会报 `Directory not empty`，
+  `Remove-Item -Recurse` 会顺着 junction 删到真 node_modules；正确顺序 = `cmd /c rmdir <wt>\node_modules`
+  → `cmd /c rmdir /s /q <wt>` → `git worktree prune`。
+  两个坑都是 0.2.3 适配引入、且**只在 <0.2.3 宿主上现形**：
   **坑①（往宿主服务塞回调时丢 this，代价最高）**：把 `ctx.get('connection').requestRejection` 取出到局部变量
   再裸调（`const reject = conn?.requestRejection; reject(req)`）→ 类方法内部 `this.admit()` 为 undefined →
   每次调用抛 TypeError → 闸门兜底成 503，桌面端 `/edrv/rpc` 全灭、客户端重试风暴（14 分钟 1.4 万条）。
