@@ -125,6 +125,18 @@
 7. SVN 提交对话框：文件行右键出菜单、Ctrl/Shift 多选后批量勾选、提交信息框右键有编辑五项。
 8. 热替换插件（重装同版本）后，页面 head 里不再堆积重复的 `dsh-vscode-mode` 样式标签。
 
+## 发布记录
+
+- 提交 `c7d719e`（69 文件：48 改 / 21 新增）→ tag `v0.33.0` → Release run `45132096583`，15m35s 全绿；
+  同 commit 的 CI run `45132060696` 绿。
+- registry `dsh-vscode-mode@0.33.0`：200，`gitHead=c7d719e`，`dist-tags.latest=0.33.0`，
+  SRI 与 shasum 与实包字节一致（764 条，`lib/index.js` / `lib/client.js` / `cordis.patch.yml` / 技能组齐全）。
+- GitHub Release asset：`dsh-vscode-mode-0.33.0.tgz`，17,190,024 B，`sha256:843ba38b…`，与 API digest 一致。
+- npm 实包（17,190,031 B）与 Release asset 差 7 B：逐条比对 764 个文件，只有 `lib/client.js` 不同，
+  差异是 `meta.stylesheets` 的**键序**（同一批样式、文件长度一致），来自两次 `npm pack` 之间样式表按目录遍历顺序生成。
+  功能无差异；要对齐两端摘要需让样式表派发走固定顺序。
+- 未做：DSH 部署与 GUI 验收（重启属部署动作，留给维护者按上面 8 条复验）。
+
 ## 未完成 / 下一批
 
 - `forge.review.conversation`（single 槽）被官方占用；要接管需先让官方让位，跨插件边界，暂不做。

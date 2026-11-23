@@ -5,8 +5,30 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
 
 # dsh-vscode-mode 开发/发布经验集（自我更新型技能）
 
-> updated: 2026-11-15 · 维护者：ddj（AI 会话按文末协议更新，保持精炼、去重）
+> updated: 2026-11-23 · 维护者：ddj（AI 会话按文末协议更新，保持精炼、去重）
 > **发布时先读「发布流程」与「失败恢复」**；下方实录是历史证据，不授权当前重跑发布、改 tag 或部署。冲突旧口径以更新后的规则为准。
+- 2026-11-23 实录（v0.33.0 发布：DSH 0.2.3 适配 + 官方 `mcpManager` 托管 + 审阅行注解 + 非 UTF-8 文本兼容；
+  基线 v0.31.0 @ `8519ca5`）：本地三门 typecheck 0 / **335 文件通过 + 2 跳过（4194 passed / 22 skipped，31.61s）** /
+  `node --test` fail 0 / build `index.js` 1,265,238 B + `client.js` 1,055,081 B（另有 rules/debug/excel/excelcodec）。
+  提交 `c7d719e`（69 文件：48 改 / 21 新增）→ tag `v0.33.0` → Release run `45132096583` **15m35s 全绿**
+  （含 `Verify published tarball`，一次过；同 commit 的 CI run `45132060696` 也绿）。四向闭环：
+  registry `0.33.0` 200、`gitHead=c7d719e`、`latest=0.33.0`、SRI/shasum 与实包字节一致（764 条、`lib/index.js`
+  与 `lib/client.js` 齐全）、GitHub asset `sha256:843ba38b…`（17,190,024 B）与 API digest 一致。
+  **新事实（两端不再字节相同，原因已定位）**：npm 实包（17,190,031 B）与 Release asset 差 7 B，
+  逐文件比对 764 条里只有 `lib/client.js` 不同——差异是 `meta.stylesheets` 的**键序**（同一批样式、长度一致），
+  来自两次 `npm pack` 间样式表派发按目录遍历顺序生成；功能无差异。要对齐得让样式表派发按固定顺序（下一批可做）。
+  **新坑（接口契约变了必须跑全量，定向全绿不算）**：本批改了 `installOpenPathRouter` 的入参（改为传探测到的
+  `target`）和 MCP 表单默认值，定向测试全绿，全量挂 2 例：`tests/fileOpeners.test.ts` 还在用旧签名、
+  `tests/mcpSettings.test.ts` 的「保存载荷精确相等」被新字段 `toolLoading: 'eager'` 打响。
+  处置：测试改用新契约并补 `resolveOpenPathOwner` 用例；表单默认值**不落盘**（`EMPTY` 不带该字段，
+  只有用户明确选过才写），既保住「保存无损」这条断言，也不往用户配置里加键。
+  **新坑（沙箱与 git 的组合限制）**：workspace-write 下 `git add/commit/fetch` 报 `.git/index.lock` /
+  `FETCH_HEAD: Permission denied`（只读的 status/diff/log 正常）；且 **git 的 stdout 不能接 PowerShell 管道或重定向**
+  （`程序'git.exe'运行失败： Access to the path '\\.\pipe\LOCAL\…' is denied`）。
+  可行写法：命令直接打控制台；需要落文件用 `git diff --output=<工作区内路径>`；沙箱临时目录（`$env:TEMP`）也常被拒，
+  把中间产物放工作区内（`tmp/` 已被忽略）。写操作升 danger-full-access 后才正常。
+  **记录**：0.32.0 只写了草案（`docs/release-0.32.0.md`）未单独发版，内容随 0.33.0 一起上线；
+  发布说明 `docs/release-0.33.0.md` 已按七组主题重写，含需重启后的 8 条验收。
 - 2026-10-19 实录（v0.17.0 发布：DSH 0.2.1 吸收——locale 元数据 meta 化、engines.dsh、workingDirectory 投影跟随 cd、
   会话级 recordsFeed 轮询收敛、ctx.locale 接入、plugins.detail.section；基线 v0.16.0 @ `8b79f8f`）：
   三门本地全绿（typecheck 0 / **3029 passed + 15 skipped · 225 文件通过 + 2 跳过** / `node --test` 9 passed /
