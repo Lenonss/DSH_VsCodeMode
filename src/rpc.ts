@@ -25,6 +25,7 @@ import { cp, mkdir, readFile, rename, rm, stat, writeFile, readdir } from 'node:
 import { basename, dirname, join } from 'node:path'
 import { archiveEntryFor, markDecision, recordResolved, reconstructOriginal } from './model.js'
 import { clearRevertState, listArchives, pageArchives, readArchives, revertState, setRevertState, startReverts } from './archiveDb.js'
+import { purgeArchiveDb } from './archivePurge.js'
 import { hasOfficial } from './reviewDb.js'
 import { log } from './log.js'
 import type { Registry, SessionScope } from './registry.js'
@@ -1133,6 +1134,28 @@ export function buildHandlers(
         return { ok: true, entries }
       } catch (error) {
         return { ok: false, error: '归档列表读取失败：' + String(error) }
+      }
+    },
+    /**
+     * @author ddj 2026-11-24
+     * @description: 归档库清理：保留期 + 每文件上限 + 撤销栈截断。缺省 dryRun，显式传 false 才删。
+     * @param args 清理参数
+     * @returns 三个统计口径与删除行数
+     */
+    'edrv.archive.purge': async (args) => {
+      const sc = await resolveScope(ctx, args.sessionId)
+      if ('err' in sc) return { ok: false, error: sc.err }
+      try {
+        const outcome = purgeArchiveDb(sc.cwd, {
+          dryRun: args.dryRun !== false,
+          retentionDays: args.retentionDays,
+          keepBatches: args.keepBatches,
+          keepHistory: args.keepHistory,
+          vacuum: args.vacuum,
+        })
+        return { ok: true, ...outcome }
+      } catch (error) {
+        return { ok: false, error: '归档清理失败：' + String(error) }
       }
     },
     'edrv.archivePage': async (args) => {

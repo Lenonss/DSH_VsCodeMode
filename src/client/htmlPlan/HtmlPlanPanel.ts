@@ -26,7 +26,6 @@ import {
   readPendingReview,
   readPlanProjection,
   revealPlanReview,
-  sendPlanMessage,
   submitPlanResponse,
   subscribePlanFaces,
 } from './planActions.js'
@@ -166,7 +165,9 @@ export function HtmlPlanPanel(props: HtmlPlanPanelProps) {
 
   /**
    * 把页面答复直接发给 agent：成功清空并回传成功，失败回传原因且保留文本。
+   * 有待审批时答复会先送进 agent 当前回合、再结算批准，两者落在同一次请求里。
    * @author ddj 2026年11月21号
+   * @author ddj 2026年11月24号（文案改为「答复与批准同一步送达」）
    * @param text 答复 markdown
    */
   async function sendResponse(text: string): Promise<void> {
@@ -178,7 +179,7 @@ export function HtmlPlanPanel(props: HtmlPlanPanelProps) {
     const result = await submitPlanResponse(sessionId, body)
     setBusy(false)
     setNotice(result.ok
-      ? hadReview ? '已批准并发送答复，agent 开始执行' : '已回复并发送给 agent'
+      ? hadReview ? '答复已随批准送进当前回合，agent 会带着答复开始执行' : '已回复并发送给 agent'
       : String(result.error ?? '发送失败'))
     try {
       frameRef.current?.contentWindow?.postMessage({
@@ -252,29 +253,24 @@ export function HtmlPlanPanel(props: HtmlPlanPanelProps) {
 
   /**
    * 让 agent 现场生成计划页：先发修复指令，再每 2 秒读一次，最多等 90 秒。
-   * 有待审批卡片时先按官方「继续规划」结算——计划还不完整，不能直接批准；
+   *
+   * 有待审批卡片时把「继续规划」和修复指令一起交给 agent（先 steer 指令再结算），
+   * 否则 agent 会先按「继续规划」开始修订、指令等到下一回合才被读到。
    * 计划模式允许写计划交付物，所以这里不要求用户退出计划模式。
    * @author ddj 2026年11月23号
+   * @author ddj 2026年11月24号（与「继续规划」一起提交，保证同一步送达）
    */
   async function regenerate(): Promise<void> {
     if (repairing) return
     setRepairing(true)
     const hadReview = reviewRef.current
-    if (hadReview) {
-      const kept = await answerPlanReview(sessionId, false)
-      if (!kept.ok) {
-        setRepairing(false)
-        setNotice('先提交「继续规划」失败：' + String(kept.error ?? ''))
-        return
-      }
-      refresh()
-    }
-    const result = await sendPlanMessage(sessionId, planRepairInstruction(declared))
+    const result = await submitPlanResponse(sessionId, planRepairInstruction(declared), false)
     setRepairing(false)
     if (!result.ok) {
       setNotice(String(result.error ?? '发送失败'))
       return
     }
+    refresh()
     setNotice(hadReview
       ? '已提交「继续规划」并让 agent 生成计划页，等文件出现（最多 90 秒）…'
       : '已让 agent 生成计划页，等文件出现（最多 90 秒）…')

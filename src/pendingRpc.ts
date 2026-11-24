@@ -7,7 +7,7 @@ import { bucketOf } from './registry.js'
 import { readText } from './pending/capture.js'
 import { pendingRawId, setPendingCovers, trackPendingCover } from './pendingCompat.js'
 import { loadEntries, pendingVersion, saveEntry } from './pending/persist.js'
-import { applyDecide, importFromVcs, itemOf, loadDetail, loadPage, recordWrite, refreshed, removeEntry, undoDecide } from './pending/store.js'
+import { applyDecide, importFromVcs, itemOf, loadDetail, loadPage, purgePending, recordWrite, refreshed, removeEntry, undoDecide } from './pending/store.js'
 import { alignInWorkspace } from './pending/externalAlign.js'
 import type { ShellLike } from './pending/vcs.js'
 import type { Ctx } from './store.js'
@@ -204,6 +204,24 @@ function refreshHandlers(kit: ScopeKit): Partial<RpcHandlerMap> {
       const page = loadPage(cwd, args.sessionId)
       setPendingCovers(cwd, args.sessionId, page.items.map((item) => item.path))
       return { ok: true, imported: outcome.imported, changed: outcome.changed, gaps: outcome.gaps }
+    },
+    /**
+     * @author ddj 2026-11-24
+     * @description: 清掉指定通道的幽灵记录。dryRun 只报数；真删后按需 VACUUM，
+     * 并重建「待审接管」集合，避免旧路径继续顶掉官方行。
+     * @param args 清理请求
+     * @returns 命中、删除、保留条数与 VACUUM 耗时
+     */
+    'edrv.pending.purge': async (args) => {
+      const cwd = await kit.write(args.sessionId)
+      const outcome = purgePending(cwd, {
+        sources: args.sources,
+        baseKinds: args.baseKinds,
+        before: args.before,
+      }, { dryRun: args.dryRun === true, vacuum: true })
+      const page = loadPage(cwd, args.sessionId)
+      setPendingCovers(cwd, args.sessionId, page.items.map((item) => item.path))
+      return { ok: true, matched: outcome.matched, removed: outcome.removed, kept: outcome.kept, vacuumMs: outcome.vacuumMs }
     },
   }
 }

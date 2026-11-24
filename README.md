@@ -687,13 +687,13 @@ profile 请替换为实际目标，不要把示例目录当成当前运行 profi
 
 ```bash
 # ① Git 安装（clone + prepare 构建；推荐打固定 tag）
-dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.36.0
+dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.37.0
 
 # ② npm 注册表（发布到 npm 后）
-dsh plugin --profile web add dsh-vscode-mode@0.36.0
+dsh plugin --profile web add dsh-vscode-mode@0.37.0
 
 # ③ GitHub Release tgz 直装（Release asset 可用后）
-dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.36.0/dsh-vscode-mode-0.36.0.tgz
+dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.37.0/dsh-vscode-mode-0.37.0.tgz
 ```
 
 > **DSH 版本政策（0.17.0 起）**：六项 DSH peer 仍统一声明为 `*`，另以
@@ -1078,6 +1078,7 @@ Keep All / Undo All 却是亮的。修复：单文件 Keep / Undo 覆盖冲突�
 
 | 版本 | 要点 |
 | --- | --- |
+| v0.37.0 | 计划页「回复并执行」改为先把答复 steer 进 agent 当前回合、再结算审批，批准与答复落在同一次模型请求里（不再出现「agent 先跑、答复下一回合才到」）；steer 失败不结算审批、批准失败重试不重复发答复。幽灵待审记录治理：`edrv.pending.purge` 按通道 + 基线可信度 + 时间窗清理（已判定过的条目一律保留，dryRun 只报数，删后按需 VACUUM）；采集侧拿不到版本库状态时，首次见到的路径必须有「确实刚被写过」的 mtime 证据才建档，读文件不再被误认成改文件，版本库状态不可用的原因按工作区节流写进缺口。归档库每日清理：启动时按保留期 30 天 + 每文件 20 批 + 撤销栈 10 步回收（未判完的整批跳过，真删前留一份 `.before-purge.bak`），另有 `edrv.archive.purge` 手动 dryRun/真删入口 |
 | v0.36.0 | 审查捕获补上「非工具写盘」：`fs.watch` 实时采集 + 版本库补扫（启动 / 版本库写命令后 / 手动按钮 / 每 10 分钟）把 bash 里的 `node -e`、prettier、生成器等写盘也记进待审面板；记录新增来源字段（`edit`/`write`/`remote_ssh_write`/`watch`/`scan`/`vcs`）与归属（`agent`/`editor`/`vcs`/`external`），修改前内容按「已知→不存在→版本库基线→未知」降级、拿不到就禁撤销；按「路径 + 内容哈希」去重，撤销只对 agent 来源直接可用（其余需确认）；设置页可关。MCP 托管后端会话卡片补真实计时（挂载时刻 + 官方 `connectedAt`），`reconnecting`/`waiting-credentials`/`waiting-authorization` 不再显示成 idle |
 | v0.34.0 | SVN 行图标按判型区分文件/目录（`svn status`/`svn update` 输出不带 kind：先用子项关系白拿，剩下的按上限查盘，失败回落文件图标）；变更面板、提交对话框、更新窗口三处统一；对话输入框崩溃兜底（槽被替换成空占位时给「恢复输入框」，不再只能手动刷新） |
 | v0.33.1 | 旧宿主兼容修复：`connection.requestRejection` 恢复以服务实例为接收者调用（v0.33.0 裸调导致 DSH 0.2.2 桌面端 `/edrv/rpc` 全量 503）；客户端样式补守卫式自注入（旧宿主不认 `meta.stylesheets`，缺了会让悬浮按钮鲸鱼按原始尺寸铺满屏幕），注入按文本指纹判重 |
@@ -1103,7 +1104,18 @@ Keep All / Undo All 却是亮的。修复：单文件 Keep / Undo 覆盖冲突�
 | v0.23.0 | 快捷菜单：可拖动悬浮按钮 + 自定义菜单树 |
 
 <details>
-<summary>完整版本记录（v0.36.0 → v0.1.5x，点击展开）</summary>
+<summary>完整版本记录（v0.37.0 → v0.1.5x，点击展开）</summary>
+
+- **v0.37.0**：计划页答复与批准同一步送达——「回复并执行」先把答复 steer 进 agent 当前回合
+  （`session/prompt` 的 `steer` 模式），再结算官方审批，两者落在同一次模型请求里，不再出现
+  「agent 先开始执行、答复等这一轮跑完才送到」；steer 失败就保持审批待处理（可重试），
+  批准失败时明确提示「答复已送达」，同 callId 同正文不重复发送。幽灵待审记录治理：新增
+  `edrv.pending.purge`（采集通道 + 基线可信度 + 时间窗筛选，dryRun 只报数，已判定过的条目一律保留，
+  删后可选 VACUUM）；采集侧拿不到版本库状态时，首次见到的路径必须有「确实刚被写过」的 mtime 证据
+  才建档（否则只记缺口），版本库状态不可用的原因按工作区 5 分钟节流写进缺口。归档库治理：启动时
+  每日清理（保留期 30 天 / 每文件 20 批 / 每条目 10 步撤销栈，未判完的整批跳过，真删前留一份
+  `.before-purge.bak`），另提供 `edrv.archive.purge` 手动入口。详见
+  [0.37.0 发布说明](docs/release-0.37.0.md)。
 
 - **v0.36.0**：审查捕获补上「非工具写盘」——工作区递归监听 300ms 合并，把 agent 用 `ops_bash` 跑的
   `node -e`、prettier / eslint --fix、生成器、python / sed 写盘补进待审投影；版本库补扫覆盖启动对齐、

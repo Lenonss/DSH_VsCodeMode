@@ -7,13 +7,15 @@
  *   MAX_BATCH 个文件、MAX_FLUSH_BYTES 字节，其余留到下一轮。批量按**入队顺序**处理，不按 mtime：
  *   同一毫秒内的多次写入 mtime 相同，用它排序反而可能造出倒序 diff。
  * - 判定顺序固定：已知内容未变 → 跳过；插件自写窗口 → 跳过；编辑器保存窗口 → 只推进基线；
- *   版本库说干净 → 跳过或标成版本库同步；其余按窗口判定归属后落库。绝不按时间戳猜重复。
+ *   版本库说干净 → 跳过或标成版本库同步；拿不到版本库状态且是首次见到的路径 → 必须自带 mtime 证据
+ *   （文件确实在监听开始之后被写过），否则只记缺口不建档；其余按窗口判定归属后落库。
+ *   绝不按时间戳猜重复，也绝不把「被读过」当成「被改过」。
  * - 递归监听不可用（Linux）时降级为逐子目录非递归监听；仍不可用就只靠补扫，并把原因写进缺口。
  * - 读盘一律走待审采集的严格 UTF-8 往返：二进制、GBK 等无法字节往返的内容不落记录（记缺口），
  *   绝不因为"分析"而改写任何字节。
  * 作者 ddj 2026-11-24
  */
-import { readdirSync, watch } from 'node:fs'
+import { readdirSync, statSync, watch } from 'node:fs'
 import type { FSWatcher } from 'node:fs'
 import { join, resolve } from 'node:path'
 import type { Ctx } from '../store.js'
@@ -51,6 +53,12 @@ export const SEEN_MAX = 5000
 export const ALIGN_INTERVAL_MS = 10 * 60_000
 /** 版本库写命令之后推迟多久补扫：等命令输出落盘、索引失效完成。 */
 export const ALIGN_AFTER_VCS_MS = 1500
+/** 每个工作区最多记住多少条「已上报过的缺口」，防止事件风暴把去重表撑大。 */
+export const GAP_KEY_MAX = 500
+/** 「版本库状态不可用」这条诊断的最短间隔：同一工作区 5 分钟只报一次。 */
+export const STATUS_NOTE_MIN_MS = 5 * 60_000
+/** mtime 证据的时钟容差：监听开始前这段时间内写过的文件也算「刚被写过」。 */
+export const WATCH_SKEW_MS = 2000
 
 /** 会改动工作副本的版本库 RPC：只有这些方法之后才值得补扫。 */
 export const VCS_WRITE_METHODS = new Set([
@@ -63,7 +71,11 @@ export const VCS_WRITE_TOOLS = new Set([
   'svn_propset', 'svn_propdel', 'svn_changelist', 'remote_ssh_write',
 ])
 
-/** 额外忽略的目录名（在搜索排除项之外，按原样大小写敏感匹配，口径与 EXCLUDES 一致）。 */
+/**
+ * 额外忽略的目录名（在搜索排除项之外，按原样大小写敏感匹配，口径与 EXCLUDES 一致）。
+ * 只收版本库元数据、Unity 缓存与构建产物：第三方与代码生成目录不在忽略之列，
+ * 它们的改动靠「mtime 证据 + 版本库状态」两道闸门拦，而不是按目录名一刀切。
+ */
 export const EXTRA_IGNORE_SEGMENTS = ['.svn', '.hg', '.p4config', 'Library', 'Temp', 'obj', 'Logs']
 
 /** 忽略集合：目录段 + 文件名模式。 */
@@ -127,6 +139,8 @@ export interface ExternalCaptureDeps {
   status?(cwd: string, sessionId: string): Promise<VcsStatus | null>
   /** 覆盖补扫执行（测试注入）；缺省调用 alignInWorkspace。 */
   align?(cwd: string, sessionId: string): Promise<void>
+  /** 覆盖 mtime 读取（测试注入）；缺省 statSync。拿不到返回 undefined。 */
+  mtime?(cwd: string, absolute: string): number | undefined
   now?(): number
 }
 
@@ -164,6 +178,12 @@ interface Workspace {
   alignTimer: ReturnType<typeof setTimeout> | null
   /** 延后补扫的定时器（版本库命令后/手动按钮，同一工作区合并一次）。 */
   requestTimer: ReturnType<typeof setTimeout> | null
+  /** 本次监听的起始时刻：文件 mtime 不比它新，就不是「刚被写过」。 */
+  startedAt: number
+  /** 已上报过的缺口键（同路径/同原因只报一次）。 */
+  gapKeys: Set<string>
+  /** 上次把「版本库状态不可用」写进缺口的时刻。 */
+  statusNoteAt: number
 }
 
 // --endregion
@@ -198,6 +218,7 @@ export function installExternalCapture(deps: ExternalCaptureDeps): ExternalCaptu
       cwd: String(cwd), sessionId, watchers: [], dirty: new Map(), seen: new Map(),
       timer: null, firstAt: 0, flushing: false, again: false, degraded: '',
       statusAt: 0, status: undefined, alignedAt: 0, alignTimer: null, requestTimer: null,
+      startedAt: 0, gapKeys: new Set(), statusNoteAt: 0,
     }
     spaces.set(key, created)
     return created
@@ -237,6 +258,7 @@ export function installExternalCapture(deps: ExternalCaptureDeps): ExternalCaptu
    */
   function startWatch(space: Workspace): void {
     if (space.watchers.length || stopped) return
+    space.startedAt = now()
     try {
       const watcher = watch(space.cwd, { recursive: true, persistent: false }, (_event, name) => onEvent(space, space.cwd, name))
       // EventEmitter 的 'error' 无监听者时抛出未捕获异常，必须挂处理器
@@ -323,8 +345,75 @@ export function installExternalCapture(deps: ExternalCaptureDeps): ExternalCaptu
       return space.status
     }
     const scope = vcsScopeOf(deps.ctx, space.cwd, space.sessionId)
-    space.status = scope ? await vcsStatus(scope.shell, space.cwd) : null
+    if (!scope) {
+      noteStatusOnce(space, '没有 shell 能力，版本库状态不可用')
+      space.status = null
+      return space.status
+    }
+    space.status = await vcsStatus(scope.shell, space.cwd, (reason) => noteStatusOnce(space, reason))
     return space.status
+  }
+
+  /**
+   * @private
+   * @author ddj 2026-11-24
+   * @description: 读文件修改时间（测试可注入）；读不到返回 undefined。
+   * @param space 工作区状态
+   * @param absolute 绝对路径
+   * @returns 毫秒时间戳或 undefined
+   */
+  function mtimeOf(space: Workspace, absolute: string): number | undefined {
+    if (deps.mtime) return deps.mtime(space.cwd, absolute)
+    try { return statSync(absolute).mtimeMs } catch { return undefined }
+  }
+
+  /**
+   * @private
+   * @author ddj 2026-11-24
+   * @description: 判断文件是否在本次监听开始之后被写过：这是「拿不到版本库状态」时唯一的外部证据。
+   * @param space 工作区状态
+   * @param absolute 绝对路径
+   * @returns 刚被写过返回 true
+   */
+  function recentlyWritten(space: Workspace, absolute: string): boolean {
+    if (!space.startedAt) return false
+    const mtime = mtimeOf(space, absolute)
+    return mtime !== undefined && mtime >= space.startedAt - WATCH_SKEW_MS
+  }
+
+  /**
+   * @private
+   * @author ddj 2026-11-24
+   * @description: 同一条缺口只上报一次；去重表满了就丢最早的键，保证内存有界。
+   * @param space 工作区状态
+   * @param key 去重键
+   * @param absolute 出问题的路径
+   * @param message 原因
+   * @returns 无
+   */
+  function noteGapOnce(space: Workspace, key: string, absolute: string, message: string): void {
+    if (space.gapKeys.has(key)) return
+    if (space.gapKeys.size >= GAP_KEY_MAX) {
+      const oldest = space.gapKeys.values().next().value
+      if (oldest !== undefined) space.gapKeys.delete(oldest)
+    }
+    space.gapKeys.add(key)
+    noteCaptureGap(space.cwd, space.sessionId, absolute, message)
+  }
+
+  /**
+   * @private
+   * @author ddj 2026-11-24
+   * @description: 「版本库状态不可用」按工作区节流上报，让面板能说清为什么没拦住噪声。
+   * @param space 工作区状态
+   * @param reason 失败原因（命令回执头 200 字）
+   * @returns 无
+   */
+  function noteStatusOnce(space: Workspace, reason: string): void {
+    const at = now()
+    if (at - space.statusNoteAt < STATUS_NOTE_MIN_MS) return
+    space.statusNoteAt = at
+    noteCaptureGap(space.cwd, space.sessionId, space.cwd, '版本库状态不可用：' + reason.slice(0, 200))
   }
 
   /**
@@ -368,6 +457,13 @@ export function installExternalCapture(deps: ExternalCaptureDeps): ExternalCaptu
       if (!stored) return false
       deps.record(writeOf(space, absolute, stored.entry.newText, content, at, 'vcs', 'vcs', 'known'))
       return true
+    }
+    // 拿不到版本库状态时，首次见到的路径必须自带证据：文件真的在监听开始之后被写过。
+    // 否则事件多半只是读取/属性变化（整树扫描、索引器、杀软），按「整文件新增」建档会刷出幽灵差异。
+    if (!status && !stored && !space.seen.has(key) && !recentlyWritten(space, absolute)) {
+      noteGapOnce(space, 'absent:' + key, absolute, '无版本库状态且文件未改动，未建档')
+      space.seen.set(key, content)
+      return false
     }
 
     const before = await beforeOf(space, key, absolute, stored, status, content)

@@ -18,9 +18,10 @@ import type { PendingEntry } from './kernel.js'
 import type { PendingFlags, StoredEntry } from './persist.js'
 import type { KeepRecord } from './persist.js'
 import {
-  dropEntry, earliestUndone, latestApplied, loadBlocks, loadEntries, pendingDb, pushHistory,
-  readOp, saveBlocks, saveDecisions, saveEntry, setHistoryState, writeOp,
+  dropEntry, earliestUndone, latestApplied, loadBlocks, loadEntries, pendingDb, purgeEntries, pushHistory,
+  readOp, saveBlocks, saveDecisions, saveEntry, setHistoryState, vacuumEntries, writeOp,
 } from './persist.js'
+import type { PurgeFilter, PurgeOutcome } from './persist.js'
 
 /**
  * @author ddj 2026年10月29号
@@ -601,6 +602,40 @@ export function removeEntry(cwd: string, id: string, revision: number): boolean 
   if (!stored || stored.flags.revision !== revision || !isSettled(stored.entry)) return false
   dropEntry(cwd, id)
   return true
+}
+
+/** 清库回执：命中、删除、保留条数，以及可选的 VACUUM 耗时。 */
+export interface PendingPurgeOutcome extends PurgeOutcome {
+  /** VACUUM 耗时毫秒；dryRun 或未清理时为 undefined。 */
+  vacuumMs?: number
+}
+
+/** 清库默认口径：只清 watch 通道、空基线的条目——幽灵记录就长这样。 */
+export const PURGE_DEFAULT_SOURCES = ['watch']
+/** 清库默认基线口径：空基线（改前内容缺失）。 */
+export const PURGE_DEFAULT_BASE_KINDS = ['absent']
+
+/**
+ * @public
+ * @author ddj 2026-11-24
+ * @description: 清掉指定通道的待审条目（幽灵记录治理入口）。dryRun 只报数；
+ * 真删之后按需 VACUUM，把已删行占的页还给磁盘。
+ * @param cwd 工作区
+ * @param filter 筛选条件（缺省 watch + absent）
+ * @param options dryRun 只数不删；vacuum 删除后是否回收
+ * @returns 命中、删除、保留条数与 VACUUM 耗时
+ */
+export function purgePending(
+  cwd: string, filter: PurgeFilter = {}, options: { dryRun?: boolean; vacuum?: boolean } = {},
+): PendingPurgeOutcome {
+  const scoped: PurgeFilter = {
+    sources: filter.sources && filter.sources.length ? filter.sources : PURGE_DEFAULT_SOURCES,
+    baseKinds: filter.baseKinds && filter.baseKinds.length ? filter.baseKinds : PURGE_DEFAULT_BASE_KINDS,
+    before: filter.before,
+  }
+  const outcome = purgeEntries(cwd, scoped, options.dryRun === true)
+  if (options.dryRun || !outcome.removed || !options.vacuum) return outcome
+  return { ...outcome, vacuumMs: vacuumEntries(cwd) }
 }
 
 /**

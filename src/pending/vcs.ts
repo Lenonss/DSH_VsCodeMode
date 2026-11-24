@@ -390,12 +390,22 @@ async function runCommand(
  * 非 git/svn（含 Perforce 与无版本库）一律返回 null，由调用方降级为「只对齐已记录条目」。
  * @param shell shell 能力
  * @param cwd 工作区
+ * @param onFailure 失败原因回调（可选）：调用方用它把「为什么没有状态」写进采集缺口
  * @returns 状态集合或 null
  */
-export async function vcsStatus(shell: ShellLike, cwd: string): Promise<VcsStatus | null> {
+export async function vcsStatus(
+  shell: ShellLike, cwd: string, onFailure?: (reason: string) => void,
+): Promise<VcsStatus | null> {
   const detected = await detectVcsRoot(cwd)
-  if (!detected || detected.kind === 'p4') return null
-  return detected.kind === 'git' ? gitStatus(shell, detected.root) : svnStatus(shell, detected.root)
+  if (!detected) {
+    onFailure?.('不是 git/svn 工作副本')
+    return null
+  }
+  if (detected.kind === 'p4') {
+    onFailure?.('Perforce 工作副本不支持状态探测')
+    return null
+  }
+  return detected.kind === 'git' ? gitStatus(shell, detected.root, onFailure) : svnStatus(shell, detected.root, onFailure)
 }
 
 /**
@@ -404,11 +414,15 @@ export async function vcsStatus(shell: ShellLike, cwd: string): Promise<VcsStatu
  * @description: git 状态：一条 status 命令解析出改动集合。
  * @param shell shell 能力
  * @param root 仓库根
+ * @param onFailure 失败原因回调（可选）
  * @returns 状态集合或 null（命令失败）
  */
-async function gitStatus(shell: ShellLike, root: string): Promise<VcsStatus | null> {
+async function gitStatus(shell: ShellLike, root: string, onFailure?: (reason: string) => void): Promise<VcsStatus | null> {
   const status = await runCommand(shell, 'git -c status.renames=false status --porcelain=v1 -z --untracked-files=all', root)
-  if (!status.ok) return null
+  if (!status.ok) {
+    onFailure?.('git status 失败：' + status.stderr.slice(0, 200))
+    return null
+  }
   const entries = new Map<string, VcsEntry>()
   for (const entry of parseGitStatus(status.stdout)) {
     const absolute = join(root, ...entry.path.split(GIT_SEPARATOR))
@@ -424,11 +438,15 @@ async function gitStatus(shell: ShellLike, root: string): Promise<VcsStatus | nu
  * @description: svn 状态：一条 status --xml 解析出改动集合。
  * @param shell shell 能力
  * @param root 工作副本根
+ * @param onFailure 失败原因回调（可选）
  * @returns 状态集合或 null（命令失败）
  */
-async function svnStatus(shell: ShellLike, root: string): Promise<VcsStatus | null> {
+async function svnStatus(shell: ShellLike, root: string, onFailure?: (reason: string) => void): Promise<VcsStatus | null> {
   const status = await runCommand(shell, 'svn status --xml', root)
-  if (!status.ok) return null
+  if (!status.ok) {
+    onFailure?.('svn status 失败：' + status.stderr.slice(0, 200))
+    return null
+  }
   const entries = new Map<string, VcsEntry>()
   for (const entry of parseSvnStatus(status.stdout)) {
     const absolute = resolve(root, entry.path)

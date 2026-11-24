@@ -202,31 +202,55 @@ describe('submitPlanResponse（一键回复）', () => {
     dispose()
   })
 
-  it('待审批：先「同意执行」再发送，顺序正确', async () => {
+  it('待审批：先把答复 steer 进当前回合，再「同意执行」', async () => {
     const { ctx, calls } = fakeCtx({ questions: REVIEW })
-    const answerAtSend: number[] = []
+    const answersAtSteer: number[] = []
+    const steeredAt: string[] = []
     const dispose = installHtmlPlanActions(ctx, {
       appendText: async () => 'ok',
-      sendTask: async () => { answerAtSend.push(calls.answer.length); return { status: 'submitted' } },
+      steerTask: async (_id, text) => { answersAtSteer.push(calls.answer.length); steeredAt.push(text); return { status: 'accepted' } },
+      sendTask: async () => ({ status: 'accepted' }),
     })
-    expect(await submitPlanResponse('s1', '反馈正文')).toEqual({ ok: true })
+    expect(await submitPlanResponse('s1', '  反馈正文甲  ')).toEqual({ ok: true })
+    expect(steeredAt).toEqual(['反馈正文甲'])
+    // steer 必须发生在结算审批之前：反过来时 agent 已开始下一步，答复只能落到下一回合。
+    expect(answersAtSteer).toEqual([0])
     expect(calls.answer).toHaveLength(1)
     expect((calls.answer[0][2] as { answers: Array<{ selected: string[] }> }).answers[0].selected).toEqual(['Approve'])
-    expect(answerAtSend).toEqual([1])
     dispose()
   })
 
-  it('「同意执行」失败时不发送答复', async () => {
-    const { ctx } = fakeCtx({ questions: REVIEW, answerResult: { ok: false, error: { message: 'gone' } } })
+  it('答复没送进当前回合时不结算审批（保持可重试）', async () => {
+    const { ctx, calls } = fakeCtx({ questions: REVIEW })
     let sent = 0
     const dispose = installHtmlPlanActions(ctx, {
       appendText: async () => 'ok',
+      steerTask: async () => ({ status: 'rejected', message: 'composer busy' }),
       sendTask: async () => { sent += 1; return { status: 'accepted' } },
     })
-    const result = await submitPlanResponse('s1', '反馈')
+    const result = await submitPlanResponse('s1', '反馈正文乙')
     expect(result.ok).toBe(false)
-    expect(String(result.error)).toContain('gone')
+    expect(String(result.error)).toContain('composer busy')
+    expect(calls.answer).toEqual([])
     expect(sent).toBe(0)
+    dispose()
+  })
+
+  it('批准失败时报明「答复已送达」，重试不重复送答复', async () => {
+    let steers = 0
+    const { ctx } = fakeCtx({ questions: REVIEW, answerResult: { ok: false, error: { message: 'gone' } } })
+    const dispose = installHtmlPlanActions(ctx, {
+      appendText: async () => 'ok',
+      steerTask: async () => { steers += 1; return { status: 'accepted' } },
+      sendTask: async () => ({ status: 'accepted' }),
+    })
+    const first = await submitPlanResponse('s1', '反馈正文丙')
+    expect(first.ok).toBe(false)
+    expect(String(first.error)).toContain('gone')
+    expect(String(first.error)).toContain('送进当前回合')
+    expect(steers).toBe(1)
+    expect((await submitPlanResponse('s1', '反馈正文丙')).ok).toBe(false)
+    expect(steers).toBe(1)
     dispose()
   })
 
@@ -270,7 +294,7 @@ describe('submitPlanResponse（一键回复）', () => {
     dispose()
   })
 
-  it('在线卡片 + 回复：先同意执行再发送；失败则不发送', async () => {
+  it('在线卡片 + 回复：先 steer 答复再同意执行；steer 失败则不批', async () => {
     const answers: unknown[] = []
     const sequence: string[] = []
     const pending = livePending(answers)
@@ -283,26 +307,28 @@ describe('submitPlanResponse（一键回复）', () => {
     })
     const dispose = installHtmlPlanActions(first.ctx, {
       appendText: async () => 'ok',
+      steerTask: async () => { sequence.push('steer'); return { status: 'accepted' } },
       sendTask: async () => { sequence.push('send'); return { status: 'accepted' } },
     })
-    expect(await submitPlanResponse('s1', '答复')).toEqual({ ok: true })
-    expect(sequence).toEqual(['approve', 'send'])
+    expect(await submitPlanResponse('s1', '答复丁')).toEqual({ ok: true })
+    expect(sequence).toEqual(['steer', 'approve'])
     dispose()
 
     const failing = fakeCtx({
       uiSession: {
         sessionStatus: {
-          getSnapshot: () => new Map([['s1', { pendingInteraction: { ...pending, answer: async () => { throw new Error('gone') } } }]]),
+          getSnapshot: () => new Map([['s1', { pendingInteraction: { ...pending, answer: async () => { sequence.push('approve') } } }]]),
         },
       },
     })
     const d2 = installHtmlPlanActions(failing.ctx, {
       appendText: async () => 'ok',
+      steerTask: async () => ({ status: 'unavailable' }),
       sendTask: async () => { sequence.push('send'); return { status: 'accepted' } },
     })
-    const result = await submitPlanResponse('s1', '答复')
+    const result = await submitPlanResponse('s1', '答复戊')
     expect(result.ok).toBe(false)
-    expect(sequence).toEqual(['approve', 'send'])
+    expect(sequence).toEqual(['steer', 'approve'])
     d2()
   })
 })
@@ -396,5 +422,50 @@ describe('sendPlanMessage（生成计划页指令，不结算审批）', () => {
 
   it('桥未安装时失败', async () => {
     expect((await sendPlanMessage('s1', '请生成计划页')).ok).toBe(false)
+  })
+})
+
+describe('submitPlanResponse 的「继续规划 + 指令」分支', () => {
+  it('有待审批：先把指令 steer 进当前回合，再提交继续规划', async () => {
+    const { ctx, calls } = fakeCtx({ questions: REVIEW })
+    const order: string[] = []
+    const dispose = installHtmlPlanActions(ctx, {
+      appendText: async () => 'ok',
+      steerTask: async () => { order.push('steer'); return { status: 'accepted' } },
+      sendTask: async () => { order.push('send'); return { status: 'accepted' } },
+    })
+    expect(await submitPlanResponse('s1', '请生成计划页', false)).toEqual({ ok: true })
+    expect(order).toEqual(['steer'])
+    expect((calls.answer[0][2] as { answers: Array<{ selected: string[] }> }).answers[0].selected).toEqual(['Keep planning'])
+    dispose()
+  })
+
+  it('没有待审批：退化为普通发消息', async () => {
+    const { ctx, calls } = fakeCtx()
+    const ran: string[] = []
+    const dispose = installHtmlPlanActions(ctx, {
+      appendText: async () => 'ok',
+      steerTask: async () => { ran.push('steer'); return { status: 'accepted' } },
+      sendTask: async (_id, text) => { ran.push(text); return { status: 'accepted' } },
+    })
+    expect(await submitPlanResponse('s1', '请生成计划页', false)).toEqual({ ok: true })
+    expect(ran).toEqual(['请生成计划页'])
+    expect(calls.answer).toEqual([])
+    dispose()
+  })
+
+  it('空指令与指令没送达都给可读失败，且不结算审批', async () => {
+    const { ctx, calls } = fakeCtx({ questions: REVIEW })
+    const dispose = installHtmlPlanActions(ctx, {
+      appendText: async () => 'ok',
+      steerTask: async () => ({ status: 'unavailable' }),
+      sendTask: async () => ({ status: 'accepted' }),
+    })
+    expect((await submitPlanResponse('s1', '  ', false)).ok).toBe(false)
+    const failed = await submitPlanResponse('s1', '请生成计划页己', false)
+    expect(failed.ok).toBe(false)
+    expect(String(failed.error)).toContain('没送进当前回合')
+    expect(calls.answer).toEqual([])
+    dispose()
   })
 })

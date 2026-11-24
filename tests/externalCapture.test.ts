@@ -5,6 +5,7 @@ import type { ExternalSettings } from '../src/pending/externalCapture.js'
 import { isIgnoredPath, installExternalCapture, ALIGN_AFTER_VCS_MS, MAX_BATCH } from '../src/pending/externalCapture.js'
 import { windows } from '../src/pending/provenance.js'
 import type { PendingWrite } from '../src/pending/capture.js'
+import { pendingGaps } from '../src/pending/capture.js'
 import type { StoredEntry } from '../src/pending/persist.js'
 import { entryFromNew } from '../src/pending/kernel.js'
 import { capabilityOf } from '../src/pending/decide.js'
@@ -31,13 +32,17 @@ function storedOf(path: string, newText: string, extra?: Partial<StoredEntry['en
 }
 
 /**
- * @description: 一次采集运行的夹具：注入读盘、条目表与版本库状态，记录全部落库写入。
+ * @description: 一次采集运行的夹具：注入读盘、条目表、版本库状态与 mtime，记录全部落库写入。
  * @param files 磁盘内容表（绝对路径 → 内容；缺省视为不存在）
  * @param entries 已知条目
- * @param status 版本库状态（null = 非版本库）
+ * @param status 版本库状态（null = 拿不到状态）
+ * @param mtimes mtime 表（绝对路径 → 毫秒；缺省视为读不到）
  * @returns 采集器、写入记录与改动磁盘的入口
  */
-function harness(files: Record<string, string | null>, entries: StoredEntry[] = [], status: VcsStatus | null = null) {
+function harness(
+  files: Record<string, string | null>, entries: StoredEntry[] = [], status: VcsStatus | null = null,
+  mtimes: Record<string, number> = {},
+) {
   const writes: PendingWrite[] = []
   const disk = new Map(Object.entries(files))
   const capture = installExternalCapture({
@@ -51,7 +56,10 @@ function harness(files: Record<string, string | null>, entries: StoredEntry[] = 
     },
     entries: () => new Map(entries.map((stored) => [pathKeyOf(stored.entry.id), stored])),
     status: async () => status,
+    mtime: (_cwd, absolute) => mtimes[absolute],
   })
+  // 生产里 startedAt 由 ensure() 里的 startWatch 赋值；夹具走同一条路，mtime 证据才有参照点
+  capture.ensure(CWD, 's1')
   return {
     capture,
     writes,
@@ -244,8 +252,8 @@ describe('判定链', () => {
 describe('修改前内容的四级来源', () => {
   it('首次观察到的内容成为后续改动的基线', async () => {
     const file = join(CWD, 'a.txt')
-    const { capture, writes, put } = harness({ [file]: 'FIRST' }, [], null)
-    // 第一次事件没有任何基线：只能如实记 unknown（可见但禁撤销），同时把内容记成基线
+    // 刚被写过的文件：没有版本库状态也能建档，只是基线只能标 unknown
+    const { capture, writes, put } = harness({ [file]: 'FIRST' }, [], null, { [file]: Date.now() })
     capture.enqueue(CWD, file)
     await capture.flush()
     expect(writes).toHaveLength(1)
@@ -272,6 +280,52 @@ describe('修改前内容的四级来源', () => {
     capture.enqueue(CWD, file)
     await capture.flush()
     expect(writes[0]).toMatchObject({ before: null, baseKind: 'unknown', origin: 'external' })
+  })
+})
+
+describe('首次见路径的建档证据（幽灵记录闸门）', () => {
+  it('拿不到版本库状态且文件没被写过：不建档，只记一条缺口', async () => {
+    const file = join(CWD, 'old.txt')
+    const { capture, writes } = harness({ [file]: 'UNTOUCHED' }, [], null, { [file]: Date.now() - 3600_000 })
+    capture.enqueue(CWD, file)
+    capture.enqueue(CWD, file)
+    await capture.flush()
+    expect(writes).toHaveLength(0)
+    const gaps = pendingGaps(CWD).filter((line) => line.includes('old.txt'))
+    expect(gaps).toHaveLength(1)
+    expect(gaps[0]).toContain('未建档')
+  })
+
+  it('拿不到版本库状态但文件刚被写过：仍然建档，基线标 unknown', async () => {
+    const file = join(CWD, 'just-written.txt')
+    const { capture, writes } = harness({ [file]: 'NEW' }, [], null, { [file]: Date.now() })
+    capture.enqueue(CWD, file)
+    await capture.flush()
+    expect(writes).toHaveLength(1)
+    expect(writes[0]).toMatchObject({ before: null, after: 'NEW', baseKind: 'unknown' })
+  })
+
+  it('本会话观察过的路径再变化：mtime 旧也照常记录', async () => {
+    const file = join(CWD, 'seen.txt')
+    const { capture, writes, put } = harness({ [file]: 'V1' }, [], null, { [file]: Date.now() - 3600_000 })
+    // 第一次被闸门挡下，但内容进了本会话的观察快照
+    capture.enqueue(CWD, file)
+    await capture.flush()
+    expect(writes).toHaveLength(0)
+    put(file, 'V2')
+    capture.enqueue(CWD, file)
+    await capture.flush()
+    expect(writes).toHaveLength(1)
+    expect(writes[0]).toMatchObject({ before: 'V1', after: 'V2' })
+  })
+
+  it('版本库说有改动时不受 mtime 闸门影响', async () => {
+    const file = join(CWD, 'vcs-modified.txt')
+    const { capture, writes } = harness({ [file]: 'NEW' }, [], statusOf([[file, 'modified']]), { [file]: Date.now() - 3600_000 })
+    capture.enqueue(CWD, file)
+    await capture.flush()
+    expect(writes).toHaveLength(1)
+    expect(writes[0]).toMatchObject({ after: 'NEW', baseKind: 'unknown' })
   })
 })
 

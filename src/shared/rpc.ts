@@ -393,6 +393,7 @@ export interface RpcRequestMap {
   'edrv.pending.history': PendingHistoryMove
   'edrv.pending.import': PendingImport
   'edrv.pending.align': PendingRequest & { includeUntracked?: boolean }
+  'edrv.pending.purge': PendingRequest & { dryRun?: boolean; sources?: string[]; baseKinds?: string[]; before?: number }
   'edrv.pending.version': PendingRequest
   'edrv.list': { sessionId?: string; callIds?: string[]; skipStale?: boolean }
   'edrv.accept': { sessionId?: string; callId: string; scope?: RpcScope; hunkIndex?: number }
@@ -411,6 +412,7 @@ export interface RpcRequestMap {
   'edrv.archiveList': { sessionId?: string }
   'edrv.archivePage': { sessionId?: string; cursor?: string; limit?: number }
   'edrv.archiveRead': { sessionId?: string; path?: string; batch?: number | null }
+  'edrv.archive.purge': { sessionId?: string; dryRun?: boolean; retentionDays?: number; keepBatches?: number; keepHistory?: number; vacuum?: boolean }
   'edrv.rollback': { sessionId?: string; path: string; batch?: number }
   'edrv.debug': { sessionId?: string; text: string; level?: LoggerLevel }
   'edrv.dlog.list': { sessionId?: string }
@@ -603,6 +605,7 @@ export interface RpcOkMap {
   'edrv.pending.history': { item: PendingItem; wrote: boolean }
   'edrv.pending.import': { imported: number; changes: number }
   'edrv.pending.align': { imported: number; changed: number; gaps: string[] }
+  'edrv.pending.purge': { matched: number; removed: number; kept: number; vacuumMs?: number }
   'edrv.pending.version': { version: number }
   'edrv.list': { records: RecordView[] }
   'edrv.accept': { record: RecordView }
@@ -621,6 +624,7 @@ export interface RpcOkMap {
   'edrv.archiveList': { entries: ArchiveEntry[] }
   'edrv.archivePage': { entries: ArchiveEntry[]; nextCursor: string | null }
   'edrv.archiveRead': { batches: ArchiveBatch[] }
+  'edrv.archive.purge': { expired: number; overCap: number; keptPending: number; removed: { records: number; batches: number; history: number }; vacuumMs?: number }
   'edrv.rollback': { path: string; batch: number | null }
   'edrv.debug': object
   'edrv.dlog.list': { root: string; files: DebugLogFileInfo[]; current: string | null }

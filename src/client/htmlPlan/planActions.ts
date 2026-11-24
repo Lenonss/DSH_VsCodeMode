@@ -25,6 +25,7 @@ let host: {
   ctx: PlanActionCtx
   appendText: (sessionId: string | undefined, text: string) => Promise<string>
   sendTask: (sessionId: string | undefined, text: string) => Promise<PlanActionResult>
+  steerTask: (sessionId: string | undefined, text: string) => Promise<PlanActionResult>
 } | null = null
 /** 取异常的展示文案。 */
 function messageOf(error: unknown): string {
@@ -211,15 +212,15 @@ function unwrap(result: unknown): PlanActionResult {
 }
 
 /**
- * 安装动作宿主（index.ts 装配一次）。
+ * 安装选项（appendText / sendTask / steerTask 可注入，便于单测；生产缺省用会话输入门面）。
  * @author ddj 2026年11月21号
- * @param ctx 客户端上下文
- * @returns 幂等卸载器
+ * @author ddj 2026年11月24号（新增 steerTask）
  */
-/** 安装选项（appendText / sendTask 可注入，便于单测；生产缺省用会话输入门面）。 */
 export interface HtmlPlanActionOptions {
   appendText?: (sessionId: string | undefined, text: string) => Promise<string>
   sendTask?: (sessionId: string | undefined, text: string) => Promise<unknown>
+  /** 送进 agent 当前回合（steer）：答复先到、审批后结算，两者才落在同一次请求里。 */
+  steerTask?: (sessionId: string | undefined, text: string) => Promise<unknown>
 }
 
 /**
@@ -244,26 +245,79 @@ function sendResultOf(raw: unknown): PlanActionResult {
   return fail('发送结果未知' + detail)
 }
 
+/**
+ * 安装动作宿主（index.ts 装配一次）。
+ * @author ddj 2026年11月21号
+ * @param ctx 客户端上下文
+ * @returns 幂等卸载器
+ */
 export function installHtmlPlanActions(ctx: PlanActionCtx, options: HtmlPlanActionOptions = {}): () => void {
   const injectedAppend = options.appendText
   const injectedSend = options.sendTask
+  const injectedSteer = options.steerTask
   const addToConversation = injectedAppend && injectedSend ? null : createAddToConversation(ctx as never)
   const sendInjected = injectedSend
+  const steerInjected = injectedSteer
   const conversations = addToConversation
+
+  /** 走会话投递门面的详细回执（sendTaskResult 缺失时给可读失败）。 */
+  const sendViaResults = async (
+    sessionId: string | undefined,
+    text: string,
+    mode: 'queue' | 'steer',
+  ): Promise<PlanActionResult> => {
+    const send = conversations?.sendTaskResult
+    if (typeof send !== 'function') return fail('当前 DSH 不支持直接发送，请用「填入对话输入框」')
+    return sendResultOf(await send.call(conversations, sessionId, text, mode))
+  }
+
   host = {
     ctx,
     appendText: injectedAppend ?? ((sessionId, text) => conversations!.appendText(sessionId, text)),
     sendTask: typeof sendInjected === 'function'
       ? async (sessionId, text) => sendResultOf(await sendInjected(sessionId, text))
-      : async (sessionId, text) => {
-          const send = conversations?.sendTaskResult
-          if (typeof send !== 'function') return fail('当前 DSH 不支持直接发送，请用「填入对话输入框」')
-          return sendResultOf(await send.call(conversations, sessionId, text))
-        },
+      : (sessionId, text) => sendViaResults(sessionId, text, 'queue'),
+    steerTask: typeof steerInjected === 'function'
+      ? async (sessionId, text) => sendResultOf(await steerInjected(sessionId, text))
+      : (sessionId, text) => sendViaResults(sessionId, text, 'steer'),
   }
   return () => {
     host = null
   }
+}
+
+/**
+ * 已送进当前回合、但审批结算还没成功的答复：同一 callId 与同一正文不重复送。
+ *
+ * 批准这一步可能失败（网络、审批已被别处结算），用户会再点一次；没有这张表，
+ * 同一份答复会被送两遍给模型。
+ */
+const steeredReplies = new Map<string, { callId: string; text: string }>()
+
+/**
+ * 把一段正文送进 agent 当前回合（steer），让它和审批结果落在同一次模型请求里。
+ *
+ * 顺序只能是「先 steer 正文，再结算审批」。反过来时，审批一结算宿主立刻把工具结果
+ * 交给模型并开始下一步，而排队投递（queue）的消息属于下一回合，于是表现为
+ * 「agent 直接开始执行，我填的答复等这一轮跑完才送到」。
+ * @author ddj 2026年11月24号
+ * @param sessionId 会话 id
+ * @param callId 待审批调用的 id（同一份答复的去重键）
+ * @param body 正文
+ * @returns 动作结果
+ */
+async function steerIntoRun(sessionId: string, callId: string, body: string): Promise<PlanActionResult> {
+  const previous = steeredReplies.get(sessionId)
+  if (previous && previous.callId === callId && previous.text === body) return ok()
+  if (!host) return fail('计划动作桥未就绪')
+  let result: PlanActionResult
+  try {
+    result = await host.steerTask(sessionId, body)
+  } catch (error) {
+    return fail('送进当前回合失败：' + messageOf(error))
+  }
+  if (result.ok) steeredReplies.set(sessionId, { callId, text: body })
+  return result
 }
 
 /**
@@ -282,6 +336,7 @@ export async function answerPlanReview(sessionId: string, approve: boolean): Pro
     if (!label) return fail(approve ? '该审批没有可用的批准选项' : '官方审批没有「继续规划」选项，请在对话中要求修改')
     try {
       await live.pending.answer({ answers: [{ id: live.labels.questionId, selected: [label] }] })
+      steeredReplies.delete(sessionId)
       return ok()
     } catch (error) {
       return fail('提交审批失败：' + messageOf(error))
@@ -296,7 +351,9 @@ export async function answerPlanReview(sessionId: string, approve: boolean): Pro
     return fail('当前 DSH 不支持在插件内作答，请在对话审批卡片中操作')
   }
   try {
-    return unwrap(await questions.answer(sessionId, review.callId, answer))
+    const result = unwrap(await questions.answer(sessionId, review.callId, answer))
+    if (result.ok) steeredReplies.delete(sessionId)
+    return result
   } catch (error) {
     return fail('提交审批失败：' + messageOf(error))
   }
@@ -323,27 +380,44 @@ export async function exitPlanMode(sessionId: string): Promise<PlanActionResult>
 }
 
 /**
- * 发送计划页答复给 agent：有待审批时先提交「继续规划」，再发送反馈正文。
+ * 把手填正文交给 agent，并同时结算官方审批（页面「回复」/「回复并执行」）。
+ *
+ * 有待审批卡片时：先把正文 steer 进当前回合，再结算审批（approve=true 选批准标签，
+ * false 选「继续规划」）。宿主在审批一结算就把工具结果交给模型并开始下一步，
+ * 所以顺序不能反——反过来时答复只能排到下一回合，表现为「agent 先执行，答复晚一步才送到」。
+ * steer 失败就不动审批（保持可重试），避免出现「批了但答复没送到」的半截状态。
  * @author ddj 2026年11月21号
+ * @author ddj 2026年11月24号（批准前先把正文送进当前回合；新增 approve 参数）
  * @param sessionId 会话 id
- * @param text 答复 markdown
- * @returns 动作结果（失败带原因，答复文本不丢）
+ * @param text 答复 / 指令 markdown
+ * @param approve true 结算为「同意执行」，false 结算为「继续规划」；没有待审批时只发消息
+ * @returns 动作结果（失败带原因，正文不丢）
  */
-export async function submitPlanResponse(sessionId: string, text: string): Promise<PlanActionResult> {
+export async function submitPlanResponse(sessionId: string, text: string, approve = true): Promise<PlanActionResult> {
   if (!host) return fail('计划动作桥未就绪')
   if (!sessionId) return fail('当前没有活动会话')
   const body = String(text ?? '').trim()
-  if (!body) return fail('答复为空：先在页面里作答再点「回复」')
-  // 有待审批卡片：先结算为「同意执行」，再把答复作为用户消息送出；失败则不发，避免半截状态。
-  if (readPendingReview(sessionId)) {
-    const approved = await answerPlanReview(sessionId, true)
-    if (!approved.ok) return fail('先同意执行失败，答复未发送：' + String(approved.error ?? ''))
+  if (!body) return fail(approve ? '答复为空：先在页面里作答再点「回复」' : '指令为空')
+  const review = readPendingReview(sessionId)
+  if (!review) {
+    try {
+      return await host.sendTask(sessionId, body)
+    } catch (error) {
+      return fail('发送失败：' + messageOf(error))
+    }
   }
-  try {
-    return await host.sendTask(sessionId, body)
-  } catch (error) {
-    return fail('发送失败：' + messageOf(error))
+  const bodyLabel = approve ? '答复' : '指令'
+  const steered = await steerIntoRun(sessionId, review.callId, body)
+  if (!steered.ok) {
+    return fail(bodyLabel + '没送进当前回合，审批保持待处理：' + String(steered.error ?? '') + '。可点「填入对话输入框」手动发送')
   }
+  const settled = await answerPlanReview(sessionId, approve)
+  if (!settled.ok) {
+    const settleLabel = approve ? '批准' : '「继续规划」'
+    return fail(bodyLabel + '已送进当前回合，但' + settleLabel + '失败：' + String(settled.error ?? '')
+      + '。点页签的「' + (approve ? '同意执行' : '继续规划') + '」重试即可，' + bodyLabel + '不会重复发送')
+  }
+  return ok()
 }
 
 /**

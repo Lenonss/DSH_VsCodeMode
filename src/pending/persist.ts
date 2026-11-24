@@ -4,6 +4,7 @@
  */
 import type { DatabaseSync } from 'node:sqlite'
 import { activeReady, dbFor } from '../archiveDb.js'
+import { log } from '../log.js'
 import type { PendingBaseKind, PendingLineage, PendingOrigin, PendingSource } from '../shared/pendingReview.js'
 import type { PendingEntry } from './kernel.js'
 
@@ -517,4 +518,90 @@ export function saveDecisions(cwd: string, records: KeepRecord[]): { id: string;
     if (db.isTransaction) db.exec('ROLLBACK')
     throw error
   }
+}
+
+/** 清理筛选条件：只按「采集通道 + 基线可信度 + 时间窗」命中，不猜内容。 */
+export interface PurgeFilter {
+  /** 采集通道（缺省 watch）。 */
+  sources?: string[]
+  /** 基线可信度（缺省 absent）。 */
+  baseKinds?: string[]
+  /** 只清这个时间之前更新的条目（毫秒时间戳）。 */
+  before?: number
+}
+
+/** 一次清理的结果。 */
+export interface PurgeOutcome {
+  /** 命中多少条（dryRun 也算）。 */
+  matched: number
+  /** 真正删掉多少条；dryRun 恒为 0。 */
+  removed: number
+  /** 命中但因为有判定历史而保留的条数。 */
+  kept: number
+}
+
+/**
+ * @public
+ * @author ddj 2026-11-24
+ * @description: 按条件清理待审条目（清幽灵记录用）。命中判定与删除在同一份读结果上做：
+ * 有 pending_history 的条目（已经 Keep/Revert 过）一律保留，绝不按内容猜。
+ * @param cwd 工作区
+ * @param filter 筛选条件
+ * @param dryRun 只数不删
+ * @returns 命中、删除与保留条数
+ * @throws 事务级异常整体回滚后抛出
+ */
+export function purgeEntries(cwd: string, filter: PurgeFilter = {}, dryRun = false): PurgeOutcome {
+  const db = pendingDb(cwd)
+  const sources = filter.sources && filter.sources.length ? new Set(filter.sources) : null
+  const baseKinds = filter.baseKinds && filter.baseKinds.length ? new Set(filter.baseKinds) : null
+  const before = typeof filter.before === 'number' ? filter.before : null
+  // 只读三列，不把两侧全文拉进内存（大库上单条全文可达百 KB）
+  const rows = db.prepare(`SELECT id, source, base_kind, updated_at,
+      EXISTS(SELECT 1 FROM pending_history h WHERE h.entry_id = pending_entries.id) AS decided
+    FROM pending_entries`).all() as Row[]
+
+  const hits: string[] = []
+  let kept = 0
+  for (const row of rows) {
+    if (sources && !sources.has(String(row.source))) continue
+    if (baseKinds && !baseKinds.has(String(row.base_kind))) continue
+    if (before !== null && Number(row.updated_at) >= before) continue
+    if (Number(row.decided) === 1) kept += 1
+    else hits.push(String(row.id))
+  }
+  if (dryRun || !hits.length) return { matched: hits.length, removed: 0, kept }
+
+  db.exec('BEGIN IMMEDIATE')
+  try {
+    const dropEntryRow = db.prepare('DELETE FROM pending_entries WHERE id=?')
+    const dropBlockRows = db.prepare('DELETE FROM pending_blocks WHERE entry_id=?')
+    for (const id of hits) {
+      dropEntryRow.run(id)
+      dropBlockRows.run(id)
+    }
+    db.exec('COMMIT')
+  } catch (error) {
+    if (db.isTransaction) db.exec('ROLLBACK')
+    throw error
+  }
+  bumpVersion(cwd)
+  return { matched: hits.length, removed: hits.length, kept }
+}
+
+/**
+ * @public
+ * @author ddj 2026-11-24
+ * @description: 回收已删行占用的页；失败只记日志，不影响已完成的删除。
+ * @param cwd 工作区
+ * @returns 耗时毫秒
+ */
+export function vacuumEntries(cwd: string): number {
+  const started = Date.now()
+  try {
+    pendingDb(cwd).exec('VACUUM')
+  } catch (error) {
+    log.warn('待审库 VACUUM 失败：' + String(error))
+  }
+  return Date.now() - started
 }

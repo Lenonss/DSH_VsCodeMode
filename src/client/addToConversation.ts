@@ -271,10 +271,17 @@ export interface CtxLike {
   effect?: (setup: () => () => void, label?: string) => (() => void)
 }
 
+/**
+ * 投递方式：`queue` 排到当前回合之后（下一回合才读），`steer` 送进当前回合的下一步
+ * （agent 下一次请求就能看到）。区别由 Host 侧 `session/prompt` 的 mode 决定。
+ * @author ddj 2026年11月24号
+ */
+export type TaskSendMode = 'queue' | 'steer'
+
 /** Public Controller subset; old Hosts need not provide retain/binding. */
 interface SessionBridge {
   retain?: (id: string, options: { source: 'controllerOperation'; signal: AbortSignal }) => {
-    ready: Promise<{ session: { prompt(content: { type: 'text'; text: string }[], mode: 'queue', signal: AbortSignal): Promise<{ ok: boolean }> } }>
+    ready: Promise<{ session: { prompt(content: { type: 'text'; text: string }[], mode: TaskSendMode, signal: AbortSignal): Promise<{ ok: boolean }> } }>
     release(): void
   }
   binding?: (id: string) => { ctx: unknown } | undefined
@@ -296,8 +303,25 @@ function taskReceipt(receipt: unknown): TaskSendResult {
   return { status: 'unknown', legacyOk: false }
 }
 
-/** @private @author ddj 2026年10月29号 @param ctx Lifecycle owner. @param sessions Public Controller. @param id Fixed target. @param text Task body. @returns Admission evidence without switching transport. @sideEffects Retains and releases exactly one generation. */
-async function sendOwned(ctx: CtxLike, sessions: SessionBridge, id: string, text: string): Promise<TaskSendResult> {
+/**
+ * 经公共 Controller 投递一条文本（独占一次会话代际，投完即释放）。
+ * @author ddj 2026年10月29号
+ * @author ddj 2026年11月24号（新增 mode：steer 送进当前回合）
+ * @param ctx 生命周期持有者
+ * @param sessions 公共 Controller
+ * @param id 固定目标会话
+ * @param text 任务正文
+ * @param mode 投递方式，默认 queue
+ * @returns 受理证据；全程不换通道
+ * @sideEffects 持有并释放恰好一次会话引用
+ */
+async function sendOwned(
+  ctx: CtxLike,
+  sessions: SessionBridge,
+  id: string,
+  text: string,
+  mode: TaskSendMode = 'queue',
+): Promise<TaskSendResult> {
   const controller = new AbortController()
   const reference = sessions.retain!(id, { source: 'controllerOperation', signal: controller.signal })
   let released = false
@@ -318,7 +342,7 @@ async function sendOwned(ctx: CtxLike, sessions: SessionBridge, id: string, text
     if (controller.signal.aborted) result = { status: 'cancelled', legacyOk: false }
     else {
       started = true
-      result = taskReceipt(await binding.session.prompt([{ type: 'text', text }], 'queue', controller.signal))
+      result = taskReceipt(await binding.session.prompt([{ type: 'text', text }], mode, controller.signal))
     }
   } catch {
     result = { status: started ? 'unknown' : 'unavailable', legacyOk: false }
@@ -333,10 +357,22 @@ async function sendOwned(ctx: CtxLike, sessions: SessionBridge, id: string, text
   return result
 }
 
-/** @private @author ddj 2026年10月29号 @param ctx Service owner. @param id Fixed target. @param text Task body. @returns One legacy-channel attempt; no cross-channel retry. */
-async function sendLegacy(ctx: CtxLike, id: string, text: string): Promise<TaskSendResult> {
+/**
+ * 旧 Host 的单次投递：按能力选一条通道，不跨通道重试。
+ *
+ * `steer` 只能用带 mode 的通道（remote.session / wire）；输入框 `submit()` 只能排队，
+ * 拿它顶 steer 会把「同一步送达」悄悄降级成下一回合，所以 steer 直接跳过该通道。
+ * @author ddj 2026年10月29号
+ * @author ddj 2026年11月24号（新增 mode）
+ * @param ctx 服务持有者
+ * @param id 固定目标会话
+ * @param text 任务正文
+ * @param mode 投递方式，默认 queue
+ * @returns 本次唯一通道的受理证据
+ */
+async function sendLegacy(ctx: CtxLike, id: string, text: string, mode: TaskSendMode = 'queue'): Promise<TaskSendResult> {
   const input = inputFor(ctx, id) as { setDraft?: (task: string) => void; submit?: () => void } | undefined
-  if (typeof input?.setDraft === 'function' && typeof input.submit === 'function') {
+  if (mode === 'queue' && typeof input?.setDraft === 'function' && typeof input.submit === 'function') {
     let submitted = false
     try {
       input.setDraft(text)
@@ -347,9 +383,9 @@ async function sendLegacy(ctx: CtxLike, id: string, text: string): Promise<TaskS
   }
 
   const remote = ctx.get('remote.session') as { prompt?: (req: unknown) => Promise<unknown> } | undefined
-  if (typeof remote?.prompt !== 'function') return httpTaskResult(id, text)
+  if (typeof remote?.prompt !== 'function') return mode === 'steer' ? { status: 'unavailable', legacyOk: false } : httpTaskResult(id, text)
   try {
-    const payload = { sessionId: id, mode: 'queue', content: [{ type: 'text', text }] }
+    const payload = { sessionId: id, mode, content: [{ type: 'text', text }] }
     const receipt = await remote.prompt(slotArg(payload))
     return taskReceipt((receipt as { result?: unknown } | null)?.result ?? receipt)
   } catch { return { status: 'unknown', legacyOk: false } }
@@ -439,10 +475,18 @@ export async function apiSessionPrompt(sessionId: string, text: string): Promise
   return (await httpTaskResult(sessionId, text)).legacyOk
 }
 
-/** @private @author ddj 2026年10月29号 @param sessionId Fixed target. @param text Task body. @returns HTTP receipt evidence; errors after request entry are never safe rejection. */
-async function httpTaskResult(sessionId: string, text: string): Promise<TaskSendResult> {
+/**
+ * wire 直发 session/prompt 的受理证据（未持有 Controller 时用）。
+ * @author ddj 2026年10月29号
+ * @author ddj 2026年11月24号（新增 mode）
+ * @param sessionId 固定目标会话
+ * @param text 任务正文
+ * @param mode 投递方式，默认 queue
+ * @returns HTTP 回执证据；进入请求后的异常一律不算安全拒绝
+ */
+async function httpTaskResult(sessionId: string, text: string, mode: TaskSendMode = 'queue'): Promise<TaskSendResult> {
   try {
-    const payload = { sessionId, mode: 'queue', content: [{ type: 'text', text }] }
+    const payload = { sessionId, mode, content: [{ type: 'text', text }] }
     const res = await fetch(appUrl(SESSION_PROMPT_PATH), {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -523,8 +567,11 @@ export interface AddToConversation {
   startDraftSession(cwd?: string): Promise<DraftSessionResult>
   /** Historical compatibility result, not proof that a task was accepted. */
   sendTask(sessionId: string | undefined, text: string): Promise<boolean>
-  /** Optional on older injected facades; detailed callers must not infer acceptance from sendTask. */
-  sendTaskResult?(sessionId: string | undefined, text: string): Promise<TaskSendResult>
+  /**
+   * Optional on older injected facades; detailed callers must not infer acceptance from sendTask.
+   * `mode` 默认 queue；`steer` 送进当前回合（会话在跑时 agent 下一次请求就能看到）。
+   */
+  sendTaskResult?(sessionId: string | undefined, text: string, mode?: TaskSendMode): Promise<TaskSendResult>
 }
 
 /**
@@ -704,13 +751,25 @@ export function createAddToConversation(ctx: CtxLike): AddToConversation {
    */
   const sendTask: AddToConversation['sendTask'] = async (sessionId, text) => (await sendTaskResult(sessionId, text)).legacyOk
 
-  /** @private @author ddj 2026年10月29号 @param sessionId Fixed target. @param text Task body. @returns Detailed evidence from exactly one selected transport. */
-  async function sendTaskResult(sessionId: string | undefined, text: string): Promise<TaskSendResult> {
+  /**
+   * 投递一条文本并返回详细受理证据（只选一条通道，不跨通道重发）。
+   * @author ddj 2026年10月29号
+   * @author ddj 2026年11月24号（新增 mode：steer 送进当前回合）
+   * @param sessionId 固定目标会话
+   * @param text 任务正文
+   * @param mode 投递方式，默认 queue
+   * @returns 受理证据
+   */
+  async function sendTaskResult(
+    sessionId: string | undefined,
+    text: string,
+    mode: TaskSendMode = 'queue',
+  ): Promise<TaskSendResult> {
     if (!sessionId) return { status: 'unavailable', legacyOk: false }
     try {
       const sessions = ctx.get('sessions') as SessionBridge | undefined
-      if (typeof sessions?.retain === 'function') return await sendOwned(ctx, sessions, sessionId, text)
-      return await sendLegacy(ctx, sessionId, text)
+      if (typeof sessions?.retain === 'function') return await sendOwned(ctx, sessions, sessionId, text, mode)
+      return await sendLegacy(ctx, sessionId, text, mode)
     } catch { return { status: 'unavailable', legacyOk: false } }
   }
 
