@@ -55,6 +55,7 @@ import type { EncodingVerdict } from './textEncoding.js'
 import { backupPathOf, classifyEncoding, decodePreview, isEncodingError, lossyCountOf, repairBytes } from './textEncoding.js'
 import { baseNameOf, checkNewName, checkRenameName, isSubPath, joinRelPath, parentRelOf } from './shared/fsNames.js'
 import { invalidateIndex, listDirCached } from './treeIndex.js'
+import { pathKeyOf, windows } from './pending/provenance.js'
 import { findRemoteWs, remoteDisplayOf, type RemoteWs } from './remoteWorkspace.js'
 import { revealInExplorer } from './reveal.js'
 import { dshHome, debugLogFile, pluginLogRoot, uiGlobalsFile, uiStateFile } from './paths.js'
@@ -377,9 +378,13 @@ async function afterManualSave(
   registry: Registry,
   sc: { session: Session; cwd: string },
   path: string,
+  identity?: string,
 ): Promise<void> {
   // 手动保存后目录树可能变化（新建/删除文件）：父目录+祖先进失效，后台自愈。
   invalidateIndex(ctx, sc.cwd, path)
+  // 这是用户自己在编辑器里保存：打标记让外部改动采集只推进基线，不新建待审行。
+  // 标记必须用解析后的绝对身份，否则与 watch 事件的比较键对不上。
+  windows.markEditor(pathKeyOf(identity ?? path))
   // Editing disk is not a review decision. Keep all historical pending records;
   // location checks may report conflict but must not silently accept or archive them.
 }
@@ -1082,7 +1087,7 @@ export function buildHandlers(
         const rev = typeof args.rev === 'string' && args.rev ? args.rev : null
         const intent = rev ? { kind: 'replaceIfVersion', version: rev } : undefined
         const outcome = await fs.writeText(target, args.content, intent, void 0, policyOf(ctx, sc.session))
-        await afterManualSave(ctx, registry, sc, args.path)
+        await afterManualSave(ctx, registry, sc, args.path, fs.processPath(target))
         return { ok: true, rev: outcome?.version ? String(outcome.version) : rev ?? undefined }
       } catch (error) {
         if (isStaleVersion(error)) {
@@ -1111,7 +1116,7 @@ export function buildHandlers(
         if (bytes.byteLength === 0) return { ok: false, error: '内容为空，拒绝写回' }
         if (bytes.byteLength > BINARY_READ_CAP) return { ok: false, error: '内容过大（>32MB），拒绝写回' }
         await writeFile(fs.processPath(target), bytes)
-        await afterManualSave(ctx, registry, sc, args.path)
+        await afterManualSave(ctx, registry, sc, args.path, fs.processPath(target))
         return { ok: true }
       } catch (error) {
         return { ok: false, error: '二进制保存失败：' + String(error) }

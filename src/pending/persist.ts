@@ -4,7 +4,7 @@
  */
 import type { DatabaseSync } from 'node:sqlite'
 import { activeReady, dbFor } from '../archiveDb.js'
-import type { PendingLineage } from '../shared/pendingReview.js'
+import type { PendingBaseKind, PendingLineage, PendingOrigin, PendingSource } from '../shared/pendingReview.js'
 import type { PendingEntry } from './kernel.js'
 
 /** 数据库行。 */
@@ -24,10 +24,44 @@ export interface StoredEntry {
   flags: PendingFlags
 }
 
-/** 待审库版本号，写进 metadata 便于日后迁移。v3 给评论表加了引文与上下文列。 */
-const SCHEMA_VERSION = '3'
+/** 待审库版本号，写进 metadata 便于日后迁移。v4 给条目加了采集来源与基线可信度。 */
+const SCHEMA_VERSION = '4'
 /** 迁移前的备份后缀。 */
 const BACKUP_SUFFIX = '.before-pending.bak'
+/** 工作区待审版本号：条目一落库就自增，供客户端轮询判断是否需要重读列表。 */
+const versions = new Map<string, number>()
+
+/**
+ * @author ddj 2026-11-24
+ * @description: 读工作区待审版本号；只在条目真正落库后自增，保证「先记录后通知 UI」。
+ * @param cwd 工作区
+ * @returns 单调递增的版本号
+ */
+export function pendingVersion(cwd: string): number {
+  return versions.get(cwd) ?? 0
+}
+
+/**
+ * @private
+ * @author ddj 2026-11-24
+ * @description: 条目状态变化后自增版本号（进程内计数，不落盘）。
+ * @param cwd 工作区
+ * @returns 无
+ */
+function bumpVersion(cwd: string): void {
+  versions.set(cwd, (versions.get(cwd) ?? 0) + 1)
+}
+
+/**
+ * @private
+ * @author ddj 2026-11-24
+ * @description: 清空某工作区版本号（活跃库重建时用，避免把旧计数当新变化）。
+ * @param cwd 工作区
+ * @returns 无
+ */
+export function resetPendingVersion(cwd: string): void {
+  versions.delete(cwd)
+}
 
 /**
  * @author ddj 2026年10月29号
@@ -45,6 +79,7 @@ export function pendingDb(cwd: string): DatabaseSync {
   try {
     db.exec(DDL)
     migrateHistory(db)
+    migrateProvenance(db)
     db.prepare("INSERT INTO metadata(name,value) VALUES('pending_schema',?) ON CONFLICT(name) DO UPDATE SET value=excluded.value")
       .run(SCHEMA_VERSION)
     db.exec('COMMIT')
@@ -63,7 +98,9 @@ CREATE TABLE IF NOT EXISTS pending_entries (
   unseen INTEGER NOT NULL DEFAULT 0, missing INTEGER NOT NULL DEFAULT 0,
   diverged INTEGER NOT NULL DEFAULT 0, oversized INTEGER NOT NULL DEFAULT 0,
   revision INTEGER NOT NULL DEFAULT 0, session_id TEXT NOT NULL,
-  session_ids TEXT NOT NULL, lineage TEXT);
+  session_ids TEXT NOT NULL, lineage TEXT,
+  source TEXT NOT NULL DEFAULT 'tool', origin TEXT NOT NULL DEFAULT 'agent',
+  base_kind TEXT NOT NULL DEFAULT 'known');
 CREATE TABLE IF NOT EXISTS pending_blocks (
   entry_id TEXT NOT NULL, block_id TEXT NOT NULL, decision TEXT NOT NULL,
   PRIMARY KEY(entry_id,block_id));
@@ -75,6 +112,21 @@ CREATE TABLE IF NOT EXISTS pending_history (
   snapshot TEXT NOT NULL, created_at INTEGER NOT NULL,
   state TEXT NOT NULL DEFAULT 'applied');
 `
+
+/**
+ * @author ddj 2026-11-24
+ * @description: v3 → v4：给条目补三列来源字段。旧行按默认值读成「工具链路 / agent / 已知内容」，
+ * 与 v3 的语义一致，不需要回填。
+ * @param db 已打开的工作区库
+ * @returns 无
+ */
+function migrateProvenance(db: DatabaseSync): void {
+  const columns = db.prepare('PRAGMA table_info(pending_entries)').all() as Row[]
+  const names = new Set(columns.map((column) => String(column.name)))
+  if (!names.has('source')) db.exec("ALTER TABLE pending_entries ADD COLUMN source TEXT NOT NULL DEFAULT 'tool'")
+  if (!names.has('origin')) db.exec("ALTER TABLE pending_entries ADD COLUMN origin TEXT NOT NULL DEFAULT 'agent'")
+  if (!names.has('base_kind')) db.exec("ALTER TABLE pending_entries ADD COLUMN base_kind TEXT NOT NULL DEFAULT 'known'")
+}
 
 /**
  * @author ddj 2026年10月29号
@@ -107,7 +159,7 @@ export function loadEntries(cwd: string): StoredEntry[] {
  * @returns 无
  */
 export function saveEntry(cwd: string, stored: StoredEntry): void {
-  upsertEntry(pendingDb(cwd), stored)
+  upsertEntry(pendingDb(cwd), cwd, stored)
 }
 
 /**
@@ -118,18 +170,22 @@ export function saveEntry(cwd: string, stored: StoredEntry): void {
  * @param stored 条目与标记
  * @returns 无
  */
-function upsertEntry(db: DatabaseSync, stored: StoredEntry): void {
+function upsertEntry(db: DatabaseSync, cwd: string, stored: StoredEntry): void {
   const { entry, flags } = stored
   db.prepare(`INSERT INTO pending_entries
-    (id,path,earlier,old_text,new_text,updated_at,unseen,missing,diverged,oversized,revision,session_id,session_ids,lineage)
-    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    (id,path,earlier,old_text,new_text,updated_at,unseen,missing,diverged,oversized,revision,session_id,session_ids,lineage,
+     source,origin,base_kind)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     ON CONFLICT(id) DO UPDATE SET path=excluded.path,earlier=excluded.earlier,old_text=excluded.old_text,
       new_text=excluded.new_text,updated_at=excluded.updated_at,unseen=excluded.unseen,missing=excluded.missing,
       diverged=excluded.diverged,oversized=excluded.oversized,revision=excluded.revision,
-      session_id=excluded.session_id,session_ids=excluded.session_ids,lineage=excluded.lineage`)
+      session_id=excluded.session_id,session_ids=excluded.session_ids,lineage=excluded.lineage,
+      source=excluded.source,origin=excluded.origin,base_kind=excluded.base_kind`)
     .run(entry.id, entry.path, entry.earlierVersion, entry.oldText, entry.newText, entry.updatedAt,
       entry.unseen === true ? 1 : 0, flags.missing ? 1 : 0, flags.diverged ? 1 : 0, flags.oversized ? 1 : 0,
-      flags.revision, entry.sessionId, JSON.stringify(entry.sessionIds), entry.lineage ? JSON.stringify(entry.lineage) : null)
+      flags.revision, entry.sessionId, JSON.stringify(entry.sessionIds), entry.lineage ? JSON.stringify(entry.lineage) : null,
+      entry.source ?? 'tool', entry.origin ?? 'agent', entry.baseKind ?? 'known')
+  bumpVersion(cwd)
 }
 
 /**
@@ -146,6 +202,7 @@ export function dropEntry(cwd: string, id: string): void {
     db.prepare('DELETE FROM pending_entries WHERE id=?').run(id)
     db.prepare('DELETE FROM pending_blocks WHERE entry_id=?').run(id)
     db.exec('COMMIT')
+    bumpVersion(cwd)
   } catch (error) {
     if (db.isTransaction) db.exec('ROLLBACK')
     throw error
@@ -179,6 +236,7 @@ export function saveBlocks(cwd: string, entryId: string, blocks: { id: string; d
   try {
     writeBlocks(db, entryId, blocks)
     db.exec('COMMIT')
+    bumpVersion(cwd)
   } catch (error) {
     if (db.isTransaction) db.exec('ROLLBACK')
     throw error
@@ -346,10 +404,50 @@ function entryOfRow(row: Row): PendingEntry {
     earlierVersion: String(row.earlier) === 'none' ? 'none' : 'file',
     oldText: String(row.old_text), newText: String(row.new_text), updatedAt: Number(row.updated_at),
     sessionId: String(row.session_id), sessionIds: JSON.parse(String(row.session_ids)) as string[],
+    source: sourceOfRow(row),
+    origin: originOfRow(row),
+    baseKind: baseKindOfRow(row),
   }
   if (Number(row.unseen) === 1) entry.unseen = true
   if (lineage !== undefined) entry.lineage = lineage
   return entry
+}
+
+/**
+ * @private
+ * @author ddj 2026-11-24
+ * @description: 读采集通道列；v3 旧库升级后该列有默认值，异常值按 `tool` 处理。
+ * @param row 数据库行
+ * @returns 采集通道
+ */
+function sourceOfRow(row: Row): PendingSource {
+  const value = String(row.source ?? 'tool')
+  return (value === 'edit' || value === 'write' || value === 'remote_ssh_write' || value === 'watch'
+    || value === 'scan' || value === 'vcs') ? value : 'tool'
+}
+
+/**
+ * @private
+ * @author ddj 2026-11-24
+ * @description: 读归属列；异常值按 `agent` 处理（与 v3 语义一致）。
+ * @param row 数据库行
+ * @returns 归属
+ */
+function originOfRow(row: Row): PendingOrigin {
+  const value = String(row.origin ?? 'agent')
+  return value === 'editor' || value === 'vcs' || value === 'external' ? value : 'agent'
+}
+
+/**
+ * @private
+ * @author ddj 2026-11-24
+ * @description: 读基线可信度列；异常值按 `known` 处理。
+ * @param row 数据库行
+ * @returns 基线可信度
+ */
+function baseKindOfRow(row: Row): PendingBaseKind {
+  const value = String(row.base_kind ?? 'known')
+  return value === 'absent' || value === 'vcs' || value === 'unknown' ? value : 'known'
 }
 
 /**
@@ -390,7 +488,8 @@ export function saveDecisions(cwd: string, records: KeepRecord[]): { id: string;
   const db = pendingDb(cwd)
   const skipped: { id: string; reason: string }[] = []
   const advance = db.prepare(`UPDATE pending_entries SET path=?,earlier=?,old_text=?,new_text=?,updated_at=?,unseen=?,
-    missing=?,diverged=?,oversized=?,revision=?,session_id=?,session_ids=?,lineage=? WHERE id=? AND revision=?`)
+    missing=?,diverged=?,oversized=?,revision=?,session_id=?,session_ids=?,lineage=?,source=?,origin=?,base_kind=?
+    WHERE id=? AND revision=?`)
 
   db.exec('BEGIN IMMEDIATE')
   try {
@@ -400,7 +499,9 @@ export function saveDecisions(cwd: string, records: KeepRecord[]): { id: string;
       const changed = advance.run(entry.path, entry.earlierVersion, entry.oldText, entry.newText, entry.updatedAt,
         entry.unseen === true ? 1 : 0, flags.missing ? 1 : 0, flags.diverged ? 1 : 0, flags.oversized ? 1 : 0,
         flags.revision, entry.sessionId, JSON.stringify(entry.sessionIds),
-        entry.lineage ? JSON.stringify(entry.lineage) : null, record.entryId, expected)
+        entry.lineage ? JSON.stringify(entry.lineage) : null,
+        entry.source ?? 'tool', entry.origin ?? 'agent', entry.baseKind ?? 'known',
+        record.entryId, expected)
       // 读条目到落库之间被别的决定推进过：只放弃这一条
       if (changed.changes !== 1) {
         skipped.push({ id: record.entryId, reason: '待审条目已变化，请重试' })
@@ -410,6 +511,7 @@ export function saveDecisions(cwd: string, records: KeepRecord[]): { id: string;
       insertHistory(db, 'decide', record.entryId, record.snapshot, Date.now())
     }
     db.exec('COMMIT')
+    if (records.length) bumpVersion(cwd)
     return skipped
   } catch (error) {
     if (db.isTransaction) db.exec('ROLLBACK')

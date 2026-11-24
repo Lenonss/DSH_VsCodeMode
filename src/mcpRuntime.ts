@@ -3,7 +3,7 @@ import { loadHostModule } from './hostImport.js'
 import { entriesOf, MCP_PACKAGE, publicConfig, toolsOf } from './mcp.js'
 import { isProjectEntryId } from './compat.js'
 import { matchWorkspace } from './mcpIsolation.js'
-import { ManagedProject, managedName } from './mcpManaged.js'
+import { ManagedProject, managedName, type ManagedState } from './mcpManaged.js'
 import { managerPort } from './mcpManagerBridge.js'
 import { listProjects, projectEntryId, reconcileProject } from './mcpProject.js'
 import { parseMcpPolicy, type McpPolicy, type McpPhase, type McpSessionServer, type McpSessionStatus, type MpcConfig, type MpcServer, type MpcStatus } from './shared/mcp.js'
@@ -257,6 +257,8 @@ export class McpRuntime {
       if (!def.enabled || record.holds.has(name) || !path) continue
       record.holds.set(name, managed.hold(path, name))
     }
+    // 托管后端不经过 syncAgent，配置就绪时刻要在这里落账，否则会话状态永远停在 preparing。
+    record.finishedAt ??= Date.now()
     this.changed()
   }
 
@@ -453,15 +455,39 @@ export class McpRuntime {
 
   /** @private @author ddj 2026年10月20号 @param agent Owner. @param record Ledger. @returns Server phases with caller-local timing, not pooled connection age. */
   private sessionServers(agent: any, record: AgentRecord): McpSessionServer[] {
+    const managed = this.probeBackend() === 'manager' ? this.managedOf() : undefined
+    const path = managed ? this.workspace(agent) ?? '' : ''
     return this.catalogue(agent).map(({ serverName, phase }) => {
       const instance = record.instances.get(serverName)
-      if (!instance) return { serverName, phase: 'idle', startedAt: record.finishedAt ?? record.startedAt, phaseAt: record.finishedAt ?? record.startedAt }
+      // 托管后端不建本会话的连接账目，阶段与时间只能取官方报告，不能再按「没实例就是 idle」处理。
+      if (!instance) return this.managedServer(record, serverName, phase, managed?.stateOf(path, serverName))
       const entry = instance.lease.entry
       return { serverName, phase, startedAt: instance.startedAt, phaseAt: Math.max(instance.startedAt, entry.phaseAt),
         finishedAt: entry.finishedAt && Math.max(instance.startedAt, entry.finishedAt), error: entry.error, reused: instance.reused,
         queuedMs: Math.max(0, (entry.startAt ?? Date.now()) - instance.startedAt),
         connectMs: entry.connectedAt === undefined ? undefined : Math.max(0, entry.connectedAt - Math.max(instance.startedAt, entry.startAt ?? instance.startedAt)), firstCallMs: instance.firstCallMs }
     })
+  }
+
+  /**
+   * 托管后端的一条服务器状态：阶段取 catalogue 的官方映射，时间取挂载时刻与官方连上时刻。
+   * @private @author ddj 2026年11月24号
+   * @param record 会话账目
+   * @param serverName 服务器名
+   * @param phase 官方状态映射后的阶段
+   * @param state 官方托管状态；连接池后端不传
+   * @returns 会话里的一条服务器状态
+   */
+  private managedServer(record: AgentRecord, serverName: string, phase: McpPhase, state?: ManagedState): McpSessionServer {
+    const startedAt = state?.since ?? record.finishedAt ?? record.startedAt
+    // 只有落定的阶段才收尾，正在起来的阶段留空，前端按秒继续走。
+    let finishedAt: number | undefined
+    if (phase === 'ready') finishedAt = state?.connectedAt ?? startedAt
+    else if (phase === 'error') finishedAt = startedAt
+
+    const server: McpSessionServer = { serverName, phase, startedAt, phaseAt: finishedAt ?? startedAt, finishedAt }
+    if (state?.error) server.error = state.error
+    return server
   }
 
   /** @public @author ddj 2026年09月28号 @param path Workspace. @returns Masked configuration and pool/lease counts; initialization is not health. */
@@ -547,6 +573,9 @@ export function leftoverOf(ctx: Ctx): string[] {
     .map((entry) => String(entry.id))
 }
 
+/** 官方状态里算「还在起来」的那几个：连接中、重连退避、等凭据、等授权。 */
+const STARTING_STATES = new Set(['connecting', 'reconnecting', 'waiting-credentials', 'waiting-authorization'])
+
 /**
  * 官方状态 → 插件阶段：未知一律 idle，不假装连上。
  * @private @author ddj 2026年11月23号
@@ -555,7 +584,7 @@ export function leftoverOf(ctx: Ctx): string[] {
  */
 function managedPhase(state: string): McpPhase {
   if (state === 'connected') return 'ready'
-  if (state === 'connecting') return 'starting'
+  if (STARTING_STATES.has(state)) return 'starting'
   if (state === 'failed') return 'error'
   return 'idle'
 }
@@ -570,7 +599,7 @@ function managedPhase(state: string): McpPhase {
 function managedStatusOf(enabled: boolean, state: string): MpcStatus {
   if (!enabled) return 'disabled'
   if (state === 'connected') return 'connected'
-  if (state === 'connecting') return 'connecting'
+  if (STARTING_STATES.has(state)) return 'connecting'
   if (state === 'failed') return 'error'
   return 'configured'
 }

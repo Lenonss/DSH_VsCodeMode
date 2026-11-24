@@ -6,6 +6,7 @@
 import type { ReviewDetail, ReviewItem, ReviewPage } from './shared/review.js'
 import type { PendingDetail, PendingItem, PendingPage } from './shared/pendingReview.js'
 import { pathKeyFor } from './shared/pathKey.js'
+import { sourceLabelOf } from './pending/provenance.js'
 
 /**
  * 进程内"已被待审接管"的路径集合；旧写入口守卫只读它，绝不碰数据库。
@@ -102,7 +103,7 @@ export function pendingDisplay(cwd: string, path: string): string {
  * @returns 面板列表项
  */
 export function pendingItemOf(item: PendingItem, cwd?: string): ReviewItem {
-  return {
+  const row: ReviewItem = {
     id: PENDING_PREFIX + item.id,
     sessionId: item.sessionId,
     turn: 0,
@@ -117,6 +118,9 @@ export function pendingItemOf(item: PendingItem, cwd?: string): ReviewItem {
     revision: item.revision,
     current: true,
   }
+  // 来源徽标只对待审条目有意义：官方行没有采集通道。
+  if (item.settled !== true) row.sourceLabel = sourceLabelOf(item)
+  return row
 }
 
 /**
@@ -127,16 +131,19 @@ export function pendingItemOf(item: PendingItem, cwd?: string): ReviewItem {
  * @returns 面板详情
  */
 export function pendingDetailOf(detail: PendingDetail, capturedAt: string, cwd?: string): ReviewDetail {
+  const capability: ReviewDetail['capability'] = {
+    keep: detail.capability.keep,
+    undo: detail.capability.revert,
+    reason: detail.capability.reason,
+  }
+  // 非 agent 来源的撤销需要客户端先确认：能力位原样透出，由界面弹一次确认。
+  if (detail.capability.confirmRevert === true) capability.confirmUndo = true
   return {
     item: pendingItemOf(detail.item, cwd),
     diff: detail.diff,
     capturedAt,
     blocks: detail.blocks,
-    capability: {
-      keep: detail.capability.keep,
-      undo: detail.capability.revert,
-      reason: detail.capability.reason,
-    },
+    capability,
   }
 }
 

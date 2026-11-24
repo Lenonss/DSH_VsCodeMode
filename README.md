@@ -687,13 +687,13 @@ profile 请替换为实际目标，不要把示例目录当成当前运行 profi
 
 ```bash
 # ① Git 安装（clone + prepare 构建；推荐打固定 tag）
-dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.35.0
+dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.36.0
 
 # ② npm 注册表（发布到 npm 后）
-dsh plugin --profile web add dsh-vscode-mode@0.35.0
+dsh plugin --profile web add dsh-vscode-mode@0.36.0
 
 # ③ GitHub Release tgz 直装（Release asset 可用后）
-dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.35.0/dsh-vscode-mode-0.35.0.tgz
+dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.36.0/dsh-vscode-mode-0.36.0.tgz
 ```
 
 > **DSH 版本政策（0.17.0 起）**：六项 DSH peer 仍统一声明为 `*`，另以
@@ -1078,7 +1078,7 @@ Keep All / Undo All 却是亮的。修复：单文件 Keep / Undo 覆盖冲突�
 
 | 版本 | 要点 |
 | --- | --- |
-| v0.35.0 | HTML 计划页支持附件：`/html-plan` 收下图片/文件并落到 `plans/<slug>/assets/`，页面用 `<doc-attach>` 展示（缩略图 / 文件卡片 / 下载），`pack.mjs` 内联成 data URI（单个 >4 MB 不内联），打包后附件目录默认删除（`--keep-assets` 保留），`--check` 拦下没内联的页面；计划页签沙箱放开下载 |
+| v0.36.0 | 审查捕获补上「非工具写盘」：`fs.watch` 实时采集 + 版本库补扫（启动 / 版本库写命令后 / 手动按钮 / 每 10 分钟）把 bash 里的 `node -e`、prettier、生成器等写盘也记进待审面板；记录新增来源字段（`edit`/`write`/`remote_ssh_write`/`watch`/`scan`/`vcs`）与归属（`agent`/`editor`/`vcs`/`external`），修改前内容按「已知→不存在→版本库基线→未知」降级、拿不到就禁撤销；按「路径 + 内容哈希」去重，撤销只对 agent 来源直接可用（其余需确认）；设置页可关。MCP 托管后端会话卡片补真实计时（挂载时刻 + 官方 `connectedAt`），`reconnecting`/`waiting-credentials`/`waiting-authorization` 不再显示成 idle |
 | v0.34.0 | SVN 行图标按判型区分文件/目录（`svn status`/`svn update` 输出不带 kind：先用子项关系白拿，剩下的按上限查盘，失败回落文件图标）；变更面板、提交对话框、更新窗口三处统一；对话输入框崩溃兜底（槽被替换成空占位时给「恢复输入框」，不再只能手动刷新） |
 | v0.33.1 | 旧宿主兼容修复：`connection.requestRejection` 恢复以服务实例为接收者调用（v0.33.0 裸调导致 DSH 0.2.2 桌面端 `/edrv/rpc` 全量 503）；客户端样式补守卫式自注入（旧宿主不认 `meta.stylesheets`，缺了会让悬浮按钮鲸鱼按原始尺寸铺满屏幕），注入按文本指纹判重 |
 | v0.33.0 | DSH 0.2.3 适配（路由授权交框架、运行时版本探测、文件链接宿主探测、cordis 根上下文）；项目 MCP 交官方 `mcpManager` 托管（注册名 = 工作区哈希，状态/重启/授权走官方）；官方变更视图行级注解；非 UTF-8 文件兼容（GB18030 判定、只读预览、转码修复与撤销）；SVN 提交对话框右键菜单与 Ctrl/Shift 多选批量；`/html-plan` 改一条 `plan.mjs` 打包命令并支持缺口现生成；侧栏正文错误边界 |
@@ -1103,7 +1103,18 @@ Keep All / Undo All 却是亮的。修复：单文件 Keep / Undo 覆盖冲突�
 | v0.23.0 | 快捷菜单：可拖动悬浮按钮 + 自定义菜单树 |
 
 <details>
-<summary>完整版本记录（v0.35.0 → v0.1.5x，点击展开）</summary>
+<summary>完整版本记录（v0.36.0 → v0.1.5x，点击展开）</summary>
+
+- **v0.36.0**：审查捕获补上「非工具写盘」——工作区递归监听 300ms 合并，把 agent 用 `ops_bash` 跑的
+  `node -e`、prettier / eslint --fix、生成器、python / sed 写盘补进待审投影；版本库补扫覆盖启动对齐、
+  版本库写命令之后、面板「补扫一次」按钮与每 10 分钟定时，一条 `status` 出候选、超预算/超时写缺口。
+  记录带采集通道（`edit`/`write`/`remote_ssh_write`/`watch`/`scan`/`vcs`）与归属
+  （`agent`/`editor`/`vcs`/`external`）：修改前内容按「已知内容 → 当时不存在 → 版本库基线 → 未知」
+  四级降级，未知只标注、禁撤销；编辑器保存只推进基线不建行；按「路径 + 内容哈希」去重，
+  插件自己的写回（撤销、远端镜像写穿、编辑器保存）不算外部改动。撤销白名单：agent 来源直接可用，
+  其它来源需确认。待审库 v3 → v4 只加三列带默认值。设置页新增「改动捕获」两个开关可关。
+  MCP 托管后端会话卡片补真实计时（挂载时刻 + 官方 `connectedAt`），四种「正在起来」状态不再显示成 idle。
+  详见 [0.36.0 发布说明](docs/release-0.36.0.md)。
 
 - **v0.35.0**：HTML 计划页支持附件——`/html-plan` 声明 `attachments`，把 composer 的图片/文件复制到
   `plans/<slug>/assets/`，并把固定 slug 与清单写进指令；页面新增 `<doc-attach>` / `<doc-file>`，

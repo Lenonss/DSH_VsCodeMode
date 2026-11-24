@@ -1,7 +1,9 @@
 /** Scoped MCP lifecycle and file regressions. @author ddj 2026年09月28号 */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { filterResources, guardMcp, installIsolation } from '../src/mcpIsolation.js'
-import { installMcpRuntime, runtimeOf } from '../src/mcpRuntime.js'
+import { installMcpRuntime, runtimeOf, type ProjectDef } from '../src/mcpRuntime.js'
+import { managedName } from '../src/mcpManaged.js'
+import type { McpSessionStatus } from '../src/shared/mcp.js'
 import { McpBridge } from '../src/mcpBridge.js'
 import { listProjects, projectRefresh, projectRemove, projectSave, projectToggle, reconcileProject, mcpSnapshot } from '../src/mcpProject.js'
 import { listMcp, MCP_PACKAGE, saveMcp, serverOf, toolsOf, validateConfig, removeMcp, toggleMcp, refreshMcp } from '../src/mcp.js'
@@ -940,5 +942,71 @@ describe('inherited workspace isolation', () => {
     await installReady(host)
     expect(host.view(child).visible.has('mcp__alpha__nested__search')).toBe(false)
     expect(guardMcp(host.ctx, { name: 'mcp__alpha__nested__search', agent: child })).toContain('不能使用其他项目')
+  })
+})
+
+/** @author ddj 2026年11月24号 @param state 官方状态名 @returns 只提供 attach 与快照真正取到服务的托管宿主桩 */
+function managedHost(state: string): any {
+  const name = managedName('/alpha', 'demo')
+  const status: Record<string, unknown> = { state }
+  if (state === 'connected') status.connectedAt = 7000
+  if (state === 'failed') status.lastError = 'boom'
+  const frame = [{ name, configured: true, status }]
+  const services: Record<string, any> = {
+    workspaceRegistry: { list: () => [{ path: '/alpha' }] },
+    agents: { list: () => [] },
+    loader: { entries: () => [], remove: async () => undefined },
+    tools: { register: () => () => undefined },
+    mcpResources: { register: () => () => undefined },
+    systemPrompt: { section: () => () => undefined },
+    mcpManager: { register: () => () => undefined, list: () => frame, watch: async function* () { yield frame } },
+  }
+  return {
+    get: (id: string) => services[id],
+    on: () => () => undefined,
+    emit: () => undefined,
+    effect: (factory: () => unknown) => factory(),
+    logger: { warn: () => undefined, info: () => undefined },
+  }
+}
+
+/**
+ * @author ddj 2026年11月24号
+ * @param state 官方状态名
+ * @returns 托管后端下这条会话的观测结果
+ */
+async function managedSnapshot(state: string): Promise<McpSessionStatus> {
+  const host = managedHost(state)
+  const runtime = runtimeOf(host)
+  const def: ProjectDef = { config: { serverName: 'demo', transport: 'stdio', command: 'node', args: [], env: {}, cwd: '' }, enabled: true }
+  // 先载配置再建会话，等价于真实宿主启动后再开会话的时序。
+  await runtime.replace('/alpha', new Map([['demo', def]]))
+  const agent: any = { session: { id: 'session-manager', header: { cwd: '/alpha' } }, ctx: { get: (id: string) => host.get(id) } }
+  runtime.prepare(agent)
+  await runtime.attach(agent)
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  const status = runtime.sessionSnapshot().sessions[0]
+  await runtime.dispose()
+  return status
+}
+
+describe('托管后端的会话快照', () => {
+  it('连上的服务器报 ready，并按官方连上时刻收尾', async () => {
+    const status = await managedSnapshot('connected')
+    expect(status.phase).toBe('ready')
+    expect(status.servers[0]).toMatchObject({ serverName: 'demo', phase: 'ready', finishedAt: 7000 })
+  })
+
+  it('还没启动的服务器保持 idle，不再谎报读取配置', async () => {
+    const status = await managedSnapshot('closed')
+    expect(status.phase).toBe('idle')
+    expect(status.servers[0]).toMatchObject({ serverName: 'demo', phase: 'idle' })
+    expect(status.configMs).toBeGreaterThanOrEqual(0)
+  })
+
+  it('官方报告失败时按 error 显示并带上原因', async () => {
+    const status = await managedSnapshot('failed')
+    expect(status.phase).toBe('error')
+    expect(status.servers[0].error).toContain('boom')
   })
 })

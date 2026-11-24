@@ -4,7 +4,12 @@ import { captureToolResult } from './capture.js'
 import { installCapture } from './officialCapture.js'
 import { installEvidence } from './reviewCapture.js'
 import { installPending } from './pending/capture.js'
+import type { PendingWrite } from './pending/capture.js'
+import { installExternalCapture, VCS_WRITE_METHODS, VCS_WRITE_TOOLS } from './pending/externalCapture.js'
+import { windows } from './pending/provenance.js'
 import { recordWrite } from './pending/store.js'
+import { cwdOfSession } from './store.js'
+import { resolveScope } from './registry.js'
 import { trackPendingCover } from './pendingCompat.js'
 import { closeArchiveDbs } from './archiveDb.js'
 import { handleRpc, integrationBaseUrlOf } from './rpc.js'
@@ -64,7 +69,7 @@ function createRuntime(ctx: Ctx, config: unknown) {
   const svnRpc = createSvnRpc({ ctx, settings })
   const dapRpc = createDapRpc(ctx)
   const fileVersions = createFileVersions(ctx)
-  return { registry, searcher, contentSearcher, lspManager, lspRpc, aiRpc, svnRpc, dapRpc, fileVersions }
+  return { registry, searcher, contentSearcher, lspManager, lspRpc, aiRpc, svnRpc, dapRpc, fileVersions, settings }
 }
 
 /**
@@ -73,14 +78,47 @@ function createRuntime(ctx: Ctx, config: unknown) {
  * @param ctx Host context.
  * @param runtime Managers created by this instance.
  */
-function attachRuntime(ctx: Ctx, runtime: Runtime): void {
+function attachRuntime(ctx: Ctx, runtime: Runtime): { external: ReturnType<typeof installExternalCapture> } {
   const evidence = installEvidence(ctx)
   const stopCapture = installCapture(ctx, (cwd, snapshot) => { evidence.persist(cwd, snapshot); return true })
-  // 待审累计基线：只有写后内容确实变化才落库，异常一律不打断用户工具调用
-  const pending = installPending(ctx, (write) => {
+  /** @author ddj 2026年11月24号 @param write 已确认的一次写入 @returns 无；落库失败不打断用户工具调用 */
+  function recordPendingWrite(write: PendingWrite): void {
     try { trackPendingCover(write.cwd, write.path, true, write.sessionId) } catch { /* 内存登记失败不阻断采集 */ }
     try { recordWrite(write) } catch (error) { log.warn('待审差异落库失败：' + String(error)) }
+  }
+  // 待审累计基线：只有写后内容确实变化才落库，异常一律不打断用户工具调用
+  const pending = installPending(ctx, recordPendingWrite)
+  // 外部改动采集：非 DSH 文件工具（bash 里的 node -e、脚本、生成器）写盘也进审查面板
+  const external = installExternalCapture({
+    ctx,
+    settings: () => runtime.settings.external(),
+    record: recordPendingWrite,
   })
+  /**
+   * @author ddj 2026年11月24号
+   * @description: 任一工具调用期间都是 agent 写入窗口：bash / python 写盘落在窗口内时归属 agent。
+   * 版本库写工具结束后再补扫一次，把命令造成的成片变化对齐进待审投影。
+   * @param exec 工具执行描述
+   * @param next 原始分发
+   * @returns 原始结果
+   */
+  function aroundToolWindow(exec: { name?: unknown; agent?: { session?: unknown } }, next: () => Promise<unknown>): Promise<unknown> {
+    windows.enterTool()
+    return Promise.resolve()
+      .then(next)
+      .finally(() => {
+        windows.exitTool()
+        if (!VCS_WRITE_TOOLS.has(String(exec.name ?? ''))) return
+        const cwd = cwdOfSession(ctx, exec.agent?.session)
+        if (cwd) external.requestAlign(cwd)
+      })
+  }
+  /** @author ddj 2026年11月24号 @param session 新建会话 @returns 无；工作区可用即开始监听 */
+  function onCreated(session: { id?: unknown }): void {
+    if (typeof session.id !== 'string') return
+    const cwd = cwdOfSession(ctx, session)
+    if (cwd) external.ensure(cwd, session.id)
+  }
   /** @author ddj 2026年09月28号 @param exec Tool execution. @param result Tool result. */
   function onResult(exec: unknown, result: unknown): void {
     void captureToolResult(ctx, runtime.registry, exec, result)
@@ -89,6 +127,7 @@ function attachRuntime(ctx: Ctx, runtime: Runtime): void {
   function onDisposed(session: { id?: unknown }): void {
     const cwd = cwdOf(session)
     if (cwd) {
+      external.dismiss(cwd)
       runtime.registry.delete(cwd)
       runtime.searcher.dispose(cwd)
       runtime.contentSearcher.dispose(cwd)
@@ -101,6 +140,8 @@ function attachRuntime(ctx: Ctx, runtime: Runtime): void {
     await stopCapture()
     evidence.dispose()
     pending.dispose()
+    external.dispose()
+    windows.dispose()
     runtime.fileVersions.dispose()
     closeArchiveDbs()
     disposeAllServers()
@@ -108,9 +149,14 @@ function attachRuntime(ctx: Ctx, runtime: Runtime): void {
     await Promise.allSettled(tasks.map((run) => Promise.resolve().then(run)))
   }
   ctx.on('tools/result', onResult)
+  ctx.on('tools/execute', aroundToolWindow)
+  ctx.on('session/created', onCreated)
   ctx.on('session/disposed', onDisposed)
+  // 启动时给已有会话的工作区各开一份监听（会话内 cd 后由 session/created 与 ensure 幂等补齐）
+  for (const session of ctx.get('sessions').list()) onCreated(session)
   ctx.effect(() => cleanup, 'vscode-mode:runtime')
   hookExitReclaim()
+  return { external }
 }
 
 /**
@@ -136,13 +182,35 @@ export async function apply(ctx: Ctx, config?: unknown): Promise<void> {
   bindHostLog(ctx)
   const runtime = createRuntime(ctx, config)
   const warnings: string[] = []
-  attachRuntime(ctx, runtime)
+  const capture = attachRuntime(ctx, runtime)
   installContent(ctx)
+  /** 版本库写操作后的补扫串行链：并发 RPC 也不会叠出多次补扫。 */
+  let alignChain: Promise<void> = Promise.resolve()
   /** @author ddj 2026年09月28号 @param method RPC name. @param args Typed request. @returns RPC result. */
   function dispatch<M extends RpcMethod>(method: M, args: RpcRequestMap[M]) {
     const { registry, searcher, contentSearcher, lspRpc, aiRpc, fileVersions, svnRpc, dapRpc } = runtime
-    return handleRpc(ctx, registry, method, args, searcher, contentSearcher, lspRpc.handlers,
+    const pendingResult = handleRpc(ctx, registry, method, args, searcher, contentSearcher, lspRpc.handlers,
       aiRpc.handlers, fileVersions, svnRpc.handlers as Partial<RpcHandlerMap>, dapRpc.handlers)
+    // 版本库写操作（提交/更新/还原/清理…）之后补扫一次：命令造成的成片变化要能进待审投影
+    if (!VCS_WRITE_METHODS.has(method)) return pendingResult
+    alignChain = alignChain.then(async () => {
+      const cwd = await workspaceOfSession((args as { sessionId?: string } | undefined)?.sessionId)
+      if (cwd) capture.external.requestAlign(cwd)
+    }).catch(() => {})
+    return pendingResult
+  }
+  /**
+   * @author ddj 2026年11月24号
+   * @description: 取 RPC 参数里的会话工作区；取不到就跳过补扫，绝不影响 RPC 本身。
+   * @param sessionId 请求会话
+   * @returns 工作区路径或 null
+   */
+  async function workspaceOfSession(sessionId: string | undefined): Promise<string | null> {
+    try {
+      if (!sessionId) return null
+      const scope = await resolveScope(ctx, sessionId)
+      return 'err' in scope ? null : scope.cwd
+    } catch { return null }
   }
   /** @author ddj 2026年09月28号 @param warning Startup compatibility diagnostic. */
   function noteWarning(warning: string): void { warnings.push(warning) }

@@ -2,10 +2,11 @@
  * 待审投影的工作区存储：把采集到的写入折进单条累计条目，并承接 Keep/Revert 与外部改动的吸收。
  * @author ddj 2026年10月29号
  */
-import type { PendingDecide, PendingDetail, PendingHistoryMove, PendingItem, PendingPage } from '../shared/pendingReview.js'
+import type { PendingDecide, PendingDetail, PendingHistoryMove, PendingItem, PendingOrigin, PendingPage } from '../shared/pendingReview.js'
 import type { ReviewBlockState } from '../shared/reviewRegions.js'
 import { reviewBlocks } from '../shared/reviewRegions.js'
 import { addedFiles } from '../reviewDb.js'
+import { pathKeyOf, sourceOfTool, windows } from './provenance.js'
 import type { PendingWrite } from './capture.js'
 import { readText, pendingGaps } from './capture.js'
 import type { ShellLike, VcsImportOptions } from './vcs.js'
@@ -70,6 +71,9 @@ export function foldWrite(stored: StoredEntry | undefined, write: PendingWrite):
     oldText: write.before ?? '',
     newText: write.after ?? '',
     updatedAt: write.now,
+    source: sourceOfTool(write.tool),
+    origin: originOf(write),
+    baseKind: write.before === null ? 'absent' : (write.baseKind ?? 'known'),
   })
   if (!stored) {
     return {
@@ -88,6 +92,21 @@ export function foldWrite(stored: StoredEntry | undefined, write: PendingWrite):
       revision: stored.flags.revision + 1,
     },
   }
+}
+
+/**
+ * @private
+ * @author ddj 2026-11-24
+ * @description: 本次写入的归属：显式指定优先，否则按窗口判定（工具链路默认 agent）。
+ * @param write 采集到的写入
+ * @returns 归属
+ */
+function originOf(write: PendingWrite): PendingOrigin {
+  if (write.origin) return write.origin
+  const window = windows.windowOf(pathKeyOf(write.identity))
+  if (window === 'self') return 'agent'
+  if (window === 'editor') return 'editor'
+  return 'agent'
 }
 
 /**
@@ -115,6 +134,9 @@ export function itemOf(stored: StoredEntry, baselineEmpty = false): PendingItem 
     updatedAt: entry.updatedAt,
     sessionId: entry.sessionId,
     sessionIds: entry.sessionIds,
+    source: entry.source ?? 'tool',
+    origin: entry.origin ?? 'agent',
+    baseKind: entry.baseKind ?? 'known',
   }
   if (entry.lineage !== undefined) item.lineage = entry.lineage
   return item
@@ -204,9 +226,11 @@ export function recordWrite(write: PendingWrite): void {
  * @param now 时间
  * @returns 新条目与标记
  */
-export function absorbed(stored: StoredEntry, content: string, now: number): StoredEntry {
+export function absorbed(stored: StoredEntry, content: string, now: number, origin?: PendingOrigin): StoredEntry {
+  const entry: PendingEntry = { ...stored.entry, newText: content, updatedAt: now, unseen: true }
+  if (origin) entry.origin = origin
   return {
-    entry: { ...stored.entry, newText: content, updatedAt: now, unseen: true },
+    entry,
     flags: { ...stored.flags, diverged: true, missing: false, revision: stored.flags.revision + 1 },
   }
 }
@@ -299,7 +323,9 @@ export async function applyDecide(
     now: Date.now(),
     write: (content) => {
       if (content === null) return deleteTarget(fs, cwd, stored.entry.id, stored.entry.newText, signal, policy)
-      return writerFor(fs, cwd, stored.entry.id, stored.entry.newText, signal, policy)(content)
+      // 允许重建：文件已被删除时撤销的语义就是「恢复修改前内容」。createIfAbsent 原子创建，
+      // 期间有人抢先写了同名文件会失败并回到 diverged，不会覆盖别人的新内容。
+      return writerFor(fs, cwd, stored.entry.id, stored.entry.newText, signal, policy, true)(content)
     },
   })
   if (!outcome.ok) return { ok: false, reason: outcome.reason }

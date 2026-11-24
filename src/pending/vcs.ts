@@ -5,6 +5,7 @@
  */
 import { readFile, stat } from 'node:fs/promises'
 import { dirname, join, resolve, sep } from 'node:path'
+import { pathKeyOf } from './provenance.js'
 
 /** 支持的版本库种类。 */
 export type VcsKind = 'git' | 'svn' | 'p4'
@@ -21,6 +22,23 @@ export interface VcsChange {
   earlierVersion: 'file' | 'none'
   oldText: string
   newText: string | null
+}
+
+/** 工作副本相对基线的一条状态（补扫只关心这三类）。 */
+export type VcsEntryStatus = 'modified' | 'added' | 'deleted'
+
+/** 一条状态条目：绝对路径与归一状态。 */
+export interface VcsEntry {
+  path: string
+  status: VcsEntryStatus
+}
+
+/** 一次状态探测结果：根目录、种类与「相对基线有改动」的路径集合。 */
+export interface VcsStatus {
+  kind: VcsKind
+  root: string
+  /** 绝对路径比较键 → 状态条目（键由 pathKeyFor 生成，调用方直接比对）。 */
+  entries: Map<string, VcsEntry>
 }
 
 /** 导入选项。 */
@@ -362,6 +380,110 @@ async function runCommand(
     }
   } catch (error) {
     return { ok: false, stdout: '', stderr: String(error) }
+  }
+}
+
+/**
+ * @author ddj 2026-11-24
+ * @description: 只读一条状态命令，取「工作副本相对基线有改动」的路径集合。补扫用它当候选与
+ * 「干净」判据：不在集合里的路径，其内容变化只能来自版本库同步，不该记成 agent 改动。
+ * 非 git/svn（含 Perforce 与无版本库）一律返回 null，由调用方降级为「只对齐已记录条目」。
+ * @param shell shell 能力
+ * @param cwd 工作区
+ * @returns 状态集合或 null
+ */
+export async function vcsStatus(shell: ShellLike, cwd: string): Promise<VcsStatus | null> {
+  const detected = await detectVcsRoot(cwd)
+  if (!detected || detected.kind === 'p4') return null
+  return detected.kind === 'git' ? gitStatus(shell, detected.root) : svnStatus(shell, detected.root)
+}
+
+/**
+ * @private
+ * @author ddj 2026-11-24
+ * @description: git 状态：一条 status 命令解析出改动集合。
+ * @param shell shell 能力
+ * @param root 仓库根
+ * @returns 状态集合或 null（命令失败）
+ */
+async function gitStatus(shell: ShellLike, root: string): Promise<VcsStatus | null> {
+  const status = await runCommand(shell, 'git -c status.renames=false status --porcelain=v1 -z --untracked-files=all', root)
+  if (!status.ok) return null
+  const entries = new Map<string, VcsEntry>()
+  for (const entry of parseGitStatus(status.stdout)) {
+    const absolute = join(root, ...entry.path.split(GIT_SEPARATOR))
+    if (!insideRoot(root, absolute)) continue
+    entries.set(pathKeyOf(absolute), { path: absolute, status: gitStatusOf(entry.status) })
+  }
+  return { kind: 'git', root, entries }
+}
+
+/**
+ * @private
+ * @author ddj 2026-11-24
+ * @description: svn 状态：一条 status --xml 解析出改动集合。
+ * @param shell shell 能力
+ * @param root 工作副本根
+ * @returns 状态集合或 null（命令失败）
+ */
+async function svnStatus(shell: ShellLike, root: string): Promise<VcsStatus | null> {
+  const status = await runCommand(shell, 'svn status --xml', root)
+  if (!status.ok) return null
+  const entries = new Map<string, VcsEntry>()
+  for (const entry of parseSvnStatus(status.stdout)) {
+    const absolute = resolve(root, entry.path)
+    if (!insideRoot(root, absolute)) continue
+    entries.set(pathKeyOf(absolute), { path: absolute, status: svnStatusOf(entry.status) })
+  }
+  return { kind: 'svn', root, entries }
+}
+
+/**
+ * @private
+ * @author ddj 2026-11-24
+ * @description: git 状态码归一：删除优先，其次新增/未跟踪，其余按修改。
+ * @param status 两位状态码
+ * @returns 归一状态
+ */
+function gitStatusOf(status: string): VcsEntryStatus {
+  if (status.includes('D')) return 'deleted'
+  if (status === '??' || status.includes('A')) return 'added'
+  return 'modified'
+}
+
+/**
+ * @private
+ * @author ddj 2026-11-24
+ * @description: svn 条目状态归一。
+ * @param status wc-status 的 item 值
+ * @returns 归一状态
+ */
+function svnStatusOf(status: string): VcsEntryStatus {
+  if (status === 'deleted' || status === 'missing') return 'deleted'
+  if (status === 'added' || status === 'unversioned' || status === 'replaced') return 'added'
+  return 'modified'
+}
+
+/**
+ * @author ddj 2026-11-24
+ * @description: 读某路径的版本库基线内容；只用于补录记录的修改前内容。
+ * @param shell shell 能力
+ * @param status 已探测的状态（给根目录与种类）
+ * @param absolute 绝对路径
+ * @returns 基线内容；读不到返回 null
+ */
+export async function vcsBaselineOf(
+  shell: ShellLike, status: Pick<VcsStatus, 'kind' | 'root'>, absolute: string,
+): Promise<string | null> {
+  const root = status.root
+  const relative = absolute.slice(root.length).replace(/^[\\/]+/, '').split(sep).join(GIT_SEPARATOR)
+  if (!relative) return null
+  try {
+    if (status.kind === 'git') return await gitBaseline(shell, root, relative)
+    const shown = await runCommand(shell, `svn cat -r BASE ${quote(absolute)}`, root)
+    return shown.ok ? shown.stdout : null
+  } catch {
+    return null
   }
 }
 

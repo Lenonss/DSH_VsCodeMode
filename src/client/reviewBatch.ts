@@ -8,6 +8,8 @@ export interface BatchPort {
   decide: (detail: ReviewDetail, reject: boolean, operationId: string) => Promise<ReviewResult<{ revision: number }>>
   guard: () => void
   operation: (detail: ReviewDetail, reject: boolean) => string
+  /** 撤销里含非 agent 来源时的整批确认；缺省视为不允许（严格口径）。 */
+  confirmExternal?: (details: ReviewDetail[]) => boolean
 }
 export interface BatchResult { completed: number; total: number; paths: string[]; error: string }
 
@@ -58,6 +60,12 @@ export async function runReviewBatch(port: BatchPort, reject: boolean): Promise<
         || !detail.capability.keep) throw new Error(`${item.display}：审查版本变化，请刷新后重试`)
       if (reject && !detail.capability.undo) throw new Error(`${item.display}：${detail.capability.reason}`)
       details.push(detail)
+    }
+    // 非 agent 来源（编辑器保存 / 版本库基线 / 外部写入）先问一次，避免整批撤销误伤用户代码
+    if (reject && details.some((detail) => detail.capability.confirmUndo)) {
+      if (!port.confirmExternal || !port.confirmExternal(details.filter((detail) => detail.capability.confirmUndo))) {
+        throw new Error('已取消：这批修改里有非本会话工具写入的来源，撤销前需要确认')
+      }
     }
     // Reverse chronological snapshots allow a newer round's result to expose the previous round's endpoint.
     details.sort((left, right) => right.capturedAt.localeCompare(left.capturedAt) || right.item.seq - left.item.seq)

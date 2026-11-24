@@ -3580,6 +3580,11 @@ export function EditorView(props) {
    */
   async function submitOfficialDecision(detail, reject, blockId) {
     const source = detail.item
+    // 撤销白名单：非 agent 来源（编辑器保存 / 版本库基线 / 外部写入）先确认一次再写盘
+    if (reject && detail.capability?.confirmUndo && !window.confirm(
+      `「${source.display || source.path}」的改动来自 ${source.sourceLabel || '外部来源'}，不是本会话工具写的。\n确认撤销并写回修改前内容？`)) {
+      throw new Error('已取消撤销')
+    }
     const opKey = JSON.stringify([sessionId, source.id, source.seq, source.revision, blockId, reject])
     let operationId = reviewOpsRef.current.get(opKey)
     if (!operationId) { operationId = crypto.randomUUID(); reviewOpsRef.current.set(opKey, operationId) }
@@ -3844,6 +3849,8 @@ export function EditorView(props) {
       snapshot: batchSnapshot,
       detail: async (id) => { const res = await rpc('edrv.review.detail', { sessionId, id }); if (!res.ok) throw new Error(res.error); return res.detail },
       decide: (detail, undo, operationId) => rpc('edrv.review.decide', { sessionId, id: detail.item.id, seq: detail.item.seq, revision: detail.item.revision, operationId, scope: 'file', decision: undo ? 'rejected' : 'accepted' }),
+      confirmExternal: (details) => window.confirm(
+        `这批修改里有 ${details.length} 条不是本会话工具写入的来源（例如编辑器保存、版本库基线或外部脚本）。\n确认整批撤销并写回修改前内容？`),
       guard: () => guardReviewAll(true, token), operation: batchOperation,
     }, true)
   }

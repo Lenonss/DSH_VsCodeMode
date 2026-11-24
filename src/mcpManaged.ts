@@ -25,6 +25,10 @@ export interface ManagedState {
   error?: string
   /** 官方报告的 OAuth 授权阶段。 */
   phase?: string
+  /** 官方报告的真连上时刻（epoch 毫秒，仅 connected 状态有）。 */
+  connectedAt?: number
+  /** 本条注册的挂载时刻（epoch 毫秒），供会话卡片算耗时。 */
+  since?: number
 }
 
 /** 一条托管注册的账目。 */
@@ -39,6 +43,8 @@ interface Held {
   key: string
   /** 需求计数：归零才真正注销。 */
   refs: number
+  /** 注册时刻：会话卡片按它算本服务器的耗时。 */
+  mountedAt: number
   /** 注销函数；注册失败时缺省。 */
   dispose?: () => void
 }
@@ -197,7 +203,7 @@ export class ManagedProject {
    */
   private mount(path: string, server: string, def: ManagedDef, refs: number): void {
     const name = managedName(path, server)
-    const record: Held = { name, path, server, key: keyOf(def), refs }
+    const record: Held = { name, path, server, key: keyOf(def), refs, mountedAt: Date.now() }
     this.held.set(name, record)
     const reason = this.conflictOf(name)
     if (reason) {
@@ -269,7 +275,7 @@ export class ManagedProject {
   }
 
   /**
-   * 读一条托管的当前状态。
+   * 读一条托管的当前状态；挂载时刻与官方连上时刻一并带出。
    * @public @author ddj 2026年11月23号
    * @param path 工作区路径
    * @param server 服务器名
@@ -277,12 +283,15 @@ export class ManagedProject {
    */
   stateOf(path: string, server: string): ManagedState {
     const name = managedName(path, server)
+    const held = this.held.get(name)
     const view = this.views.get(name)
     // 没注册过就不是 disabled：那是「按需、还没人用」，面板按 configured 显示。
-    if (!view) return { state: this.held.has(name) ? 'unknown' : 'idle' }
+    if (!view) return held ? { state: 'unknown', since: held.mountedAt } : { state: 'idle' }
     const state: ManagedState = { state: view.state }
+    if (held) state.since = held.mountedAt
     if (view.error) state.error = view.error
     if (view.phase) state.phase = view.phase
+    if (view.connectedAt !== undefined) state.connectedAt = view.connectedAt
     return state
   }
 

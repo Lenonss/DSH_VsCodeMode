@@ -151,6 +151,8 @@ function GeneralSettings({ registry, getShortcuts }) {
   const [nativeDraft, setNativeDraft] = React.useState(null) // 原生打开范围草稿（同上提交语义）
   const [refIntakeOn, setRefIntakeOn] = React.useState(true) // 引用接入（拖拽/粘贴/复制 → 引用 chip）
   const [searchReplaceOn, setSearchReplaceOn] = React.useState(true) // 搜索面板全局替换
+  const [extWatchOn, setExtWatchOn] = React.useState(true) // 外部改动实时捕获（watch）
+  const [extScanOn, setExtScanOn] = React.useState(true) // 外部改动补扫（启动对齐与定时）
   const [kbMessage, setKbMessage] = React.useState('') // 打开官方快捷键弹窗的失败说明（空 = 未失败）
   const settings = React.useContext(SettingsContext)
   const snapshot = settings?.getSnapshot?.()
@@ -168,6 +170,8 @@ function GeneralSettings({ registry, getShortcuts }) {
       setNativeSaved(typeof native === 'string' && native.trim() ? native : DEFAULT_NATIVE_CSV)
       setRefIntakeOn(snap?.value?.refIntake !== false)
       setSearchReplaceOn(snap?.value?.searchReplace !== false)
+      setExtWatchOn(snap?.value?.externalWatch !== false)
+      setExtScanOn(snap?.value?.externalScan !== false)
     }
     onChange()
     return settings?.subscribe?.(onChange)
@@ -364,6 +368,23 @@ function GeneralSettings({ registry, getShortcuts }) {
             type: 'checkbox', checked: searchReplaceOn,
             disabled: loading || unavailable || notReady || busy || snapshot?.writable === false,
             onChange: (event) => saveToggle('searchReplace', event.target.checked, setSearchReplaceOn),
+          })),
+      ),
+    ),
+    React.createElement('section', { className: 'vsm-panel' },
+      React.createElement('h3', { className: 'vsm-panel-title' }, '改动捕获'),
+      React.createElement('div', { className: 'vsm-panel-body' },
+        React.createElement(SettingRow, { label: '实时捕获', description: 'agent 用 shell 或脚本（node -e、prettier、生成器）写文件时，改动也会进审查面板；关闭后只认 edit/write 等写工具。' },
+          React.createElement('input', {
+            type: 'checkbox', checked: extWatchOn,
+            disabled: loading || unavailable || notReady || busy || snapshot?.writable === false,
+            onChange: (event) => saveToggle('externalWatch', event.target.checked, setExtWatchOn),
+          })),
+        React.createElement(SettingRow, { label: '补扫对齐', description: '启动时与每 10 分钟用版本库比对一次，把漏采的改动补录进来；关闭后仍可手动补扫。' },
+          React.createElement('input', {
+            type: 'checkbox', checked: extScanOn,
+            disabled: loading || unavailable || notReady || busy || snapshot?.writable === false,
+            onChange: (event) => saveToggle('externalScan', event.target.checked, setExtScanOn),
           })),
       ),
     ),

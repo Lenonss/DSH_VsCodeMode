@@ -10,6 +10,7 @@ import { keepBlock, revertBlock, textDiff } from './hunks.js'
 import type { PendingEntry } from './kernel.js'
 import { applyUpdate, isSettled } from './kernel.js'
 import type { PendingFlags } from './persist.js'
+import { revertPolicyOf, sourceLabelOf } from './provenance.js'
 
 /** 写盘结果：`content` 是读回校验通过后的最终内容，null 表示删除。 */
 export type WriteResult = { ok: true; content: string | null } | { ok: false; reason: string }
@@ -187,17 +188,25 @@ function markAll(states: ReviewBlockState[], targets: ReviewBlock[], decision: '
 }
 
 /**
- * @author ddj 2026年10月29号
- * @description: 能力口径：Keep 恒可；Revert 受超大/缺失/已解决限制，拒绝原因要能展示。
+ * @author ddj 2026年10月29号 / 2026年11月24号
+ * @description: 能力口径：Keep 恒可；Revert 受超大/缺失/已解决/来源限制，拒绝原因要能展示。
+ * 撤销白名单：只有 agent 来源且基线可信时直接可撤销，其它来源要求客户端显式确认。
  * @param entry 待审条目
  * @param flags 持久标记
  * @returns 能力与原因
  */
-export function capabilityOf(entry: PendingEntry, flags: PendingFlags): { keep: boolean; revert: boolean; reason: string } {
+export function capabilityOf(entry: PendingEntry, flags: PendingFlags): { keep: boolean; revert: boolean; reason: string; confirmRevert?: boolean } {
   if (isSettled(entry)) return { keep: false, revert: false, reason: 'settled' }
   if (flags.oversized) return { keep: false, revert: false, reason: 'oversized' }
+  if (entry.baseKind === 'unknown') {
+    return { keep: true, revert: false, reason: '未捕获修改前内容（外部写入）：留档可见，但不能撤销，否则会删掉现有代码' }
+  }
   if (entry.earlierVersion === 'none' && entry.newText.length === 0) {
     return { keep: true, revert: false, reason: 'empty-create' }
+  }
+  const policy = revertPolicyOf(entry.origin, entry.baseKind)
+  if (policy === 'confirm') {
+    return { keep: true, revert: true, confirmRevert: true, reason: '该改动不是本会话工具写的（' + sourceLabelOf(entry) + '）：撤销前请确认' }
   }
   return { keep: true, revert: true, reason: '' }
 }

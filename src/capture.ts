@@ -19,6 +19,7 @@ import type { Registry } from './registry.js'
 import { cwdOfSession } from './registry.js'
 import { findRemoteWs, mirrorTargetOf } from './remoteWorkspace.js'
 import { invalidateIndex } from './treeIndex.js'
+import { pathKeyOf, windows } from './pending/provenance.js'
 import { log } from './log.js'
 
 /** 捕获所需的工具执行最小形状（DSH ToolExecution 的结构子集）。 */
@@ -154,6 +155,8 @@ async function syncMirrorFile(absPath: string, content: string): Promise<string 
   try {
     await mkdir(dirname(absPath), { recursive: true })
     await writeFile(absPath, content, 'utf8')
+    // 镜像写穿是本插件自己的写盘：打标记让 watch 采集别把它记成外部改动
+    windows.markSelf(pathKeyOf(absPath))
     return null
   } catch (error) {
     return String(error)

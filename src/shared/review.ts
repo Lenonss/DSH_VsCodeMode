@@ -55,6 +55,8 @@ export interface ReviewItem {
   decision: ReviewFileDecision
   revision: number
   current: boolean
+  /** 待审条目的来源徽标（如「watch · agent」）；官方行为空。 */
+  sourceLabel?: string
 }
 export interface ReviewDetail {
   item: ReviewItem
@@ -62,7 +64,7 @@ export interface ReviewDetail {
   capturedAt: string
   blocks: import('./reviewRegions.js').ReviewBlockState[]
   /** live 缺省视为未知：只有 host 明确给出 false 时才代表会话不在本端活跃。 */
-  capability: { keep: boolean; undo: boolean; reason: string; live?: boolean }
+  capability: { keep: boolean; undo: boolean; reason: string; live?: boolean; confirmUndo?: boolean }
 }
 export interface CaptureGap {
   sessionId: string

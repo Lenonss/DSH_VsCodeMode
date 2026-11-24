@@ -121,6 +121,13 @@ describe('managerPort', () => {
     expect(frames).toEqual([[{ name: 'demo', configured: true, state: 'connected' }]])
   })
 
+  it('keeps the official connected time for the session card', () => {
+    expect(toView({ name: 'demo', configured: true, status: { state: 'connected', connectedAt: 7000 } }))
+      .toEqual({ name: 'demo', configured: true, state: 'connected', connectedAt: 7000 })
+    expect(toView({ name: 'demo', configured: true, status: { state: 'connecting', connectedAt: 'oops' } }))
+      .toEqual({ name: 'demo', configured: true, state: 'connecting' })
+  })
+
   it('gives an empty stream when watch is missing or the service is absent', async () => {
     const withoutWatch = managerPort({ get: () => ({ register: () => () => {}, list: () => [] }) })
     const frames: unknown[] = []

@@ -12,6 +12,8 @@ export interface DiffFile extends FileSummary {
   added?: number
   /** 待审行的删除行数。 */
   deleted?: number
+  /** 待审行的来源徽标（如「watch · 外部」）；官方与历史行为空。 */
+  sourceLabel?: string
 }
 export interface DiffSummary extends Summary { files: DiffFile[]; pendingFiles: DiffFile[] }
 
@@ -101,14 +103,17 @@ function pendingRowsOf(page: ReviewPage | null): { rows: DiffFile[]; covered: Se
   for (const item of page?.items ?? []) {
     if (!item.id.startsWith(PENDING_PREFIX)) continue
     const path = item.currentPath || item.path
+    const label = item.display || path
     rows.push({
       path,
-      label: item.display || path,
+      // 非 agent 来源才在标签上带徽标：agent 行保持原样，面板不被新增文案刷屏
+      label: item.sourceLabel && !item.sourceLabel.endsWith('· agent') ? `${label} · ${item.sourceLabel}` : label,
       recs: [],
       pending: item.decision === 'pending' ? 1 : 0,
       added: item.added,
       deleted: item.deleted,
       sourceKind: 'pending',
+      sourceLabel: item.sourceLabel,
     })
   }
   return { rows, covered: pendingCoverKeys(page) }

@@ -13,6 +13,8 @@ export function ReviewLedger(props: { sessionId: string; first: ReviewPage | nul
   const [cursor, setCursor] = React.useState(0)
   const [detail, setDetail] = React.useState<ReviewDetail | null>(null)
   const [error, setError] = React.useState('')
+  const [aligning, setAligning] = React.useState(false)
+  const [alignNote, setAlignNote] = React.useState('')
   const selected = React.useRef<AbortController | null>(null)
   React.useEffect(() => () => selected.current?.abort(), [])
   React.useEffect(() => {
@@ -38,9 +40,25 @@ export function ReviewLedger(props: { sessionId: string; first: ReviewPage | nul
       else setError(result.error)
     } catch (cause) { if (!controller.signal.aborted) setError(String(cause)) }
   }
+  /** @private @author ddj 2026年11月24号 @description 手动补扫：用版本库基线与已知内容对齐一次，把漏采的改动补进列表。 */
+  async function align(): Promise<void> {
+    if (aligning) return
+    setAligning(true)
+    try {
+      const result = await rpc('edrv.pending.align', { sessionId: props.sessionId })
+      if (!result.ok) { setAlignNote(result.error); return }
+      setAlignNote(result.imported ? `补扫新增 ${result.imported} 条（版本库报告 ${result.changed} 个改动）` : `没有需要补录的改动（版本库报告 ${result.changed} 个改动）`)
+      refreshReview(props.sessionId)
+    } catch (cause) { setAlignNote(String(cause)) }
+    finally { setAligning(false) }
+  }
   const gaps = page?.gaps ?? []
   return h('div', { style: { marginTop: 8 } },
-    h('label', null, h('input', { type: 'checkbox', checked: history, onChange: () => { setHistory(!history); setCursor(0) } }), '显示已处理及被替换的历史'),
+    h('div', { style: { display: 'flex', gap: 8, alignItems: 'center' } },
+      h('label', null, h('input', { type: 'checkbox', checked: history, onChange: () => { setHistory(!history); setCursor(0) } }), '显示已处理及被替换的历史'),
+      h('button', { type: 'button', disabled: aligning, title: '用版本库基线与已知内容对齐一次，补录漏采的改动', onClick: () => { void align() } },
+        aligning ? '补扫中…' : '补扫一次')),
+    alignNote ? h('small', { role: 'status', style: { display: 'block', marginTop: 4 } }, alignNote) : null,
     error ? h('div', { role: 'alert' }, error) : null,
     !page ? h('p', { role: 'status' }, '正在读取官方审查记录…') : null,
     page && !page.items.length ? h('p', null, history ? '暂无已落盘历史。' : '没有待处理的官方记录；可切换查看历史。') : null,
@@ -49,7 +67,7 @@ export function ReviewLedger(props: { sessionId: string; first: ReviewPage | nul
       title: item.currentPath || item.path,
       style: { display: 'block', width: '100%', textAlign: 'left', padding: '6px 4px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
     }, item.id.startsWith(PENDING_PREFIX)
-      ? `【待审】${item.display}  +${item.added} −${item.deleted} · ${item.decision}${item.kind === 'oversized' ? ' · 过大' : ''}`
+      ? `【待审】${item.display}  +${item.added} −${item.deleted} · ${item.decision}${item.sourceLabel ? ' · ' + item.sourceLabel : ''}${item.kind === 'oversized' ? ' · 过大' : ''}`
       : `轮次 ${item.turn} · ${item.display}  +${item.added} −${item.deleted} · ${item.decision}${item.current ? '' : '（已被同轮新版本替换）'}`))),
     cursor > 0 ? h('button', { type: 'button', onClick: () => setCursor(Math.max(0, cursor - 50)) }, '上一页') : null,
     page?.nextCursor !== null && page?.nextCursor !== undefined ? h('button', { type: 'button', onClick: () => setCursor(page.nextCursor!) }, '下一页') : null,

@@ -9,6 +9,7 @@ import { toolTargets, patchDiagnostics, OPS_PREFIX } from '../toolTargets.js'
 import { replaceCandidates, BULK_LIMIT } from './bulkTargets.js'
 import type { BulkSearcher } from './bulkTargets.js'
 import { rawText, rawReviewFile } from '../reviewEvidence.js'
+import type { PendingBaseKind, PendingOrigin } from '../shared/pendingReview.js'
 
 /** 可被采信为待审来源的写文件工具（含 dsh-ops 的单目标写工具）。 */
 const WRITE_TOOLS = [
@@ -36,6 +37,21 @@ function recordGap(scope: { cwd: string; sessionId: string }, exec: WriteExec, p
   while (captureGaps.size > 500) captureGaps.delete(captureGaps.keys().next().value!)
 }
 
+/**
+ * @public
+ * @author ddj 2026-11-24
+ * @description: 外部采集（watch / 补扫）的缺口上报：非文本、超大、读取失败都记进同一份列表，
+ * 让面板能把「没记下来」说清楚，而不是静默丢条目。
+ * @param cwd 工作区
+ * @param sessionId 会话
+ * @param path 出问题的路径
+ * @param error 原因
+ * @returns 无
+ */
+export function noteCaptureGap(cwd: string, sessionId: string, path: string, error: unknown): void {
+  recordGap({ cwd, sessionId }, { id: 'external' }, path, error)
+}
+
 /** 一次已确认的写入。 */
 export interface PendingWrite {
   cwd: string
@@ -45,6 +61,12 @@ export interface PendingWrite {
   before: string | null
   after: string | null
   now: number
+  /** 触发本次写入的工具名；缺省按未知写工具（`tool`）记录。 */
+  tool?: string
+  /** 显式归属（外部采集用）；缺省按时间窗判定。 */
+  origin?: PendingOrigin
+  /** 修改前内容的可信度（外部采集用）；缺省按 before 是否为空推断。 */
+  baseKind?: PendingBaseKind
 }
 
 /** 采集器。 */
@@ -105,7 +127,7 @@ export function installPending(
  * @param exec 工具分发上下文
  * @returns 采集计划或 null
  */
-async function planOf(scope: { cwd: string; sessionId: string; fs: any }, state: CaptureState, requested: string): Promise<CapturePlan | null> {
+async function planOf(scope: { cwd: string; sessionId: string; fs: any }, state: CaptureState, requested: string, tool: string): Promise<CapturePlan | null> {
   const { cwd, sessionId, fs } = scope
   if (state.stopped || state.disposed.has(sessionId)) return null
   const target = await fs.resolve(requested, { cwd })
@@ -118,7 +140,7 @@ async function planOf(scope: { cwd: string; sessionId: string; fs: any }, state:
       state.busy.delete(identity)
       return null
     }
-    return { cwd: String(cwd), sessionId, path: requested, identity, before, target, fs }
+    return { cwd: String(cwd), sessionId, path: requested, identity, before, target, fs, tool }
   } catch (error) {
     state.busy.delete(identity)
     throw error
@@ -134,6 +156,8 @@ interface CapturePlan {
   before: string | null
   target: unknown
   fs: any
+  /** 触发本次写入的工具名，用于记录采集通道。 */
+  tool: string
 }
 
 /** 替换回执里的一条文件结果；只关心目标与完成状态。 */
@@ -230,10 +254,11 @@ async function buildPlans(
   scope: { cwd: string; sessionId: string; fs: any }, state: CaptureState, exec: WriteExec, paths: string[],
 ): Promise<CapturePlan[]> {
   const plans: CapturePlan[] = []
+  const tool = String(exec.name ?? '')
   for (const path of paths) {
     try {
       if (plans.length >= BULK_LIMIT) throw new Error('capture target budget exceeded')
-      const plan = await planOf(scope, state, path)
+      const plan = await planOf(scope, state, path, tool)
       if (plan) plans.push(plan)
     } catch (error) {
       if (!state.stopped && !state.disposed.has(scope.sessionId)) recordGap(scope, exec, path, error)
@@ -316,7 +341,10 @@ async function reportWrite(state: CaptureState, sink: (write: PendingWrite) => v
     if (gap.cwd === plan.cwd && gap.sessionId === plan.sessionId && identity[3] === plan.path) captureGaps.delete(key)
   }
   if (plan.before === after) return
-  sink({ cwd: plan.cwd, sessionId: plan.sessionId, path: plan.path, identity: plan.identity, before: plan.before, after, now: Date.now() })
+  sink({
+    cwd: plan.cwd, sessionId: plan.sessionId, path: plan.path, identity: plan.identity,
+    before: plan.before, after, now: Date.now(), tool: plan.tool,
+  })
 }
 
 /**

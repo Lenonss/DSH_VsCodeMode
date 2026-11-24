@@ -33,6 +33,8 @@ export interface ManagerView {
   state: string
   error?: string
   phase?: string
+  /** 官方报告的真连上时刻（epoch 毫秒，仅 connected 状态有）。 */
+  connectedAt?: number
 }
 
 /** 官方 manager 的最小能力面；服务缺失即 available() === false。 */
@@ -56,7 +58,7 @@ interface HostLike { get: (name: string) => unknown }
 interface RawView {
   name?: unknown
   configured?: unknown
-  status?: { state?: unknown; reason?: unknown; lastError?: unknown; result?: { message?: unknown } }
+  status?: { state?: unknown; reason?: unknown; lastError?: unknown; connectedAt?: unknown; result?: { message?: unknown } }
   authorization?: { phase?: unknown }
 }
 
@@ -165,6 +167,8 @@ export function toView(raw: unknown): ManagerView {
   const result: ManagerView = { name, configured: view.configured === true, state }
   if (message) result.error = message
   if (phase) result.phase = phase
+  // 只有真连上才带这个时刻，会话卡片据此算本服务器的真实初始化耗时。
+  if (typeof status.connectedAt === 'number') result.connectedAt = status.connectedAt
   return result
 }
 

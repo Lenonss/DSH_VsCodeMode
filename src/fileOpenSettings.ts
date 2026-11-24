@@ -41,6 +41,10 @@ export interface FileOpenSettings {
   svnReadOnly?: boolean
   /** AI 提交信息风格（默认 plain）。 */
   aiCommitStyle?: 'plain' | 'conventional'
+  /** 外部改动实时捕获（watch，默认 true）。 */
+  externalWatch?: boolean
+  /** 外部改动补扫（启动对齐与定时，默认 true）。 */
+  externalScan?: boolean
 }
 export interface FileOpenSettingsState { value: string; revision?: number; update: (value: string, expectedRevision?: number) => Promise<void> }
 
@@ -462,6 +466,9 @@ export function buildSettingsSchema(z: SettingsDeps['z'], options?: { volatile?:
     // 交互特性开关（默认开）：拖拽/粘贴/复制的引用接入；搜索面板的全局替换
     refIntake: withVol(z.boolean().default(true)),
     searchReplace: withVol(z.boolean().default(true)),
+    // 外部改动捕获（默认开）：watch 实时采集 / 版本库补扫。关掉即退回只认工具链路的行为。
+    externalWatch: withVol(z.boolean().default(true)),
+    externalScan: withVol(z.boolean().default(true)),
   }
   if (wantVolatile) configVolatile = { requested: true, marked, total: Object.keys(shape).length }
   return z.object(shape)
@@ -652,6 +659,14 @@ export interface PluginAiUiSettings {
   commitStyle: 'plain' | 'conventional'
 }
 
+/** 外部改动捕获开关视图（host 采集层与设置页共用）。 */
+export interface PluginExternalSettings {
+  /** 实时监听工作区写事件并补记录。 */
+  watch: boolean
+  /** 启动对齐与定时补扫。 */
+  scan: boolean
+}
+
 /** setupOpenSettings 句柄（设置读写 + 分面视图读取）。 */
 export interface OpenSettingsHandle extends FileOpenSettingsState {
   /** AI 补全配置。 */
@@ -664,6 +679,8 @@ export interface OpenSettingsHandle extends FileOpenSettingsState {
   svnCommitDefaults: () => PluginSvnCommitDefaults
   /** AI 界面设置。 */
   aiUi: () => PluginAiUiSettings
+  /** 外部改动捕获开关。 */
+  external: () => PluginExternalSettings
 }
 
 /**
@@ -703,6 +720,11 @@ export function setupOpenSettings(ctx: Ctx, config: unknown, onChange: (value: s
   }
   /** AI 界面设置当前值（提交信息风格 / 整理是否默认按勾选范围）。 */
   let aiUiCurrent: PluginAiUiSettings = { commitStyle: commitStyleValueOf(config) }
+  /** 外部改动捕获开关当前值（settings 未就绪回退配置值）。 */
+  let externalCurrent: PluginExternalSettings = {
+    watch: boolValueOf(config, 'externalWatch', true),
+    scan: boolValueOf(config, 'externalScan', true),
+  }
   const svnSync = (stored: unknown): void => {
     svnCurrent = {
       svnPath: svnPathValueOf(stored),
@@ -713,6 +735,10 @@ export function setupOpenSettings(ctx: Ctx, config: unknown, onChange: (value: s
       autoDelete: boolValueOf(stored, 'svnAutoDeleteMissing', true),
     }
     aiUiCurrent = { commitStyle: commitStyleValueOf(stored) }
+    externalCurrent = {
+      watch: boolValueOf(stored, 'externalWatch', true),
+      scan: boolValueOf(stored, 'externalScan', true),
+    }
   }
   /** 读取 settings 存储值（describe 未就绪返回 undefined）。 */
   const storedValue = (): unknown => {
@@ -729,6 +755,8 @@ export function setupOpenSettings(ctx: Ctx, config: unknown, onChange: (value: s
     svnAutoDeleteMissing: svnCurrent.autoDelete,
     svnReadOnly: svnCurrent.readOnly,
     aiCommitStyle: aiUiCurrent.commitStyle,
+    externalWatch: externalCurrent.watch,
+    externalScan: externalCurrent.scan,
   }, {
     setSource: (source) => {
       notify(source().fileOpenTool)
@@ -764,6 +792,7 @@ export function setupOpenSettings(ctx: Ctx, config: unknown, onChange: (value: s
     svn: () => svnCurrent,
     svnCommitDefaults: () => ({ autoAdd: svnCurrent.autoAdd, autoDelete: svnCurrent.autoDelete }),
     aiUi: () => aiUiCurrent,
+    external: () => externalCurrent,
     aiUpdate: async (patch: AiConfigPatch, expectedRevision?: number): Promise<AiConfigView> => {
       const stored = { ...aiCurrent }
       const body: Record<string, unknown> = {}

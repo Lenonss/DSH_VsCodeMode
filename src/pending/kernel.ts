@@ -3,8 +3,9 @@
  * 无 IO、无时钟、不改入参；调用方传入 now 与内容，便于测试与复用。
  * @author ddj 2026年10月29号
  */
-import type { PendingEarlier, PendingLineage } from '../shared/pendingReview.js'
+import type { PendingBaseKind, PendingEarlier, PendingLineage, PendingOrigin, PendingSource } from '../shared/pendingReview.js'
 import { logicalLines } from '../shared/lineEndings.js'
+import { strongerSource } from './provenance.js'
 
 /** 内存态条目：比展示投影多保存两侧全文。 */
 export interface PendingEntry {
@@ -18,6 +19,12 @@ export interface PendingEntry {
   sessionId: string
   sessionIds: string[]
   lineage?: PendingLineage
+  /** 采集通道；缺省按 `tool` 解释。 */
+  source?: PendingSource
+  /** 归属；缺省按 `agent` 解释。 */
+  origin?: PendingOrigin
+  /** 修改前内容的可信度；缺省按 `known` 解释。 */
+  baseKind?: PendingBaseKind
 }
 
 /** 新建条目的入参。 */
@@ -30,6 +37,9 @@ export interface NewPending {
   newText: string
   updatedAt: number
   lineage?: PendingLineage
+  source?: PendingSource
+  origin?: PendingOrigin
+  baseKind?: PendingBaseKind
 }
 
 /** 决定后对条目的局部推进；未出现的字段表示不改。 */
@@ -76,6 +86,11 @@ export function mergeEntries(earlier: PendingEntry, later: PendingEntry): Pendin
     ...later,
     updatedAt: later.updatedAt,
     sessionIds: unionSessions(earlier, later),
+    // 采集通道取更强的一侧（工具链路胜过 watch，watch 胜过补扫），归属取最近一次改动。
+    source: strongerSource(earlier.source, later.source),
+    origin: later.origin ?? earlier.origin,
+    // 基线一旦落成"已知内容"，就不再退回未知；未知只来自首次观察失败的那条记录。
+    baseKind: later.baseKind ?? earlier.baseKind,
   }
   if (later.lineage === undefined && earlier.lineage !== undefined) merged.lineage = earlier.lineage
   if (earlier.earlierVersion === 'none' && later.earlierVersion === 'none') {
@@ -107,6 +122,9 @@ export function entryFromNew(input: NewPending): PendingEntry {
     sessionIds: [input.sessionId],
   }
   if (input.lineage !== undefined) entry.lineage = input.lineage
+  if (input.source !== undefined) entry.source = input.source
+  if (input.origin !== undefined) entry.origin = input.origin
+  if (input.baseKind !== undefined) entry.baseKind = input.baseKind
   return entry
 }
 

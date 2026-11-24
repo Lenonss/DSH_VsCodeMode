@@ -160,11 +160,26 @@ describe('ManagedProject 状态与重启', () => {
 
     managed.start()
     await tick()
-    expect(managed.stateOf('C:/w/alpha', 'demo')).toEqual({ state: 'connected', phase: 'authorizing' })
+    expect(managed.stateOf('C:/w/alpha', 'demo')).toMatchObject({ state: 'connected', phase: 'authorizing' })
 
     await managed.refresh('C:/w/alpha', 'demo')
     await managed.refresh('C:/w/alpha', 'missing')
     expect(calls.filter((call) => call.startsWith('restart:'))).toEqual(['restart:' + name])
+  })
+
+  it('carries the mount time and the official connected time', async () => {
+    const { ctx } = ctxOf()
+    const name = managedName('C:/w/alpha', 'demo')
+    const { port } = portOf({ frames: [[{ name, configured: true, state: 'connected', connectedAt: 7000 }]] })
+    const managed = new ManagedProject(ctx, port)
+    managed.sync('C:/w/alpha', new Map([['demo', defOf()]]))
+    managed.hold('C:/w/alpha', 'demo')
+
+    managed.start()
+    await tick()
+    const state = managed.stateOf('C:/w/alpha', 'demo')
+    expect(state.connectedAt).toBe(7000)
+    expect(typeof state.since).toBe('number')
   })
 
   it('reports idle before the first hold and unknown while unregistered', () => {

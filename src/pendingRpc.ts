@@ -6,8 +6,9 @@ import type { Registry } from './registry.js'
 import { bucketOf } from './registry.js'
 import { readText } from './pending/capture.js'
 import { pendingRawId, setPendingCovers, trackPendingCover } from './pendingCompat.js'
-import { loadEntries, saveEntry } from './pending/persist.js'
-import { applyDecide, importFromVcs, itemOf, loadDetail, loadPage, refreshed, removeEntry, undoDecide } from './pending/store.js'
+import { loadEntries, pendingVersion, saveEntry } from './pending/persist.js'
+import { applyDecide, importFromVcs, itemOf, loadDetail, loadPage, recordWrite, refreshed, removeEntry, undoDecide } from './pending/store.js'
+import { alignInWorkspace } from './pending/externalAlign.js'
 import type { ShellLike } from './pending/vcs.js'
 import type { Ctx } from './store.js'
 import { policyOf } from './store.js'
@@ -93,6 +94,11 @@ function readHandlers(kit: ScopeKit): Partial<RpcHandlerMap> {
       const rawId = pendingRawId(args.id)
       const detail = loadDetail(cwd, rawId)
       return detail ? { ok: true, detail } : { ok: false, error: '待审条目不存在' }
+    },
+    'edrv.pending.version': async (args: PendingRequest) => {
+      // 只读内存计数：供客户端用 1s 轻量轮询替代把整页列表拉到 5s 一次
+      const cwd = await kit.read(args.sessionId)
+      return { ok: true, version: pendingVersion(cwd) }
     },
   }
 }
@@ -187,6 +193,17 @@ function refreshHandlers(kit: ScopeKit): Partial<RpcHandlerMap> {
       const next = refreshed(stored, content, Date.now())
       if (next) saveEntry(cwd, next)
       return { ok: true, item: itemOf(next ?? stored) }
+    },
+    'edrv.pending.align': async (args) => {
+      // 手动补扫：与启动对齐同一条路径，只是明确要求本端活跃会话
+      const cwd = await kit.write(args.sessionId)
+      const outcome = await alignInWorkspace(kit.ctx, cwd, args.sessionId, (write) => {
+        try { trackPendingCover(write.cwd, write.path, true, write.sessionId) } catch { /* 登记失败不影响落库 */ }
+        recordWrite(write)
+      })
+      const page = loadPage(cwd, args.sessionId)
+      setPendingCovers(cwd, args.sessionId, page.items.map((item) => item.path))
+      return { ok: true, imported: outcome.imported, changed: outcome.changed, gaps: outcome.gaps }
     },
   }
 }

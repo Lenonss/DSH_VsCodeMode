@@ -392,6 +392,8 @@ export interface RpcRequestMap {
   'edrv.pending.refresh': PendingRequest & { id: string }
   'edrv.pending.history': PendingHistoryMove
   'edrv.pending.import': PendingImport
+  'edrv.pending.align': PendingRequest & { includeUntracked?: boolean }
+  'edrv.pending.version': PendingRequest
   'edrv.list': { sessionId?: string; callIds?: string[]; skipStale?: boolean }
   'edrv.accept': { sessionId?: string; callId: string; scope?: RpcScope; hunkIndex?: number }
   'edrv.reject': { sessionId?: string; callId: string; scope?: RpcScope; hunkIndex?: number }
@@ -600,6 +602,8 @@ export interface RpcOkMap {
   'edrv.pending.refresh': { item: PendingItem }
   'edrv.pending.history': { item: PendingItem; wrote: boolean }
   'edrv.pending.import': { imported: number; changes: number }
+  'edrv.pending.align': { imported: number; changed: number; gaps: string[] }
+  'edrv.pending.version': { version: number }
   'edrv.list': { records: RecordView[] }
   'edrv.accept': { record: RecordView }
   'edrv.reject': { record: RecordView }

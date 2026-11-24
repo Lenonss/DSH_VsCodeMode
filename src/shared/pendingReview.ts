@@ -9,6 +9,18 @@ import type { ReviewBlockState } from './reviewRegions.js'
 /** 基线形态：`file` 写回内容，`none` 说明基线没有该路径（Revert 语义是删除文件）。 */
 export type PendingEarlier = 'file' | 'none'
 
+/**
+ * 采集通道：谁把这次变化变成了一条记录。
+ * `tool` 是旧记录与未知写工具的默认值；`remote_ssh_write` 目前只走旧链路，为桥接保留。
+ */
+export type PendingSource = 'edit' | 'write' | 'remote_ssh_write' | 'tool' | 'watch' | 'scan' | 'vcs'
+
+/** 归属：谁动的文件。撤销白名单只看它。 */
+export type PendingOrigin = 'agent' | 'editor' | 'vcs' | 'external'
+
+/** 修改前内容的可信度：known 已知内容，absent 当时不存在，vcs 版本库基线，unknown 拿不到。 */
+export type PendingBaseKind = 'known' | 'absent' | 'vcs' | 'unknown'
+
 /** 会话血缘，用于子代理/派生会话归属到同一待审视图。 */
 export interface PendingLineage {
   parentSessionId?: string
@@ -41,6 +53,12 @@ export interface PendingItem {
   sessionId: string
   sessionIds: string[]
   lineage?: PendingLineage
+  /** 采集通道；旧条目没有该字段，按 `tool` 处理。 */
+  source?: PendingSource
+  /** 归属；旧条目没有该字段，按 `agent` 处理。 */
+  origin?: PendingOrigin
+  /** 修改前内容的可信度；旧条目没有该字段，按 `known` 处理。 */
+  baseKind?: PendingBaseKind
 }
 
 /** 一页待审条目。 */
@@ -57,7 +75,7 @@ export interface PendingDetail {
   item: PendingItem
   diff: OfficialDiff
   blocks: ReviewBlockState[]
-  capability: { keep: boolean; revert: boolean; reason: string }
+  capability: { keep: boolean; revert: boolean; reason: string; confirmRevert?: boolean }
 }
 
 /** 全部请求都带会话作用域，工作区由 host 解析，永不采信客户端 cwd。 */
