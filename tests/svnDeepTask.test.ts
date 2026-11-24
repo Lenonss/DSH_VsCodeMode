@@ -13,12 +13,13 @@ vi.mock('react', () => ({ default: {
   useCallback: (callback: unknown, deps?: unknown[]) => memoHook(() => callback, deps),
   useEffect: effectHook,
 } }))
-vi.mock('../src/client/ui/icons.js', () => ({ IconRefreshOutline16: null, fileIconEl: () => null }))
+vi.mock('../src/client/ui/icons.js', () => ({ IconRefreshOutline16: null, fileIconEl: () => null, dirIconEl: () => null, entryIconEl: () => null }))
 vi.mock('../src/client/ui/ContextMenu.js', () => ({ ContextMenu: 'context-menu' }))
 vi.mock('../src/client/ui/SvnAiPlanDialog.js', () => ({ SvnAiPlanDialog: 'plan-dialog' }))
 vi.mock('../src/client/svnStatus.js', () => ({
   svnAiPlanPending: hooks.poll, svnChangesCapped: () => false,
   svnFileSizes: hooks.forbidden, refreshSvnChanges: hooks.forbidden, runPlanSteps: hooks.forbidden,
+  svnPathKinds: async () => ({}),
   svnAdd: hooks.forbidden, svnAiPlan: hooks.forbidden, svnChangelist: hooks.forbidden,
   svnConflictArtifacts: hooks.forbidden, svnIgnore: hooks.forbidden, svnRemoteStatus: hooks.forbidden, svnRevert: hooks.forbidden,
 }))

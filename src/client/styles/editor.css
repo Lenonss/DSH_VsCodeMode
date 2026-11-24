@@ -229,6 +229,39 @@
   box-shadow: none;
   overflow: hidden;
 }
+/* 输入条崩溃兜底：官方槽被替换成空占位时，dock 位给出可点的恢复入口 */
+[data-edrv-diff-dock-shell] .edrv-composer-crash {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 6px 12px;
+}
+[data-edrv-diff-dock-shell] .edrv-composer-crash-text {
+  min-width: 0;
+  flex: 1;
+  color: var(--dsw-alias-state-warning-primary, #a86a1f);
+  font-size: 12px;
+  line-height: 18px;
+  overflow-wrap: anywhere;
+}
+[data-edrv-diff-dock-shell] .edrv-composer-crash-fix {
+  flex: none;
+  height: 28px;
+  padding: 0 12px;
+  border: 1px solid var(--dsw-alias-border-l1, #e0e6e8);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+[data-edrv-diff-dock-shell] .edrv-composer-crash-fix:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
 [data-edrv-diff-dock-shell] .edrv-diffbar-dock {
   box-sizing: border-box;
   position: relative;
@@ -740,7 +773,7 @@
 [data-edrv-view] .edrv-update-close:disabled { opacity: .35; cursor: default; }
 [data-edrv-view] .edrv-update-close:not(:disabled):hover { background: var(--dsw-alias-interactive-bg-hover, #e7edf0); }
 [data-edrv-view] .edrv-update-table { display: flex; flex-direction: column; flex: 1; min-height: 0; margin: 12px 14px 0; border: 1px solid var(--dsw-alias-border-l1, #d9e0e4); border-radius: 5px; overflow: hidden; background: var(--dsw-alias-bg-layer-1, #fff); }
-[data-edrv-view] .edrv-update-cols, [data-edrv-view] .edrv-update-row { display: grid; grid-template-columns: 110px minmax(0, 1fr) 160px; align-items: center; }
+[data-edrv-view] .edrv-update-cols, [data-edrv-view] .edrv-update-row { display: grid; grid-template-columns: 110px 22px minmax(0, 1fr) 160px; align-items: center; }
 [data-edrv-view] .edrv-update-sort { width: 100%; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
 [data-edrv-view] .edrv-update-sort:hover { color: var(--dsw-alias-brand-primary, #2869b4); }
 [data-edrv-view] .edrv-update-sort:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary, #2869b4); outline-offset: 2px; }
@@ -759,6 +792,9 @@
 [data-edrv-view] .edrv-update-action.tone-deleted, [data-edrv-view] .edrv-update-action.tone-conflict { color: var(--dsw-alias-state-error-primary, #b93b43); }
 [data-edrv-view] .edrv-update-action.tone-merged { color: var(--dsw-alias-state-warn-primary, #a05d22); }
 [data-edrv-view] .edrv-update-action.tone-updated { color: var(--dsw-alias-state-info-primary, #2869b4); }
+/* 图标列：独立窄列，不带单元格内边距与分隔线 @author ddj 2026年11月23号 */
+[data-edrv-view] .edrv-update-icon { display: inline-flex; align-items: center; justify-content: center; padding: 0; }
+[data-edrv-view] .edrv-update-cols > span + .edrv-update-icon, [data-edrv-view] .edrv-update-row > span + .edrv-update-icon { padding: 0; border-left: 0; }
 [data-edrv-view] .edrv-update-path { font-family: var(--ds-font-family-code, ui-monospace, monospace); }
 [data-edrv-view] .edrv-update-type { color: var(--dsw-alias-label-tertiary, #65737c); }
 [data-edrv-view] .edrv-update-empty { position: absolute; top: 50%; left: 0; right: 0; transform: translateY(-50%); text-align: center; font-size: 12px; color: var(--dsw-alias-label-tertiary, #65737c); pointer-events: none; }
@@ -777,8 +813,8 @@
 @media (max-width: 620px) {
   [data-edrv-view] .edrv-update-head { gap: 6px; padding: 0 10px; }
   [data-edrv-view] .edrv-update-table { margin: 8px 8px 0; }
-  [data-edrv-view] .edrv-update-cols, [data-edrv-view] .edrv-update-row { grid-template-columns: 76px minmax(0, 1fr); }
-  [data-edrv-view] .edrv-update-cols > span:nth-child(3), [data-edrv-view] .edrv-update-row > span:nth-child(3) { display: none; }
+  [data-edrv-view] .edrv-update-cols, [data-edrv-view] .edrv-update-row { grid-template-columns: 76px 18px minmax(0, 1fr); }
+  [data-edrv-view] .edrv-update-cols > span:nth-child(4), [data-edrv-view] .edrv-update-row > span:nth-child(4) { display: none; }
   [data-edrv-view] .edrv-update-path { white-space: normal !important; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
   [data-edrv-view] .edrv-update-foot { flex-wrap: wrap; padding: 8px; }
   [data-edrv-view] .edrv-update-counts { flex-basis: 100%; }
@@ -795,7 +831,7 @@
 [data-edrv-view] .edrv-svncommit-bar .edrv-svn-check { flex: none; gap: 4px; font-size: 11px; color: var(--dsw-alias-label-secondary, #485762); }
 [data-edrv-view] .edrv-svncommit-badge { flex: none; margin-left: auto; padding: 1px 8px; border: 1px solid var(--dsw-alias-border-l1, #d9e0e4); border-radius: 10px; background: var(--dsw-alias-bg-layer-2, #f1f4f5); color: var(--dsw-alias-label-secondary, #485762); font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 [data-edrv-view] .edrv-svncommit-table { display: flex; flex-direction: column; flex: 1; min-height: 120px; margin: 10px 14px 0; border: 1px solid var(--dsw-alias-border-l1, #d9e0e4); border-radius: 5px; overflow: hidden; background: var(--dsw-alias-bg-layer-1, #fff); }
-[data-edrv-view] .edrv-svncommit-cols, [data-edrv-view] .edrv-svncommit-row { display: grid; grid-template-columns: 34px 24px minmax(0, 1fr); align-items: center; }
+[data-edrv-view] .edrv-svncommit-cols, [data-edrv-view] .edrv-svncommit-row { display: grid; grid-template-columns: 34px 24px 22px minmax(0, 1fr); align-items: center; }
 [data-edrv-view] .edrv-svncommit-cols { flex: none; height: 28px; padding: 0 10px; background: var(--dsw-alias-bg-layer-2, #f1f4f5); border-bottom: 1px solid var(--dsw-alias-border-l1, #d9e0e4); color: var(--dsw-alias-label-secondary, #485762); font-size: 11px; font-weight: 600; }
 [data-edrv-view] .edrv-svncommit-cols > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 [data-edrv-view] .edrv-svncommit-list { flex: 1; min-height: 0; overflow: auto; scrollbar-width: thin; }
@@ -810,6 +846,8 @@
 [data-edrv-view] .edrv-svncommit-emptyrow { padding: 3px 10px 5px 44px; font-size: 11px; color: var(--dsw-alias-label-tertiary, #8a949b); }
 [data-edrv-view] .edrv-svncommit-row:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary, #2869b4); outline-offset: -2px; }
 [data-edrv-view] .edrv-svncommit-pick { display: flex; align-items: center; }
+/* 图标列：独立窄列，与文件树同款图标 @author ddj 2026年11月23号 */
+[data-edrv-view] .edrv-svncommit-icon { display: inline-flex; align-items: center; justify-content: center; }
 [data-edrv-view] .edrv-svncommit-path { min-width: 0; padding-right: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--ds-font-family-code, ui-monospace, monospace); font-size: 11px; }
 [data-edrv-view] .edrv-svncommit-empty { display: grid; place-items: center; flex: 1; padding: 24px; color: var(--dsw-alias-label-tertiary, #65737c); font-size: 12px; }
 [data-edrv-view] .edrv-svncommit-cb { position: relative; flex: none; box-sizing: border-box; width: 13px; height: 13px; margin: 0; border: 1px solid var(--dsw-alias-border-l2, #cdd6da); border-radius: 3px; background: var(--dsw-alias-bg-layer-1, #fff); cursor: pointer; appearance: none; -webkit-appearance: none; }
@@ -843,7 +881,7 @@
   [data-edrv-view] .edrv-svncommit-bar { padding: 6px 8px; }
   [data-edrv-view] .edrv-svncommit-badge { margin-left: 0; }
   [data-edrv-view] .edrv-svncommit-table { margin: 8px 8px 0; }
-  [data-edrv-view] .edrv-svncommit-cols, [data-edrv-view] .edrv-svncommit-row { grid-template-columns: 26px 24px minmax(0, 1fr); }
+  [data-edrv-view] .edrv-svncommit-cols, [data-edrv-view] .edrv-svncommit-row { grid-template-columns: 24px 20px 18px minmax(0, 1fr); }
   [data-edrv-view] .edrv-svncommit-row { height: auto; min-height: 34px; padding: 3px 8px; }
   [data-edrv-view] .edrv-svncommit-path { white-space: normal; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
   [data-edrv-view] .edrv-svncommit-compose { padding: 8px 8px 0; }

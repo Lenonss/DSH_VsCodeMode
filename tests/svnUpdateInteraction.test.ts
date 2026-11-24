@@ -3,6 +3,13 @@ const h = vi.hoisted(() => ({ slots: [] as any[], effects: [] as any[], cursor: 
 vi.mock('../src/client/rpc.js', () => ({ rpc: h.rpc }))
 vi.mock('../src/client/ui/ContextMenu.js', () => ({ ContextMenu: 'context-menu' }))
 vi.mock('../src/client/ui/ModalShell.js', () => ({ ModalShell: 'modal' }))
+// 图标原语来自 peer 包：开发环境未装它的传递依赖（anser），与本仓库其它 UI 测试同样改为 mock。
+vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({ Button: 'button' }))
+vi.mock('../src/client/ui/icons.js', () => ({
+  fileIconEl: () => null, dirIconEl: () => null, entryIconEl: () => null,
+}))
+// 判型请求只在本用例之外真正发出：固定回空表，避免定时器里打到 rpc mock。
+vi.mock('../src/client/svnStatus.js', () => ({ svnPathKinds: async () => ({}) }))
 vi.mock('react', async (original) => {
   const real = await original<any>()
   return { ...real, default: { ...real.default,
@@ -82,6 +89,7 @@ describe('SVN update actual component callbacks', () => {
   it('sort headers change display order, conflict navigation scrolls and selects stable seq', async () => {
     render(); let nodes = await settle()
     button(nodes, '路径').props.onClick(); nodes = render()
+    // 路径文本回到单元格本身（图标改为独立窄列）
     expect(nodes.filter((node) => node.props.className === 'edrv-update-path').map((node) => node.props.children)).toEqual(['a.txt', 'z.txt'])
     button(nodes, '跳转冲突').props.onClick(); nodes = render()
     expect(nodes.filter((node) => node.props.role === 'row' && node.props['aria-selected']).map((node) => node.props.title)).toEqual(['C a.txt'])

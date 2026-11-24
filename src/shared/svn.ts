@@ -566,6 +566,15 @@ export interface SvnRenamePair {
 /** 改名配对 size 批量查询单次上限（host `svn.fileSizes` 同值护栏；client 预截断对齐，防请求白打）。 */
 export const FILE_SIZES_CAP = 200
 
+/**
+ * 条目类型：`svn status` / `svn update` 的输出都不带 kind，只能查磁盘。
+ * `missing` 表示磁盘上没有该条目（已删除、或被外部移走），调用方按非目录处理。
+ */
+export type SvnPathKind = 'file' | 'dir' | 'missing'
+
+/** 批量判型单次上限（host `svn.pathKinds` 同值护栏；client 预分块对齐，防请求白打）。 */
+export const PATH_KINDS_CAP = 200
+
 /** 批量路径动作单次上限（revert/add/changelist 共用；host mutate 权威护栏，client 预分块对齐）。 */
 export const BATCH_PATHS_CAP = 64
 

@@ -7,6 +7,7 @@
  */
 import React from 'react'
 import { openDiffView } from '../events.js'
+import { recoverComposer, watchComposer } from '../composerState.js'
 import { diffSummary } from '../state/diffSummary.js'
 import { subscribeReview } from '../state/reviewFeed.js'
 import { subscribeRecords } from '../state/recordsFeed.js'
@@ -27,6 +28,12 @@ export function ConversationDiffDock(props) {
   const sessionId = props?.sessionId
   const [summary, setSummary] = React.useState(null)
   const [, setStoreRevision] = React.useState(0)
+  // 输入条槽崩溃后官方不会自愈：所有会话的输入框都会一直是空的，这里给出恢复入口
+  const [composerBroken, setComposerBroken] = React.useState(false)
+
+  React.useEffect(() => {
+    return watchComposer(typeof document === 'undefined' ? undefined : document, setComposerBroken)
+  }, [])
 
   React.useEffect(() => {
     if (!sessionId) {
@@ -57,14 +64,25 @@ export function ConversationDiffDock(props) {
   // 命令栏浮层的兜底宿主：本 dock 是每会话常驻 slot（编辑区未挂载时仍能唤起命令栏）；
   // 与 EditorView 同时挂载时由 commandPaletteStore 的单实例认领保证只渲染一份。
   const palette = React.createElement(CommandPalette, { key: 'edrv-palette', sessionId })
+  const crashHint = composerBroken
+    ? renderDock(React.createElement('div', { className: 'edrv-composer-crash' },
+      React.createElement('span', { className: 'edrv-composer-crash-text' },
+        '对话输入框渲染失败（官方槽抛错后不会自愈），点右侧按钮恢复'),
+      React.createElement('button', {
+        type: 'button',
+        className: 'edrv-composer-crash-fix',
+        onClick: recoverComposer,
+      }, '恢复输入框')), 'edrv-composer-crash')
+    : null
   if (editorSnapshot) {
-    if (!dockInLayout(editorSnapshot, 'tab')) return palette
+    if (!dockInLayout(editorSnapshot, 'tab')) return React.createElement(React.Fragment, null, crashHint, palette)
     return React.createElement(React.Fragment, null,
+      crashHint,
       renderDock(React.createElement(DiffBox, Object.assign({}, editorSnapshot, { dock: true })), sessionId),
       palette)
   }
 
-  if (!sessionId || !summary?.pendingFiles?.length) return palette
+  if (!sessionId || !summary?.pendingFiles?.length) return React.createElement(React.Fragment, null, crashHint, palette)
 
   const paths = summary.pendingFiles.map((file) => file.path)
   const click = () => {
@@ -75,6 +93,7 @@ export function ConversationDiffDock(props) {
   }
 
   return React.createElement(React.Fragment, null,
+    crashHint,
     palette,
     renderDock(React.createElement(DiffBox, {
       mode: 'chat', dock: true, fileTotal: paths.length, onOpenNextFile: click,

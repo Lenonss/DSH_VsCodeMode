@@ -19,7 +19,7 @@ import {
   svnPathOf,
   updateResultOf,
 } from '../src/svn.js'
-import { FILE_SIZES_CAP, TORTOISE_EXE, tortoiseLaunchArgv } from '../src/shared/svn.js'
+import { FILE_SIZES_CAP, PATH_KINDS_CAP, TORTOISE_EXE, tortoiseLaunchArgv } from '../src/shared/svn.js'
 import { AI_INBOX_TTL_MS } from '../src/svn.js'
 import { SVN_LOG_SHOW_ALL_CAP } from '../src/svnLog.js'
 import { svnEditorActions } from '../src/client/svnStatus.js'
@@ -513,6 +513,49 @@ describe('createSvnRpc svn.fileSizes（W2-5 批量大小查询）', () => {
     const empty = await (handlers as Record<string, (a: never) => unknown>)['svn.fileSizes']({ paths: [] } as never) as { ok: boolean; sizes?: unknown[] }
     expect(empty.ok).toBe(true)
     expect(empty.sizes).toEqual([])
+  })
+})
+
+describe('createSvnRpc svn.pathKinds（窗口行图标判型）', () => {
+  /** fs mock：resolve 保真回传；stat 按路径判目录/不存在，可选指定路径抛错。 */
+  const fsMock = (over: { failPaths?: string[] } = {}) => ({
+    resolve: async (p: string) => {
+      if (over.failPaths?.includes(p)) throw new Error('boom')
+      return p
+    },
+    stat: async (p: string) => {
+      if (String(p).endsWith('/gone')) return null
+      return { type: String(p).includes('folder') ? 'directory' : 'file' }
+    },
+  })
+
+  it('批量判型：等长同序，目录/文件/不存在分别映射', async () => {
+    const { handlers } = createSvnRpc(makeDeps({ ctx: makeCtx(null, '/wc', fsMock()) }))
+    const paths = ['Assets/folder', 'Assets/hero.png', 'Assets/gone']
+    const res = await (handlers as Record<string, (a: never) => unknown>)['svn.pathKinds']({ paths } as never) as { ok: boolean; kinds?: Array<{ path: string; kind: string }> }
+    expect(res.ok).toBe(true)
+    expect(res.kinds!.map((item) => item.path)).toEqual(paths)
+    expect(res.kinds!.map((item) => item.kind)).toEqual(['dir', 'file', 'missing'])
+  })
+
+  it('路径上限：超出 PATH_KINDS_CAP 的部分不查询（client 预分块对齐）', async () => {
+    const { handlers } = createSvnRpc(makeDeps({ ctx: makeCtx(null, '/wc', fsMock()) }))
+    const paths = Array.from({ length: PATH_KINDS_CAP + 25 }, (_, i) => 'f' + i + '.txt')
+    const res = await (handlers as Record<string, (a: never) => unknown>)['svn.pathKinds']({ paths } as never) as { ok: boolean; kinds?: unknown[] }
+    expect(res.ok).toBe(true)
+    expect(res.kinds!.length).toBe(PATH_KINDS_CAP)
+  })
+
+  it('单条失败按 missing：不因个别路径异常整体报错；空 paths 直接成功', async () => {
+    const { handlers } = createSvnRpc(makeDeps({ ctx: makeCtx(null, '/wc', fsMock({ failPaths: ['bad.txt'] })) }))
+    const res = await (handlers as Record<string, (a: never) => unknown>)['svn.pathKinds']({ paths: ['ok.txt', 'bad.txt', ''] } as never) as { ok: boolean; kinds?: Array<{ path: string; kind: string }> }
+    expect(res.ok).toBe(true)
+    expect(res.kinds![0]).toEqual({ path: 'ok.txt', kind: 'file' })
+    expect(res.kinds![1]).toEqual({ path: 'bad.txt', kind: 'missing' })
+    expect(res.kinds![2]).toEqual({ path: '', kind: 'missing' })
+    const empty = await (handlers as Record<string, (a: never) => unknown>)['svn.pathKinds']({ paths: [] } as never) as { ok: boolean; kinds?: unknown[] }
+    expect(empty.ok).toBe(true)
+    expect(empty.kinds).toEqual([])
   })
 })
 

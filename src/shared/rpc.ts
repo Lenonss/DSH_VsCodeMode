@@ -546,6 +546,8 @@ export interface RpcRequestMap {
   'svn.conflictArtifacts': { sessionId?: string; path: string }
   'svn.diffLocalPair': { sessionId?: string; left: string; right: string }
   'svn.fileSizes': { sessionId?: string; paths: string[] }
+  /** 批量判型：磁盘上这些条目是文件、目录还是不存在（svn 输出不带 kind，只能查盘）。 */
+  'svn.pathKinds': { sessionId?: string; paths: string[] }
   /** AI 智能整理：只读分析变更（paths 限定范围，缺省 = 全部），产出分组/还原/忽略/拆分提交方案。 */
   'svn.aiPlan': { sessionId?: string; paths?: string[] }
   /** AI 智能整理执行段：按目录合并写入 svn:ignore 属性（propget 合并，不整体覆盖）。 */
@@ -752,6 +754,7 @@ export interface RpcOkMap {
   'svn.conflictArtifacts': { artifacts: SvnConflictArtifact[] }
   'svn.diffLocalPair': SvnDiffRevResult
   'svn.fileSizes': { sizes: Array<{ path: string; size: number | null }> }
+  'svn.pathKinds': { kinds: Array<{ path: string; kind: import('./svn.js').SvnPathKind }> }
   'svn.aiPlan': { plan: SvnAiPlan; entriesCount: number; analyzedCount: number; diffIncluded: boolean; dropped: number; model?: string }
   'svn.ignore': { count: number; summary: string; output: string }
   /** accepted = 归一后三段总路径数（0 = ok:false 拒收）；dropped = 幻觉/落选丢弃数。 */

@@ -8,7 +8,7 @@
  * 动作：svnUpdate / svnTortoise / svnRevert / svnAdd / svnDiffBase 统一执行与反馈文案。
  * 作者 ddj 2026年09月16号
  */
-import type { SvnAction, SvnAiPlan, SvnChangeEntry, SvnIgnoreItem, SvnItemStatus, SvnStatusPayload, SvnUpdateEntry } from '../shared/svn.js'
+import type { SvnAction, SvnAiPlan, SvnChangeEntry, SvnIgnoreItem, SvnItemStatus, SvnPathKind, SvnStatusPayload, SvnUpdateEntry } from '../shared/svn.js'
 import { SVN_TORTOISE_LABELS, SVN_UPDATE_LABEL } from '../shared/svn.js'
 import { svnActionOn, svnActionsFor } from '../shared/svnActions.js'
 import type { SvnActionContext } from '../shared/svnActions.js'
@@ -608,6 +608,30 @@ export async function svnFileSizes(
     if (!res.ok) return {}
     const table: Record<string, number | null> = {}
     for (const item of res.sizes) table[item.path] = item.size
+    return table
+  } catch (error) {
+    return {}
+  }
+}
+
+/**
+ * 批量判型（窗口行图标用）：磁盘上这些条目是文件、目录还是不存在。
+ *
+ * 未加载或调用失败返回空表：调用方按「非目录」回落文件图标，列表与动作不受影响。
+ * @author ddj 2026年11月23号
+ * @param sessionId 会话 id
+ * @param paths 工作副本相对路径列表（host 单次上限 PATH_KINDS_CAP，调用方分块）
+ * @returns 路径 → 类型表（不存在的路径不出现在表里）
+ */
+export async function svnPathKinds(
+  sessionId: string | undefined,
+  paths: string[],
+): Promise<Record<string, SvnPathKind>> {
+  try {
+    const res = await rpc('svn.pathKinds', { sessionId, paths })
+    if (!res.ok) return {}
+    const table: Record<string, SvnPathKind> = {}
+    for (const item of res.kinds) table[item.path] = item.kind
     return table
   } catch (error) {
     return {}

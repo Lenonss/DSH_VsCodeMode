@@ -72,20 +72,68 @@ export const IconBranchOutline16 = iconOf('IconBranchOutline16', 'IconBranchOutl
 // 两代同名存活的原语：直通再导出（0.1.6/0.1.7 实证均在）
 export { FileTypeIcon, classifyFileType } from '@deepseek-ai/dsh-client-ui-primitives'
 
+/** 文件图标元素缓存上限（文件类型数远小于此；超限整体重置，防异常分类值把表撑爆）。 */
+const FILE_ICON_CACHE_MAX = 64
+/** 类型 → 图标元素（同一类型复用同一元素实例，全量渲染的清单不会每帧重建 4000 个节点）。 */
+const fileIconCache = new Map<string, React.ReactElement | null>()
+/** 目录图标元素（闭合/展开各一份，理由同上）。 */
+const dirIconCache = new Map<string, React.ReactElement>()
+
+/**
+ * 目录图标元素（官方 IconFolderClose16/Open16，与文件树同一套原语）。
+ * @author ddj 2026年09月10号 / 2026年11月23号
+ * @param isOpen 目录是否展开（窗口行恒为闭合）
+ * @returns 图标元素；原语缺失返回 null
+ */
+export function dirIconEl(isOpen = false): React.ReactElement | null {
+  const Icon = isOpen ? IconFolderOpen16 : IconFolderClose16
+  if (typeof Icon !== 'function') return null
+  const cached = dirIconCache.get(isOpen ? 'open' : 'close')
+  if (cached) return cached
+  // 与 fileIconEl 同法：图标是纯函数组件，直接调用并收窄返回类型（createElement 重载不认 unknown）。
+  const el = Icon({ size: 16, className: 'edrv-tree-icon' }) as React.ReactElement
+  dirIconCache.set(isOpen ? 'open' : 'close', el)
+  return el
+}
+
 /**
  * 文件图标元素（官方 FileTypeIcon + classifyFileType 分类，未知类型为 other）。
- * 文件树与 SVN 变更行共用（原为 FileExplorer 私有副本，上移共享防两处漂移）。
- * @author ddj 2026年09月23号
+ * 文件树、SVN 变更行与提交/更新窗口共用；元素按分类缓存，重复渲染不重建。
+ * @author ddj 2026年09月23号 / 2026年11月23号
  * @param name 文件名（含扩展名；目录由调用方走目录图标）
  * @returns 图标元素；原语缺失或分类异常返回 null
  */
 export function fileIconEl(name: string): React.ReactElement | null {
   if (typeof FileTypeIcon !== 'function' || typeof classifyFileType !== 'function') return null
+  let kind: ReturnType<typeof classifyFileType>
   try {
-    // FileTypeIcon 签名为 (props) => ReactNode（非 ReactElement），createElement 重载不认——
-    // 纯函数组件直接调用并收窄返回类型（与 FileExplorer 原 createElement 等效）。
-    return FileTypeIcon({ kind: classifyFileType(String(name ?? '')), size: 16, className: 'edrv-tree-icon' }) as React.ReactElement
+    kind = classifyFileType(String(name ?? ''))
   } catch (error) {
     return null
   }
+  const cacheKey = String(kind)
+  if (fileIconCache.has(cacheKey)) return fileIconCache.get(cacheKey) ?? null
+  let el: React.ReactElement | null = null
+  try {
+    // FileTypeIcon 签名为 (props) => ReactNode（非 ReactElement），createElement 重载不认——
+    // 纯函数组件直接调用并收窄返回类型（与 FileExplorer 原 createElement 等效）。
+    el = FileTypeIcon({ kind, size: 16, className: 'edrv-tree-icon' }) as React.ReactElement
+  } catch (error) {
+    el = null
+  }
+  if (fileIconCache.size >= FILE_ICON_CACHE_MAX) fileIconCache.clear()
+  fileIconCache.set(cacheKey, el)
+  return el
+}
+
+/**
+ * 条目图标分派：目录 → 文件夹图标，文件 → 官方类型图标。
+ * @author ddj 2026年11月23号
+ * @param path 条目路径（取末段做扩展名分类；目录不参与分类）
+ * @param isDir 是否目录（调用方用 SVN 判型结果决定）
+ * @returns 图标元素；原语缺失返回 null
+ */
+export function entryIconEl(path: string, isDir: boolean): React.ReactElement | null {
+  if (isDir) return dirIconEl(false)
+  return fileIconEl(String(path ?? '').split(/[\\/]/).pop() || '')
 }

@@ -11,7 +11,7 @@
  * 作者 ddj 2026-08-26 / 2026-08-27 / 2026-08-31 / 2026-09-10 / 2026-09-16 / 2026-10-09
  */
 import React from 'react'
-import { IconFolderClose16, IconFolderOpen16, IconRefreshOutline16, fileIconEl } from '../../ui/icons.js'
+import { IconRefreshOutline16, dirIconEl, fileIconEl } from '../../ui/icons.js'
 import { rpc } from '../../rpc.js'
 import { isSessionMissingError, sessionMissingDetail, sessionMissingTitle } from '../../sessionError.js'
 import { ContextMenu } from '../../ui/ContextMenu.js'
@@ -41,19 +41,8 @@ const MISSING_DIR_PREFIX = '目录不存在'
 
 // --region 行图标（官方原语：目录文件夹图标 + 文件类型图标；缺失时回落纯文本）
 
-/**
- * 目录图标元素（官方 IconFolderOpen16/Close16）。
- * @author ddj 2026年09月10号
- * @param isOpen 目录是否展开
- * @returns 图标元素；原语缺失返回 null
- */
-function dirIconEl(isOpen) {
-  const Icon = isOpen ? IconFolderOpen16 : IconFolderClose16
-  if (typeof Icon !== 'function') return null
-  return React.createElement(Icon, { size: 16, className: 'edrv-tree-icon' })
-}
-
-// 文件图标元素（fileIconEl）已上移 icons.ts 共享（SVN 变更行同用），此处直接引用。
+// 目录图标（dirIconEl）与文件图标（fileIconEl）都在 icons.ts 共享：文件树、SVN 变更行、
+// 提交/更新窗口用同一套原语，避免三处各留一份副本后漂移。
 
 /**
  * 行图标分派：目录 → 文件夹图标，文件 → 官方类型图标。

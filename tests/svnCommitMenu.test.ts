@@ -5,7 +5,12 @@
  * （抛穿渲染层会让整个 EditorView 被卸载——右键后弹窗与编辑页一起白屏）。
  * @author ddj 2026年11月21号
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+// 图标原语来自 peer 包：开发环境未装它的传递依赖（anser），与本仓库其它 UI 测试同样改为 mock。
+vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({ Button: 'button' }))
+vi.mock('../src/client/ui/icons.js', () => ({
+  fileIconEl: () => null, dirIconEl: () => null, entryIconEl: () => null,
+}))
 import { commitMenuEntriesOf } from '../src/client/ui/SvnCommitDialog.js'
 
 const view = {

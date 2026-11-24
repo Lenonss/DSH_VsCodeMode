@@ -9,10 +9,10 @@ vi.mock('react', () => ({ default: {
   useMemo: (factory: any) => factory(), useCallback: (callback: any) => callback,
   useEffect: (effect: any, deps: any[]) => { const i = mock.effectCursor++; const previous = mock.effects[i]; if (previous && deps?.every((entry, index) => Object.is(entry, previous.deps?.[index]))) return; mock.pending.push(() => { previous?.cleanup?.(); mock.effects[i] = { deps, cleanup: effect() } }) },
 } }))
-vi.mock('../src/client/ui/icons.js', () => ({ IconRefreshOutline16: null, fileIconEl: () => null }))
+vi.mock('../src/client/ui/icons.js', () => ({ IconRefreshOutline16: null, fileIconEl: () => null, dirIconEl: () => null, entryIconEl: () => null }))
 vi.mock('../src/client/ui/ContextMenu.js', () => ({ ContextMenu: () => null }))
 vi.mock('../src/client/ui/SvnAiPlanDialog.js', () => ({ SvnAiPlanDialog: () => null }))
-vi.mock('../src/client/svnStatus.js', () => ({ svnFileSizes: mock.sizes, svnChangesCapped: () => false, svnAiPlanPending: () => null,
+vi.mock('../src/client/svnStatus.js', () => ({ svnFileSizes: mock.sizes, svnChangesCapped: () => false, svnAiPlanPending: () => null, svnPathKinds: async () => ({}),
   refreshSvnChanges: vi.fn(), runPlanSteps: vi.fn(), svnAdd: vi.fn(), svnAiPlan: vi.fn(), svnChangelist: vi.fn(), svnConflictArtifacts: vi.fn(), svnIgnore: vi.fn(), svnRemoteStatus: vi.fn(), svnRevert: vi.fn() }))
 import { SvnPanel } from '../src/client/sidebar/panels/SvnPanel.js'
 

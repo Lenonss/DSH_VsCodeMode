@@ -19,6 +19,9 @@ import { SVN_ACTION_BY_ID } from '../../shared/svnActions.js'
 import type { SvnChangeEntry } from '../../shared/svn.js'
 import { SVN_STATUS_LABEL, SVN_STATUS_LETTER, SVN_STATUS_TONE } from '../../shared/svn.js'
 import { updateParent } from './svnUpdateModel.js'
+import { entryIconEl } from './icons.js'
+import { isDirOf } from './svnIcons.js'
+import { useSvnEntryKinds } from './useSvnEntryKinds.js'
 import {
   commitActs,
   commitHintOf,
@@ -333,8 +336,8 @@ function msgMenuEntriesOf(s, menu) {
 }
 
 /**
- * 单条待提交文件（勾选 / 状态字母 / 路径），支持右键与键盘唤起菜单。
- * @author ddj 2026年11月15号 / 2026年11月21号
+ * 单条待提交文件（勾选 / 状态字母 / 图标 / 路径），支持右键与键盘唤起菜单。
+ * @author ddj 2026年11月15号 / 2026年11月21号 / 2026年11月23号
  * @param entry 变更条目 @param checked 是否勾选 @param onToggle 切换 @param s 视图状态（菜单与动作）
  * @returns 行元素
  */
@@ -358,6 +361,8 @@ function rowEl(entry, checked, onToggle, s) {
       role: 'cell',
       title: SVN_STATUS_LABEL[entry.status] ?? entry.status,
     }, SVN_STATUS_LETTER[entry.status] ?? '?'),
+    React.createElement('span', { className: 'edrv-svncommit-icon', role: 'cell', 'aria-hidden': true },
+      entryIconEl(entry.path, isDirOf(entry.path, s.dirs, s.kinds))),
     React.createElement('span', { className: 'edrv-svncommit-path', role: 'cell', title: entry.path }, entry.path))
 }
 
@@ -390,6 +395,7 @@ function tableEl(s) {
     React.createElement('div', { className: 'edrv-svncommit-cols' },
       React.createElement('span', null, '勾选'),
       React.createElement('span', null, '状态'),
+      React.createElement('span', { 'aria-hidden': true }),
       React.createElement('span', null, '路径')),
     React.createElement('div', { className: 'edrv-svncommit-list', role: 'table', 'aria-label': '待提交文件清单' }, ...body))
 }
@@ -732,8 +738,10 @@ export function SvnCommitDialog(props) {
   const s = useCommitState(sessionId, seed, notify, onCommitted, props.onChanged)
   const context = useCommitMenu()
   const rowPick = useRowPick(s.rowOrder)
+  const entryKind = useSvnEntryKinds(s.rowOrder, sessionId)
   const view = {
     ...s, onClose, notify, selection: rowPick.selected, pickRow: rowPick.choose,
+    dirs: entryKind.dirs, kinds: entryKind.kinds,
     menu: context.menu,
     menuOpen: (event, kind, entry, node) => context.open(event, kind, entry, node, pickPathsOf(rowPick, entry)),
     onCompare: props.onCompare, onShowLog: props.onShowLog,

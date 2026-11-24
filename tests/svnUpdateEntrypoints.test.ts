@@ -18,7 +18,8 @@ vi.mock('../src/client/sidebar/panels/useExplorerReveal.js', () => ({
 }))
 vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({ Button: 'toolbar-button' }))
 vi.mock('../src/client/ui/icons.js', () => ({
-  IconFolderClose16: null, IconFolderOpen16: null, IconRefreshOutline16: null, fileIconEl: () => null,
+  IconFolderClose16: null, IconFolderOpen16: null, IconRefreshOutline16: null,
+  fileIconEl: () => null, dirIconEl: () => null, entryIconEl: () => null,
 }))
 import { FileExplorer } from '../src/client/sidebar/panels/FileExplorer.js'
 import { SvnPanel } from '../src/client/sidebar/panels/SvnPanel.js'

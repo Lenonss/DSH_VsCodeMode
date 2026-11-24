@@ -24,7 +24,7 @@ vi.mock('react', () => ({ default: {
   useLayoutEffect: (effect: any, deps?: any[]) => queueEffect(effect, deps, harness.layout),
 } }))
 vi.mock('../src/client/rpc.js', () => ({ rpc: vi.fn(() => new Promise(() => {})) }))
-vi.mock('../src/client/ui/icons.js', () => ({ IconFolderClose16: null, IconFolderOpen16: null, IconRefreshOutline16: null, fileIconEl: () => null }))
+vi.mock('../src/client/ui/icons.js', () => ({ IconFolderClose16: null, IconFolderOpen16: null, IconRefreshOutline16: null, fileIconEl: () => null, dirIconEl: () => null }))
 vi.mock('../src/client/ui/SvnOverlay.js', () => ({ svnOverlayEl: () => null, viewOverlayOf: () => null }))
 vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({ Button: 'button' }))
 vi.mock('../src/client/ui/ContextMenu.js', () => ({ ContextMenu: 'menu' }))

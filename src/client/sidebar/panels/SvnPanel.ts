@@ -13,7 +13,9 @@
  * 作者 ddj 2026年09月16号
  */
 import React from 'react'
-import { IconRefreshOutline16, fileIconEl } from '../../ui/icons.js'
+import { IconRefreshOutline16, entryIconEl } from '../../ui/icons.js'
+import { isDirOf } from '../../ui/svnIcons.js'
+import { useSvnEntryKinds } from '../../ui/useSvnEntryKinds.js'
 import {
   BATCH_PATHS_CAP,
   FILE_SIZES_CAP,
@@ -281,10 +283,12 @@ export function groupByChangelist(entries) {
  * @param props.onMenu 行右键菜单（分区管理入口；参数为条目与视口坐标）
  * @param props.onOpen 单击跳转（编辑区打开/聚焦该文件）
  * @param props.pairNote 疑似改名标记文案（W2-5；空 = 无配对）
+ * @param props.dirs 子项关系确定的目录集合（行图标判型）
+ * @param props.kinds host 返回的类型表（行图标判型）
  * @returns 行元素
  */
 const SvnRow = React.memo(function SvnRow(props) {
-  const { entry, busy, onDiff, onAdd, onRevert, onConflict, onMenu, onOpen, pairNote } = props
+  const { entry, busy, onDiff, onAdd, onRevert, onConflict, onMenu, onOpen, pairNote, dirs, kinds } = props
   const diffable = isSvnDiffable(entry.path, entry.status)
   const act = (label, title, danger, run) => React.createElement('button', {
     className: 'edrv-svn-act' + (danger ? ' edrv-svn-act-danger' : ''),
@@ -303,7 +307,7 @@ const SvnRow = React.memo(function SvnRow(props) {
       onMenu(entry, event.clientX, event.clientY)
     },
   },
-    fileIconEl(String(entry.path ?? '').split(/[\\/]/).pop() || ''),
+    entryIconEl(entry.path, isDirOf(entry.path, dirs, kinds)),
     statusLetterEl(entry),
     React.createElement('span', { className: 'edrv-svn-path' }, entry.path),
     (pairNote ? React.createElement('span', { className: 'edrv-svn-pair-mark', title: pairNote }, '⇄') : null),
@@ -944,6 +948,9 @@ export function SvnPanel(props) {
   const onAdd = React.useCallback((paths) => runBatch('add', paths), [runBatch])
   const onRevert = React.useCallback((paths) => runBatch('revert', paths), [runBatch])
   const showMore = React.useCallback(() => setRenderLimit((old) => old + RENDER_STEP), [])
+  // 行图标判型：条目集合变化才重算子项关系（面板会随编辑区刷新重渲，别每帧 O(n)）
+  const kindPaths = React.useMemo(() => shown.map((entry) => entry.path), [shown])
+  const entryKinds = useSvnEntryKinds(kindPaths, sessionId)
   const handlers = {
     busy,
     onDiff: openSvnDiff,
@@ -955,6 +962,8 @@ export function SvnPanel(props) {
     onMenu: openRowMenu,
     onGroupClRemove: removeGroupCl,
     onOpen: openFileAt,
+    dirs: entryKinds.dirs,
+    kinds: entryKinds.kinds,
   }
 
   /**

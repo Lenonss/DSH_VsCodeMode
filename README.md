@@ -684,13 +684,13 @@ profile 请替换为实际目标，不要把示例目录当成当前运行 profi
 
 ```bash
 # ① Git 安装（clone + prepare 构建；推荐打固定 tag）
-dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.33.1
+dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.34.0
 
 # ② npm 注册表（发布到 npm 后）
-dsh plugin --profile web add dsh-vscode-mode@0.33.1
+dsh plugin --profile web add dsh-vscode-mode@0.34.0
 
 # ③ GitHub Release tgz 直装（Release asset 可用后）
-dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.33.1/dsh-vscode-mode-0.33.1.tgz
+dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.34.0/dsh-vscode-mode-0.34.0.tgz
 ```
 
 > **DSH 版本政策（0.17.0 起）**：六项 DSH peer 仍统一声明为 `*`，另以
@@ -1075,6 +1075,7 @@ Keep All / Undo All 却是亮的。修复：单文件 Keep / Undo 覆盖冲突�
 
 | 版本 | 要点 |
 | --- | --- |
+| v0.34.0 | SVN 行图标按判型区分文件/目录（`svn status`/`svn update` 输出不带 kind：先用子项关系白拿，剩下的按上限查盘，失败回落文件图标）；变更面板、提交对话框、更新窗口三处统一；对话输入框崩溃兜底（槽被替换成空占位时给「恢复输入框」，不再只能手动刷新） |
 | v0.33.1 | 旧宿主兼容修复：`connection.requestRejection` 恢复以服务实例为接收者调用（v0.33.0 裸调导致 DSH 0.2.2 桌面端 `/edrv/rpc` 全量 503）；客户端样式补守卫式自注入（旧宿主不认 `meta.stylesheets`，缺了会让悬浮按钮鲸鱼按原始尺寸铺满屏幕），注入按文本指纹判重 |
 | v0.33.0 | DSH 0.2.3 适配（路由授权交框架、运行时版本探测、文件链接宿主探测、cordis 根上下文）；项目 MCP 交官方 `mcpManager` 托管（注册名 = 工作区哈希，状态/重启/授权走官方）；官方变更视图行级注解；非 UTF-8 文件兼容（GB18030 判定、只读预览、转码修复与撤销）；SVN 提交对话框右键菜单与 Ctrl/Shift 多选批量；`/html-plan` 改一条 `plan.mjs` 打包命令并支持缺口现生成；侧栏正文错误边界 |
 | v0.31.0 | SVN agent 工具（19 个 `svn_*`：只读门禁、路径白名单、无损 JSON）+ 原生提交（勾选清单、单块提交、中文日志、不自动 resolve）+ AI 提交信息（只分析勾选范围、只产草稿）+ 提交对话框；HTML 网页预览转接官方渲染器（一键预览 / 链接让位 / 旧版回退，不新增路由）；HTML 计划模式（`/html-plan <任务>`、`--delegate` 可委派写页，单文件计划页 + 官方审批/退出 + 答复「回复并执行」）；上游 html-plan 按 MIT vendor |
@@ -1098,7 +1099,14 @@ Keep All / Undo All 却是亮的。修复：单文件 Keep / Undo 覆盖冲突�
 | v0.23.0 | 快捷菜单：可拖动悬浮按钮 + 自定义菜单树 |
 
 <details>
-<summary>完整版本记录（v0.33.1 → v0.1.5x，点击展开）</summary>
+<summary>完整版本记录（v0.34.0 → v0.1.5x，点击展开）</summary>
+
+- **v0.34.0**：SVN 窗口行图标按判型区分文件与目录——`svn status --xml` 与 `svn update` 的输出都不带
+  kind，只能查盘：先用「某条目是另一条目的上级目录」白拿一批目录，剩下的按 200/批查 host 新增的
+  `svn.pathKinds`，失败或超上限按文件图标回落，`missing` 不当目录。变更面板、提交对话框、更新窗口
+  三处共用同一个钩子（更新窗口流式输出用 400ms 合并窗，只查工作区内路径）。另修：对话输入框被官方槽
+  替换成空占位后不自愈的问题，现在输入区给「恢复输入框」，走插件已有的受保护刷新。详见
+  [0.34.0 发布说明](docs/release-0.34.0.md)。
 
 - **v0.33.1**：修两个只在旧宿主上现形的 0.33.0 回归——① `httpGuard` 取出
   `connection.requestRejection` 后裸调，`this` 丢失 → 0.2.2 桌面端每个 `/edrv/rpc` 都 503

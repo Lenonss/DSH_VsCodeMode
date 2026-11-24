@@ -11,9 +11,9 @@ import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:pat
 import { tmpdir } from 'node:os'
 import type { Ctx, Session } from './store.js'
 import { cwdOfSession, sessionOf } from './registry.js'
-import type { SvnAction, SvnAiPlan, SvnChangeEntry, SvnConflictArtifact, SvnFeature, SvnIgnoreItem, SvnItemStatus, SvnLogEntry, SvnRemoteOutdatedEntry, SvnStatusPayload, SvnSumEntry } from './shared/svn.js'
+import type { SvnAction, SvnAiPlan, SvnChangeEntry, SvnConflictArtifact, SvnFeature, SvnIgnoreItem, SvnItemStatus, SvnLogEntry, SvnPathKind, SvnRemoteOutdatedEntry, SvnStatusPayload, SvnSumEntry } from './shared/svn.js'
 import { SESSION_MISSING_ERROR, SESSION_NO_WORKSPACE_ERROR } from './shared/rpc.js'
-import { AI_PLAN_DIFF_CAP, AI_PLAN_PATHS_CAP, BATCH_PATHS_CAP, COMMIT_PATHS_CAP, FILE_SIZES_CAP, SVN_CLI_DEFAULT, TORTOISE_EXE, commitGroupsOf, contentGuardOf, normalizeAiPlan, svnChangelistNameErrorOf, tortoiseLaunchArgv } from './shared/svn.js'
+import { AI_PLAN_DIFF_CAP, AI_PLAN_PATHS_CAP, BATCH_PATHS_CAP, COMMIT_PATHS_CAP, FILE_SIZES_CAP, PATH_KINDS_CAP, SVN_CLI_DEFAULT, TORTOISE_EXE, commitGroupsOf, contentGuardOf, normalizeAiPlan, svnChangelistNameErrorOf, tortoiseLaunchArgv } from './shared/svn.js'
 import type { AiConfigView } from './shared/ai.js'
 import { buildAiPrompt, svnAiPlanOf } from './ai/svnTriage.js'
 import { runJsonTask } from './ai/llmTask.js'
@@ -1465,6 +1465,54 @@ export function createSvnRpc(deps: SvnRpcDeps): { handlers: Record<string, unkno
         sizes.push(...await Promise.all(list.slice(start, start + BATCH).map(sizeOne)))
       }
       return { ok: true as const, sizes }
+    },
+    /**
+     * 批量判型（窗口行图标用）：`svn status` 与 `svn update` 的输出都不带 kind，
+     * 只能逐条查磁盘。口径与 svn.fileSizes 同型：上限护栏 + 单条失败按 missing +
+     * 分批并发保序（批 16），个别路径查不到不影响整批。
+     * @author ddj 2026年11月23号
+     * @param args.sessionId 会话 id
+     * @param args.paths 工作副本相对路径列表（host 权威上限 PATH_KINDS_CAP）
+     * @returns 路径 → 类型（file/dir/missing），顺序与输入一致
+     */
+    'svn.pathKinds': async (args: { sessionId?: string; paths?: string[] }) => {
+      const sc = await requireSvnSession(ctx, args.sessionId)
+      if ('err' in sc) return { ok: false as const, error: sc.err }
+      const list = Array.isArray(args.paths) ? args.paths.slice(0, PATH_KINDS_CAP) : []
+      if (!list.length) return { ok: true as const, kinds: [] }
+
+      const fs = ctx.get('fs') as {
+        resolve?: (p: string, o: object) => Promise<unknown>
+        stat?: (t: unknown) => Promise<{ type?: string } | null>
+      } | null | undefined
+      if (!fs?.resolve || !fs?.stat) return { ok: false as const, error: '缺少 fs' }
+
+      /**
+       * 单条判型：路径越界或查询异常都按 missing（客户端只据此决定图标，不再推测）。
+       * @author ddj 2026年11月23号
+       * @param raw 调用方给的路径
+       * @returns 归一后的相对路径与类型
+       */
+      const kindOne = async (raw: string): Promise<{ path: string; kind: SvnPathKind }> => {
+        const rel = safeRel(raw)
+        if (rel === null || rel === '') return { path: String(raw ?? ''), kind: 'missing' }
+        try {
+          const resolved = await fs.resolve!(rel, { cwd: sc.cwd })
+          const info = await fs.stat!(resolved)
+          if (!info) return { path: rel, kind: 'missing' }
+          if (info.type === 'directory') return { path: rel, kind: 'dir' }
+          return { path: rel, kind: info.type === 'file' ? 'file' : 'missing' }
+        } catch {
+          return { path: rel, kind: 'missing' }
+        }
+      }
+
+      const kinds: Array<{ path: string; kind: SvnPathKind }> = []
+      const BATCH = 16
+      for (let start = 0; start < list.length; start += BATCH) {
+        kinds.push(...await Promise.all(list.slice(start, start + BATCH).map(kindOne)))
+      }
+      return { ok: true as const, kinds }
     },
     /**
      * AI 智能整理分析（只读）：拉最新变更 → 附 diff 上下文（超限降级 paths-only）→

@@ -3,7 +3,7 @@
  * @author ddj 2026年09月24号
  */
 import React from 'react'
-import type { SvnConflictState, SvnResolveAccept, SvnUpdateRow, SvnUpdateState } from '../../shared/svn.js'
+import type { SvnConflictState, SvnPathKind, SvnResolveAccept, SvnUpdateRow, SvnUpdateState } from '../../shared/svn.js'
 import { copyText } from '../copyText.js'
 import { rpc } from '../rpc.js'
 import { absoluteOf } from '../tabActions.js'
@@ -12,6 +12,13 @@ import type { ContextMenuEntry } from './ContextMenu.js'
 import { FloatingWindow } from './FloatingWindow.js'
 import { nextConflict, nextUpdateSort, rowConflict, sortUpdateRows, updateActs, updateCloseMode, updateDone, updateLocked, updateParent, updateRange, updateReady, updateType } from './svnUpdateModel.js'
 import type { UpdateColumn, UpdateSort } from './svnUpdateModel.js'
+import { entryIconEl } from './icons.js'
+import { isDirOf } from './svnIcons.js'
+import { useSvnEntryKinds } from './useSvnEntryKinds.js'
+import type { SvnEntryKinds } from './useSvnEntryKinds.js'
+
+/** 流式输出期间判型请求的合并窗口：更新还在写行时只保留最后一次请求。 */
+const KIND_QUERY_DEBOUNCE_MS = 400
 
 interface UpdateProps {
   sessionId?: string
@@ -254,6 +261,26 @@ function menuEntries(props: UpdateProps, state: SvnUpdateState, menu: UpdateMenu
 }
 
 /**
+ * 行图标用的目录判定输入：更新行是流式到达的，路径集合与可查白名单在这里派生一次。
+ * @author ddj 2026年11月23号
+ * @param rows 当前全部输出行
+ * @param sessionId 会话 id
+ * @returns 目录集合与类型表
+ */
+function useRowKinds(rows: SvnUpdateRow[], sessionId?: string) {
+  const kindPaths = React.useMemo(
+    () => rows.filter((row) => row.action).map((row) => row.relPath || row.path),
+    [rows],
+  )
+  // 工作区外的行没有可 stat 的相对路径：只把工作区内 relPath 交给 host 查。
+  const kindOnly = React.useMemo(
+    () => new Set(rows.filter((row) => row.action && row.relPath).map((row) => row.relPath as string)),
+    [rows],
+  )
+  return useSvnEntryKinds(kindPaths, sessionId, { only: kindOnly, debounceMs: KIND_QUERY_DEBOUNCE_MS })
+}
+
+/**
  * 将一条增量行映射为高密度的三列；单元格显示工作副本内相对路径，完整绝对路径留在 title 中。
  * @author ddj 2026年09月24号
  * @param row 更新行
@@ -261,11 +288,15 @@ function menuEntries(props: UpdateProps, state: SvnUpdateState, menu: UpdateMenu
  * @param picked 是否选中
  * @param onPick 选择回调
  * @param onMenu 右键回调
+ * @param resolved 冲突是否已解决
+ * @param dirs 已确定的目录集合
+ * @param kinds host 返回的类型表
  * @returns 行元素
  */
 function rowElement(row: SvnUpdateRow, cwd: string | null | undefined, picked: boolean,
   onPick: (event: React.MouseEvent<HTMLDivElement>) => void,
-  onMenu: (event: React.MouseEvent<HTMLDivElement>) => void, resolved: boolean): React.ReactElement {
+  onMenu: (event: React.MouseEvent<HTMLDivElement>) => void, resolved: boolean,
+  dirs: ReadonlySet<string>, kinds: Readonly<Record<string, SvnPathKind | undefined>>): React.ReactElement {
   // 显示用相对路径（窄窗省略尾部时先保住文件名），悬浮与复制仍用完整绝对路径。
   const full = row.relPath ? absoluteOf(row.relPath, cwd) : (row.path || row.label)
   const path = row.relPath || row.path || row.label
@@ -276,6 +307,9 @@ function rowElement(row: SvnUpdateRow, cwd: string | null | undefined, picked: b
     onClick: onPick, onContextMenu: onMenu, title: row.raw,
   },
     React.createElement('span', { role: 'cell', className: 'edrv-update-action tone-' + tone }, resolved ? row.label + '（已解决）' : row.action ? row.label : '信息'),
+    // 信息行（Updating '.' / At revision N 等）不是文件行，图标列留空。
+    React.createElement('span', { role: 'cell', className: 'edrv-update-icon', 'aria-hidden': true },
+      row.action ? entryIconEl(path, isDirOf(path, dirs, kinds)) : null),
     React.createElement('span', { role: 'cell', className: 'edrv-update-path', title: full }, path),
     React.createElement('span', { role: 'cell', className: 'edrv-update-type' }, row.action ? updateType(row.path) : ''))
 }
@@ -417,17 +451,28 @@ function updateHead(props: UpdateProps, state: SvnUpdateState | null, phase: str
  */
 function updateTable(props: UpdateProps, rows: SvnUpdateRow[], view: ReturnType<typeof useUpdateView>,
   selection: ReturnType<typeof useUpdateMenu>, finished: boolean, sort: UpdateSort | null,
-  onSort: (column: UpdateColumn) => void, states: ReadonlyMap<string, SvnConflictState>): React.ReactElement {
+  onSort: (column: UpdateColumn) => void, states: ReadonlyMap<string, SvnConflictState>,
+  entryKind: SvnEntryKinds): React.ReactElement {
   const visible = rows.slice(view.range.start, view.range.end)
+  /**
+   * 可排序的列表头（图标列不参与排序，单独占一格空表头）。
+   * @author ddj 2026年09月24号 / 2026年11月23号
+   * @param column 排序列
+   * @returns 表头单元格
+   */
+  const sortHead = (column: UpdateColumn) => {
+    const direction = sort?.column === column ? sort.direction : 0
+    const label = column === 'action' ? '操作' : column === 'path' ? '路径' : '类型（推断）'
+    return React.createElement('span', { key: column, role: 'columnheader', 'aria-sort': direction === 1 ? 'ascending' : direction === -1 ? 'descending' : 'none' },
+      React.createElement('button', { type: 'button', className: 'edrv-update-sort', onClick: () => onSort(column),
+        title: '点击切换升序、降序、原始顺序' + (column === 'type' ? '；仅推断类型，非 SVN 属性' : '') }, label + (direction === 1 ? ' ▲' : direction === -1 ? ' ▼' : ' ↕')))
+  }
   return React.createElement('div', { className: 'edrv-update-table', role: 'table', 'aria-label': 'SVN 更新文件明细', 'aria-rowcount': rows.length },
     React.createElement('div', { role: 'row', className: 'edrv-update-cols' },
-      (['action', 'path', 'type'] as const).map((column) => {
-        const direction = sort?.column === column ? sort.direction : 0
-        const label = column === 'action' ? '操作' : column === 'path' ? '路径' : '类型（推断）'
-        return React.createElement('span', { key: column, role: 'columnheader', 'aria-sort': direction === 1 ? 'ascending' : direction === -1 ? 'descending' : 'none' },
-          React.createElement('button', { type: 'button', className: 'edrv-update-sort', onClick: () => onSort(column),
-            title: '点击切换升序、降序、原始顺序' + (column === 'type' ? '；仅推断类型，非 SVN 属性' : '') }, label + (direction === 1 ? ' ▲' : direction === -1 ? ' ▼' : ' ↕')))
-      })),
+      sortHead('action'),
+      React.createElement('span', { key: 'icon', role: 'columnheader', className: 'edrv-update-icon', 'aria-hidden': true }),
+      sortHead('path'),
+      sortHead('type')),
     React.createElement('div', { className: 'edrv-update-list', ref: view.listRef, role: 'rowgroup', onScroll: view.onScroll },
       React.createElement('div', { className: 'edrv-update-space', style: { height: rows.length * view.rowHeight } },
         visible.map((row, index) => React.createElement('div', {
@@ -436,7 +481,7 @@ function updateTable(props: UpdateProps, rows: SvnUpdateRow[], view: ReturnType<
           'aria-rowindex': view.range.start + index + 1,
         }, rowElement(row, props.cwd, selection.picked.has(row.seq),
           (event) => selection.pick(event, row), (event) => selection.openMenu(event, row),
-          row.action === 'C' && !rowConflict(row, states))))),
+          row.action === 'C' && !rowConflict(row, states), entryKind.dirs, entryKind.kinds)))),
       !rows.length ? React.createElement('div', { className: 'edrv-update-empty' },
         finished ? '没有逐文件变更' : '等待 SVN 输出…') : null))
 }
@@ -514,6 +559,7 @@ export function SvnUpdateDialog(props: UpdateProps): React.ReactElement {
   const conflictPaths = React.useMemo(() => [...new Set(rows.filter((row) => row.action === 'C' && row.relPath).map((row) => row.relPath!))], [rows])
   const evidence = useConflictState(props, conflictPaths, finished)
   const write = useConflictWrite(props, finished, evidence)
+  const entryKind = useRowKinds(rows, props.sessionId)
   const remaining = new Set(rows.filter((row) => rowConflict(row, evidence.states)).map((row) => row.relPath || row.path)).size
   const outside = rows.some((row) => row.action === 'C' && !row.relPath)
   const closeMode = updateCloseMode(finished, error, Boolean(state), Boolean(selection.menu || props.childOverlay || write.busy))
@@ -569,7 +615,7 @@ export function SvnUpdateDialog(props: UpdateProps): React.ReactElement {
     closeOnEsc: closeMode.passive, onClose: dismiss,
   },
     updateHead(props, state, phase, closable, dismiss),
-    updateTable(props, displayRows, view, selection, finished, sort, onSort, evidence.states),
+    updateTable(props, displayRows, view, selection, finished, sort, onSort, evidence.states, entryKind),
     updateStatus(state, error || evidence.error, cleaned),
     outside ? React.createElement('div', { className: 'edrv-update-warning' }, '存在工作区外冲突；可定位但不能在此执行解决操作') : null,
     write.busy ? React.createElement('div', { role: 'status' }, '正在处理冲突并核对 SVN 状态…') : null,
