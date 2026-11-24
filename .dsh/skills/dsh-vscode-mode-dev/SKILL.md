@@ -5,8 +5,24 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
 
 # dsh-vscode-mode 开发/发布经验集（自我更新型技能）
 
-> updated: 2026-11-23 · 维护者：ddj（AI 会话按文末协议更新，保持精炼、去重）
+> updated: 2026-11-24 · 维护者：ddj（AI 会话按文末协议更新，保持精炼、去重）
 > **发布时先读「发布流程」与「失败恢复」**；下方实录是历史证据，不授权当前重跑发布、改 tag 或部署。冲突旧口径以更新后的规则为准。
+- 2026-11-24 实录（v0.34.0：SVN 行图标判型 + 对话输入框崩溃兜底；基线 v0.33.1 @ `728a19d`，发布提交 `b729ee8`）。
+  三门：typecheck 0 / vitest 340 文件（337 通过 + 1 失败 + 2 跳过）、4239 用例（4216 通过 + 22 跳过）33.30s，
+  唯一失败是已知抖动 `tests/dapFakeAdapter.test.ts` 握手用例（throw 点 `:26`、调用点 `:236`，隔离重跑 7/7 绿、不在本次 diff）/
+  `node --test` 9/9 / build `index.js` 1,267,739 B + `client.js` 1,288,762 B。CI `45303956449` 绿、Release `45303972925` **一次全绿**
+  （含 Verify，5 分钟级）。四向闭环：registry `0.34.0` `gitHead=b729ee8`、latest=0.34.0、SRI/shasum 与实包一致
+  （764+3 条、入口齐全、新代码标记 `edrv-composer-crash`/`svn.pathKinds` 都在），GitHub asset digest `sha256:371a848d…`。
+  **这次两端包完全同形**（npm 与 asset 都是 17,272,368 B，`index.js` 1,267,739 / `client.js` 1,297,496 逐文件同长）——
+  说明历史上「两端字节不同」来自 minify 顺序抖动，不是必然；验收仍按各自声明的 digest 独立核，不拿长度当证据。
+  **新坑（pnpm store 里某目录被清空 → 插件 fiber 永不激活，代价最高）**：症状是整个 `/edrv/*` 404/405、
+  插件自己的日志停在某一刻不再增长，而 `plugin_manager list_plugins` 里该条目 `enabled: true` 但 **`fiberPhase: null`**
+  （其余 240 条全是 `active`）。根因是 workspace `node_modules/.pnpm/@deepseek-ai+cosmokit@1.8.5/.../cosmokit` 变成空目录
+  （0 文件、无 package.json），`import schemastery` 直接 `Cannot find package …/cosmokit/index.js`。
+  诊断链：`fiberPhase` → 在 profile 目录 `node --input-type=module -e "import('dsh-vscode-mode')"` 看真实报错 →
+  补包（本次把 profile 里那份 cosmokit 1.9.0 复制进空槽，正解是稍后 `pnpm install` 按锁文件补回 1.8.5）→
+  `plugin_manager set_plugin` 关→开（`include:dsh-vscode-mode`）即恢复，**不用重启 dsh web**。
+  下次遇到「插件没生效」，先看 `fiberPhase` 再谈重启；重启治不了缺依赖。
 - 2026-11-23 实录（v0.33.1 紧急修复：旧宿主（桌面端 0.2.2-rc.5）上 `/edrv/rpc` 全量 503 + 插件样式全丢；
   基线 v0.33.0 @ `299e992`，发布提交 `728a19d`）。本地门禁：typecheck 0 / vitest 338 文件（336 通过 + 2 跳过）
   **4199 通过 / 23 跳过**，其中 2 例失败均为已知计时抖动（`archiveDb.test.ts:211` 15s 超时、
