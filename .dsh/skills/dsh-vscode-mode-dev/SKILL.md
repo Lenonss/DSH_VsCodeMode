@@ -7,6 +7,20 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
 
 > updated: 2026-11-24 · 维护者：ddj（AI 会话按文末协议更新，保持精炼、去重）
 > **发布时先读「发布流程」与「失败恢复」**；下方实录是历史证据，不授权当前重跑发布、改 tag 或部署。冲突旧口径以更新后的规则为准。
+- 2026-11-24 实录（v0.35.0：HTML 计划页支持附件——`/html-plan` 声明 `attachments`、落盘 `plans/<slug>/assets/`、
+  `<doc-attach>`/`<doc-file>`、打包内联与 `--keep-assets`；基线 v0.34.0 @ `b729ee8`，发布提交 `ce0cbf2`）。
+  三门：typecheck 0 / vitest 340 文件通过 + 2 跳过、4246 通过 / 22 跳过 / 23.52s、
+  `node --test` 9/9（10.5s）/ build `index.js` 1,283,041 B + `client.js` 1,289,459 B（同批两次构建差 14 B，minify 顺序）。
+  Release `45309545910` **一次全绿 11m44s**（含 Verify，publish 02:06:32 后 Verify 同轮取到）；main CI `45309525803` 绿。
+  **本轮两端包字节完全相同**：npm 与 Release asset 同为 17,299,511 B、sha256 `4dc30f10…`，
+  说明历史上「两端不同」来自 `npm publish` 重跑 prepare 的 minify 顺序，不是必然。
+  四向闭环：registry `0.35.0` `gitHead=ce0cbf2`、latest=0.35.0、SRI/shasum 与实包一致、包内
+  `lib/index.js`+`lib/client.js`+`locale/zh.json`+技能运行时齐全，新标记 `attachments: true` /
+  `define('doc-attach')` / `--keep-assets` / `allow-downloads` 都在。
+  **新坑（本地 `npm run` 全部 `'tsc' is not recognized`）**：`node_modules/.bin` 缺失 + `.pnpm/@deepseek-ai+cordis@4.0.1_…`
+  目录为空（与 v0.34.0 记的空目录坑同源）→ `pnpm install --frozen-lockfile` **14.1s 即修好**，
+  顺带跑 `prepare` 重建 `lib`（所以修完先重跑三门，别拿修复前的构建当发布产物）。修复后 `npm run …` 正常。
+  本次未跑 GUI 端到端（composer 拖附件 → `/html-plan`），披露缺口后按用户要求发布；本地开发形态重载插件可验。
 - 2026-11-24 实录（v0.34.0：SVN 行图标判型 + 对话输入框崩溃兜底；基线 v0.33.1 @ `728a19d`，发布提交 `b729ee8`）。
   三门：typecheck 0 / vitest 340 文件（337 通过 + 1 失败 + 2 跳过）、4239 用例（4216 通过 + 22 跳过）33.30s，
   唯一失败是已知抖动 `tests/dapFakeAdapter.test.ts` 握手用例（throw 点 `:26`、调用点 `:236`，隔离重跑 7/7 绿、不在本次 diff）/
