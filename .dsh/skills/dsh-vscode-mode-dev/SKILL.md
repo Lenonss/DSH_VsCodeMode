@@ -7,6 +7,23 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
 
 > updated: 2026-11-24 · 维护者：ddj（AI 会话按文末协议更新，保持精炼、去重）
 > **发布时先读「发布流程」与「失败恢复」**；下方实录是历史证据，不授权当前重跑发布、改 tag 或部署。冲突旧口径以更新后的规则为准。
+- 2026-11-24 实录（v0.36.0：审查捕获补上「非工具写盘」——`fs.watch` 采集 + 版本库补扫四触发点 +
+  来源/归属字段 + 修改前内容四级降级 + 撤销白名单；MCP 托管后端会话计时。基线 v0.35.0 @ `9e35556`，
+  发布提交 `0451975`）。三门：typecheck 0 / vitest **343 文件通过 + 2 跳过、4292 通过 / 22 跳过**、
+  `node --test` 9/9 / build `index.js` 1,327,822 B + `client.js` 1,292,410 B。
+  Release `45339595730` **一次全绿 10m32s**（含 Publish + Verify），main CI `45339581955` 绿。
+  四向闭环：registry `0.36.0` `gitHead=0451975`、latest=0.36.0、shasum/sha256 与实包一致、入口齐全，
+  GitHub asset digest `sha256:cd99e562…` 与 API 一致。**本轮两端产物内容完全相同**：771 条文件清单逐条同尺寸，
+  `lib/index.js`(`a1cef7a1…`)、`lib/client.js`(`50486108…`)、`package.json`(`cd5f6d84…`) 哈希逐一相同，
+  tgz 总长差 1 B 只在 gzip 容器层——比历史上「client.js 差几字节」更干净，**核对口径仍按各自 digest 独立验**。
+  **坑（同一批里三次不同抖动，别改测试）**：连跑全量三次，各挂一个且互不相同——`uiState` 的
+  `EPERM rename`（`%TEMP%` 竞争）、`dapFakeAdapter` 的 `waitFor 超时`、`treeIndex:195` 的
+  `expected null not to be null`；三者隔离各 2 次全绿、均不在本次 diff，第四轮全量全绿。判据不变：
+  「失败文件不在本批 diff + 隔离重跑绿 + 前次绿」三中即判抖动。**新增测试会抬高并行负载**，
+  这类时间敏感用例更容易抖，发布前预留「多跑一轮」的时间预算，别在第三次红时改代码。
+  **流程事实（他人 WIP 的处理）**：工作区里有并行会话留下的 6 个 MCP 改动（`src/mcpManaged|mcpManagerBridge|mcpRuntime`
+  + 3 个测试），本次经用户明确批准并入同一发布提交；**默认仍是不碰**，按精确清单 `git add -- <paths>`，
+  绝不用 `git add -A`（会带上 `.dsh-ops/`、`*.trace.json.gz`、`plans/` 等未跟踪产物）。
 - 2026-11-24 实录（v0.35.0：HTML 计划页支持附件——`/html-plan` 声明 `attachments`、落盘 `plans/<slug>/assets/`、
   `<doc-attach>`/`<doc-file>`、打包内联与 `--keep-assets`；基线 v0.34.0 @ `b729ee8`，发布提交 `ce0cbf2`）。
   三门：typecheck 0 / vitest 340 文件通过 + 2 跳过、4246 通过 / 22 跳过 / 23.52s、
