@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 // plan.mjs — one command to turn plans/<slug>/plan.html into plan.packed.html.
-//   node plan.mjs <slug> [--root <dir>] [--check] [--keep]
-// Copies the runtime next to the page, runs pack.mjs, then removes runtime/ and the
-// unpacked plan.html so only the single packed page stays in the repo.
+//   node plan.mjs <slug> [--root <dir>] [--check] [--keep] [--keep-assets]
+// Copies the runtime next to the page, runs pack.mjs, then removes runtime/, the unpacked
+// plan.html and (by default) the attachments folder so only the packed page stays in the repo.
 // @author ddj 2026年11月23号
-import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -22,7 +22,7 @@ function die(message) {
   process.exit(1)
 }
 
-if (!slug || !/^[a-z0-9][a-z0-9-]*$/i.test(slug)) die('用法：node plan.mjs <slug> [--root <dir>] [--check] [--keep]\n   slug 用小写 kebab-case，例如 html-plan-own-answer')
+if (!slug || !/^[a-z0-9][a-z0-9-]*$/i.test(slug)) die('用法：node plan.mjs <slug> [--root <dir>] [--check] [--keep] [--keep-assets]\n   slug 用小写 kebab-case，例如 html-plan-own-answer')
 
 const dir = join(root, 'plans', slug)
 const pagePath = join(dir, 'plan.html')
@@ -35,6 +35,7 @@ if (flag('--check')) {
   const text = readFileSync(packedPath, 'utf8')
   if (/<(?:link|script)\b[^>]*?\s(?:href|src)\s*=\s*["'][^"']*htmlplan\.(?:css|js)/i.test(text)) die(`plan.packed.html 仍引用运行时文件，没打包干净：${packedPath}`)
   if (!/<style[^>]*data-htmlplan/i.test(text) || !/<script[^>]*data-htmlplan/i.test(text)) die(`plan.packed.html 里没有内联样式/脚本，可能不是 pack.mjs 的产物：${packedPath}`)
+  if (/<doc-file\b[^>]*\ssrc\s*=\s*["'](?!data:|https?:|#)[^"']+["']/i.test(text)) die(`plan.packed.html 里还有没内联的附件（<doc-file src="…">）：重跑 plan.mjs ${slug}；单个超过 4 MB 的附件要换小文件或改成文字引用`)
   console.log(`✓ ${packedPath}  ${(statSync(packedPath).size / 1024).toFixed(0)} KB`)
   process.exit(0)
 }
@@ -59,12 +60,22 @@ try {
 }
 if (!packed || !existsSync(packedPath)) process.exit(1)
 
-// 3) 清理：只留打包好的单文件
+// 3) 清理：只留打包好的单文件（附件目录默认也删掉——页面已内联，仓库不留原图；--keep-assets 才留）
 if (!flag('--keep')) {
   rmSync(runtimeDir, { recursive: true, force: true })
   rmSync(pagePath, { force: true })
 } else {
   console.log('· --keep：保留 runtime/ 与 plan.html')
+}
+const assetsDir = join(dir, 'assets')
+if (existsSync(assetsDir)) {
+  const count = readdirSync(assetsDir).length
+  if (flag('--keep-assets')) {
+    console.log(`· --keep-assets：保留 ${count} 个附件：plans/${slug}/assets/`)
+  } else {
+    rmSync(assetsDir, { recursive: true, force: true })
+    console.log(`· 已删除 plans/${slug}/assets/（${count} 项）；要重打包先加 --keep-assets`)
+  }
 }
 console.log(`✓ ${packedPath}  ${(statSync(packedPath).size / 1024).toFixed(0)} KB`)
 console.log(`下一步：计划正文单独一行写「HTML 计划页：plans/${slug}/plan.packed.html」，再调 exit_plan_mode`)

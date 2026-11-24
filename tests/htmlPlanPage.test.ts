@@ -8,6 +8,7 @@ import {
   derivePlanUiState,
   findPendingReview,
   isMissingPage,
+  planAttachInfoOf,
   planPagePathOf,
   planRepairInstruction,
   planSlugOf,
@@ -60,6 +61,17 @@ describe('unresolvedRuntimeRefs', () => {
     const packed = '<style data-htmlplan>a{}</style><script data-htmlplan>1</script>' +
       '<doc-code src="skills/x/runtime/htmlplan.js" lines="1-2"></doc-code>'
     expect(unresolvedRuntimeRefs(packed)).toEqual([])
+  })
+})
+
+describe('planAttachInfoOf', () => {
+  it('data URI 与 http 算已内联，本地路径算未内联', () => {
+    const packed = '<doc-file src="data:text/plain;base64,QQ==">a.txt</doc-file><doc-file src="https://x/y.pdf">b.pdf</doc-file>'
+    expect(planAttachInfoOf(packed)).toEqual({ total: 2, pending: 0 })
+    const raw = '<doc-file src="assets/a.pdf">a.pdf</doc-file><doc-file src=\'assets/b.png\'>b.png</doc-file>'
+    expect(planAttachInfoOf(raw)).toEqual({ total: 2, pending: 2 })
+    expect(planAttachInfoOf(undefined)).toEqual({ total: 0, pending: 0 })
+    expect(planAttachInfoOf('<p>x</p>')).toEqual({ total: 0, pending: 0 })
   })
 })
 

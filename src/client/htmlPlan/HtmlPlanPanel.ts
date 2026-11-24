@@ -12,6 +12,7 @@ import {
   buildPlanSrcDoc,
   derivePlanUiState,
   isMissingPage,
+  planAttachInfoOf,
   planPagePathOf,
   planRepairInstruction,
   resolvePlanPagePath,
@@ -161,6 +162,7 @@ export function HtmlPlanPanel(props: HtmlPlanPanelProps) {
   React.useEffect(() => { postPlanState() }, [review])
 
   const state = derivePlanUiState(projection, review !== null, acted)
+  const attachments = html === null ? { total: 0, pending: 0 } : planAttachInfoOf(html)
 
   /**
    * 把页面答复直接发给 agent：成功清空并回传成功，失败回传原因且保留文本。
@@ -348,9 +350,12 @@ export function HtmlPlanPanel(props: HtmlPlanPanelProps) {
   } else if (html === null) {
     stage = React.createElement('div', { className: 'edrv-empty' }, '读取计划页…')
   } else {
-    const warn = staleRefs.length
+    const warnLines: string[] = []
+    if (staleRefs.length) warnLines.push('页面未打包：仍引用 ' + staleRefs.join('、') + '。样式/脚本可能缺失，先重新打包再提交。')
+    if (attachments.pending) warnLines.push(String(attachments.pending) + ' 个附件没内联：点开是空链接，重新打包后再提交。')
+    const warn = warnLines.length
       ? React.createElement('div', { className: 'edrv-htmlplan-warn' },
-          '页面未打包：仍引用 ' + staleRefs.join('、') + '。样式/脚本可能缺失，先重新打包再提交。',
+          warnLines.join(' '),
           React.createElement('button', {
             className: 'edrv-pill edrv-pill-accent', style: { marginLeft: 8 },
             disabled: repairing || !sessionId,
@@ -364,7 +369,7 @@ export function HtmlPlanPanel(props: HtmlPlanPanelProps) {
         ref: frameRef,
         className: 'edrv-htmlplan-frame',
         title,
-        sandbox: 'allow-scripts allow-forms allow-popups',
+        sandbox: 'allow-scripts allow-forms allow-popups allow-downloads',
         srcDoc: buildPlanSrcDoc(html),
       }))
   }

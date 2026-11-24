@@ -209,6 +209,34 @@ export function isMissingPage(result: unknown): boolean {
   return /文件不存在|no such file|ENOENT/i.test(typeof row.error === 'string' ? row.error : '')
 }
 
+/** 打包页里的附件统计。 */
+export interface PlanAttachmentInfo {
+  /** `<doc-file>` 总数。 */
+  total: number
+  /** src 仍是本地路径（没被 pack 内联）的数量。 */
+  pending: number
+}
+
+/**
+ * 统计打包页里的附件：`data:` / `http(s):` 之外都算没内联。
+ * 打包后的页面内附件必须是 data URI——iframe 用 srcdoc 渲染，相对路径打不开。
+ * @author ddj 2026年11月24号
+ * @param html 页面文本
+ * @returns 总数与未内联数
+ */
+export function planAttachInfoOf(html: unknown): PlanAttachmentInfo {
+  const text = typeof html === 'string' ? html : ''
+  let total = 0
+  let pending = 0
+  for (const match of text.matchAll(/<doc-file\b([^>]*)>/gi)) {
+    total += 1
+    const found = /\bsrc\s*=\s*["']([^"']*)["']/i.exec(match[1] ?? '')
+    const src = found ? found[1] : ''
+    if (src && !/^(?:data:|https?:|#)/i.test(src)) pending += 1
+  }
+  return { total, pending }
+}
+
 /**
  * 从计划正文声明的页面路径里取 slug（plans/<slug>/… 的第二段）。
  * @author ddj 2026年11月23号
@@ -235,7 +263,9 @@ export function planRepairInstruction(declared: unknown): string {
     '请按 dsh-vscodemode-html-plan 技能生成并打包 HTML 计划页，然后重新提交计划：',
     '1. 计划模式里允许写 plans/ 下的计划交付物：直接在计划模式里写页面，不要让我退出计划模式。',
     `2. 先写 plans/${slug}/plan.html，再运行该技能的 runtime/plan.mjs ${slug}（自带复制运行时、pack、清理）。`,
-    `3. 确认 plans/${slug}/plan.packed.html 存在后，再调用 exit_plan_mode：正文第一行「# 计划：<标题>」，并单独一行「HTML 计划页：plans/${slug}/plan.packed.html」。`,
+    `3. 页面若引用附件（<doc-file src="assets/…">），确认文件在 plans/${slug}/assets/，并由 pack 内联成 data URI。`,
+    '   打包成功后该目录会被删除；文件已不在时让我重新附一次附件，不要凭空造图。',
+    `4. 确认 plans/${slug}/plan.packed.html 存在后，再调用 exit_plan_mode：正文第一行「# 计划：<标题>」，并单独一行「HTML 计划页：plans/${slug}/plan.packed.html」。`,
     '不要只写路径不生成文件；页面确实生成失败就说清原因，并交付纯 Markdown 计划。',
   ].join('\n')
 }

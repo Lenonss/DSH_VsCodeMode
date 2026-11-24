@@ -362,6 +362,26 @@ doc-mock > template { display: none; }
 .mk-frame.none { background: transparent; border: 1px dashed var(--line); box-shadow: none; color: var(--ink); }
 .mk-cap { font-size: 13px; color: var(--ink-2); margin-top: 7px; }
 
+/* ── doc-attach ──────────────────────────────────── */
+doc-attach { display: block; }
+.at-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 170px), 1fr)); gap: 10px; align-items: start; }
+.at-item { display: flex; flex-direction: column; align-items: stretch; overflow: hidden; padding: 0; margin: 0; background: var(--card); border: 1px solid var(--line); border-radius: var(--r); color: inherit; font: inherit; text-align: left; text-decoration: none; }
+button.at-item { cursor: pointer; }
+button.at-item:disabled { cursor: default; }
+a.at-item { flex-direction: row; align-items: center; gap: 10px; padding: 10px 12px; }
+.at-item:hover { border-color: var(--ink-3); }
+.at-thumb { display: block; width: 100%; height: 120px; object-fit: cover; background: var(--sunk); }
+.at-thumb.at-missing { display: grid; place-items: center; font: 12px var(--mono); color: var(--ink-3); border-bottom: 1px dashed var(--line); }
+.at-name { display: block; padding: 7px 10px 0; font: 550 12.5px/1.35 var(--sans); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.at-file .at-name { padding: 0; font-weight: 600; }
+.at-meta { display: block; padding: 1px 10px 9px; font: 11px var(--mono); color: var(--ink-3); }
+.at-file .at-meta { padding: 2px 0 0; }
+.at-info { min-width: 0; flex: 1; }
+.at-ext { flex: 0 0 34px; height: 34px; border-radius: 8px; background: var(--accent-soft); color: var(--accent); display: grid; place-items: center; font: 700 10px var(--mono); }
+.at-raw { border-style: dashed; opacity: .85; }
+.at-cap { font-size: 13px; color: var(--ink-2); margin-top: 7px; }
+.pl-body > doc-attach { display: block; margin-bottom: 10px; }
+
 /* ── doc-ask ──────────────────────────────────────── */
 doc-ask { display: block; margin: 20px 0 24px; padding: 16px; background: var(--card); border: 1px solid var(--line); border-radius: var(--r); box-shadow: var(--shadow); position: relative; }
 doc-ask::before { content: "Decision"; display: block; font: 550 12px/1 var(--sans); color: var(--ink-3); margin: 0 0 8px; }

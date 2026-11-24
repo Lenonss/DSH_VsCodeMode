@@ -49,6 +49,20 @@ Put it in the `<header>`, after the `h1`. It shows “Proposed · 10 files · +5
 - **A behaviour whose output is text** (a CLI, a log, a generated file) is a `frame="terminal"` mock, or a `doc-code` of the output.
 - `doc-shot src="before.png"` is the same for a screenshot. Use screenshots for UI that exists and mocks for UI that does not.
 
+## `doc-attach` — files and images that came with the request
+
+```html
+<doc-attach label="随附材料" caption="打包后内联，离线也能看">
+  <doc-file src="assets/login-mock.png">登录页设计稿</doc-file>
+  <doc-file src="assets/api-v3.pdf">接口文档 v3</doc-file>
+</doc-attach>
+```
+
+- One `<doc-file>` per attachment; its text is the display name (`name=""` overrides it). `src` is relative to the page, so the file must sit beside it — `/html-plan` puts uploads in `assets/<name>`.
+- Images render as a thumbnail that opens full size; every other type renders as a card that downloads.
+- `pack.mjs` inlines each source as a data URI and stamps `data-mime` / `data-bytes`. A file over 4 MB stays a dashed "未内联" card, and more than ~12 MB of attachments gets a warning.
+- `plan.mjs` deletes `plans/<slug>/assets/` after a successful pack; pass `--keep-assets` when a repack still needs the originals. `plan.mjs --check` refuses a packed page that still points at a local attachment.
+
 ## `doc-machine` — a lifecycle, with the screen for each state
 
 ```html

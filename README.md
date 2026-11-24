@@ -87,6 +87,9 @@
   「退出计划模式」（官方 `/plan off`）与「去对话审批」兜底；答复面板点「回复」直接发送给 agent，有待审批时同时「同意执行」，复制仍可兜底手动粘贴。
   页面缺少标记、文件缺失或未打包时回退 Markdown 计划预览。运行时按上游 html-plan 的 MIT 许可 vendor
   （作者 Thariq Shihipar，见 `skills/dsh-vscodemode-html-plan/LICENSE`）。
+  附件：把图片/文件拖进输入框、连 `/html-plan <任务>` 一起发，命令会复制到 `plans/<slug>/assets/`；
+  计划页用 `<doc-attach>` 呈现（图片缩略图、文件卡片），`pack.mjs` 内联成 data URI（单个 >4 MB 不内联），
+  打包成功后附件目录默认删除（重打包加 `--keep-assets`）；`plan.mjs --check` 会拦下没内联的附件。
 - **DSH 计划模式接入**：工作区 `plans/`、DSH `.dsh/plans/` 下的 Markdown 计划文件，
   以及成功生成且以 `# 计划：` / `# 计划:` 标题显式关联的 Markdown，默认以预览打开；
   指定行号的链接仍进入源码定位，普通 Markdown 的既有打开方式不变。
@@ -684,13 +687,13 @@ profile 请替换为实际目标，不要把示例目录当成当前运行 profi
 
 ```bash
 # ① Git 安装（clone + prepare 构建；推荐打固定 tag）
-dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.34.0
+dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.35.0
 
 # ② npm 注册表（发布到 npm 后）
-dsh plugin --profile web add dsh-vscode-mode@0.34.0
+dsh plugin --profile web add dsh-vscode-mode@0.35.0
 
 # ③ GitHub Release tgz 直装（Release asset 可用后）
-dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.34.0/dsh-vscode-mode-0.34.0.tgz
+dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.35.0/dsh-vscode-mode-0.35.0.tgz
 ```
 
 > **DSH 版本政策（0.17.0 起）**：六项 DSH peer 仍统一声明为 `*`，另以
@@ -1075,6 +1078,7 @@ Keep All / Undo All 却是亮的。修复：单文件 Keep / Undo 覆盖冲突�
 
 | 版本 | 要点 |
 | --- | --- |
+| v0.35.0 | HTML 计划页支持附件：`/html-plan` 收下图片/文件并落到 `plans/<slug>/assets/`，页面用 `<doc-attach>` 展示（缩略图 / 文件卡片 / 下载），`pack.mjs` 内联成 data URI（单个 >4 MB 不内联），打包后附件目录默认删除（`--keep-assets` 保留），`--check` 拦下没内联的页面；计划页签沙箱放开下载 |
 | v0.34.0 | SVN 行图标按判型区分文件/目录（`svn status`/`svn update` 输出不带 kind：先用子项关系白拿，剩下的按上限查盘，失败回落文件图标）；变更面板、提交对话框、更新窗口三处统一；对话输入框崩溃兜底（槽被替换成空占位时给「恢复输入框」，不再只能手动刷新） |
 | v0.33.1 | 旧宿主兼容修复：`connection.requestRejection` 恢复以服务实例为接收者调用（v0.33.0 裸调导致 DSH 0.2.2 桌面端 `/edrv/rpc` 全量 503）；客户端样式补守卫式自注入（旧宿主不认 `meta.stylesheets`，缺了会让悬浮按钮鲸鱼按原始尺寸铺满屏幕），注入按文本指纹判重 |
 | v0.33.0 | DSH 0.2.3 适配（路由授权交框架、运行时版本探测、文件链接宿主探测、cordis 根上下文）；项目 MCP 交官方 `mcpManager` 托管（注册名 = 工作区哈希，状态/重启/授权走官方）；官方变更视图行级注解；非 UTF-8 文件兼容（GB18030 判定、只读预览、转码修复与撤销）；SVN 提交对话框右键菜单与 Ctrl/Shift 多选批量；`/html-plan` 改一条 `plan.mjs` 打包命令并支持缺口现生成；侧栏正文错误边界 |
@@ -1099,7 +1103,13 @@ Keep All / Undo All 却是亮的。修复：单文件 Keep / Undo 覆盖冲突�
 | v0.23.0 | 快捷菜单：可拖动悬浮按钮 + 自定义菜单树 |
 
 <details>
-<summary>完整版本记录（v0.34.0 → v0.1.5x，点击展开）</summary>
+<summary>完整版本记录（v0.35.0 → v0.1.5x，点击展开）</summary>
+
+- **v0.35.0**：HTML 计划页支持附件——`/html-plan` 声明 `attachments`，把 composer 的图片/文件复制到
+  `plans/<slug>/assets/`，并把固定 slug 与清单写进指令；页面新增 `<doc-attach>` / `<doc-file>`，
+  图片出缩略图、文件出卡片（大小 + 下载），`pack.mjs` 内联成 data URI（单文件 >4 MB 不内联、全页
+  >12 MB 警告），`plan.mjs --check` 拒绝仍有未内联附件的页面；打包成功后附件目录默认删除，
+  重打包加 `--keep-assets`。详见 [0.35.0 发布说明](docs/release-0.35.0.md)。
 
 - **v0.34.0**：SVN 窗口行图标按判型区分文件与目录——`svn status --xml` 与 `svn update` 的输出都不带
   kind，只能查盘：先用「某条目是另一条目的上级目录」白拿一批目录，剩下的按 200/批查 host 新增的

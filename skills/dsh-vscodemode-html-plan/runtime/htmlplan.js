@@ -1183,6 +1183,41 @@ define('doc-shot', (el) => {
   img.addEventListener('load', fitS); new ResizeObserver(fitS).observe(stage); fitS();
 });
 
+/* ── doc-attach (files and images that came with the request) ────────────── */
+/* One container, one <doc-file> child per attachment. pack.mjs turns each src into a data URI and
+   stamps data-mime / data-bytes; an unpacked page still renders, marked as not inlined. */
+const fmtBytes = (n) => { const v = +n || 0; if (!v) return ''; if (v >= 1048576) return (v / 1048576).toFixed(1) + ' MB'; if (v >= 1024) return Math.round(v / 1024) + ' KB'; return v + ' B'; };
+const extOfName = (s) => { const m = String(s || '').match(/\.([a-z0-9]{1,6})(?:$|[?#])/i); return m ? m[1].toUpperCase() : ''; };
+const MIME_LABEL = { 'text/plain': 'TXT', 'text/markdown': 'MD', 'text/csv': 'CSV', 'application/json': 'JSON', 'application/pdf': 'PDF', 'application/zip': 'ZIP' };
+const mimeLabel = (mime) => { const base = String(mime || '').split(';')[0].trim(); if (MIME_LABEL[base]) return MIME_LABEL[base]; const sub = base.split('/')[1] || ''; return sub.replace(/^(x-|vnd\.)/i, '').slice(0, 4).toUpperCase(); };
+const looksImage = (src, mime) => /^image\//i.test(mime || '') || (!mime && /\.(png|jpe?g|gif|webp|svg|avif|bmp|tiff?)$/i.test(String(src || '')));
+/** One attachment card: an image thumbnail that opens full size, or a file row that downloads. */
+function attachItem(f) {
+  const src = f.getAttribute('src') || ''; const mime = f.getAttribute('data-mime') || '';
+  const name = (f.textContent || '').trim() || f.getAttribute('name') || String(src).split(/[\\/]/).pop() || 'attachment';
+  const bytes = +(f.getAttribute('data-bytes') || 0); const packed = /^(data:|https?:)/i.test(src);
+  const meta = [fmtBytes(bytes), packed ? '' : '未内联'].filter(Boolean).join(' · ');
+  if (looksImage(src, mime)) {
+    const thumb = packed ? h('img', { class: 'at-thumb', src, alt: name, loading: 'lazy' }) : h('div', { class: 'at-thumb at-missing' }, '未内联');
+    const card = h('button', { type: 'button', class: 'at-item at-image', title: name }, thumb, h('span', { class: 'at-name' }, name), h('span', { class: 'at-meta' }, meta));
+    if (packed) card.addEventListener('click', () => openSheet(name, h('img', { src, alt: name, style: 'max-width:100%;height:auto;display:block' })));
+    else card.disabled = true;
+    return card;
+  }
+  const badge = h('span', { class: 'at-ext' }, (extOfName(name) || mimeLabel(mime) || 'FILE').slice(0, 4).toUpperCase());
+  const info = h('span', { class: 'at-info' }, h('span', { class: 'at-name' }, name), h('span', { class: 'at-meta' }, [fmtBytes(bytes), packed ? '下载' : '未内联'].filter(Boolean).join(' · ')));
+  if (packed) return h('a', { class: 'at-item at-file', href: src, download: name, target: '_blank', rel: 'noopener', title: name }, badge, info);
+  return h('span', { class: 'at-item at-file at-raw', title: src || name }, badge, info);
+}
+define('doc-attach', (el) => {
+  const files = $$(':scope > doc-file', el);
+  if (!files.length) { errBox(el, ['no <doc-file> inside'], 'doc-attach'); return; }
+  const grid = h('div', { class: 'at-grid' });
+  files.forEach((f) => { grid.append(attachItem(f)); f.remove(); });
+  const label = el.getAttribute('label'); const caption = el.getAttribute('caption');
+  el.replaceChildren(...[label ? h('div', { class: 'mk-label' }, label) : null, grid, caption ? h('div', { class: 'at-cap', html: capHtml(caption) }) : null].filter(Boolean));
+});
+
 /* ── doc-plan / doc-claim (a tree of claims; each claim shows the one exhibit that proves it) ── */
 const claimKids = (c) => $$(':scope > doc-claim, :scope > .pl-body > doc-claim', c);
 /** Runs before the TOC is built: level, number, id and plain text of every claim. */
@@ -1286,7 +1321,7 @@ define('doc-ask', (el) => {
 });
 
 /* ── generic: [data-ref] outside mocks, tables ── */
-function upgradeWithin(root) { $$('doc-code, doc-flow, doc-seq, doc-schema, doc-tree, doc-calls, doc-mock, doc-shot, doc-quote', root).forEach((el) => { const d = defs.find(([t]) => t === el.tagName.toLowerCase()); if (d && !el._nw) { el._nw = true; d[1](el); } }); }
+function upgradeWithin(root) { $$('doc-code, doc-flow, doc-seq, doc-schema, doc-tree, doc-calls, doc-mock, doc-shot, doc-attach, doc-quote', root).forEach((el) => { const d = defs.find(([t]) => t === el.tagName.toLowerCase()); if (d && !el._nw) { el._nw = true; d[1](el); } }); }
 
 /* ───────────────────────── boot ───────────────────────── */
 function boot() {

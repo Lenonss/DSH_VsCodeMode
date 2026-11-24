@@ -50,6 +50,29 @@ whenToUse: 用户输入 /html-plan；或 plan 模式下要求给出可逐项作�
 8. 用户在计划页签点「生成 HTML 计划页」时，你会收到一条同样的修复指令：照第 3、4 步做完再重提交。
    不要回「计划模式不能写文件」——能写，写的是 `plans/` 下的计划交付物。
 
+### 2.1 附件（图片与文件）
+
+用户把图片/文件拖进对话输入框、连 `/html-plan <任务>` 一起发时，命令会先把它们复制到
+`plans/<slug>/assets/`，并把固定 slug 与文件清单写进给你的指令：
+
+- slug 已由命令定好：页面写到 `plans/<slug>/plan.html`，不要另起目录。
+- 图片先用 `read_image` 看清内容再写主张；文档、日志用 `read` 读原文。
+- 页面里用附件块引用（`src` 相对页面目录）：
+
+  ```html
+  <doc-attach label="随附材料" caption="打包后内联，离线也能看">
+    <doc-file src="assets/login-mock.png">登录页设计稿</doc-file>
+    <doc-file src="assets/api-v3.pdf">接口文档 v3</doc-file>
+  </doc-attach>
+  ```
+
+- `pack.mjs` 把每个 `doc-file` 内联成 data URI，并补 `data-mime` / `data-bytes`；
+  图片出缩略图（点开看原图），文件出卡片（带下载）。单文件 >4 MB 不内联，
+  卡片显示「未内联」；全页附件 >12 MB 会警告——大文件先裁小或改成文字引用。
+- `plan.mjs --check` 会拒绝仍有未内联附件的页面；打包成功后 `plans/<slug>/assets/` 默认删除。
+  要再打包一次（改页、重跑）就先给 `plan.mjs` 加 `--keep-assets` 保留原图。
+- 页面只引用工作区里的文件：pack 只读 `--root` 与页面目录，围栏与密钥过滤对附件同样生效。
+
 ## 3. 主张树（沿用上游）
 
 每一层回答一个问题，问题决定配什么图示。

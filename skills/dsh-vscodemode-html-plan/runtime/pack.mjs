@@ -66,7 +66,7 @@ if (!/<h1[\s>]/i.test(html)) warn('no <h1> — the response header uses it');
 if (!/<meta[^>]+charset/i.test(html)) warn('missing <meta charset="utf-8">');
 if (!/htmlplan\.css/.test(html) && !/<style[^>]*data-htmlplan/.test(html)) err('htmlplan.css is not linked — add <link rel="stylesheet" href="…/htmlplan.css">');
 if (!/htmlplan\.js/.test(html) && !/<script[^>]*data-htmlplan/.test(html)) err('htmlplan.js is not included — add <script src="…/htmlplan.js" defer></script>');
-const KNOWN = new Set(['doc-code', 'doc-pin', 'doc-flow', 'doc-seq', 'doc-schema', 'doc-tree', 'doc-calls', 'doc-machine', 'doc-mock', 'doc-shot', 'doc-quote', 'doc-ask', 'doc-note', 'doc-draft', 'doc-plan', 'doc-claim', 'doc-changes']);
+const KNOWN = new Set(['doc-code', 'doc-pin', 'doc-flow', 'doc-seq', 'doc-schema', 'doc-tree', 'doc-calls', 'doc-machine', 'doc-mock', 'doc-shot', 'doc-attach', 'doc-file', 'doc-quote', 'doc-ask', 'doc-note', 'doc-draft', 'doc-plan', 'doc-claim', 'doc-changes']);
 for (const m of html.matchAll(/<(doc-[a-z]+)\b/g)) if (!KNOWN.has(m[1])) err(`line ${lineOf(m.index)}: unknown element <${m[1]}> — known: ${[...KNOWN].join(' ')}`);
 const ids = {}; for (const m of html.matchAll(/\sid=["']([^"']+)["']/g)) { if (ids[m[1]]) err(`duplicate id="${m[1]}" (lines ${ids[m[1]]} and ${lineOf(m.index)})`); ids[m[1]] = lineOf(m.index); }
 for (const m of html.matchAll(/href=["']#([^"']+)["']/g)) if (!ids[m[1]] && !/^s\d+/.test(m[1])) warn(`line ${lineOf(m.index)}: href="#${m[1]}" points at no id`);
@@ -174,6 +174,19 @@ html = html.replace(/<(doc-(?!plan\b|claim\b)[a-z]+)\b([^>]*)>([\s\S]*?)<\/\1>/g
       else if (w >= 800 && !('thumbnail' in a)) warn(`${at}: ${a.frame || 'browser'} mock w=${w} renders at ~${Math.round(350 / w * 100)}% on a phone — fine as an overview (add thumbnail to say so), but pair it with a narrow crop (w≤480 frame=none) of the part that matters${inCols ? '; and it is inside .cols, which halves it again on desktop' : ''}`);
       else if (inCols && w > 600) warn(`${at}: w=${w} mock inside .cols — .cols is for mocks ≤600 wide; stack them or use .storyboard`); }
     else if (tag === 'doc-shot') { if (!a.src) err(`${at}: needs src=""`); else if (!/^(data:|https?:)/.test(a.src) && !findFile(a.src)) err(`${at}: src="${a.src}" not found`); }
+    else if (tag === 'doc-attach') {
+      const files = [...inner.matchAll(/<doc-file\b([^>]*)>([\s\S]*?)<\/doc-file>/gi)];
+      if (!files.length) err(`${at}: no <doc-file> inside — one child per attachment`);
+      if (files.length > 6) warn(`${at}: ${files.length} attachments — past ~6 the row wraps; split by kind or link the rest`);
+      for (const item of files) {
+        const fa = attrs(item[1]); const label = stripTags(item[2]).replace(/\s+/g, ' ').trim();
+        if (!fa.src) err(`${at}: <doc-file> needs src="assets/…"`);
+        else if (!/^(data:|https?:)/.test(fa.src) && !findFile(fa.src)) err(`${at}: src="${fa.src}" not found — keep attachments under plans/<slug>/assets/ and cite them as assets/<name>`);
+        if (!label && !fa.name) warn(`${at}: <doc-file src="${fa.src || '…'}"> has no display name — put it as the element text`);
+        if (fa.src && !/^(data:|https?:)/.test(fa.src) && /\.(html?|svg)$/i.test(fa.src)) warn(`${at}: ${fa.src} is markup — a browser may run it when opened; prefer a screenshot or a non-executable format`);
+      }
+      if (!a.caption) warn(`${at}: no caption="" — say what these attachments are for`);
+    }
     else if (tag === 'doc-draft') { if (!blockSrc(inner).trim()) err(`${at}: empty — put the editable text inside <script type="text/plain">`); if (!a.id) warn(`${at}: give it an id so edits survive a reload`); }
     else if (tag === 'doc-quote') { if (!a.via) warn(`${at}: add via="prompt|slack|github|transcript|doc|tools|…"`); if (!inner.trim()) err(`${at}: empty quote`); if (/[{}]/.test(a.from || '')) warn(`${at}: from="${a.from}" contains braces — from= is the literal name/handle the source shows; put role/agent context in where=`);
       if (a.via === 'slack' && a.href && /\/archives\/[A-Z0-9]+\/?$/.test(a.href)) warn(`${at}: href links the channel, not the message — use the permalink (…/p<ts>)`);
@@ -200,12 +213,13 @@ html = html.replace(/<(doc-(?!plan\b|claim\b)[a-z]+)\b([^>]*)>([\s\S]*?)<\/\1>/g
 });
 for (const m of html.matchAll(/data-if=["']([^"']+)["']/g)) m[1].split(/\s*&&\s*/).forEach((c) => { const n = c.replace(/^!/, '').split(/[=!~]/)[0].trim(); if (!names.has(n)) err(`line ${lineOf(m.index)}: data-if="${m[1]}" — no control named "${n}"`); });
 if (/<doc-pin\b/.test(html.replace(/<doc-(code|mock|shot|schema)\b[\s\S]*?<\/doc-\1>/g, ''))) err('a <doc-pin> sits outside any doc-code / doc-mock / doc-shot');
+if (/<doc-file\b/.test(html.replace(/<doc-attach\b[\s\S]*?<\/doc-attach>/gi, ''))) err('a <doc-file> sits outside any doc-attach');
 
 /* ── doc-plan: the shape of the tree ── */
 if (/<doc-plan\b/.test(html)) {
   const flat = html.replace(/<!--[\s\S]*?-->/g, '').replace(/<(script|template|style)\b[\s\S]*?<\/\1>/gi, '').replace(/(<doc-(machine|ask|calls|mock|note)\b[^>]*>)[\s\S]*?(<\/doc-\2>)/gi, '$1$3');
   const root = { no: '', kids: [], ex: [], l: 0 }; const stack = [root]; let inPlan = 0;
-  for (const t of flat.matchAll(/<(\/?)(doc-plan|doc-claim)\b([^>]*)>|<(doc-(?:mock|shot|machine|calls|schema|code|flow|seq|tree|quote))\b|<(doc-ask)\b|<p\b[^>]*>([\s\S]*?)<\/p>/g)) {
+  for (const t of flat.matchAll(/<(\/?)(doc-plan|doc-claim)\b([^>]*)>|<(doc-(?:mock|shot|attach|machine|calls|schema|code|flow|seq|tree|quote))\b|<(doc-ask)\b|<p\b[^>]*>([\s\S]*?)<\/p>/g)) {
     const top = stack[stack.length - 1];
     if (t[2] === 'doc-plan') { inPlan += t[1] ? -1 : 1; continue; }
     if (t[2] === 'doc-claim') { if (t[1]) { if (stack.length > 1) stack.pop(); else err('a </doc-claim> closes nothing'); continue; }
@@ -241,8 +255,8 @@ if (/<doc-plan\b/.test(html)) {   // a plan starts with a title, not a label lin
 
 /* ── words: the blocks are the document; prose only joins them ── */
 { const main = (html.match(/<main[\s\S]*<\/main>/i) || [html])[0];
-  const blocks = (main.match(/<doc-(code|flow|seq|schema|tree|calls|machine|mock|shot|ask|draft)\b/g) || []).length;
-  const bare = main.replace(/<(script|style|template)\b[\s\S]*?<\/\1>/gi, ' ').replace(/<(doc-(?:code|flow|seq|schema|tree|calls|machine|mock|shot|ask|draft|quote))\b[\s\S]*?<\/\1>/gi, ' ');
+  const blocks = (main.match(/<doc-(code|flow|seq|schema|tree|calls|machine|mock|shot|attach|ask|draft)\b/g) || []).length;
+  const bare = main.replace(/<(script|style|template)\b[\s\S]*?<\/\1>/gi, ' ').replace(/<(doc-(?:code|flow|seq|schema|tree|calls|machine|mock|shot|attach|ask|draft|quote))\b[\s\S]*?<\/\1>/gi, ' ');
   let total = 0, long = 0, longest = 0, slow = 0;
   for (const m of bare.matchAll(/<(p|li|dd|doc-note)\b[^>]*>([\s\S]*?)<\/\1>/gi)) { const t = stripTags(m[2]).replace(/\s+/g, ' ').trim(); const n = wc(t); total += n; if (n > 40) { long++; longest = Math.max(longest, n); } t.split(/(?<=[.!?])\s+/).forEach((sn) => { if (wc(sn) > 25) slow++; }); }
   if (long) warn(`${long} paragraph${long > 1 ? 's' : ''} over 40 words (longest ${longest}) — two short sentences, then a block; move the rest into a caption, a pin or a table`);
@@ -274,6 +288,23 @@ if (!lintOnly) {
     const size = statSync(f).size; if (size > 6e6) { warn(`${src} is ${(size / 1e6).toFixed(1)} MB — not inlining; the packed file will need it alongside`); return m; }
     inlined++; return `${pre}data:${MIME[extname(f).toLowerCase()] || 'application/octet-stream'};base64,${readFileSync(f).toString('base64')}${post}`;
   });
+  // Attachments: a <doc-file> is one downloadable file (or image) that came with the request. Each is
+  // inlined under a stricter per-file cap than figures, so a plan page never silently ships a dead link.
+  const ATTACH_MIME = { ...MIME, '.pdf': 'application/pdf', '.txt': 'text/plain;charset=utf-8', '.log': 'text/plain;charset=utf-8', '.md': 'text/markdown;charset=utf-8', '.csv': 'text/csv;charset=utf-8', '.json': 'application/json', '.zip': 'application/zip', '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation' };
+  let attachTotal = 0;
+  packed = packed.replace(/<doc-file\b([^>]*)>/gi, (m, rawAttrs) => {
+    const a = attrs(rawAttrs); const src = a.src || '';
+    if (!src || /^(data:|https?:|#)/.test(src)) return m;
+    const f = findFile(src); if (!f) { warn(`attachment ${src} not found — left as-is`); return m; }
+    const size = statSync(f).size; const mime = ATTACH_MIME[extname(f).toLowerCase()] || 'application/octet-stream';
+    if (size > 4e6) { warn(`${src} is ${(size / 1e6).toFixed(1)} MB — over the 4 MB attachment cap; the card will say it is not packed`); return m; }
+    attachTotal += size; inlined++;
+    const uri = `data:${mime};base64,${readFileSync(f).toString('base64')}`;
+    const next = rawAttrs.replace(/(\ssrc\s*=\s*["'])([^"']*)(["'])/i, (whole, pre, _old, post) => `${pre}${uri}${post}`);
+    const extra = ('data-mime' in a ? '' : ` data-mime="${mime}"`) + ('data-bytes' in a ? '' : ` data-bytes="${size}"`);
+    return `<doc-file${next}${extra}>`;
+  });
+  if (attachTotal > 12e6) warn(`attachments total ${(attachTotal / 1e6).toFixed(1)} MB — pages over ~12 MB open slowly; link the big ones instead`);
   if (!/data-htmlplan-packed/.test(packed)) packed = packed.replace(/<html\b/i, '<html data-htmlplan-packed');
 }
 
