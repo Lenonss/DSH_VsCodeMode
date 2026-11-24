@@ -7,6 +7,23 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
 
 > updated: 2026-11-24 · 维护者：ddj（AI 会话按文末协议更新，保持精炼、去重）
 > **发布时先读「发布流程」与「失败恢复」**；下方实录是历史证据，不授权当前重跑发布、改 tag 或部署。冲突旧口径以更新后的规则为准。
+- 2026-11-24 实录（v0.37.0：计划页「答复先送达再批准」——先 steer 正文再结算审批 + 幽灵待审记录闸门
+  （无版本库状态时首次见路径必须有 mtime 证据）+ `edrv.pending.purge` / `edrv.archive.purge` 两个清理入口
+  + 归档库每日清理；基线 v0.36.0 @ `0451975`，发布提交 `6ea0497`）。三门：typecheck 0 /
+  vitest **345 文件通过 + 2 跳过、4312 通过 / 22 跳过（33.68s）** / `node --test` 9/9（12.3s）/
+  build `index.js` 1,344,145 B + `client.js` 1,293,026 B。本轮无抖动。
+  Release `45360040877` **一次全绿 12m0s**（含 Publish + Verify），main CI `45360028401` 绿（1m54s）。
+  四向闭环：registry `0.37.0` `gitHead=6ea0497`、latest=0.37.0、shasum `00c22c61…` 与 sha512 SRI 均与实包一致、
+  包内 772 条且新标记 `edrv.pending.purge`/`edrv.archive.purge`/`before-purge.bak` 齐全，
+  GitHub asset digest `sha256:ee90d44d…`（17,390,777 B）与 API 一致。
+  **两端 `lib/index.js` 与 `package.json` 逐字节相同**，只有 `lib/client.js` 差 14 B（npm 1,283,760 / gh 1,283,774，
+  `prepare` 重构建的 minify 顺序，同历史）；**本地 Windows 构建的 client.js 是 1,293,026 B——跨 OS 构建差约 9 KB
+  属正常，别拿本地产物大小当验收依据**，验收只认各自声明的 digest 与包内逐文件哈希。
+  **新坑（vitest 汇总被打断/淹没）**：`npm run test` 的 stdout 末尾是整段缓冲 stderr，
+  `job_output` 尾部常常看不到 `Test Files` 行，容易误判「还没跑完」。取数用溢出文件 grep
+  `Test Files|Tests\s+[0-9]|Duration`；`node --test` 段用 `2>&1 | Select-Object -Last 12` 抓 `ℹ pass`。
+  **事实（审批策略中途变 never + danger-full-access）**：此后 `npm run typecheck/test/build` 直接可跑，
+  **先直接跑、失败再谈升权**；不要再默认带 `sandbox_permissions`（never 下这类请求会被自动拒）。
 - 2026-11-24 实录（v0.36.0：审查捕获补上「非工具写盘」——`fs.watch` 采集 + 版本库补扫四触发点 +
   来源/归属字段 + 修改前内容四级降级 + 撤销白名单；MCP 托管后端会话计时。基线 v0.35.0 @ `9e35556`，
   发布提交 `0451975`）。三门：typecheck 0 / vitest **343 文件通过 + 2 跳过、4292 通过 / 22 跳过**、
