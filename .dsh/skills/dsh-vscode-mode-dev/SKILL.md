@@ -7,6 +7,21 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
 
 > updated: 2026-11-25 · 维护者：ddj（AI 会话按文末协议更新，保持精炼、去重）
 > **发布时先读「发布流程」与「失败恢复」**；下方实录是历史证据，不授权当前重跑发布、改 tag 或部署。冲突旧口径以更新后的规则为准。
+- 2026-11-25 实录（v0.39.0：AI 追踪窗口差异模型 + 并行 WIP 的 HTML 计划模式，经用户确认一并发布；
+  基线 v0.38.0 @ `a0ea8ec`，发布提交 `b71c817`）。
+  **发布前做了隔离树校验**：`git diff --cached --binary --output=tmp/release.patch` → `git worktree add --detach tmp/release-tree HEAD`
+  → `git apply` 补丁 → 给 worktree 建 `node_modules` junction → 三门全绿（typecheck 0 / vitest **352 文件通过 + 2 跳过，
+  4386 通过 / 23 跳过** / `node --test` 9/9 / build）。**新坑（工作树与干净树产物差 9 KB 属正常）**：主工作树 build
+  `index.js` 1,501,804 B + `client.js` 1,306,207 B（内联 CSS 带 CRLF）；干净 worktree 是 `index.js` 1,501,906 B +
+  `client.js` 1,296,895 B（LF）。差异全来自内联 CSS 的行尾，不是漏模块：用字符串字面量集合 diff 确认后收工，
+  验收以 CI 产物为准。线上：Release `45596191708` **首跑全绿 13m10s**（含 Publish + Verify），main CI `45596186003` 绿。
+  四向闭环：registry `0.39.0` `gitHead=b71c817`、latest=0.39.0、shasum `54d803af…` / SRI `sha512-WtXdM6/w…`
+  均与 npm 实包一致（17,566,277 B、783 条）；GitHub asset `sha256:25f16856…`（17,565,733 B）与 API digest 一致；
+  两包 783 条、`lib/index.js`/`package.json`/新增 `src/**` 逐字节相同，只有 `client.js` 差 14 B（历史 minify 顺序）；
+  新标记 `tracking_schema` / `差异窗口折入` / `校准一次` / `实时跟随` / `HTML 计划模式` 齐全。
+  **运维事实（0.39 双宿主）**：桌面 profile 仍是 0.38 时会向共享库写 `opened_at=0` 的旧格式行、并把
+  `pending_schema` 写回 6；新端按「已关窗」隐藏这些行，并用独立 `tracking_schema` 快路径避免重复迁移，
+  但两端都升级前不要拿旧端面板当验收依据。
 - 2026-11-25 实录（v0.38.0：合并式差异 + 卡顿治理，含并行 WIP 的 SVN 提交对话框与采集证据强度）。
   本地三门：typecheck 0 / vitest **350 文件通过 + 2 跳过、4373 通过 / 22 跳过（40.47s）** /
   `node --test` 9/9 / build `index.js` 1,388,527 B + `client.js` 1,296,424 B。
