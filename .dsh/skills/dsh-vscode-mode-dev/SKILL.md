@@ -5,8 +5,26 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
 
 # dsh-vscode-mode 开发/发布经验集（自我更新型技能）
 
-> updated: 2026-11-24 · 维护者：ddj（AI 会话按文末协议更新，保持精炼、去重）
+> updated: 2026-11-25 · 维护者：ddj（AI 会话按文末协议更新，保持精炼、去重）
 > **发布时先读「发布流程」与「失败恢复」**；下方实录是历史证据，不授权当前重跑发布、改 tag 或部署。冲突旧口径以更新后的规则为准。
+- 2026-11-25 实录（v0.38.0：合并式差异 + 卡顿治理，含并行 WIP 的 SVN 提交对话框与采集证据强度）。
+  本地三门：typecheck 0 / vitest **350 文件通过 + 2 跳过、4373 通过 / 22 跳过（40.47s）** /
+  `node --test` 9/9 / build `index.js` 1,388,527 B + `client.js` 1,296,424 B。
+  Release `45545522173` **首跑挂 `tests/dapFakeAdapter.test.ts:26`（已知抖动，Test 在 Publish 之前，publish 未尝试）
+  → `gh run rerun --failed` 一次全绿 9m53s**（含 Publish + Verify）；同 commit main CI `45544701570` 绿（2m24s）。
+  四向闭环：registry `0.38.0` `gitHead=207c34c`、latest=0.38.0、SRI `sha512-b3mc474d…` 与 shasum
+  `5731d019…` 均与实包一致、包内 778 条且 `lib/index.js`+`lib/client.js` 齐全、新标记
+  `edrv.review.undoAll` / `[slow]` / `pending_history` / `installNoteTool` 都在；GitHub asset
+  `sha256:0a1e4e57…`（17,457,553 B）与 API digest 一致。
+  **新坑（代价最高：提交了 import 却没提交被 import 的新文件）**：`src/index.ts`/`store.ts`/`capture.ts`
+  早已 import `pending/{noteTool,notes,receipt,verdict}.js` 与 `textEncoding.probe.js`，但这几个文件
+  从未纳入 git——本地 typecheck/test/build 全绿只因为磁盘上有。CI 在 `Install deps` 的 `prepare`
+  直接 `UNRESOLVED_IMPORT`，23 秒红掉，且 publish 未尝试。规矩：`git add -- <精确清单>` 必须覆盖
+  **新增模块**而不只是修改文件；发布前把 `git status` 的 `??` 逐个过一遍，`src/` 与 `tests/` 下任何
+  未跟踪的 `.ts` 都可能是被 import 的必需文件（用「该路径是否出现在某个 import 说明符」判定）。
+  **事实（重打 tag 的可行前提与判据）**：首 tag 打在漏文件提交上、publish 从未执行、registry 无该版本、
+  Release 无资产 → 取得用户明确批准后删远端 tag 并重打到修复提交（`207c34c`）即完成同版本发布；
+  判据只有两条：publish 未尝试 + 版本未被占用/暂存。已公开或已接受时必须另发新版本。
 - 2026-11-24 实录（v0.37.0：计划页「答复先送达再批准」——先 steer 正文再结算审批 + 幽灵待审记录闸门
   （无版本库状态时首次见路径必须有 mtime 证据）+ `edrv.pending.purge` / `edrv.archive.purge` 两个清理入口
   + 归档库每日清理；基线 v0.36.0 @ `0451975`，发布提交 `6ea0497`）。三门：typecheck 0 /
