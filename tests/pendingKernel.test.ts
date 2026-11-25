@@ -12,7 +12,7 @@ import {
   applyUpdate, byUpdatedAt, ContentVersions, entryFromNew, isSettled, mergeEntries, touchSeen, withUnseen,
 } from '../src/pending/kernel.js'
 import type { PendingFlags } from '../src/pending/persist.js'
-import { foldWrite, itemOf, refreshed } from '../src/pending/store.js'
+import { foldWrite, itemOf } from '../src/pending/store.js'
 
 /** 未配置标记的默认值。 */
 const FLAGS: PendingFlags = { missing: false, diverged: false, oversized: false, revision: 3 }
@@ -272,21 +272,22 @@ describe('pending store projection', () => {
     expect(edited.entry.oldText).toBe('x')
   })
 
-  it('外部改动被吸收并标分歧，基线不动', () => {
-    const stored = foldWrite(undefined, write('A', 'B', 1))
-    const next = refreshed(stored, 'EXT', 5)
-    expect(next?.entry.newText).toBe('EXT')
-    expect(next?.entry.oldText).toBe('A')
-    expect(next?.flags.diverged).toBe(true)
-    expect(next?.entry.unseen).toBe(true)
+  it('窗口关闭后再写：按本次写前内容重开新基线', () => {
+    const first = foldWrite(undefined, write('A', 'B', 1))
+    const closed = { ...first, entry: { ...first.entry, tracking: 'closed' as const } }
+    const reopened = foldWrite(closed, write('C', 'D', 9))
+    expect(reopened.entry.oldText).toBe('C')
+    expect(reopened.entry.newText).toBe('D')
+    expect(reopened.entry.tracking).toBe('open')
+    expect(reopened.entry.openedAt).toBe(9)
+    expect(reopened.flags.revision).toBe(first.flags.revision + 1)
   })
 
-  it('内容一致不产生新状态，缺失只打标记不删条目', () => {
-    const stored = foldWrite(undefined, write('A', 'B', 1))
-    expect(refreshed(stored, 'B', 5)).toBeNull()
-    const missing = refreshed(stored, null, 6)
-    expect(missing?.flags.missing).toBe(true)
-    expect(missing?.entry.newText).toBe('B')
+  it('开窗中的再次写入沿用开窗时刻，不改窗口边界', () => {
+    const first = foldWrite(undefined, write('A', 'B', 1))
+    const second = foldWrite(first, write('B', 'C', 2))
+    expect(second.entry.openedAt).toBe(1)
+    expect(second.entry.tracking).toBe('open')
   })
 
   it('列表项暴露已解决与增删统计', () => {

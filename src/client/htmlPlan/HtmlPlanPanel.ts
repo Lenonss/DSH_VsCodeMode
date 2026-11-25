@@ -1,28 +1,36 @@
 /**
  * dsh-vscode-mode client — HTML 计划页签面板：状态条 + 官方动作 + 沙箱 iframe。
  *
- * 页面由 agent 按 html-plan 技能打包成单文件；这里只负责呈现与转交用户动作：
+ * 页面来源按优先级解析：作者页（已打包直接显示、未打包自动打包、声明缺失时试备用路径）
+ * → HTML 计划模式下用计划正文渲染自动页 → 报错（并把回落控制权交回 EditorView）。
  * 同意执行 / 继续规划走官方 userQuestions 答案通道，退出计划模式走官方 /plan off，
  * 页面答复经桥接脚本回填对话输入框。iframe 一律 sandbox 且不给 allow-same-origin。
  * @author ddj 2026年11月21号
+ * @author ddj 2026年11月25号（HTML 计划模式：模式徽标、自动页、页面来源与 Markdown 回落）
  */
 import React from 'react'
 import { rpc } from '../rpc.js'
 import {
   buildPlanSrcDoc,
+  deriveHtmlPlanUiState,
   derivePlanUiState,
   isMissingPage,
   planAttachInfoOf,
+  planPageAltPath,
+  planPageDecisionOf,
   planPagePathOf,
   planRepairInstruction,
   resolvePlanPagePath,
   unresolvedRuntimeRefs,
   type PendingReview,
+  type PlanPageRead,
 } from './planPage.js'
 import {
   answerPlanReview,
+  exitHtmlPlanMode,
   exitPlanMode,
   fillComposer,
+  readHtmlPlanMode,
   readPendingReview,
   readPlanProjection,
   revealPlanReview,
@@ -38,28 +46,43 @@ export interface HtmlPlanPanelProps {
   title?: string
   htmlPath?: string
   markdown?: string
+  /** 计划由 HTML 计划模式提交：允许插件渲染自动页，缺页不再视为错误。 */
+  htmlPlanMode?: boolean
+  /** 页面无法生成时交回 EditorView 回落官方 Markdown。 */
+  onMarkdownFallback?: () => void
 }
 
 /** 本地刚完成的动作（用于状态文案，不持久化）。 */
 type PlanAct = 'approved' | 'revising' | 'exited'
 type ReadResult = { ok?: boolean; content?: string; error?: string; code?: string }
+type PageSource = 'authored' | 'packed' | 'auto'
+
+/** 页面来源徽标文案。 */
+const SOURCE_LABEL: Record<PageSource, string> = {
+  authored: '作者页',
+  packed: '已打包',
+  auto: '自动页',
+}
 
 /**
  * HTML 计划面板。
  * @author ddj 2026年11月21号
- * @param props 会话/工作区/计划页路径与标题
+ * @param props 会话/工作区/计划页路径、标题与模式
  * @returns 计划页签正文
  */
 export function HtmlPlanPanel(props: HtmlPlanPanelProps) {
   const sessionId = String(props.sessionId ?? '')
+  const htmlPlanMode = props.htmlPlanMode === true
   const declared = String(props.htmlPath ?? planPagePathOf(props.markdown) ?? '')
   const absPath = resolvePlanPagePath(props.cwd, declared)
   const title = String(props.title ?? 'HTML 计划')
 
   const [html, setHtml] = React.useState<string | null>(null)
+  const [source, setSource] = React.useState<PageSource | null>(null)
   const [error, setError] = React.useState<string | null>(null)
   const [staleRefs, setStaleRefs] = React.useState<string[]>([])
   const [projection, setProjection] = React.useState<unknown>(undefined)
+  const [htmlMode, setHtmlMode] = React.useState<unknown>(undefined)
   const [review, setReview] = React.useState<PendingReview | null>(null)
   const [acted, setActed] = React.useState<PlanAct | null>(null)
   const [busy, setBusy] = React.useState(false)
@@ -70,8 +93,9 @@ export function HtmlPlanPanel(props: HtmlPlanPanelProps) {
   const [repairing, setRepairing] = React.useState(false)
   const frameRef = React.useRef<HTMLIFrameElement | null>(null)
   const pollRef = React.useRef<number | null>(null)
-  const pageRef = React.useRef({ absPath, declared, sessionId })
-  pageRef.current = { absPath, declared, sessionId }
+  const aliveRef = React.useRef(true)
+  const pageRef = React.useRef({ absPath, declared, sessionId, markdown: props.markdown })
+  pageRef.current = { absPath, declared, sessionId, markdown: props.markdown }
 
   /** 停掉等待页面出现的轮询（卸载/重读/成功时都调一次）。 */
   function stopPolling(): void {
@@ -80,45 +104,176 @@ export function HtmlPlanPanel(props: HtmlPlanPanelProps) {
       pollRef.current = null
     }
   }
-  React.useEffect(() => stopPolling, [])
+  React.useEffect(() => () => { aliveRef.current = false; stopPolling() }, [])
 
-  // 读取计划页：路径缺失/读取失败/未打包都在面板内说明，不抛错、不白屏。
+  /**
+   * 读一页并把结果归一成三态 + 是否需要打包。
+   * @author ddj 2026年11月25号
+   * @param path 绝对路径
+   * @returns 读取结果
+   */
+  async function readPage(path: string): Promise<{ read: PlanPageRead; text: string; refs: string[] }> {
+    try {
+      const raw = await rpc('edrv.read', { sessionId, path })
+      const result = raw as ReadResult
+      if (result?.ok === true) {
+        const text = String(result.content ?? '')
+        return { read: 'ok', text, refs: unresolvedRuntimeRefs(text) }
+      }
+      return { read: isMissingPage(result) ? 'missing' : 'error', text: '', refs: [] }
+    } catch {
+      return { read: 'error', text: '', refs: [] }
+    }
+  }
+
+  /**
+   * 调 host 打包作者页；失败返回可读原因。
+   * @author ddj 2026年11月25号
+   * @param path 页面路径
+   * @returns 打包后的 HTML 或错误
+   */
+  async function packPage(path: string): Promise<{ ok: boolean; html?: string; error?: string }> {
+    try {
+      const raw = await rpc('edrv.planPage.pack', { sessionId, path })
+      const result = raw as { ok?: boolean; html?: string; error?: string }
+      return result?.ok === true ? { ok: true, html: String(result.html ?? '') } : { ok: false, error: String(result?.error ?? '打包失败') }
+    } catch (cause) {
+      return { ok: false, error: String(cause) }
+    }
+  }
+
+  /**
+   * 调 host 用计划正文渲染自动页。
+   * @author ddj 2026年11月25号
+   * @returns 自动页 HTML 或错误
+   */
+  async function renderAutoPage(): Promise<{ ok: boolean; html?: string; error?: string }> {
+    try {
+      const raw = await rpc('edrv.planPage.render', { sessionId, markdown: String(props.markdown ?? '') })
+      const result = raw as { ok?: boolean; html?: string; error?: string }
+      return result?.ok === true ? { ok: true, html: String(result.html ?? '') } : { ok: false, error: String(result?.error ?? '渲染失败') }
+    } catch (cause) {
+      return { ok: false, error: String(cause) }
+    }
+  }
+
+  // 读取计划页：作者页 → 自动打包 → 备用路径 → 自动页 → 报错/回落。
   React.useEffect(() => {
-    let alive = true
+    aliveRef.current = true
     setHtml(null)
+    setSource(null)
     setError(null)
     setStaleRefs([])
     setMissing(false)
-    if (!absPath) {
-      setError('计划未声明 HTML 页路径（计划正文缺少「HTML 计划页：…」一行）')
-      return () => { alive = false }
-    }
-    rpc('edrv.read', { sessionId, path: absPath }).then((raw) => {
-      if (!alive) return
-      const result = raw as ReadResult
-      if (result?.ok !== true) {
-        const pageMissing = isMissingPage(result)
-        setMissing(pageMissing)
-        setError(pageMissing ? '计划页还没生成：' + absPath : '读取计划页失败：' + String(result?.error ?? '未知原因'))
+    setNotice('')
+
+    let alive = true
+    const isAlive = (): boolean => alive && aliveRef.current
+
+    /**
+     * 页面解析主流程（异步，失败一律落到可读状态，不抛）。
+     * @author ddj 2026年11月25号
+     */
+    async function resolvePage(): Promise<void> {
+      let read: PlanPageRead = 'missing'
+      let needsPack = false
+      let alternateExists = false
+      let rawText = ''
+      let rawRefs: string[] = []
+      let alternatePath = ''
+
+      if (declared) {
+        const first = await readPage(absPath)
+        read = first.read
+        rawText = first.text
+        rawRefs = first.refs
+        needsPack = first.read === 'ok' && first.refs.length > 0
+        if (first.read !== 'ok') {
+          const alt = planPageAltPath(declared)
+          if (alt) {
+            alternatePath = resolvePlanPagePath(props.cwd, alt)
+            const alternate = await readPage(alternatePath)
+            alternateExists = alternate.read === 'ok'
+          }
+        }
+      }
+
+      if (!isAlive()) return
+      const decision = planPageDecisionOf({ declared, htmlPlanMode, read, needsPack, alternateExists })
+
+      if (decision.action === 'show') {
+        setHtml(rawText)
+        setStaleRefs(rawRefs)
+        setSource('authored')
+        setMissing(false)
         return
       }
-      const text = String(result.content ?? '')
-      stopPolling()
-      setHtml(text)
-      setStaleRefs(unresolvedRuntimeRefs(text))
-    }).catch((cause) => {
-      if (alive) setError('读取计划页失败：' + String(cause))
-    })
+
+      if (decision.action === 'pack') {
+        const target = resolvePlanPagePath(props.cwd, String(decision.target ?? ''))
+        const packed = await packPage(target)
+        if (!isAlive()) return
+        if (packed.ok && packed.html !== undefined) {
+          setHtml(packed.html)
+          setStaleRefs([])
+          setSource('packed')
+          setMissing(false)
+          setNotice('已自动打包计划页')
+          return
+        }
+        // 打包失败但作者页本身读得到：原样展示并保留告警，不吞掉内容。
+        if (read === 'ok') {
+          setHtml(rawText)
+          setStaleRefs(rawRefs)
+          setSource('authored')
+          setNotice('自动打包失败：' + String(packed.error ?? '未知原因'))
+          return
+        }
+        // 否则继续走兜底/报错。
+        setNotice('自动打包失败：' + String(packed.error ?? '未知原因'))
+      }
+
+      if (decision.action === 'auto') {
+        const rendered = await renderAutoPage()
+        if (!isAlive()) return
+        if (rendered.ok && rendered.html !== undefined) {
+          setHtml(rendered.html)
+          setStaleRefs([])
+          setSource('auto')
+          setMissing(false)
+          setNotice('自动页：由计划正文渲染，作者页可让它更丰富')
+          return
+        }
+        setError('自动页渲染失败：' + String(rendered.error ?? '未知原因') + '；已回落 Markdown 计划')
+        props.onMarkdownFallback?.()
+        return
+      }
+
+      // 没有作者页、也不是 HTML 计划模式：保持原行为（缺页给生成入口）。
+      setMissing(read === 'missing' || alternateExists)
+      if (!declared) {
+        setError('计划未声明 HTML 页路径（计划正文缺少「HTML 计划页：…」一行）')
+      } else if (read === 'missing') {
+        setError('计划页还没生成：' + absPath)
+      } else {
+        setError('读取计划页失败：' + absPath)
+      }
+    }
+
+    void resolvePage()
     return () => { alive = false }
-  }, [absPath, sessionId, reloadToken])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [absPath, declared, htmlPlanMode, markdownKey(props.markdown), sessionId, reloadToken, props.cwd])
 
   // 计划状态读取一律不可抛：侧栏 slot 里抛一次异常就会把整片正文刷空（连编辑器一起消失）。
   const refresh = React.useCallback(() => {
     try {
       setProjection(readPlanProjection(sessionId))
+      setHtmlMode(readHtmlPlanMode(sessionId))
       setReview(readPendingReview(sessionId))
     } catch {
       setProjection(undefined)
+      setHtmlMode(undefined)
       setReview(null)
     }
   }, [sessionId])
@@ -160,7 +315,8 @@ export function HtmlPlanPanel(props: HtmlPlanPanelProps) {
 
   React.useEffect(() => { postPlanState() }, [review])
 
-  const state = derivePlanUiState(projection, review !== null, acted)
+  const officialState = derivePlanUiState(projection, review !== null, acted)
+  const state = htmlPlanMode ? deriveHtmlPlanUiState(htmlMode, review !== null, acted) : officialState
   const attachments = html === null ? { total: 0, pending: 0 } : planAttachInfoOf(html)
 
   /**
@@ -210,7 +366,9 @@ export function HtmlPlanPanel(props: HtmlPlanPanelProps) {
       return
     }
     setBusy(true)
-    const result = action === 'exited' ? await exitPlanMode(sessionId) : await answerPlanReview(sessionId, action === 'approved')
+    const result = action === 'exited'
+      ? (htmlPlanMode ? await exitHtmlPlanMode(sessionId) : await exitPlanMode(sessionId))
+      : await answerPlanReview(sessionId, action === 'approved')
     setBusy(false)
     if (result.ok) {
       setActed(action)
@@ -230,38 +388,32 @@ export function HtmlPlanPanel(props: HtmlPlanPanelProps) {
   }
 
   /**
-   * 读一次计划页；读到就渲染并停掉轮询（轮询时用 ref 里的最新路径，避免闭包过期）。
-   * @author ddj 2026年11月23号
+   * 重新解析一次页面（⟳ 与轮询共用；走 reloadToken 让解析流程重跑）。
+   * @author ddj 2026年11月25号
    */
-  async function retryRead(): Promise<void> {
-    const { absPath: path, sessionId: sid } = pageRef.current
-    if (!path) return
-    try {
-      const raw = await rpc('edrv.read', { sessionId: sid, path })
-      const result = raw as ReadResult
-      if (result?.ok !== true) return
-      stopPolling()
-      setMissing(false)
-      setError(null)
-      setHtml(String(result.content ?? ''))
-      setStaleRefs(unresolvedRuntimeRefs(result.content))
-      setNotice('计划页已生成')
-    } catch {
-      /* 下一轮再试 */
-    }
+  function reloadPage(): void {
+    stopPolling()
+    setReloadToken((value) => value + 1)
   }
 
   /**
-   * 让 agent 现场生成计划页：先发修复指令，再每 2 秒读一次，最多等 90 秒。
+   * 让 agent 现场生成计划页：先发修复指令，再每 2 秒重读一次，最多等 90 秒。
    *
    * 有待审批卡片时把「继续规划」和修复指令一起交给 agent（先 steer 指令再结算），
    * 否则 agent 会先按「继续规划」开始修订、指令等到下一回合才被读到。
-   * 计划模式允许写计划交付物，所以这里不要求用户退出计划模式。
+   * HTML 计划模式下页面由插件负责，这里只重新解析，不再要求 agent 写文件。
    * @author ddj 2026年11月23号
    * @author ddj 2026年11月24号（与「继续规划」一起提交，保证同一步送达）
    */
   async function regenerate(): Promise<void> {
     if (repairing) return
+    if (htmlPlanMode) {
+      setRepairing(true)
+      reloadPage()
+      setRepairing(false)
+      setNotice('已重新解析计划页')
+      return
+    }
     setRepairing(true)
     const hadReview = reviewRef.current
     const result = await submitPlanResponse(sessionId, planRepairInstruction(declared), false)
@@ -278,18 +430,22 @@ export function HtmlPlanPanel(props: HtmlPlanPanelProps) {
     let waited = 0
     pollRef.current = window.setInterval(() => {
       waited += 1
-      void retryRead()
       if (waited >= 45) {
         stopPolling()
         setRepairing(false)
         setNotice('还没等到计划页：可以再点一次「生成 HTML 计划页」，或让 agent 跑技能的 runtime/plan.mjs 打包')
+        return
       }
+      setReloadToken((value) => value + 1)
     }, 2000)
   }
 
   const canAnswer = review !== null && !busy
+  const sourceLabel = source ? SOURCE_LABEL[source] : ''
   const chrome = React.createElement('div', { className: 'edrv-htmlplan-bar' },
     React.createElement('span', { className: 'edrv-htmlplan-title', title: absPath }, title),
+    (htmlPlanMode ? React.createElement('span', { className: 'edrv-htmlplan-mode' }, 'HTML 计划模式') : null),
+    (sourceLabel ? React.createElement('span', { className: 'edrv-htmlplan-src' }, sourceLabel) : null),
     React.createElement('span', { className: 'edrv-htmlplan-state edrv-htmlplan-state-' + state.mode }, state.label),
     React.createElement('span', { style: { flex: 1 } }),
     React.createElement('button', {
@@ -304,7 +460,7 @@ export function HtmlPlanPanel(props: HtmlPlanPanelProps) {
     }, '继续规划'),
     React.createElement('button', {
       className: 'edrv-pill edrv-pill-ghost', disabled: busy || !state.active,
-      title: '等价 composer 计划徽标的 /plan off',
+      title: htmlPlanMode ? '等价底部栏 chip 的 /html-plan off' : '等价 composer 计划徽标的 /plan off',
       onClick: () => { void run('exited') },
     }, '退出计划模式'),
     (review ? React.createElement('button', {
@@ -315,7 +471,7 @@ export function HtmlPlanPanel(props: HtmlPlanPanelProps) {
       title: copied ? '把页面答复填入对话输入框（不自动发送）' : '先在页面里点 Copy response',
       onClick: () => { void run('fill') },
     }, '填入对话输入框'),
-    (missing || !absPath ? React.createElement('button', {
+    (!htmlPlanMode && (missing || !absPath) ? React.createElement('button', {
       className: 'edrv-pill edrv-pill-accent',
       disabled: repairing || !sessionId,
       title: '让 agent 现在就写 plans/<slug>/plan.html 并打包（计划模式里允许写计划文件）',
@@ -323,20 +479,22 @@ export function HtmlPlanPanel(props: HtmlPlanPanelProps) {
     }, repairing ? '生成中…' : '生成 HTML 计划页') : null),
     React.createElement('button', {
       className: 'edrv-pill edrv-pill-ghost', title: '重新读取计划页',
-      onClick: () => { setCopied(''); setReloadToken((value) => value + 1) },
+      onClick: () => { setCopied(''); reloadPage() },
     }, '⟳'))
 
   const noticeLine = notice ? React.createElement('div', { className: 'edrv-htmlplan-notice' }, notice) : null
 
   let stage
   if (error) {
-    const canRepair = missing || !absPath
+    const canRepair = !htmlPlanMode && (missing || !absPath)
     stage = React.createElement('div', { className: 'edrv-empty', role: 'alert' },
       React.createElement('div', null, error),
       React.createElement('div', { style: { fontSize: 12, opacity: 0.75 } },
-        canRepair
-          ? '点下面的按钮让 agent 现在就写页面并打包；也可以关掉页签回到 Markdown 计划预览。'
-          : '可关闭页签回到 Markdown 计划预览；或让 agent 重新打包计划页。'),
+        htmlPlanMode
+          ? '点 ⟳ 重新解析；仍失败可关闭页签回到 Markdown 计划预览。'
+          : canRepair
+            ? '点下面的按钮让 agent 现在就写页面并打包；也可以关掉页签回到 Markdown 计划预览。'
+            : '可关闭页签回到 Markdown 计划预览；或让 agent 重新打包计划页。'),
       canRepair ? React.createElement('button', {
         className: 'edrv-pill edrv-pill-accent', style: { marginTop: 10 },
         disabled: repairing || !sessionId,
@@ -344,20 +502,20 @@ export function HtmlPlanPanel(props: HtmlPlanPanelProps) {
         onClick: () => { void regenerate() },
       }, repairing ? '生成中…' : '生成 HTML 计划页') : null)
   } else if (html === null) {
-    stage = React.createElement('div', { className: 'edrv-empty' }, '读取计划页…')
+    stage = React.createElement('div', { className: 'edrv-empty' }, htmlPlanMode ? '解析计划页…' : '读取计划页…')
   } else {
     const warnLines: string[] = []
-    if (staleRefs.length) warnLines.push('页面未打包：仍引用 ' + staleRefs.join('、') + '。样式/脚本可能缺失，先重新打包再提交。')
-    if (attachments.pending) warnLines.push(String(attachments.pending) + ' 个附件没内联：点开是空链接，重新打包后再提交。')
+    if (staleRefs.length) warnLines.push('页面未打包：仍引用 ' + staleRefs.join('、') + '。样式/脚本可能缺失。')
+    if (attachments.pending) warnLines.push(String(attachments.pending) + ' 个附件没内联：点开是空链接。')
     const warn = warnLines.length
       ? React.createElement('div', { className: 'edrv-htmlplan-warn' },
           warnLines.join(' '),
           React.createElement('button', {
             className: 'edrv-pill edrv-pill-accent', style: { marginLeft: 8 },
             disabled: repairing || !sessionId,
-            title: '让 agent 重新跑 plan.mjs 打包这一页',
+            title: htmlPlanMode ? '重新解析计划页' : '让 agent 重新跑 plan.mjs 打包这一页',
             onClick: () => { void regenerate() },
-          }, repairing ? '打包中…' : '重新打包'))
+          }, repairing ? '处理中…' : htmlPlanMode ? '重新解析' : '重新打包'))
       : null
     stage = React.createElement(React.Fragment, null,
       warn,
@@ -371,4 +529,15 @@ export function HtmlPlanPanel(props: HtmlPlanPanelProps) {
   }
 
   return React.createElement('div', { className: 'edrv-htmlplan' }, chrome, noticeLine, stage)
+}
+
+/**
+ * 取 markdown 的稳定依赖键（避免父级每次渲染都触发重解析）。
+ * @author ddj 2026年11月25号
+ * @param markdown 计划正文
+ * @returns 长度 + 前缀指纹
+ */
+function markdownKey(markdown: unknown): string {
+  const text = typeof markdown === 'string' ? markdown : ''
+  return String(text.length) + ':' + text.slice(0, 64)
 }

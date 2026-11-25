@@ -1,7 +1,7 @@
 /** Optional DSH plan integration; no provider or approval UI replacement. @author ddj 2026年10月08号 */
 import React from 'react'
 import { requestOpen } from './openReceipt.js'
-import { createPlanFeed, clearPlanState, isPlanAddress, planDocument, type PlanWindow, type PlanOpen } from './planState.js'
+import { cachedPlan, createPlanFeed, clearPlanState, isPlanAddress, planDocument, planFromEntries, type PlanWindow, type PlanOpen } from './planState.js'
 import { installPlanDirect, optionalService, type PlanOpenOptions } from './planDirect.js'
 import { detectOfficial, OFFICIAL_SLOT_NAME, type OfficialSidebar } from './officialSidebar.js'
 import { readSessionScope, subscribeScope } from './sessionScope.js'
@@ -41,6 +41,31 @@ function planRouter(ctx: PlanContext, official: OfficialSidebar, native: (addres
   /** @private @author ddj 2026年10月08号 React to owning-session changes without cancelling on unrelated list updates. */
   function scopeChanged(): void { cancel() }
   const offScope = subscribeScope(ctx, scopeChanged)
+  /**
+   * 解析计划地址对应的正文：官方资源 → 本插件缓存 → 会话窗口扫一遍。
+   *
+   * 官方 `dsh-client-ui-plan` 的资源提供方只认 `exit_plan_mode`，HTML 计划模式提交的
+   * `exit_html_plan_mode` 在它那里是「not-found」；不补这两级，计划页签只会显示读取失败。
+   * @author ddj 2026年11月25号
+   * @param sessionId 归属会话
+   * @param address 计划地址
+   * @param value 官方资源或审批参数里的计划正文
+   * @returns 计划文档；都不命中时 undefined
+   */
+  function resolvePlan(sessionId: string, address: string, value: unknown): ReturnType<typeof planDocument> {
+    const official = planDocument(address, value)
+    if (official) return official
+    const cached = cachedPlan(address)
+    if (cached) return cached
+    try {
+      const sessions = optionalService(ctx, 'sessions') as Sessions | undefined
+      const feed = sessionId && typeof sessions?.binding === 'function' ? sessions.binding(sessionId)?.eventSource : undefined
+      const window = feed?.getSnapshot?.() as PlanWindow | undefined
+      if (window && Array.isArray(window.entries)) return planFromEntries(sessionId, address, window.entries)
+    } catch { /* 事件窗口不可用：按未找到处理 */ }
+    return undefined
+  }
+
   /** @private @author ddj 2026年10月08号 @param props Official slot props. @returns Transfer status; only closes after preview readiness. */
   function PlanRouter(props: PlanProps) {
     const tab = props.useTabInfo?.()?.tab
@@ -48,7 +73,7 @@ function planRouter(ctx: PlanContext, official: OfficialSidebar, native: (addres
     const address = nav?.address ?? ''
     const resource = props.useResource?.(address) ?? EMPTY_RESOURCE
     const review = nav?.params?.planReview
-    const plan = planDocument(address, review ?? ('value' in resource ? resource.value : undefined))
+    const plan = resolvePlan(props.sessionId ?? '', address, review ?? ('value' in resource ? resource.value : undefined))
     const [failed, setFailed] = React.useState(false)
     const done = React.useRef('')
     const key = address + ':' + nav?.revision

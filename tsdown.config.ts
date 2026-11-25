@@ -182,6 +182,8 @@ function hostConfig(): UserConfig {
     clean: false,
     sourcemap: true,
     external: HOST_EXTERNALS,
+    // zod 只用于 session projection 的 schema 契约：打进 host 产物，避免安装环境缺依赖时插件整体加载失败。
+    noExternal: ['zod'],
     outputOptions: {
       // Force lib/index.js (package.json main/exports point there).
       entryFileNames: 'index.js',

@@ -1,22 +1,17 @@
 /**
- * 外部改动实时采集：非 DSH 文件工具（`ops_bash` 里 `node -e`、prettier、生成器、python/sed 等）
- * 改过的文件，用被监听目录的写事件补进待审投影。
+ * 差异追踪窗口的跟随器：只跟随“AI 文件工具动过、用户还没处理完”的文件。
  *
  * 设计取舍：
- * - 只监听工作区根（递归），事件先入队，300ms 静默或 2000ms 封顶后统一读盘；单轮最多处理
- *   MAX_BATCH 个文件、MAX_FLUSH_BYTES 字节，其余留到下一轮。批量按**入队顺序**处理，不按 mtime：
- *   同一毫秒内的多次写入 mtime 相同，用它排序反而可能造出倒序 diff。
- * - 判定顺序固定：已知内容未变 → 跳过；插件自写窗口 → 跳过；编辑器保存窗口 → 只推进基线；
- *   版本库说干净 → 跳过或标成版本库同步；拿不到版本库状态且是首次见到的路径 → 必须自带 mtime 证据
- *   （文件确实在监听开始之后被写过），否则只记缺口不建档；整文件新增短时间成批出现 → 熔断静默一段时间。
- *   写记录前按身份重读一次条目：本批快照可能早于工具落库，不重读就会把工具写入再记成版本库同步。
- *   其余按窗口判定归属后落库。绝不按时间戳猜重复，也绝不把「被读过」当成「被改过」。
- * - 递归监听不可用（Linux）时降级为逐子目录非递归监听；仍不可用就只靠补扫，并把原因写进缺口。
- * - 读盘一律走待审采集的严格 UTF-8 往返：二进制、GBK 等无法字节往返的内容不落记录（记缺口），
- *   绝不因为"分析"而改写任何字节。
- * 作者 ddj 2026-11-24
+ * - 不再为任何新路径建档。`handleOne` 先看该路径有没有开着的窗口：没有就直接丢弃事件，
+ *   Unity 重写 `index.json`、生成 `.meta`、脚本写盘都不会再冒出一条差异。
+ * - 窗口内的改动只折当前内容（基线不动）：watch 事件走 300ms 静默 / 2000ms 封顶合并，
+ *   启动、每 10 分钟和手动按钮各跑一次校准，把窗口内漏掉的事件从磁盘补齐。
+ * - 读盘一律走待审采集的严格 UTF-8 往返：二进制、GBK 等无法字节往返的内容只记缺口，
+ *   绝不因为“分析”而改写任何字节。
+ * - 递归监听不可用（Linux）时降级为逐子目录非递归监听；仍不可用就只靠校准。
+ * 作者 ddj 2026年11月25号
  */
-import { readdirSync, statSync, watch } from 'node:fs'
+import { readdirSync, watch } from 'node:fs'
 import type { FSWatcher } from 'node:fs'
 import { join, resolve } from 'node:path'
 import type { Ctx } from '../store.js'
@@ -24,12 +19,10 @@ import { log } from '../log.js'
 import type { PendingWrite } from './capture.js'
 import { noteCaptureGap, readText } from './capture.js'
 import type { StoredEntry } from './persist.js'
-import { loadEntries, loadEntry } from './persist.js'
+import { loadEntries } from './persist.js'
 import { FILE_EXCLUDES, EXCLUDES } from '../search/ripgrep.js'
 import { pathKeyOf, windows } from './provenance.js'
-import type { VcsStatus } from './vcs.js'
-import { vcsBaselineOf, vcsStatus } from './vcs.js'
-import { vcsScopeOf } from './externalAlign.js'
+import { isOpenEntry } from './tracking.js'
 import { invalidateIndex } from '../treeIndex.js'
 
 // --region 预算与忽略清单
@@ -44,44 +37,18 @@ export const MAX_BATCH = 64
 export const MAX_FLUSH_BYTES = 8 << 20
 /** 单文件读取上限（与待审采集一致）。 */
 export const MAX_FILE_BYTES = 1024 * 1024
-/** 版本库状态命令的最小间隔：补扫与 watch 合并取用，避免频繁起进程。 */
-export const VCS_STATUS_MIN_INTERVAL_MS = 5000
 /** 递归监听不可用时，最多逐目录监听多少个一级子目录。 */
 export const WATCH_DIR_MAX = 64
-/** 内存基线表上限（路径比较键数）。 */
-export const SEEN_MAX = 5000
-/** 定时补扫间隔。 */
-export const ALIGN_INTERVAL_MS = 10 * 60_000
-/** 版本库写命令之后推迟多久补扫：等命令输出落盘、索引失效完成。 */
-export const ALIGN_AFTER_VCS_MS = 1500
+/** 定时校准间隔：窗口内漏掉的事件靠它从磁盘补齐。 */
+export const SYNC_INTERVAL_MS = 10 * 60_000
+/** 单次校准最多扫描多少个开窗文件。 */
+export const SYNC_MAX = 64
 /** 每个工作区最多记住多少条「已上报过的缺口」，防止事件风暴把去重表撑大。 */
 export const GAP_KEY_MAX = 500
-/** 「版本库状态不可用」这条诊断的最短间隔：同一工作区 5 分钟只报一次。 */
-export const STATUS_NOTE_MIN_MS = 5 * 60_000
-/** mtime 证据的时钟容差：监听开始前这段时间内写过的文件也算「刚被写过」。 */
-export const WATCH_SKEW_MS = 2000
-/** 熔断窗口：统计「整文件新增」记录的时间窗。 */
-export const BURST_WINDOW_MS = 5 * 60_000
-/** 窗口内最多允许的整文件新增条数：超过即判定为批量噪声。 */
-export const BURST_NEW_LIMIT = 200
-/** 熔断后的静默期：这段时间只更新已有条目，不新建。 */
-export const BURST_COOLDOWN_MS = 10 * 60_000
-
-/** 会改动工作副本的版本库 RPC：只有这些方法之后才值得补扫。 */
-export const VCS_WRITE_METHODS = new Set([
-  'svn.revert', 'svn.resolve', 'svn.add', 'svn.cleanup', 'svn.update', 'svn.ignore', 'svn.commit',
-])
-
-/** 会改动工作副本的版本库工具名。 */
-export const VCS_WRITE_TOOLS = new Set([
-  'svn_add', 'svn_delete', 'svn_revert', 'svn_commit', 'svn_update', 'svn_resolve', 'svn_cleanup',
-  'svn_propset', 'svn_propdel', 'svn_changelist', 'remote_ssh_write',
-])
 
 /**
  * 额外忽略的目录名（在搜索排除项之外，按原样大小写敏感匹配，口径与 EXCLUDES 一致）。
- * 只收版本库元数据、Unity 缓存与构建产物：第三方与代码生成目录不在忽略之列，
- * 它们的改动靠「mtime 证据 + 版本库状态」两道闸门拦，而不是按目录名一刀切。
+ * 只收版本库元数据、Unity 缓存与构建产物；其余目录跟随事件进入判定，未开窗的路径会被直接丢弃。
  */
 export const EXTRA_IGNORE_SEGMENTS = ['.svn', '.hg', '.p4config', 'Library', 'Temp', 'obj', 'Logs']
 
@@ -126,39 +93,43 @@ export function isIgnoredPath(cwd: string, absolute: string): boolean {
 
 // --region 类型
 
-/** 外部采集的两个开关。 */
+/** 跟随器的两个开关。 */
 export interface ExternalSettings {
+  /** 实时跟随开窗文件（watch）。 */
   watch: boolean
+  /** 启动与每 10 分钟从磁盘校准开窗文件。 */
   scan: boolean
 }
 
-/** 采集依赖：Host 能力 + 可注入的测试接缝。 */
+/** 一次校准的结果。 */
+export interface SyncOutcome {
+  /** 检查了多少个开窗文件。 */
+  checked: number
+  /** 折进了多少次改动。 */
+  folded: number
+  /** 读盘失败等缺口说明。 */
+  gaps: string[]
+}
+
+/** 跟随器依赖：Host 能力 + 可注入的测试接缝。 */
 export interface ExternalCaptureDeps {
   ctx: Ctx
   settings(): ExternalSettings
-  /** 落库：与 installPending 复用同一个 sink。 */
-  record(write: PendingWrite): void
+  /** 折进窗口：与工具链路共用同一个待审库入口，返回是否真的折了。 */
+  fold(write: PendingWrite): boolean
   /** 覆盖读盘（测试注入）；缺省走 ctx.fs 的严格 UTF-8 往返。 */
   read?(cwd: string, absolute: string): Promise<string | null>
   /** 覆盖条目读取（测试注入）；缺省读待审库。 */
-  entries?(cwd: string): Map<string, StoredEntry>
-  /** 覆盖版本库状态（测试注入）；缺省跑一条 status 命令。 */
-  status?(cwd: string, sessionId: string): Promise<VcsStatus | null>
-  /** 覆盖补扫执行（测试注入）；缺省调用 alignInWorkspace。 */
-  align?(cwd: string, sessionId: string): Promise<void>
-  /** 覆盖 mtime 读取（测试注入）；缺省 statSync。拿不到返回 undefined。 */
-  mtime?(cwd: string, absolute: string): number | undefined
-  /** 覆盖单条最新条目读取（测试注入）；缺省按身份查一条。 */
-  latest?(cwd: string, absolute: string): StoredEntry | undefined
+  entries?(cwd: string): StoredEntry[]
   now?(): number
 }
 
-/** 采集器对外能力。 */
+/** 跟随器对外能力。 */
 export interface ExternalCapture {
-  /** 确保工作区已开始监听（幂等；同时触发一次后台补扫）。 */
+  /** 确保工作区已开始监听（幂等；同时安排一次启动校准）。 */
   ensure(cwd: string, sessionId: string): void
-  /** 申请一次延迟补扫（版本库命令之后、手动按钮都用它；同一工作区会合并）。 */
-  requestAlign(cwd: string, delayMs?: number): void
+  /** 立即校准一次并返回结果。 */
+  sync(cwd: string): Promise<SyncOutcome>
   /** 工作区不再需要监听（会话销毁）。 */
   dismiss(cwd: string): void
   /** 收到一个写事件（watcher 与测试共用）。 */
@@ -175,41 +146,29 @@ interface Workspace {
   sessionId: string
   watchers: FSWatcher[]
   dirty: Map<string, { path: string; seq: number }>
-  seen: Map<string, string | null>
   timer: ReturnType<typeof setTimeout> | null
   firstAt: number
-  flushing: boolean
-  again: boolean
+  /** 串行链：watch 批次与校准不交叉读写同一批条目。 */
+  chain: Promise<void>
   degraded: string
-  statusAt: number
-  status?: VcsStatus | null
-  alignedAt: number
-  alignTimer: ReturnType<typeof setTimeout> | null
-  /** 延后补扫的定时器（版本库命令后/手动按钮，同一工作区合并一次）。 */
-  requestTimer: ReturnType<typeof setTimeout> | null
-  /** 本次监听的起始时刻：文件 mtime 不比它新，就不是「刚被写过」。 */
-  startedAt: number
+  /** 启动校准是否已排过。 */
+  scheduled: boolean
+  /** 定时校准器。 */
+  syncTimer: ReturnType<typeof setInterval> | null
   /** 已上报过的缺口键（同路径/同原因只报一次）。 */
   gapKeys: Set<string>
-  /** 上次把「版本库状态不可用」写进缺口的时刻。 */
-  statusNoteAt: number
-  /** 熔断窗口起点与窗口内已建的整文件新增条数。 */
-  burstAt: number
-  burstCount: number
-  /** 熔断静默截止时刻：在此之前不新建整文件新增记录。 */
-  burstMutedUntil: number
 }
 
 // --endregion
 
-// --region 采集器
+// --region 跟随器
 
 /**
  * @public
- * @author ddj 2026-11-24
- * @description: 装配外部改动采集：watch 进队、合并读盘、按判定链落库；可整体卸载。
+ * @author ddj 2026年11月25号
+ * @description: 装配差异窗口跟随器：watch 进队、合并读盘、只折已开窗路径；可整体卸载。
  * @param deps Host 能力与测试接缝
- * @returns 采集器
+ * @returns 跟随器
  */
 export function installExternalCapture(deps: ExternalCaptureDeps): ExternalCapture {
   const spaces = new Map<string, Workspace>()
@@ -229,14 +188,24 @@ export function installExternalCapture(deps: ExternalCaptureDeps): ExternalCaptu
     const existing = spaces.get(key)
     if (existing) return existing
     const created: Workspace = {
-      cwd: String(cwd), sessionId, watchers: [], dirty: new Map(), seen: new Map(),
-      timer: null, firstAt: 0, flushing: false, again: false, degraded: '',
-      statusAt: 0, status: undefined, alignedAt: 0, alignTimer: null, requestTimer: null,
-      startedAt: 0, gapKeys: new Set(), statusNoteAt: 0,
-      burstAt: 0, burstCount: 0, burstMutedUntil: 0,
+      cwd: String(cwd), sessionId, watchers: [], dirty: new Map(), timer: null, firstAt: 0,
+      chain: Promise.resolve(), degraded: '', scheduled: false, syncTimer: null, gapKeys: new Set(),
     }
     spaces.set(key, created)
     return created
+  }
+
+  /**
+   * @private
+   * @description: 把任务串到本工作区的调用链上，失败只记日志、不打断后续任务。
+   * @param space 工作区状态
+   * @param task 任务
+   * @returns 任务完成
+   */
+  function run(space: Workspace, task: () => Promise<void>): Promise<void> {
+    const next = space.chain.then(task).catch((error) => { log.warn('差异窗口跟随失败：' + String(error)) })
+    space.chain = next
+    return next
   }
 
   /**
@@ -267,17 +236,16 @@ export function installExternalCapture(deps: ExternalCaptureDeps): ExternalCaptu
 
   /**
    * @private
-   * @description: 开始监听；递归可用就用递归，否则逐一级子目录监听，都不可用时只留补扫。
+   * @description: 开始监听；递归可用就用递归，否则逐一级子目录监听，都不可用时只留校准。
    * @param space 工作区状态
    * @returns 无
    */
   function startWatch(space: Workspace): void {
     if (space.watchers.length || stopped) return
-    space.startedAt = now()
     try {
       const watcher = watch(space.cwd, { recursive: true, persistent: false }, (_event, name) => onEvent(space, space.cwd, name))
       // EventEmitter 的 'error' 无监听者时抛出未捕获异常，必须挂处理器
-      watcher.on('error', (error) => { log.warn('外部改动监听中断（改为只靠补扫）：' + String(error)); closeWatchers(space) })
+      watcher.on('error', (error) => { log.warn('差异窗口监听中断（改为只靠校准）：' + String(error)); closeWatchers(space) })
       space.watchers.push(watcher)
       return
     } catch (error) {
@@ -296,7 +264,7 @@ export function installExternalCapture(deps: ExternalCaptureDeps): ExternalCaptu
       if (!space.watchers.length) space.degraded = '目录监听不可用'
     } catch (error) {
       space.degraded = '目录监听不可用：' + String(error)
-      log.warn('外部改动监听不可用（改为只靠补扫）：' + String(error))
+      log.warn('差异窗口监听不可用（改为只靠校准）：' + String(error))
     }
   }
 
@@ -324,28 +292,10 @@ export function installExternalCapture(deps: ExternalCaptureDeps): ExternalCaptu
    * @returns 路径比较键 → 条目
    */
   function entriesOf(cwd: string): Map<string, StoredEntry> {
-    if (deps.entries) return deps.entries(cwd)
+    const stored = deps.entries ? deps.entries(cwd) : loadEntries(cwd)
     const map = new Map<string, StoredEntry>()
-    for (const stored of loadEntries(cwd)) map.set(pathKeyOf(stored.entry.id), stored)
+    for (const entry of stored) map.set(pathKeyOf(entry.entry.id), entry)
     return map
-  }
-
-  /**
-   * @private
-   * @author ddj 2026年11月25号
-   * @description: 取某路径的最新条目：批次快照可能早于工具落库，写记录前按身份重读一条。
-   * @param space 工作区状态
-   * @param absolute 绝对路径
-   * @param fallback 批次内的旧条目
-   * @returns 最新条目（读不到时回落到旧条目）
-   */
-  function latestOf(space: Workspace, absolute: string, fallback: StoredEntry | undefined): StoredEntry | undefined {
-    try {
-      if (deps.latest) return deps.latest(space.cwd, absolute) ?? fallback
-      return loadEntry(space.cwd, absolute) ?? fallback
-    } catch {
-      return fallback
-    }
   }
 
   /**
@@ -365,66 +315,15 @@ export function installExternalCapture(deps: ExternalCaptureDeps): ExternalCaptu
 
   /**
    * @private
-   * @description: 取版本库状态（带最小间隔缓存）；无 shell 或非 git/svn 时返回 null。
-   * @param space 工作区状态
-   * @returns 状态或 null
-   */
-  async function statusOf(space: Workspace): Promise<VcsStatus | null> {
-    const at = now()
-    if (space.status !== undefined && at - space.statusAt < VCS_STATUS_MIN_INTERVAL_MS) return space.status
-    space.statusAt = at
-    if (deps.status) {
-      space.status = await deps.status(space.cwd, space.sessionId)
-      return space.status
-    }
-    const scope = vcsScopeOf(deps.ctx, space.cwd, space.sessionId)
-    if (!scope) {
-      noteStatusOnce(space, '没有 shell 能力，版本库状态不可用')
-      space.status = null
-      return space.status
-    }
-    space.status = await vcsStatus(scope.shell, space.cwd, (reason) => noteStatusOnce(space, reason))
-    return space.status
-  }
-
-  /**
-   * @private
-   * @author ddj 2026-11-24
-   * @description: 读文件修改时间（测试可注入）；读不到返回 undefined。
-   * @param space 工作区状态
-   * @param absolute 绝对路径
-   * @returns 毫秒时间戳或 undefined
-   */
-  function mtimeOf(space: Workspace, absolute: string): number | undefined {
-    if (deps.mtime) return deps.mtime(space.cwd, absolute)
-    try { return statSync(absolute).mtimeMs } catch { return undefined }
-  }
-
-  /**
-   * @private
-   * @author ddj 2026-11-24
-   * @description: 判断文件是否在本次监听开始之后被写过：这是「拿不到版本库状态」时唯一的外部证据。
-   * @param space 工作区状态
-   * @param absolute 绝对路径
-   * @returns 刚被写过返回 true
-   */
-  function recentlyWritten(space: Workspace, absolute: string): boolean {
-    if (!space.startedAt) return false
-    const mtime = mtimeOf(space, absolute)
-    return mtime !== undefined && mtime >= space.startedAt - WATCH_SKEW_MS
-  }
-
-  /**
-   * @private
-   * @author ddj 2026-11-24
+   * @author ddj 2026年11月25号
    * @description: 同一条缺口只上报一次；去重表满了就丢最早的键，保证内存有界。
    * @param space 工作区状态
-   * @param key 去重键
    * @param absolute 出问题的路径
    * @param message 原因
    * @returns 无
    */
-  function noteGapOnce(space: Workspace, key: string, absolute: string, message: string): void {
+  function noteGapOnce(space: Workspace, absolute: string, message: string): void {
+    const key = absolute + '\u0000' + message
     if (space.gapKeys.has(key)) return
     if (space.gapKeys.size >= GAP_KEY_MAX) {
       const oldest = space.gapKeys.values().next().value
@@ -436,169 +335,34 @@ export function installExternalCapture(deps: ExternalCaptureDeps): ExternalCaptu
 
   /**
    * @private
-   * @author ddj 2026-11-24
-   * @description: 「版本库状态不可用」按工作区节流上报，让面板能说清为什么没拦住噪声。
+   * @author ddj 2026年11月25号
+   * @description: 把一个已开窗条目与磁盘对齐：内容变了就折进窗口，没变不落库。
    * @param space 工作区状态
-   * @param reason 失败原因（命令回执头 200 字）
-   * @returns 无
+   * @param stored 已开窗条目
+   * @returns 是否折了改动
+   * @throws 读盘失败
    */
-  function noteStatusOnce(space: Workspace, reason: string): void {
-    const at = now()
-    if (at - space.statusNoteAt < STATUS_NOTE_MIN_MS) return
-    space.statusNoteAt = at
-    noteCaptureGap(space.cwd, space.sessionId, space.cwd, '版本库状态不可用：' + reason.slice(0, 200))
-  }
-
-  /**
-   * @private
-   * @author ddj 2026-11-24
-   * @description: 整文件新增的熔断：短时间成批出现「没有基线的整文件新增」时判定为批量噪声，
-   * 静默一段时间不新建档，只留一条缺口。已有条目的更新不受影响。
-   * @param space 工作区状态
-   * @param absolute 触发熔断的路径
-   * @returns 允许新建返回 true
-   */
-  function allowNewWholeFile(space: Workspace, absolute: string): boolean {
-    const at = now()
-    if (space.burstMutedUntil > at) return false
-    if (at - space.burstAt > BURST_WINDOW_MS) {
-      space.burstAt = at
-      space.burstCount = 0
-    }
-    space.burstCount += 1
-    if (space.burstCount <= BURST_NEW_LIMIT) return true
-    space.burstMutedUntil = at + BURST_COOLDOWN_MS
-    noteGapOnce(space, 'burst:' + String(space.burstMutedUntil), absolute,
-      `短时间内新建 ${space.burstCount} 条整文件新增记录：疑似批量噪声，暂停 ${Math.round(BURST_COOLDOWN_MS / 60000)} 分钟`)
-    return false
-  }
-
-  /**
-   * @private
-   * @description: 处理一个路径：判定链见文件头注释。
-   * @param space 工作区状态
-   * @param absolute 绝对路径
-   * @param entries 本批共享的条目表
-   * @returns 是否新增或更新了条目
-   */
-  async function handleOne(space: Workspace, absolute: string, entries: Map<string, StoredEntry>): Promise<boolean> {
-    const key = pathKeyOf(absolute)
-    const at = now()
-    const content = await readOf(space.cwd, absolute)
-    const stored = entries.get(key)
-    const sameContent = stored !== undefined && stored.entry.newText === (content ?? '')
-    const sameMissing = stored !== undefined && stored.flags.missing === (content === null)
-    if (stored && sameContent && sameMissing) {
-      space.seen.set(key, content)
-      return false
-    }
-
-    const window = windows.windowOf(key, at)
-    if (window === 'self') {
-      // 插件自己刚写回（撤销/镜像写穿）：内容随后会出现在条目里，这里不建新记录
-      space.seen.set(key, content)
-      return false
-    }
-    if (window === 'editor') {
-      space.seen.set(key, content)
-      // 编辑器保存：只推进基线；已有条目按外部改动吸收（基线不动、标分歧），不新开行
-      if (!stored) return false
-      const current = latestOf(space, absolute, stored)
-      if (!current || current.entry.newText === (content ?? '')) return false
-      deps.record(writeOf(space, absolute, current.entry.newText, content, at, 'watch', 'editor', 'known'))
-      return true
-    }
-
-    const status = await statusOf(space)
-    if (status && !status.entries.has(key)) {
-      // 版本库说这个路径相对基线干净：可能是版本库同步，也可能是工具刚写完、
-      // 而本批快照还停在上一轮（git 忽略的路径根本不出现在 status 里）。
-      space.seen.set(key, content)
-      if (!stored) return false
-      const current = latestOf(space, absolute, stored)
-      if (!current || current.entry.newText === (content ?? '')) return false
-      deps.record(writeOf(space, absolute, current.entry.newText, content, at, 'vcs', 'vcs', 'known'))
-      return true
-    }
-    // 拿不到版本库状态时，首次见到的路径必须自带证据：文件真的在监听开始之后被写过。
-    // 否则事件多半只是读取/属性变化（整树扫描、索引器、杀软），按「整文件新增」建档会刷出幽灵差异。
-    if (!status && !stored && !space.seen.has(key) && !recentlyWritten(space, absolute)) {
-      noteGapOnce(space, 'absent:' + key, absolute, '无版本库状态且文件未改动，未建档')
-      space.seen.set(key, content)
-      return false
-    }
-
-    const before = await beforeOf(space, key, absolute, stored, status, content)
-    if (before.text === null && content === null) {
-      // 观察不到任何内容（既没文件也没基线）：没有可审的差异
-      space.seen.set(key, null)
-      return false
-    }
-    // 没有基线的整文件新增是幽灵记录的典型形态：短时间成批出现就熔断，避免一次噪声刷满面板
-    if (!stored && before.text === null && !allowNewWholeFile(space, absolute)) {
-      space.seen.set(key, content)
-      return false
-    }
-    deps.record(writeOf(space, absolute, before.text, content, at, 'watch',
-      windows.inAgentWindow(at) ? 'agent' : 'external', before.kind))
-    space.seen.set(key, content)
-    return true
-  }
-
-  /**
-   * @private
-   * @description: 求修改前内容：已知内容 → 首次观察 → 版本库新增/基线 → 未知。
-   * @param space 工作区状态
-   * @param key 路径比较键
-   * @param absolute 绝对路径
-   * @param stored 既有条目
-   * @param status 版本库状态
-   * @param content 当前内容
-   * @returns 修改前内容与可信度
-   */
-  async function beforeOf(
-    space: Workspace, key: string, absolute: string, stored: StoredEntry | undefined,
-    status: VcsStatus | null, content: string | null,
-  ): Promise<{ text: string | null; kind: 'known' | 'absent' | 'vcs' | 'unknown' }> {
-    if (stored) return { text: stored.flags.missing ? null : stored.entry.newText, kind: 'known' }
-    if (space.seen.has(key)) {
-      const seen = space.seen.get(key) ?? null
-      return { text: seen, kind: seen === null ? 'absent' : 'known' }
-    }
-    const entry = status?.entries.get(key)
-    if (entry?.status === 'added') return { text: null, kind: 'absent' }
-    if (entry && content !== null) {
-      const scope = vcsScopeOf(deps.ctx, space.cwd, space.sessionId)
-      if (scope && status) {
-        const base = await vcsBaselineOf(scope.shell, status, absolute)
-        if (base !== null) return { text: base, kind: 'vcs' }
-      }
-    }
-    return { text: null, kind: 'unknown' }
-  }
-
-  /**
-   * @private
-   * @description: 组装一条待审写入（watch 通道）。
-   * @param space 工作区状态
-   * @param absolute 绝对路径
-   * @param before 修改前内容
-   * @param after 当前内容
-   * @param at 时间
-   * @param source 采集通道
-   * @param origin 归属
-   * @param baseKind 基线可信度
-   * @returns 待审写入
-   */
-  function writeOf(
-    space: Workspace, absolute: string, before: string | null, after: string | null, at: number,
-    source: 'watch' | 'vcs', origin: 'agent' | 'editor' | 'vcs' | 'external',
-    baseKind: 'known' | 'absent' | 'vcs' | 'unknown',
-  ): PendingWrite {
-    return {
-      cwd: space.cwd, sessionId: space.sessionId, path: absolute, identity: absolute,
-      before, after, now: at, tool: source, origin, baseKind,
-    }
+  async function foldStored(space: Workspace, stored: StoredEntry): Promise<boolean> {
+    if (stopped || !isOpenEntry(stored.entry)) return false
+    const key = pathKeyOf(stored.entry.id)
+    // 插件自己的写回（撤销/重做）：内容随后会出现在条目里，这里不折
+    if (windows.windowOf(key, now()) === 'self') return false
+    const content = await readOf(space.cwd, stored.entry.id)
+    const sameMissing = stored.flags.missing === (content === null)
+    if (sameMissing && content === stored.entry.newText) return false
+    const origin = windows.windowOf(key, now()) === 'editor' ? 'editor' : 'external'
+    return deps.fold({
+      cwd: space.cwd,
+      sessionId: space.sessionId,
+      path: stored.entry.path,
+      identity: stored.entry.id,
+      before: stored.entry.newText,
+      after: content,
+      now: now(),
+      tool: 'watch',
+      origin,
+      baseKind: 'known',
+    })
   }
 
   /**
@@ -607,43 +371,71 @@ export function installExternalCapture(deps: ExternalCaptureDeps): ExternalCaptu
    * @param space 工作区状态
    * @returns 无
    */
-  async function flushSpace(space: Workspace): Promise<void> {
-    if (stopped) return
-    if (space.flushing) { space.again = true; return }
-    space.flushing = true
-    space.firstAt = 0
-    let bytes = 0
-    let recorded = 0
-    try {
+  function flushSpace(space: Workspace): Promise<void> {
+    return run(space, async () => {
+      if (stopped) return
+      space.firstAt = 0
+      let bytes = 0
+      let recorded = 0
+      try {
+        const entries = entriesOf(space.cwd)
+        const batch = [...space.dirty.entries()].slice(0, MAX_BATCH)
+        for (const [key] of batch) space.dirty.delete(key)
+        const ordered = batch.sort((left, right) => left[1].seq - right[1].seq)
+        const touched: string[] = []
+        for (const [, item] of ordered) {
+          if (stopped) break
+          const stored = entries.get(pathKeyOf(item.path))
+          // 没开窗的路径直接丢：Unity、脚本、索引器改的文件都不再产生记录
+          if (!stored) continue
+          try {
+            const size = item.path.length
+            if (bytes + size > MAX_FLUSH_BYTES) { space.dirty.set(pathKeyOf(item.path), item); continue }
+            bytes += size
+            if (await foldStored(space, stored)) { recorded += 1; touched.push(item.path) }
+          } catch (error) {
+            noteGapOnce(space, item.path, String(error))
+            log.debug('差异窗口跳过：' + item.path + ': ' + String(error))
+          }
+        }
+        for (const path of touched) invalidateIndex(deps.ctx, space.cwd, path)
+        if (recorded) log.debug(`差异窗口折入 ${recorded} 条（${space.cwd}）`)
+      } finally {
+        if (space.dirty.size) schedule(space)
+      }
+    })
+  }
+
+  /**
+   * @private
+   * @author ddj 2026年11月25号
+   * @description: 从磁盘校准所有开窗文件：补启动前/离线期间漏掉的事件。
+   * @param space 工作区状态
+   * @returns 校准结果
+   */
+  async function syncWorkspace(space: Workspace): Promise<SyncOutcome> {
+    const outcome: SyncOutcome = { checked: 0, folded: 0, gaps: [] }
+    await run(space, async () => {
+      if (stopped) return
       const entries = entriesOf(space.cwd)
-      const batch = [...space.dirty.entries()].slice(0, MAX_BATCH)
-      for (const [key] of batch) space.dirty.delete(key)
-      const ordered = batch.sort((left, right) => left[1].seq - right[1].seq)
-      const touched: string[] = []
-      for (const [, item] of ordered) {
+      const open = [...entries.values()].filter((stored) => isOpenEntry(stored.entry)).slice(0, SYNC_MAX)
+      let bytes = 0
+      for (const stored of open) {
         if (stopped) break
+        outcome.checked += 1
+        const size = stored.entry.newText.length
+        if (bytes + size > MAX_FLUSH_BYTES) break
+        bytes += size
         try {
-          const size = item.path.length
-          if (bytes + size > MAX_FLUSH_BYTES) { space.dirty.set(pathKeyOf(item.path), item); continue }
-          bytes += size
-          if (await handleOne(space, item.path, entries)) { recorded += 1; touched.push(item.path) }
+          if (await foldStored(space, stored)) outcome.folded += 1
         } catch (error) {
-          noteCaptureGap(space.cwd, space.sessionId, item.path, error)
-          log.debug('外部改动跳过：' + item.path + ': ' + String(error))
+          const message = stored.entry.path + ': ' + String(error)
+          outcome.gaps.push(message)
+          noteGapOnce(space, stored.entry.path, String(error))
         }
       }
-      for (const path of touched) invalidateIndex(deps.ctx, space.cwd, path)
-      if (recorded) log.debug(`外部改动记录 ${recorded} 条（${space.cwd}）`)
-    } catch (error) {
-      log.warn('外部改动处理失败：' + String(error))
-    } finally {
-      space.flushing = false
-      if (space.seen.size > SEEN_MAX) {
-        for (const key of [...space.seen.keys()].slice(0, space.seen.size - SEEN_MAX)) space.seen.delete(key)
-      }
-      if (space.dirty.size) schedule(space)
-      else if (space.again) { space.again = false; schedule(space) }
-    }
+    })
+    return outcome
   }
 
   /**
@@ -666,15 +458,20 @@ export function installExternalCapture(deps: ExternalCaptureDeps): ExternalCaptu
     ensure(cwd: string, sessionId: string): void {
       if (stopped || !cwd) return
       const space = spaceOf(cwd, sessionId)
-      if (!deps.settings().watch) return
-      startWatch(space)
-      // 启动对齐：后台跑一次补扫，把 watch 启动之前漏掉的改动补录进来
-      if (!deps.settings().scan || space.alignedAt) return
-      space.alignedAt = now()
-      const timer = setTimeout(() => { void alignNow(space) }, 0)
+      if (deps.settings().watch) startWatch(space)
+      if (!deps.settings().scan || space.scheduled) return
+      space.scheduled = true
+      // 启动校准：重启后把窗口内离线期间的改动补齐
+      const timer = setTimeout(() => { void syncWorkspace(space) }, 0)
       if (typeof timer.unref === 'function') timer.unref()
-      if (!space.alignTimer) space.alignTimer = setInterval(() => { void alignNow(space) }, ALIGN_INTERVAL_MS)
-      if (typeof space.alignTimer.unref === 'function') space.alignTimer.unref()
+      if (!space.syncTimer) {
+        space.syncTimer = setInterval(() => { void syncWorkspace(space) }, SYNC_INTERVAL_MS)
+        if (typeof space.syncTimer.unref === 'function') space.syncTimer.unref()
+      }
+    },
+    sync(cwd: string): Promise<SyncOutcome> {
+      if (stopped || !cwd) return Promise.resolve({ checked: 0, folded: 0, gaps: [] })
+      return syncWorkspace(spaceOf(cwd, ''))
     },
     dismiss(cwd: string): void {
       const key = pathKeyOf(cwd)
@@ -682,22 +479,8 @@ export function installExternalCapture(deps: ExternalCaptureDeps): ExternalCaptu
       if (!space) return
       closeWatchers(space)
       if (space.timer) clearTimeout(space.timer)
-      if (space.requestTimer) clearTimeout(space.requestTimer)
-      if (space.alignTimer) clearInterval(space.alignTimer)
+      if (space.syncTimer) clearInterval(space.syncTimer)
       spaces.delete(key)
-    },
-    requestAlign(cwd: string, delayMs = ALIGN_AFTER_VCS_MS): void {
-      // 版本库写命令和手动按钮共用：同工作区在延迟窗内只跑一次补扫
-      if (stopped || !cwd || !deps.settings().scan) return
-      const space = spaces.get(pathKeyOf(cwd))
-      if (!space) return
-      if (space.requestTimer) clearTimeout(space.requestTimer)
-      const timer = setTimeout(() => {
-        space.requestTimer = null
-        void alignNow(space)
-      }, Math.max(0, delayMs))
-      if (typeof timer.unref === 'function') timer.unref()
-      space.requestTimer = timer
     },
     enqueue(cwd: string, absolute: string): void {
       enqueue(cwd, absolute)
@@ -707,6 +490,7 @@ export function installExternalCapture(deps: ExternalCaptureDeps): ExternalCaptu
         if (cwd && key !== pathKeyOf(cwd)) continue
         if (space.timer) { clearTimeout(space.timer); space.timer = null }
         await flushSpace(space)
+        await space.chain
       }
     },
     dispose(): void {
@@ -714,31 +498,41 @@ export function installExternalCapture(deps: ExternalCaptureDeps): ExternalCaptu
       for (const space of spaces.values()) {
         closeWatchers(space)
         if (space.timer) clearTimeout(space.timer)
-        if (space.alignTimer) clearInterval(space.alignTimer)
+        if (space.syncTimer) clearInterval(space.syncTimer)
         space.dirty.clear()
-        space.seen.clear()
+        space.gapKeys.clear()
       }
       spaces.clear()
     },
   }
+}
 
-  /**
-   * @private
-   * @description: 后台补扫一次（复用 externalAlign 的候选与预算）。
-   * @param space 工作区状态
-   * @returns 无
-   */
-  async function alignNow(space: Workspace): Promise<void> {
-    if (stopped || !deps.settings().scan) return
-    try {
-      if (deps.align) { await deps.align(space.cwd, space.sessionId); return }
-      const { alignInWorkspace } = await import('./externalAlign.js')
-      const outcome = await alignInWorkspace(deps.ctx, space.cwd, space.sessionId, deps.record)
-      if (outcome.gaps.length) log.debug('补扫缺口：' + outcome.gaps.join('；'))
-    } catch (error) {
-      log.debug('后台补扫失败：' + String(error))
-    }
-  }
+// --endregion
+
+// --region 装配入口
+
+/** 当前装配的跟随器实例：RPC 的「校准一次」经它执行，避免再实现一套读盘逻辑。 */
+let activeCapture: ExternalCapture | undefined
+
+/**
+ * @author ddj 2026年11月25号
+ * @description: 登记当前跟随器；卸载时传 undefined，避免 RPC 打到旧实例。
+ * @param instance 跟随器实例
+ * @returns 无
+ */
+export function setCapture(instance: ExternalCapture | undefined): void {
+  activeCapture = instance
+}
+
+/**
+ * @author ddj 2026年11月25号
+ * @description: 从 RPC 侧触发一次校准：只对齐开窗文件，不建任何新记录。
+ * @param cwd 工作区
+ * @returns 校准结果
+ */
+export async function captureSync(cwd: string): Promise<SyncOutcome> {
+  if (!activeCapture) return { checked: 0, folded: 0, gaps: ['差异窗口跟随器未装配'] }
+  return activeCapture.sync(cwd)
 }
 
 // --endregion

@@ -180,6 +180,30 @@ export function readActive(cwd: string): Map<string, DiffRecord> {
 }
 
 /**
+ * @author ddj 2026年11月25号
+ * @description: 打上「旧活跃记录待重置」标记：待审库 v7 迁移时调用一次，由记录桶侧消费。
+ * @param cwd 工作区
+ * @returns 无
+ */
+export function markActiveReset(cwd: string): void {
+  dbFor(cwd).prepare("INSERT INTO metadata(name,value) VALUES('active_reset_v1','pending') ON CONFLICT(name) DO UPDATE SET value='pending'").run()
+}
+
+/**
+ * @author ddj 2026年11月25号
+ * @description: 消费一次重置标记：读到时原子改成 done，只有第一个调用方返回 true。
+ * @param cwd 工作区
+ * @returns 本次是否抢到标记
+ */
+export function takeActiveReset(cwd: string): boolean {
+  const db = dbFor(cwd)
+  const row = db.prepare("SELECT value FROM metadata WHERE name='active_reset_v1'").get() as Row | undefined
+  if (row?.value !== 'pending') return false
+  db.prepare("UPDATE metadata SET value='done' WHERE name='active_reset_v1'").run()
+  return true
+}
+
+/**
  * 单次 SQLite 事务提交活跃行变化及可选归档，绝不重写整个记录桶。
  * @author ddj 2026年09月30号
  * @param cwd 工作区

@@ -4,12 +4,10 @@ import type { PendingRequest } from './shared/pendingReview.js'
 import { resolveScope, sessionOf } from './registry.js'
 import type { Registry } from './registry.js'
 import { bucketOf } from './registry.js'
-import { readText } from './pending/capture.js'
 import { pendingRawId, setPendingCovers, trackPendingCover } from './pendingCompat.js'
-import { loadEntries, pendingVersion, saveEntry } from './pending/persist.js'
-import { applyDecide, importFromVcs, itemOf, loadDetail, loadPage, purgePending, recordWrite, refreshed, removeEntry, undoDecide } from './pending/store.js'
-import { alignInWorkspace } from './pending/externalAlign.js'
-import type { ShellLike } from './pending/vcs.js'
+import { loadEntries, pendingVersion } from './pending/persist.js'
+import { applyDecide, loadDetail, loadPage, purgePending, removeEntry, undoDecide } from './pending/store.js'
+import { captureSync } from './pending/externalCapture.js'
 import type { Ctx } from './store.js'
 import { policyOf } from './store.js'
 
@@ -57,20 +55,6 @@ async function writeWorkspaceOf(ctx: Ctx, registry: Registry, sessionId: string)
  */
 function failureOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
-}
-
-/**
- * @author ddj 2026年10月30号
- * @description: 按会话策略包装 shell：执行器默认按 workspace-write 跑，本机无可用沙箱后端会直接拒绝。
- * @param raw 原始 shell 能力
- * @param policy 会话沙箱策略
- * @returns 带策略的 shell 视图
- */
-function shellOf(raw: ShellLike, policy: unknown): ShellLike {
-  return {
-    resolve: (request) => raw.resolve(policy ? { ...request, sandboxPolicy: policy } : request),
-    execute: (spec) => raw.execute(spec),
-  }
 }
 
 /**
@@ -158,52 +142,20 @@ function historyHandlers(kit: ScopeKit): Partial<RpcHandlerMap> {
 }
 
 /**
- * @author ddj 2026年10月30号
- * @description: 投影维护处理器：从版本库导入、按磁盘现状刷新单条。
+ * @author ddj 2026年10月30号 / 2026年11月25号
+ * @description: 投影维护处理器：校准追踪窗口、清理旧通道条目。
  * @param kit 作用域能力
  * @returns 处理器表
  */
 function refreshHandlers(kit: ScopeKit): Partial<RpcHandlerMap> {
   return {
-    'edrv.pending.import': async (args) => {
-      const cwd = await kit.write(args.sessionId)
-      const raw = kit.ctx.get('shell') as unknown as ShellLike | undefined
-      if (!raw) return { ok: false, error: '当前环境没有 shell 能力，无法读取版本库基线' }
-      const policy = policyOf(kit.ctx, sessionOf(kit.ctx, args.sessionId))
-      try {
-        const shell = shellOf(raw, policy)
-        const result = await importFromVcs(shell, cwd, args.sessionId, { includeUntracked: args.includeUntracked, path: args.path })
-        const page = loadPage(cwd, args.sessionId)
-        setPendingCovers(cwd, args.sessionId, page.items.map((item) => item.path))
-        return { ok: true, imported: result.imported, changes: result.changes }
-      } catch (error) {
-        return { ok: false, error: failureOf(error) }
-      }
-    },
-    'edrv.pending.refresh': async (args: PendingRequest & { id: string }) => {
-      const cwd = await kit.write(args.sessionId)
-      const id = pendingRawId(args.id)
-      const stored = loadEntries(cwd).find((entry) => entry.entry.id === id)
-      if (!stored) return { ok: false, error: '待审条目不存在' }
-      const fs = kit.ctx.get('fs')
-      const session = sessionOf(kit.ctx, args.sessionId)
-      const target = await fs.resolve(id, { cwd, agent: session })
-      const content = await readText(fs, target).catch(() => undefined)
-      if (content === undefined) return { ok: false, error: '读取失败' }
-      const next = refreshed(stored, content, Date.now())
-      if (next) saveEntry(cwd, next)
-      return { ok: true, item: itemOf(next ?? stored) }
-    },
     'edrv.pending.align': async (args) => {
-      // 手动补扫：与启动对齐同一条路径，只是明确要求本端活跃会话
+      // 手动校准：把开窗文件与磁盘对齐一次，补上漏掉的 watch 事件；不受 scan 开关限制
       const cwd = await kit.write(args.sessionId)
-      const outcome = await alignInWorkspace(kit.ctx, cwd, args.sessionId, (write) => {
-        try { trackPendingCover(write.cwd, write.path, true, write.sessionId) } catch { /* 登记失败不影响落库 */ }
-        recordWrite(write)
-      })
+      const outcome = await captureSync(cwd)
       const page = loadPage(cwd, args.sessionId)
       setPendingCovers(cwd, args.sessionId, page.items.map((item) => item.path))
-      return { ok: true, imported: outcome.imported, changed: outcome.changed, gaps: outcome.gaps }
+      return { ok: true, checked: outcome.checked, folded: outcome.folded, gaps: outcome.gaps }
     },
     /**
      * @author ddj 2026-11-24

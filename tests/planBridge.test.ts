@@ -194,3 +194,36 @@ describe('direct plan routing', () => {
     off()
   })
 })
+
+describe('HTML 计划模式提交的计划仍能转进编辑器', () => {
+  /** 造一条 exit_html_plan_mode 的 tool/call 窗口。 */
+  function htmlPlanWindow(revision: number, callId: string, markdown: string): PlanWindow {
+    const entries = [{ type: 'event', event: { type: 'tool/call', seq: revision, data: { callId, name: 'exit_html_plan_mode', arguments: JSON.stringify({ plan: markdown }) } } }]
+    return { revision, entries, change: { kind: 'append', entries } }
+  }
+
+  it('官方资源读不到时，用会话窗口里的提交补出计划并转进编辑器', async () => {
+    const h = harness()
+    const off = installPlanBridge(h.ctx, vi.fn())
+    h.feed.publish(htmlPlanWindow(10, 'hp', '# 计划：HTML\n正文'))
+    vi.mocked(requestOpen).mockClear()
+
+    const close = vi.fn()
+    const address = 'dsh-resource://plan/s/hp'
+    h.body()({
+      sessionId: 's',
+      useTabInfo: () => ({ tab: { navigation: { address, revision: 1 }, actions: { close } } }),
+      // 官方资源提供方只认 exit_plan_mode：这里模拟 not-found。
+      useResource: () => ({ status: 'failed' }),
+    })
+    const cleanup = hooks.effects[0]()
+    await Promise.resolve()
+    expect(requestOpen).toHaveBeenCalledWith(null, undefined, undefined, 's', expect.objectContaining({
+      preview: true,
+      plan: expect.objectContaining({ address, markdown: '# 计划：HTML\n正文', title: '计划：HTML', htmlPlanMode: true }),
+    }))
+    expect(close).toHaveBeenCalledOnce()
+    if (typeof cleanup === 'function') cleanup()
+    off()
+  })
+})

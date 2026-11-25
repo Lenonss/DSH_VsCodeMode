@@ -5,10 +5,13 @@
 import { describe, expect, it } from 'vitest'
 import {
   buildPlanSrcDoc,
+  deriveHtmlPlanUiState,
   derivePlanUiState,
   findPendingReview,
   isMissingPage,
   planAttachInfoOf,
+  planPageAltPath,
+  planPageDecisionOf,
   planPagePathOf,
   planRepairInstruction,
   planSlugOf,
@@ -94,11 +97,11 @@ describe('planSlugOf / planRepairInstruction', () => {
     expect(planSlugOf('docs/a.md')).toBe('html-plan')
   })
 
-  it('修复指令要求先落盘再声明，并禁止让用户退出计划模式', () => {
+  it('修复指令要求只写页、插件打包，并禁止让用户退出计划模式', () => {
     const text = planRepairInstruction('plans/a-b/plan.packed.html')
     expect(text).toContain('plans/a-b/plan.html')
-    expect(text).toContain('runtime/plan.mjs a-b')
-    expect(text).toContain('HTML 计划页：plans/a-b/plan.packed.html')
+    expect(text).not.toContain('runtime/plan.mjs')
+    expect(text).toContain('HTML 计划页：plans/a-b/plan.html')
     expect(text).toContain('exit_plan_mode')
     expect(text).toContain('不要让我退出计划模式')
     expect(text).toContain('不要只写路径不生成文件')
@@ -178,5 +181,50 @@ describe('reviewAnswerOf', () => {
   it('无问题/无继续规划选项返回 null', () => {
     expect(reviewAnswerOf(null, true)).toBeNull()
     expect(reviewAnswerOf({ ...item, keepLabel: null }, false)).toBeNull()
+  })
+})
+
+describe('planPageAltPath', () => {
+  it('packed 与未打包两种后缀互推；其它路径不猜', () => {
+    expect(planPageAltPath('plans/x/plan.packed.html')).toBe('plans/x/plan.html')
+    expect(planPageAltPath('plans/x/plan.html')).toBe('plans/x/plan.packed.html')
+    expect(planPageAltPath('plans\\x\\plan.html')).toBe('plans/x/plan.packed.html')
+    expect(planPageAltPath('plans/x/plan.txt')).toBeNull()
+    expect(planPageAltPath('')).toBeNull()
+  })
+})
+
+describe('planPageDecisionOf', () => {
+  it('作者页可直接显示 / 需要打包 / 备用路径打包', () => {
+    expect(planPageDecisionOf({ declared: 'plans/x/plan.html', htmlPlanMode: false, read: 'ok', needsPack: false, alternateExists: false }))
+      .toEqual({ action: 'show' })
+    expect(planPageDecisionOf({ declared: 'plans/x/plan.html', htmlPlanMode: false, read: 'ok', needsPack: true, alternateExists: false }))
+      .toEqual({ action: 'pack', target: 'plans/x/plan.html' })
+    expect(planPageDecisionOf({ declared: 'plans/x/plan.packed.html', htmlPlanMode: false, read: 'missing', needsPack: false, alternateExists: true }))
+      .toEqual({ action: 'pack', target: 'plans/x/plan.html' })
+  })
+
+  it('HTML 计划模式下缺页兜底渲染；非模式下仍是错误', () => {
+    expect(planPageDecisionOf({ declared: '', htmlPlanMode: true, read: 'missing', needsPack: false, alternateExists: false }))
+      .toEqual({ action: 'auto' })
+    expect(planPageDecisionOf({ declared: 'plans/x/plan.packed.html', htmlPlanMode: true, read: 'missing', needsPack: false, alternateExists: false }))
+      .toEqual({ action: 'auto' })
+    expect(planPageDecisionOf({ declared: '', htmlPlanMode: false, read: 'missing', needsPack: false, alternateExists: false }))
+      .toEqual({ action: 'error' })
+    expect(planPageDecisionOf({ declared: 'plans/x/plan.html', htmlPlanMode: false, read: 'error', needsPack: false, alternateExists: false }))
+      .toEqual({ action: 'error' })
+  })
+})
+
+describe('deriveHtmlPlanUiState', () => {
+  it('活跃 / 待审批 / 批准 / 退出四态，以及投影缺失时的乐观处理', () => {
+    expect(deriveHtmlPlanUiState({ active: true }, false)).toMatchObject({ mode: 'planning', active: true })
+    expect(deriveHtmlPlanUiState({ active: true }, true)).toMatchObject({ mode: 'reviewing', label: '待审批' })
+    expect(deriveHtmlPlanUiState({ active: false }, false, 'approved').label).toContain('已退出 HTML 计划模式')
+    expect(deriveHtmlPlanUiState({ active: false }, false, 'exited').mode).toBe('exited')
+    // 投影还没读到时：提交即视为活跃，动过批准/退出后收口。
+    expect(deriveHtmlPlanUiState(undefined, true).mode).toBe('reviewing')
+    expect(deriveHtmlPlanUiState(undefined, false, 'approved').active).toBe(false)
+    expect(deriveHtmlPlanUiState(undefined, false).active).toBe(true)
   })
 })

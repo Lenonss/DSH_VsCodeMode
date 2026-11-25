@@ -255,6 +255,8 @@ export function pendingCovers(cwd: string, path: string, sessionId?: string): bo
  */
 export function mergedPage(official: ReviewPage, pending: PendingPage, cwd?: string): ReviewPage {
   const covered = new Set<string>()
+  // 已关窗的路径也继续算覆盖：关窗代表用户处理完了，官方旧行不能再冒出来。
+  for (const path of pending.coveredPaths ?? []) covered.add(pathKey(path))
   for (const item of pending.items) {
     // 待审条目的 path 是写入时的原始写法（常为工作区相对路径），官方条目用绝对身份：
     // 只按 path 建覆盖集时同一文件会同时留下待审行与官方行，差异栏把一份改动算成两条。
@@ -263,11 +265,34 @@ export function mergedPage(official: ReviewPage, pending: PendingPage, cwd?: str
   }
   const kept = official.items.filter((item) => !covered.has(pathKey(item.currentPath)) && !covered.has(pathKey(item.path)))
   const items = [...pending.items.map((item) => pendingItemOf(item, cwd)), ...kept]
+  const overview = official.overview
+    ? { ...official.overview, coveredPaths: mergePaths(official.overview.coveredPaths, pending.coveredPaths ?? []) }
+    : undefined
   return {
     items,
     pending: pending.pending + kept.filter((item) => item.decision === 'pending').length,
     nextCursor: official.nextCursor,
     gaps: official.gaps,
-    ...(official.overview ? { overview: official.overview } : {}),
+    pendingCoveredPaths: pending.coveredPaths ?? [],
+    ...(overview ? { overview } : {}),
   }
+}
+
+/**
+ * @private
+ * @author ddj 2026年11月25号
+ * @description: 合并两组路径并去重；官方覆盖集保持原有顺序，待审覆盖追加在后。
+ * @param existing 官方覆盖路径
+ * @param added 待审覆盖路径
+ * @returns 去重后的路径列表
+ */
+function mergePaths(existing: readonly string[], added: readonly string[]): string[] {
+  const seen = new Set(existing)
+  const paths = [...existing]
+  for (const path of added) {
+    if (seen.has(path)) continue
+    seen.add(path)
+    paths.push(path)
+  }
+  return paths
 }

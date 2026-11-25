@@ -33,6 +33,12 @@ export type PendingEvidence = 'authoritative' | 'receipt' | 'snapshot' | 'none'
 /** 一次写入调用的结局：只有 changed 会进待审列表。 */
 export type PendingVerdict = 'changed' | 'noop' | 'failed' | 'unverified'
 
+/**
+ * 差异追踪窗口状态：`open` 表示 AI 动过、用户还没处理完，期间所有改动都折进同一条差异；
+ * `closed` 表示已处理完，之后的改动不再生成记录。
+ */
+export type PendingTracking = 'open' | 'closed'
+
 /** 会话血缘，用于子代理/派生会话归属到同一待审视图。 */
 export interface PendingLineage {
   parentSessionId?: string
@@ -75,6 +81,10 @@ export interface PendingItem {
   evidence?: PendingEvidence
   /** 这次调用的结局；旧条目没有该字段，按 `changed` 处理。 */
   verdict?: PendingVerdict
+  /** 差异追踪窗口状态；缺省按 `open` 解释。 */
+  tracking?: PendingTracking
+  /** 开窗时刻（毫秒时间戳）；0 表示旧条目或未知。 */
+  openedAt?: number
   /** 只读编辑说明（模型声明，仅展示，不参与判定）；没有时不出现。 */
   note?: string
 }
@@ -86,6 +96,11 @@ export interface PendingPage {
   nextCursor: number | null
   /** 采集/重建过程中的缺口说明，绝不静默吞掉。 */
   gaps: string[]
+  /**
+   * 已被待审窗口接管过的路径（含已关窗条目，路径与身份两种写法）：
+   * 用来压住同路径的官方旧行与旧工具记录，避免关窗后它们复活。
+   */
+  coveredPaths?: string[]
 }
 
 /** 单条待审详情。 */
@@ -128,13 +143,6 @@ export interface PendingRemove extends PendingRequest {
 export interface PendingHistoryMove extends PendingRequest {
   direction: 'undo' | 'redo'
   operationId: string
-}
-
-/** 从版本控制导入本地改动。 */
-export interface PendingImport extends PendingRequest {
-  includeUntracked?: boolean
-  /** 只刷新一个文件，便于大仓单文件重扫。 */
-  path?: string
 }
 
 /** 待审条目在面板列表里的 id 前缀；客户端与 Host 共用这一份口径。 */

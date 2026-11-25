@@ -1,7 +1,8 @@
 /** Plan identities and live-only event reduction. @author ddj 2026年10月08号 */
 import { planPagePathOf } from './htmlPlan/planPage.js'
+import { HTML_PLAN_EXIT_TOOL, OFFICIAL_PLAN_EXIT_TOOL } from '../shared/htmlPlanMode.js'
 
-export interface PlanDocument { address: string; markdown: string; title: string; htmlPath?: string }
+export interface PlanDocument { address: string; markdown: string; title: string; htmlPath?: string; htmlPlanMode?: boolean }
 export interface PlanOpen { path?: string; plan?: PlanDocument }
 export interface PlanEntry { type?: string; event: { type: string; seq?: number; data: unknown } }
 export interface PlanWindow { revision: number; entries: readonly PlanEntry[]; change: { kind: string; entries?: readonly PlanEntry[] } }
@@ -47,6 +48,48 @@ export function isPlanAddress(address: unknown): address is string {
       && ['one-shot', 'continuable', 'unknown'].includes(segments[3]))
   } catch { return false }
 }
+
+/**
+ * 取计划地址里的工具调用 id（agent 地址与 subagent 地址都取最后一段）。
+ * @author ddj 2026年11月25号
+ * @param address 官方计划地址
+ * @returns 调用 id；无法解析时 null
+ */
+export function planCallIdOf(address: unknown): string | null {
+  if (!isPlanAddress(address)) return null
+  try {
+    const segments = address.split('/').slice(3).map(decodeURIComponent)
+    return segments[segments.length - 1] ?? null
+  } catch { return null }
+}
+
+/**
+ * 在会话窗口里按调用 id 找已提交的计划（官方资源提供方只认 `exit_plan_mode`，
+ * 不认 HTML 计划模式的 `exit_html_plan_mode`；刷新后缓存为空时靠这里兜底）。
+ * @author ddj 2026年11月25号
+ * @param sessionId 归属会话
+ * @param address 计划地址
+ * @param entries 会话窗口条目
+ * @returns 计划文档；没找到时 undefined
+ */
+export function planFromEntries(sessionId: string, address: unknown, entries: readonly PlanEntry[]): PlanDocument | undefined {
+  const callId = planCallIdOf(address)
+  if (!callId || !Array.isArray(entries)) return undefined
+  for (const entry of entries) {
+    const event = entry?.event
+    if (!event || (event.type !== 'tool/call' && event.type !== 'tool/ptc-dispatch-start')) continue
+    const data = record(event.data)
+    if (data.name !== HTML_PLAN_EXIT_TOOL && data.name !== OFFICIAL_PLAN_EXIT_TOOL) continue
+    const id = typeof data.callId === 'string' ? data.callId : (typeof data.subCallId === 'string' ? data.subCallId : '')
+    if (id !== callId) continue
+    const plan = planDocument(address as string, {
+      markdown: argsOf(data.arguments).plan,
+      htmlPlanMode: data.name === HTML_PLAN_EXIT_TOOL,
+    })
+    if (plan) return plan
+  }
+  return undefined
+}
 /** @public @author ddj 2026年10月08号 @param address Official address. @param value Provider or review payload. @returns Valid complete read-only plan, if available. */
 export function planDocument(address: string, value: unknown): PlanDocument | undefined {
   const data = record(value)
@@ -55,9 +98,13 @@ export function planDocument(address: string, value: unknown): PlanDocument | un
   if (!title) return undefined
   // HTML 计划页：正文标记行命中时随文档携带路径，计划页签据此切到 iframe 渲染。
   const htmlPath = planPagePathOf(data.markdown)
-  return htmlPath
+  // HTML 计划模式提交的计划：客户端据此渲染自动页，并允许无标记行的计划页签走插件渲染。
+  const htmlPlanMode = data.htmlPlanMode === true
+  const document: PlanDocument = htmlPath
     ? { address, markdown: data.markdown, title, htmlPath }
     : { address, markdown: data.markdown, title }
+  if (htmlPlanMode) document.htmlPlanMode = true
+  return document
 }
 /** @private @author ddj 2026年10月08号 @param sessionId Current session. @param path Explicit plan path. @param cwd Workspace. Stores bounded associations, not file contents. */
 function associate(sessionId: string, path: string, cwd: string): void {
@@ -111,10 +158,10 @@ export function createPlanFeed(sessionId: string, cwd = '') {
     const call = event.type === 'tool/result' ? pending.get(id) : { name: String(data.name), args }
     if (settled) pending.delete(id)
     if (!call || !live || seen.has(id) || result.isError === true || data.error) return undefined
-    if (call.name === 'exit_plan_mode') {
+    if (call.name === OFFICIAL_PLAN_EXIT_TOOL || call.name === HTML_PLAN_EXIT_TOOL) {
       if (event.type === 'tool/result') return undefined
       const address = 'dsh-resource://plan/' + encodeURIComponent(sessionId) + '/' + encodeURIComponent(id)
-      const plan = planDocument(address, { markdown: call.args.plan })
+      const plan = planDocument(address, { markdown: call.args.plan, htmlPlanMode: call.name === HTML_PLAN_EXIT_TOOL })
       if (plan) { rememberPlan(plan); remember(id); return { plan } }
       return undefined
     }

@@ -224,7 +224,7 @@ function dropFile(db: DatabaseSync, fileId: string): void {
 }
 
 /** @public @author ddj 2026年10月26号 @param cwd Workspace. @param gap Announced event identity. @param state Durable inbox or explicit failure. */
-export function captureState(cwd: string, gap: CaptureGap, state: 'queued' | 'gap'): void {
+export function captureState(cwd: string, gap: CaptureGap, state: 'queued' | 'gap' | 'complete'): void {
   reviewDb(cwd).prepare(`INSERT INTO review_capture VALUES(?,?,?,?,?) ON CONFLICT(session_id,turn,seq)
     DO UPDATE SET state=excluded.state,error=excluded.error WHERE review_capture.state<>'complete'`).run(gap.sessionId, gap.turn, gap.seq, state, gap.error)
 }

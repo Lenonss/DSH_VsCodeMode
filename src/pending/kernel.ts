@@ -3,7 +3,7 @@
  * 无 IO、无时钟、不改入参；调用方传入 now 与内容，便于测试与复用。
  * @author ddj 2026年10月29号
  */
-import type { PendingBaseKind, PendingEarlier, PendingEvidence, PendingLineage, PendingOrigin, PendingSource, PendingVerdict } from '../shared/pendingReview.js'
+import type { PendingBaseKind, PendingEarlier, PendingEvidence, PendingLineage, PendingOrigin, PendingSource, PendingTracking, PendingVerdict } from '../shared/pendingReview.js'
 import { logicalLines } from '../shared/lineEndings.js'
 import { strongerEvidence, strongerSource } from './provenance.js'
 
@@ -29,6 +29,10 @@ export interface PendingEntry {
   evidence?: PendingEvidence
   /** 这次调用的结局；缺省按 `changed` 解释。 */
   verdict?: PendingVerdict
+  /** 差异追踪窗口状态；缺省按 `open` 解释。 */
+  tracking?: PendingTracking
+  /** 开窗时刻；0 表示未知。 */
+  openedAt?: number
 }
 
 /** 新建条目的入参。 */
@@ -46,6 +50,8 @@ export interface NewPending {
   baseKind?: PendingBaseKind
   evidence?: PendingEvidence
   verdict?: PendingVerdict
+  tracking?: PendingTracking
+  openedAt?: number
 }
 
 /** 决定后对条目的局部推进；未出现的字段表示不改。 */
@@ -100,6 +106,9 @@ export function mergeEntries(earlier: PendingEntry, later: PendingEntry): Pendin
     // 证据强度同样取更强的一侧：回执胜过自己的快照，结局取最近一次调用。
     evidence: strongerEvidence(earlier.evidence, later.evidence),
     verdict: later.verdict ?? earlier.verdict,
+    // 合并只发生在同一窗口内：窗口状态与开窗时刻都沿用较早来源。
+    tracking: (earlier.tracking ?? 'open') === 'closed' && (later.tracking ?? 'open') === 'closed' ? 'closed' : 'open',
+    openedAt: earlier.openedAt ?? later.openedAt,
   }
   if (later.lineage === undefined && earlier.lineage !== undefined) merged.lineage = earlier.lineage
   if (earlier.earlierVersion === 'none' && later.earlierVersion === 'none') {
@@ -136,7 +145,21 @@ export function entryFromNew(input: NewPending): PendingEntry {
   if (input.baseKind !== undefined) entry.baseKind = input.baseKind
   if (input.evidence !== undefined) entry.evidence = input.evidence
   if (input.verdict !== undefined) entry.verdict = input.verdict
+  entry.tracking = input.tracking ?? 'open'
+  entry.openedAt = input.openedAt ?? 0
   return entry
+}
+
+/**
+ * @author ddj 2026年11月25号
+ * @description: 只改窗口状态，其余字段原样保留；开窗时同时写入开窗时刻。
+ * @param entry 待审条目
+ * @param tracking 目标窗口状态
+ * @param openedAt 开窗时刻；缺省沿用原值
+ * @returns 新的条目
+ */
+export function applyTracking(entry: PendingEntry, tracking: 'open' | 'closed', openedAt?: number): PendingEntry {
+  return { ...entry, tracking, openedAt: openedAt ?? entry.openedAt ?? 0 }
 }
 
 /**

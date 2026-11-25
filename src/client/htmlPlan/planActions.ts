@@ -8,6 +8,7 @@
  */
 import { createAddToConversation } from '../addToConversation.js'
 import { findPendingReview, reviewAnswerOf, reviewLabelsOf, type PendingReview } from './planPage.js'
+import { HTML_PLAN_MODE_KEY, HTML_PLAN_OFF_LINE } from '../../shared/htmlPlanMode.js'
 
 /** 客户端上下文的最小结构面。 */
 export interface PlanActionCtx {
@@ -105,6 +106,13 @@ export function readPlanProjection(sessionId: string): unknown {
   return probe(() => faceSnapshot(faceOf(ctx, sessionId, 'plan')))
 }
 
+/** 读 HTML 计划模式投影快照（{ active } 或 undefined）。 */
+export function readHtmlPlanMode(sessionId: string): unknown {
+  if (!host) return undefined
+  const ctx = host.ctx
+  return probe(() => faceSnapshot(faceOf(ctx, sessionId, HTML_PLAN_MODE_KEY)))
+}
+
 /** 在线待审批的会话卡片（PendingQuestion 实例：带 answer 与 intent）。 */
 interface LiveReview {
   pending: { answer: (answer: unknown) => Promise<unknown> }
@@ -178,7 +186,7 @@ export function readPendingReview(sessionId: string): PendingReview | null {
 export function subscribePlanFaces(sessionId: string, listener: () => void): () => void {
   if (!host) return () => {}
   const offs: Array<() => void> = []
-  for (const key of ['plan', 'userQuestions']) {
+  for (const key of ['plan', 'userQuestions', HTML_PLAN_MODE_KEY]) {
     const face = faceOf(host.ctx, sessionId, key) as { subscribe?: (fn: () => void) => unknown } | undefined
     if (!face || typeof face.subscribe !== 'function') continue
     try {
@@ -360,23 +368,45 @@ export async function answerPlanReview(sessionId: string, approve: boolean): Pro
 }
 
 /**
+ * 执行一条退出命令并归一结果（计划徽标与模式 chip 共用）。
+ * @author ddj 2026年11月25号
+ * @param sessionId 会话 id
+ * @param line 完整命令行
+ * @param failure 失败文案前缀
+ * @returns 动作结果
+ */
+async function exitWithLine(sessionId: string, line: string, failure: string): Promise<PlanActionResult> {
+  if (!host) return fail('计划动作桥未就绪，请点输入框里的模式 chip 退出')
+  if (!sessionId) return fail('当前没有活动会话')
+  const commands = serviceOf(host.ctx, 'remote.commands') as { execute?: (id: string, line: string, attachments: unknown[]) => Promise<unknown> } | undefined
+  if (!commands || typeof commands.execute !== 'function') {
+    return fail('当前 DSH 不支持在插件内执行命令，请点输入框里的模式 chip 退出')
+  }
+  try {
+    return unwrap(await commands.execute(sessionId, line, []))
+  } catch (error) {
+    return fail(failure + '：' + messageOf(error))
+  }
+}
+
+/**
  * 退出计划模式（等价 composer 计划徽标的 /plan off）。
  * @author ddj 2026年11月21号
  * @param sessionId 会话 id
  * @returns 动作结果
  */
 export async function exitPlanMode(sessionId: string): Promise<PlanActionResult> {
-  if (!host) return fail('计划动作桥未就绪，请点 composer 计划徽标退出')
-  if (!sessionId) return fail('当前没有活动会话')
-  const commands = serviceOf(host.ctx, 'remote.commands') as { execute?: (id: string, line: string, attachments: unknown[]) => Promise<unknown> } | undefined
-  if (!commands || typeof commands.execute !== 'function') {
-    return fail('当前 DSH 不支持在插件内执行命令，请点 composer 计划徽标退出')
-  }
-  try {
-    return unwrap(await commands.execute(sessionId, '/plan off', []))
-  } catch (error) {
-    return fail('退出计划模式失败：' + messageOf(error))
-  }
+  return exitWithLine(sessionId, '/plan off', '退出计划模式失败')
+}
+
+/**
+ * 退出 HTML 计划模式（等价底部栏 chip 的 /html-plan off）。
+ * @author ddj 2026年11月25号
+ * @param sessionId 会话 id
+ * @returns 动作结果
+ */
+export async function exitHtmlPlanMode(sessionId: string): Promise<PlanActionResult> {
+  return exitWithLine(sessionId, HTML_PLAN_OFF_LINE, '退出 HTML 计划模式失败')
 }
 
 /**

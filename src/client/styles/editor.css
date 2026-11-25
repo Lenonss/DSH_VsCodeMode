@@ -1264,3 +1264,16 @@
 @media (prefers-reduced-motion: reduce) { .edrv-drag-overlay { transition: none; } }
 /* 宿主节点在表格引擎 chunk 加载前就必须有高度，故留在根样式而非 panel.css。 */
 .edrv-excel-host { height: 100%; min-height: 0; flex: 1; }
+
+/* ── HTML 计划模式：计划签徽标（编辑器面板内） ── */
+[data-edrv-view] .edrv-htmlplan-mode { font-size: 11px; padding: 1px 8px; border-radius: 9px; border: 1px solid var(--dsw-alias-state-accent-primary, #2563eb); color: var(--dsw-alias-state-accent-primary, #2563eb); white-space: nowrap; }
+[data-edrv-view] .edrv-htmlplan-src { font-size: 11px; padding: 1px 8px; border-radius: 9px; border: 1px solid var(--dsw-alias-state-success-primary, #15803d); color: var(--dsw-alias-state-success-primary, #15803d); white-space: nowrap; }
+
+/* ── HTML 计划模式：输入框底部栏 chip（composer 区，不在编辑器面板内，选择器不加作用域） ── */
+.edrv-htmlplan-chip-wrap { display: inline-flex; align-items: center; gap: 6px; }
+.edrv-htmlplan-chip { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 10px; border-radius: 13px; border: 1px solid var(--dsw-alias-state-accent-primary, #2563eb); background: transparent; color: var(--dsw-alias-state-accent-primary, #2563eb); font-size: 12px; font-weight: 600; cursor: pointer; }
+.edrv-htmlplan-chip:hover:not(:disabled) { filter: brightness(.96); }
+.edrv-htmlplan-chip:disabled { opacity: .55; cursor: default; }
+.edrv-htmlplan-chip-glyph { font-size: 9px; }
+.edrv-htmlplan-chip-x { font-size: 10px; opacity: .75; }
+.edrv-htmlplan-chip-error { font-size: 11px; color: var(--dsw-alias-state-warning-primary, #b45309); }

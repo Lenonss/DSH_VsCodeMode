@@ -1,13 +1,12 @@
 /**
  * 采集来源与归属：把「谁把这次变化变成记录」和「谁动的文件」拆成两个正交字段，
- * 并维护三类时间窗（工具调用 / 编辑器保存 / 插件自写），供 watch 采集判定归属。
+ * 并维护两类时间窗（编辑器保存 / 插件自写），供窗口跟随器判定归属。
  *
  * 设计取舍：
- * - 归属只用**确定性窗口**判定，不猜 stdout、不看 mtime：任一工具调用在执行期间为 agent 窗口
- *   （结束时留 2s 尾巴），`edrv.save` 前后 2s 内命中同一路径为编辑器窗口，插件自己写回的路径
- *   为自写窗口。窗口之外的写盘一律记外部来源，宁可让用户确认一次，也不冒充 agent。
+ * - 窗口跟随器只跟随已开窗的文件；归属只用确定性窗口判定，不猜 stdout、不看 mtime。
+ *   `edrv.save` 前后 2s 内命中同一路径记为编辑器窗口，插件自己写回的路径为自写窗口。
  * - 去重键是「路径 + 内容哈希」：内容逐字节相等就视为同一次变化，绝不按时间戳猜。
- * - 三张表都有上限，长跑实例不会无界增长。
+ * - 标记表有上限，长跑实例不会无界增长。
  * 作者 ddj 2026-11-24
  */
 import { createHash } from 'node:crypto'
@@ -16,8 +15,6 @@ import { pathKeyFor } from '../shared/pathKey.js'
 
 // --region 常量
 
-/** 工具调用结束后的归属尾巴：写完盘到 flush 之间还有事件延迟。 */
-export const AGENT_TAIL_MS = 2000
 /** 编辑器保存的归属窗口。 */
 export const EDITOR_WINDOW_MS = 2000
 /** 插件自写（撤销写回、远端镜像写穿）的窗口：写入后 watch 会立刻收到事件。 */
@@ -174,10 +171,6 @@ interface Marks {
 
 /** 进程内窗口状态：随插件装配创建，卸载清空。 */
 interface WindowState {
-  /** 正在执行的工具调用数。 */
-  depth: number
-  /** agent 窗口的结束时刻。 */
-  until: number
   /** 路径标记表（插入序即淘汰序）。 */
   marks: Map<string, Marks>
 }
@@ -188,7 +181,7 @@ interface WindowState {
  * @returns 注册表能力
  */
 export function createWindows() {
-  const state: WindowState = { depth: 0, until: 0, marks: new Map() }
+  const state: WindowState = { marks: new Map() }
 
   /**
    * @description: 逐出超期标记，再压到上限内。
@@ -223,20 +216,6 @@ export function createWindows() {
   }
 
   return {
-    /** @returns 工具调用开始，进入 agent 窗口。 */
-    enterTool(now = Date.now()): void {
-      state.depth += 1
-      state.until = now + AGENT_TAIL_MS
-    },
-    /** @param now 当前时间 @returns 工具调用结束，留下尾巴。 */
-    exitTool(now = Date.now()): void {
-      state.depth = Math.max(0, state.depth - 1)
-      state.until = Math.max(state.until, now + AGENT_TAIL_MS)
-    },
-    /** @param now 当前时间 @returns 当前是否算 agent 写入窗口。 */
-    inAgentWindow(now = Date.now()): boolean {
-      return state.depth > 0 || now <= state.until
-    },
     /** @param key 路径比较键 @param now 当前时间 @returns 打自写标记。 */
     markSelf(key: string, now = Date.now()): void {
       markOf(key, now).selfAt = now
@@ -260,8 +239,6 @@ export function createWindows() {
     },
     /** @returns 无。清空全部窗口（插件卸载）。 */
     dispose(): void {
-      state.depth = 0
-      state.until = 0
       state.marks.clear()
     },
   }

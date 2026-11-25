@@ -40,14 +40,16 @@ export function ReviewLedger(props: { sessionId: string; first: ReviewPage | nul
       else setError(result.error)
     } catch (cause) { if (!controller.signal.aborted) setError(String(cause)) }
   }
-  /** @private @author ddj 2026年11月24号 @description 手动补扫：用版本库基线与已知内容对齐一次，把漏采的改动补进列表。 */
+  /** @private @author ddj 2026年11月25号 @description 手动校准：把已开窗的文件与磁盘对齐一次，补齐漏掉的改动。 */
   async function align(): Promise<void> {
     if (aligning) return
     setAligning(true)
     try {
       const result = await rpc('edrv.pending.align', { sessionId: props.sessionId })
       if (!result.ok) { setAlignNote(result.error); return }
-      setAlignNote(result.imported ? `补扫新增 ${result.imported} 条（版本库报告 ${result.changed} 个改动）` : `没有需要补录的改动（版本库报告 ${result.changed} 个改动）`)
+      setAlignNote(result.folded
+        ? `检查了 ${result.checked} 个追踪中文件，折入 ${result.folded} 条改动`
+        : `检查了 ${result.checked} 个追踪中文件，没有新改动`)
       refreshReview(props.sessionId)
     } catch (cause) { setAlignNote(String(cause)) }
     finally { setAligning(false) }
@@ -56,8 +58,8 @@ export function ReviewLedger(props: { sessionId: string; first: ReviewPage | nul
   return h('div', { style: { marginTop: 8 } },
     h('div', { style: { display: 'flex', gap: 8, alignItems: 'center' } },
       h('label', null, h('input', { type: 'checkbox', checked: history, onChange: () => { setHistory(!history); setCursor(0) } }), '显示已处理及被替换的历史'),
-      h('button', { type: 'button', disabled: aligning, title: '用版本库基线与已知内容对齐一次，补录漏采的改动', onClick: () => { void align() } },
-        aligning ? '补扫中…' : '补扫一次')),
+      h('button', { type: 'button', disabled: aligning, title: '把已开窗的文件与磁盘对齐一次，补齐漏掉的改动', onClick: () => { void align() } },
+        aligning ? '校准中…' : '校准一次')),
     alignNote ? h('small', { role: 'status', style: { display: 'block', marginTop: 4 } }, alignNote) : null,
     error ? h('div', { role: 'alert' }, error) : null,
     !page ? h('p', { role: 'status' }, '正在读取官方审查记录…') : null,

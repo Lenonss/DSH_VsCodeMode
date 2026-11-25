@@ -4,7 +4,7 @@
  */
 import type { DatabaseSync } from 'node:sqlite'
 import { createHash } from 'node:crypto'
-import { activeReady, dbFor } from '../archiveDb.js'
+import { activeReady, dbFor, markActiveReset } from '../archiveDb.js'
 import { log } from '../log.js'
 import type { PendingBaseKind, PendingEvidence, PendingLineage, PendingOrigin, PendingSource, PendingVerdict } from '../shared/pendingReview.js'
 import type { PendingEntry } from './kernel.js'
@@ -26,10 +26,8 @@ export interface StoredEntry {
   flags: PendingFlags
 }
 
-/** 待审库版本号，写进 metadata 便于日后迁移。v6 把撤销栈改成「一条路径一行」。 */
-const SCHEMA_VERSION = '6'
-/** 迁移前的备份后缀。 */
-const BACKUP_SUFFIX = '.before-pending.bak'
+/** 待审库版本号，写进 metadata 便于日后迁移。v7 引入差异追踪窗口并清空旧记录。 */
+const SCHEMA_VERSION = '7'
 /** 工作区待审版本号：条目一落库就自增，供客户端轮询判断是否需要重读列表。 */
 const versions = new Map<string, number>()
 
@@ -77,6 +75,10 @@ export function pendingDb(cwd: string): DatabaseSync {
   const db = dbFor(cwd)
   const stamp = db.prepare("SELECT value FROM metadata WHERE name='pending_schema'").get() as Row | undefined
   if (stamp?.value === SCHEMA_VERSION) return db
+  // 同工作区可能还有旧宿主在跑：它会把 pending_schema 写回旧值。以插件自己的标记为准，
+  // 已经迁过就直接返回，避免两边反复跑迁移、反复开写事务。
+  const own = db.prepare("SELECT value FROM metadata WHERE name='tracking_schema'").get() as Row | undefined
+  if (own?.value === SCHEMA_VERSION) return db
   db.exec('BEGIN IMMEDIATE')
   try {
     db.exec(DDL)
@@ -84,9 +86,15 @@ export function pendingDb(cwd: string): DatabaseSync {
     migrateHistoryMerge(db)
     migrateProvenance(db)
     migrateEvidence(db)
+    migrateTracking(db, cwd)
     db.prepare("INSERT INTO metadata(name,value) VALUES('pending_schema',?) ON CONFLICT(name) DO UPDATE SET value=excluded.value")
       .run(SCHEMA_VERSION)
+    // 独立标记：旧宿主不认识也不会改它
+    db.prepare("INSERT INTO metadata(name,value) VALUES('tracking_schema',?) ON CONFLICT(name) DO UPDATE SET value=excluded.value")
+      .run(SCHEMA_VERSION)
     db.exec('COMMIT')
+    // 旧记录在迁移里被清空：内存版本号一并归零，避免客户端把旧计数当成新变化
+    resetPendingVersion(cwd)
   } catch (error) {
     if (db.isTransaction) db.exec('ROLLBACK')
     throw error
@@ -105,7 +113,8 @@ CREATE TABLE IF NOT EXISTS pending_entries (
   session_ids TEXT NOT NULL, lineage TEXT,
   source TEXT NOT NULL DEFAULT 'tool', origin TEXT NOT NULL DEFAULT 'agent',
   base_kind TEXT NOT NULL DEFAULT 'known',
-  evidence TEXT NOT NULL DEFAULT 'snapshot', verdict TEXT NOT NULL DEFAULT 'changed');
+  evidence TEXT NOT NULL DEFAULT 'snapshot', verdict TEXT NOT NULL DEFAULT 'changed',
+  tracking TEXT NOT NULL DEFAULT 'open', opened_at INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS pending_blocks (
   entry_id TEXT NOT NULL, block_id TEXT NOT NULL, decision TEXT NOT NULL,
   PRIMARY KEY(entry_id,block_id));
@@ -146,6 +155,59 @@ function migrateEvidence(db: DatabaseSync): void {
   const names = new Set(columns.map((column) => String(column.name)))
   if (!names.has('evidence')) db.exec("ALTER TABLE pending_entries ADD COLUMN evidence TEXT NOT NULL DEFAULT 'snapshot'")
   if (!names.has('verdict')) db.exec("ALTER TABLE pending_entries ADD COLUMN verdict TEXT NOT NULL DEFAULT 'changed'")
+}
+
+/** v7 迁移要清空的旧表：待审投影、官方快照与旧工具活跃行都从零开始。 */
+const LEGACY_TABLES = [
+  'pending_entries', 'pending_blocks', 'pending_history', 'pending_ops',
+  'review_files', 'review_snapshots', 'review_blocks', 'review_evidence', 'review_capture', 'review_ops',
+  'active_records',
+]
+
+/**
+ * @author ddj 2026年11月25号
+ * @description: v6 → v7：给条目补差异追踪窗口两列，并清空旧待审/官方/工具活跃记录。
+ * 只做 DELETE，不做 VACUUM 或整库备份——大库上同步备份会把事件循环堵住。
+ * 活跃记录还要留一个标记，让已经加载进内存的记录桶也一起清掉。
+ * @param db 已打开的工作区库
+ * @param cwd 工作区
+ * @returns 无
+ */
+function migrateTracking(db: DatabaseSync, cwd: string): void {
+  const columns = db.prepare('PRAGMA table_info(pending_entries)').all() as Row[]
+  const names = new Set(columns.map((column) => String(column.name)))
+  if (names.has('tracking') && names.has('opened_at')) return
+  if (!names.has('tracking')) db.exec("ALTER TABLE pending_entries ADD COLUMN tracking TEXT NOT NULL DEFAULT 'open'")
+  if (!names.has('opened_at')) db.exec('ALTER TABLE pending_entries ADD COLUMN opened_at INTEGER NOT NULL DEFAULT 0')
+  resetLegacyRows(db)
+  // 内存里的记录桶可能已经加载了旧行：留标记让 bucketOf 侧清桶并补删库内行
+  markActiveReset(cwd)
+}
+
+/**
+ * @private
+ * @author ddj 2026年11月25号
+ * @description: 清空插件自己派生出来的旧记录；表还没建时跳过，绝不因缺表让迁移失败。
+ * @param db 已打开的工作区库
+ * @returns 无
+ */
+function resetLegacyRows(db: DatabaseSync): void {
+  for (const table of LEGACY_TABLES) {
+    if (!tableExists(db, table)) continue
+    db.exec('DELETE FROM ' + table)
+  }
+}
+
+/**
+ * @private
+ * @author ddj 2026年11月25号
+ * @description: 判断工作区库里是否存在某张表（迁移删旧表时用，表名来自固定清单）。
+ * @param db 已打开的工作区库
+ * @param table 表名
+ * @returns 存在返回 true
+ */
+function tableExists(db: DatabaseSync, table: string): boolean {
+  return !!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(table)
 }
 
 /**
@@ -284,19 +346,19 @@ function upsertEntry(db: DatabaseSync, cwd: string, stored: StoredEntry): void {
   const { entry, flags } = stored
   db.prepare(`INSERT INTO pending_entries
     (id,path,earlier,old_text,new_text,updated_at,unseen,missing,diverged,oversized,revision,session_id,session_ids,lineage,
-     source,origin,base_kind,evidence,verdict)
-    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+     source,origin,base_kind,evidence,verdict,tracking,opened_at)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     ON CONFLICT(id) DO UPDATE SET path=excluded.path,earlier=excluded.earlier,old_text=excluded.old_text,
       new_text=excluded.new_text,updated_at=excluded.updated_at,unseen=excluded.unseen,missing=excluded.missing,
       diverged=excluded.diverged,oversized=excluded.oversized,revision=excluded.revision,
       session_id=excluded.session_id,session_ids=excluded.session_ids,lineage=excluded.lineage,
       source=excluded.source,origin=excluded.origin,base_kind=excluded.base_kind,
-      evidence=excluded.evidence,verdict=excluded.verdict`)
+      evidence=excluded.evidence,verdict=excluded.verdict,tracking=excluded.tracking,opened_at=excluded.opened_at`)
     .run(entry.id, entry.path, entry.earlierVersion, entry.oldText, entry.newText, entry.updatedAt,
       entry.unseen === true ? 1 : 0, flags.missing ? 1 : 0, flags.diverged ? 1 : 0, flags.oversized ? 1 : 0,
       flags.revision, entry.sessionId, JSON.stringify(entry.sessionIds), entry.lineage ? JSON.stringify(entry.lineage) : null,
       entry.source ?? 'tool', entry.origin ?? 'agent', entry.baseKind ?? 'known',
-      entry.evidence ?? 'snapshot', entry.verdict ?? 'changed')
+      entry.evidence ?? 'snapshot', entry.verdict ?? 'changed', entry.tracking ?? 'open', entry.openedAt ?? 0)
   bumpVersion(cwd)
 }
 
@@ -319,6 +381,28 @@ export function dropEntry(cwd: string, id: string): void {
     if (db.isTransaction) db.exec('ROLLBACK')
     throw error
   }
+}
+
+/**
+ * @author ddj 2026年11月25号
+ * @description: 新窗口开窗时清掉旧窗口的块决定，避免旧块身份落进新差异。
+ * @param cwd 工作区
+ * @param id 条目身份
+ * @returns 无
+ */
+export function dropBlocks(cwd: string, id: string): void {
+  pendingDb(cwd).prepare('DELETE FROM pending_blocks WHERE entry_id=?').run(id)
+}
+
+/**
+ * @author ddj 2026年11月25号
+ * @description: 新窗口开窗时清掉旧窗口的撤销行：撤销不跨窗口，避免把已处理的历史再拉回来。
+ * @param cwd 工作区
+ * @param id 条目身份
+ * @returns 无
+ */
+export function dropHistory(cwd: string, id: string): void {
+  pendingDb(cwd).prepare('DELETE FROM pending_history WHERE entry_id=?').run(id)
 }
 
 /**
@@ -511,16 +595,6 @@ export interface HistoryRow extends HistoryRecord {
 
 /**
  * @author ddj 2026年10月29号
- * @description: 迁移前备份库文件路径，便于回退只读旧视图。
- * @param dbFile 工作区库文件
- * @returns 备份路径
- */
-export function backupPath(dbFile: string): string {
-  return dbFile + BACKUP_SUFFIX
-}
-
-/**
- * @author ddj 2026年10月29号
  * @description: 由数据库行还原条目。
  * @param row 数据库行
  * @returns 条目
@@ -537,6 +611,8 @@ function entryOfRow(row: Row): PendingEntry {
     baseKind: baseKindOfRow(row),
     evidence: evidenceOfRow(row),
     verdict: verdictOfRow(row),
+    tracking: trackingOfRow(row),
+    openedAt: Number(row.opened_at) || 0,
   }
   if (Number(row.unseen) === 1) entry.unseen = true
   if (lineage !== undefined) entry.lineage = lineage
@@ -605,6 +681,17 @@ function verdictOfRow(row: Row): PendingVerdict {
 }
 
 /**
+ * @private
+ * @author ddj 2026年11月25号
+ * @description: 读差异追踪窗口状态；旧库升级后该列有默认值，异常值按 `open` 处理。
+ * @param row 数据库行
+ * @returns 窗口状态
+ */
+function trackingOfRow(row: Row): 'open' | 'closed' {
+  return String(row.tracking ?? 'open') === 'closed' ? 'closed' : 'open'
+}
+
+/**
  * @author ddj 2026年10月29号
  * @description: 由数据库行还原标记。
  * @param row 数据库行
@@ -642,7 +729,7 @@ export function saveDecisions(cwd: string, records: KeepRecord[]): { id: string;
   const skipped: { id: string; reason: string }[] = []
   const advance = db.prepare(`UPDATE pending_entries SET path=?,earlier=?,old_text=?,new_text=?,updated_at=?,unseen=?,
     missing=?,diverged=?,oversized=?,revision=?,session_id=?,session_ids=?,lineage=?,source=?,origin=?,base_kind=?,
-    evidence=?,verdict=?
+    evidence=?,verdict=?,tracking=?,opened_at=?
     WHERE id=? AND revision=?`)
 
   db.exec('BEGIN IMMEDIATE')
@@ -655,7 +742,7 @@ export function saveDecisions(cwd: string, records: KeepRecord[]): { id: string;
         flags.revision, entry.sessionId, JSON.stringify(entry.sessionIds),
         entry.lineage ? JSON.stringify(entry.lineage) : null,
         entry.source ?? 'tool', entry.origin ?? 'agent', entry.baseKind ?? 'known',
-        entry.evidence ?? 'snapshot', entry.verdict ?? 'changed',
+        entry.evidence ?? 'snapshot', entry.verdict ?? 'changed', entry.tracking ?? 'open', entry.openedAt ?? 0,
         record.entryId, expected)
       // 读条目到落库之间被别的决定推进过：只放弃这一条
       if (changed.changes !== 1) {

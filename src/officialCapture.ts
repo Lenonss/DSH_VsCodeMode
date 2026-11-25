@@ -1,6 +1,6 @@
 /** Deferred official-event collection; no private snapshot access. @author ddj 2026年10月26号 */
 import { captureState, repairPaths, saveSnapshot } from './reviewDb.js'
-import type { OfficialDiff, OfficialSummary, ReviewSnapshot } from './shared/review.js'
+import type { ChangedFile, OfficialDiff, OfficialSummary, ReviewSnapshot } from './shared/review.js'
 import type { Ctx } from './store.js'
 import { loadBucket } from './store.js'
 import { log } from './log.js'
@@ -18,6 +18,8 @@ export interface CaptureDeps {
   identity(cwd: string, path: string): Promise<string>
   persist: typeof saveSnapshot
   state: typeof captureState
+  /** 是否只保留正在追踪窗口内的文件；缺省全部保留（测试与旧装配的兼容默认）。 */
+  tracked?(cwd: string, identity: string): boolean | Promise<boolean>
   report(message: string): void
   timeoutMs?: number
   retryMs?: number
@@ -67,20 +69,42 @@ export function createCollector(deps: CaptureDeps) {
     if (stopped) return
     deps.state(summary.cwd, { ...task, error: '' }, 'queued')
     try {
+      // 官方快照涵盖整个回合的工作区变化（含 Unity 自己的写盘）：只保留当前有追踪窗口的文件。
+      const kept = await keepTracked(summary)
+      if (stopped) return
+      // 一条都没命中：不落空快照，但把采集状态标完成，避免面板出现假缺口。
+      if (!kept.length && summary.files.length) { deps.state(summary.cwd, { ...task, error: '' }, 'complete'); return }
       const files = []
-      for (const [index, file] of summary.files.entries()) {
+      for (const item of kept) {
         if (stopped) return
         const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(deps.timeoutMs ?? 10000)])
-        const diff = await readDiff(source, task, index, signal)
-        if (!diff || diff.path !== file.path || diff.display !== file.display) throw new Error('官方文件差异缺失或身份不一致')
-        const identity = await deps.identity(summary.cwd, file.path)
-        files.push({ identity, diff: structuredClone(diff) })
+        const diff = await readDiff(source, task, item.index, signal)
+        if (!diff || diff.path !== item.file.path || diff.display !== item.file.display) throw new Error('官方文件差异缺失或身份不一致')
+        files.push({ identity: item.identity, diff: structuredClone(diff) })
       }
-      if (!stopped) deps.persist(summary.cwd, { ...task, sourceKind: 'official', capturedAt: new Date().toISOString(), summary, files })
+      if (!stopped) deps.persist(summary.cwd, { ...task, sourceKind: 'official', capturedAt: new Date().toISOString(), summary: filterSummary(summary, kept), files })
     } catch (error) {
       if (!stopped) deps.state(summary.cwd, { ...task, error: String(error) }, 'gap')
       throw error
     }
+  }
+
+  /**
+   * @private
+   * @author ddj 2026年11月25号
+   * @description: 按追踪窗口筛官方文件：只有当前开窗的文件才读取差异并落库。
+   * @param summary 官方摘要
+   * @returns 保留的文件及其下标与身份
+   */
+  async function keepTracked(summary: OfficialSummary): Promise<Array<{ index: number; file: ChangedFile; identity: string }>> {
+    const kept: Array<{ index: number; file: ChangedFile; identity: string }> = []
+    for (const [index, file] of summary.files.entries()) {
+      if (stopped) return kept
+      const identity = await deps.identity(summary.cwd, file.path)
+      if (deps.tracked && !(await deps.tracked(summary.cwd, identity))) continue
+      kept.push({ index, file, identity })
+    }
+    return kept
   }
 
   /** @private @author ddj 2026年10月26号 Starts at most two independent event reads, with each event's file reads serial. */
@@ -147,8 +171,33 @@ async function readDiff(source: SourceService, task: CaptureTask, index: number,
   })
 }
 
+/**
+ * @private
+ * @author ddj 2026年11月25号
+ * @description: 过滤后的官方摘要：只留被追踪窗口命中的文件，并重算总数与增删行数。
+ * 不重算 total 会让面板把过滤误报成「官方列表已截断」。
+ * @param summary 原始摘要
+ * @param kept 保留的文件（下标与文件）
+ * @returns 过滤后的摘要
+ */
+function filterSummary(
+  summary: OfficialSummary, kept: Array<{ index: number; file: ChangedFile }>,
+): OfficialSummary {
+  const files = kept.map((item) => item.file)
+  return {
+    ...summary,
+    files,
+    total: files.length,
+    added: files.reduce((sum, file) => sum + file.added, 0),
+    deleted: files.reduce((sum, file) => sum + file.deleted, 0),
+  }
+}
+
 /** @public @author ddj 2026年10月26号 @param ctx Host lifecycle owner; services remain optional for older Hosts. */
-export function installCapture(ctx: Ctx, onSnapshot?: (cwd: string, snapshot: ReviewSnapshot) => void): () => Promise<void> {
+export function installCapture(
+  ctx: Ctx, onSnapshot?: (cwd: string, snapshot: ReviewSnapshot) => void,
+  tracked?: (cwd: string, identity: string) => boolean,
+): () => Promise<void> {
   const collector = createCollector({
     source: () => ctx.get('workspaceChanges'),
     prepare: async (cwd) => { await loadBucket(ctx, cwd); await repairPaths(cwd, resolvePath) },
@@ -157,7 +206,7 @@ export function installCapture(ctx: Ctx, onSnapshot?: (cwd: string, snapshot: Re
       const saved = saveSnapshot(cwd, snapshot)
       onSnapshot?.(cwd, snapshot)
       return saved
-    }, state: captureState, report: (message) => log.warn(message),
+    }, state: captureState, tracked, report: (message) => log.warn(message),
   })
   // Subscribe first: seed reads must not create a live-event race window.
   ctx.on('session/event', collector.enqueue)

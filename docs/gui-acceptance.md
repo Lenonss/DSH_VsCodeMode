@@ -163,3 +163,36 @@ composer 草稿已清空；`src/search/ripgrep.ts`（flush 测试用）已 `git 
 
 **未覆盖**：真机鼠标手势（Shift 点击命中原生复选框、双击速度判定的浏览器差异）、窄窗（<620px）下工具带两个批量按钮的换行实测、暗色主题实测。已避开 `window.confirm` 之外的阻塞式交互，逻辑改动全部落在可单测的纯函数与组件回调上。
 
+
+### HTML 计划模式（组件级验收，真机待补）
+
+| 项 | 结果 | 证据 |
+| --- | --- | --- |
+| 模式投影折叠 | ✅ | `tests/htmlPlanMode.test.ts`：进入 / `off` / 官方 `/plan` 互斥 / 失败不提交 / `entered` 粘性 |
+| 两条系统提示 section | ✅ | 同文件：未进入为空；首次进入后 `html-plan:policy` 常驻；`html-plan:status` 按活跃切换；order 500.5 / 501.5 |
+| 退出工具与审批 | ✅ | 同文件：非活跃、无标题拒绝；Approved → 执行 `/html-plan off`；Keep planning 带回反馈；取消调用 `concludeTurn`；退出失败报错 |
+| 命令进入/离开 | ✅ | `tests/htmlPlanCommand.test.ts` 12/12：`off` 大小写、带附件拒绝、任务投递、失败回滚、附件降级 |
+| 兜底页渲染 | ✅ | `tests/htmlPlanAutoPage.test.ts` 9/9：转义、标题、列表、代码、表格、packed 外壳、脚本转义与体积上限 |
+| 作者页自动打包 | ✅ | `tests/htmlPlanPackRpc.test.ts` 4/4：真实 `pack.mjs` 端到端、作者页与 `assets/` 保留、越界/非 HTML/缺失拒绝、lint 失败带报告 |
+| 客户端捕获与计划签决策 | ✅ | `tests/planState.test.ts`：`exit_html_plan_mode` 带 `htmlPlanMode`；`tests/htmlPlanPage.test.ts`：备用路径与动作决策表 |
+| 类型 / 构建 | ✅ | `pnpm typecheck` 0 error；`pnpm build` 通过（host 含 zod、client 含 chip 与样式） |
+| 真机（chip / 计划签 / 模式恢复） | — | 需重载插件后验证：底部栏 chip 出现与点击退出、批准后 chip 消失、无作者页时的自动页、恢复会话后的模式与规则 |
+
+**未覆盖**：`conversation.input.left` 在旧版 DSH 的槽位兼容（缺失时 chip 不出现，命令仍可用）、真实模型在模式下的行为偏差、审批通过与 `commands.execute` 并发时序的极端情况。
+
+### v0.39.0 · 2026-11-25 · AI 追踪窗口差异模型
+
+| 项 | 结果 | 证据 |
+| --- | --- | --- |
+| 只跟随开窗路径 | ✅（单测） | `tests/externalCapture.test.ts`：未开窗路径的 Unity 写盘不产生记录；开窗路径折入并保留基线 |
+| 关窗后不复活 | ✅（单测） | 同文件与 `tests/pendingTracking.test.ts`：Keep 关窗后外部改动返回 false、条目不再变化 |
+| 重开换新基线 | ✅（单测） | `pendingTracking`：关窗后 AI 再写，基线取本次写前内容，旧撤销行与块决定被清 |
+| 窗口内外部改动并入 | ✅（单测） | `tests/externalWatch.test.ts`：真库端到端，连续 5 次外部写只折一条、取最新内容 |
+| 官方快照过滤 | ✅（单测） | `tests/officialCapture.test.ts`：未追踪文件不落库，总数与增删行数按保留文件重算 |
+| 旧记录清空 | ✅（单测） | `pendingTracking`：v6 形状库升级后补 `tracking/opened_at` 并清空待审/官方/活跃行，留重置标记 |
+| 覆盖集压住旧行 | ✅（单测） | `pendingTracking`：关窗后 `loadPage().coveredPaths` 仍含该路径；`diffSummary` 用它过滤官方概览 |
+| 类型 / 测试 / 构建 | ✅ | `tsc` 0 error；vitest 352 文件 / 4385 用例通过；`node --test` 9/9；build 六产物齐全 |
+| 真机（开窗→并入→Keep→再写） | ✅（Web 18:14–18:22） | `write` 改文件→开窗（基线 base）；`pwsh` 改同文件→折入（基线不变、内容 unity-1）；未开窗文件被 `pwsh` 连改两次→无记录；页面内 `edrv.review.decide` Keep→pending 归零；Keep 后 `pwsh` 再改→条目保持 closed；再 `write`→基线换成 unity-after-keep、opened_at 换新 |
+| 旧宿主行兼容 | ✅（单测） | `pendingTracking`：`opened_at=0` 的行不在列表、不接收外部改动；`pending_schema` 被写回旧值时不重复迁移 |
+
+**未覆盖**：桌面端仍是 0.38.0，两端同开同一工作区时旧端仍按旧逻辑显示/写行（新端已隐藏这些行）；面板按钮的鼠标路径未逐点点击，验收走的是同一组 RPC；脚本 / 代码生成器 / MCP 写盘不追踪是明确取舍。

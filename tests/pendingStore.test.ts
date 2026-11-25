@@ -7,6 +7,7 @@ import { join } from 'node:path'
 import { closeArchiveDbs, migrateActive } from '../src/archiveDb.js'
 import { archiveDbFile } from '../src/paths.js'
 import { saveSnapshot } from '../src/reviewDb.js'
+import { loadEntries } from '../src/pending/persist.js'
 import { pendingHandlers } from '../src/pendingRpc.js'
 import { applyDecide, keepAll, loadDetail, loadPage, recordWrite, removeEntry, undoDecide, writerFor } from '../src/pending/store.js'
 import { declareNote, clearNotes } from '../src/pending/notes.js'
@@ -79,8 +80,9 @@ describe('待审投影真实往返', () => {
     closeArchiveDbs()
 
     const page = loadPage(workspace, 's1')
+    // 逻辑行相等：没有净差异，窗口开完即关，面板不显示
     expect(page.pending).toBe(0)
-    expect(page.items[0]?.settled).toBe(true)
+    expect(page.items).toHaveLength(0)
     expect(loadDetail(workspace, file)?.diff.hunks).toEqual([])
     expect(await readFile(file, 'utf8')).toBe(currentText)
   })
@@ -173,7 +175,9 @@ describe('待审投影真实往返', () => {
     expect(outcome.ok).toBe(true)
     expect(fs.writeText).not.toHaveBeenCalled()
     expect(await readFile(file, 'utf8')).toBe('B')
-    expect(loadPage(workspace, 's1').items[0]?.settled).toBe(true)
+    // 基线追平内容：窗口关闭，面板不再显示，条目保留在库里
+    expect(loadPage(workspace, 's1').items).toHaveLength(0)
+    expect(loadDetail(workspace, item.id)?.item.tracking).toBe('closed')
   })
 
   it('Revert 写回基线并通过读回校验', async () => {
@@ -187,7 +191,8 @@ describe('待审投影真实往返', () => {
     })
     expect(outcome.ok).toBe(true)
     expect(await readFile(file, 'utf8')).toBe('A')
-    expect(loadPage(workspace, 's1').items[0]?.settled).toBe(true)
+    expect(loadPage(workspace, 's1').items).toHaveLength(0)
+    expect(loadDetail(workspace, item.id)?.item.tracking).toBe('closed')
   })
 
   it('新建文件 Revert 等于删除该文件', async () => {
@@ -226,9 +231,9 @@ describe('待审投影真实往返', () => {
     await applyDecide(realFs(), workspace, {
       sessionId: 's1', id: item.id, revision: item.revision, operationId: 'op-keep2', decision: 'accepted', scope: 'file',
     })
-    const settled = loadPage(workspace, 's1').items[0]!
-    expect(removeEntry(workspace, settled.id, settled.revision)).toBe(true)
-    expect(loadPage(workspace, 's1').items).toHaveLength(0)
+    const settled = loadEntries(workspace).find((entry) => entry.entry.id === item.id)!
+    expect(removeEntry(workspace, item.id, settled.flags.revision)).toBe(true)
+    expect(loadEntries(workspace)).toHaveLength(0)
   })
 
   it('面板投影：待审条目接管同路径，官方旧行让位且 id 带前缀', async () => {
@@ -283,23 +288,27 @@ describe('待审投影真实往返', () => {
     expect(detail!.item.added).toBe(4)
   })
 
-  it('创建来源而非查看者决定全量新增，Keep 后不复活空基线', async () => {
+  it('重开窗口以磁盘内容为基线，不借官方快照把整文件算新增', async () => {
     const file = join(workspace, 'source-created.ts')
     await writeFile(file, 'A\nB\nC')
     recordWrite(write(file, 'A\nB', 'A\nB\nC', 1))
+    // 基线来自工具写前内容：只算一行新增，不做整文件新增
+    expect(loadPage(workspace, 's1').items[0]?.added).toBe(1)
+    // 官方快照即使说这个文件由本会话创建，也不再改变窗口的比较基线
     saveSnapshot(workspace, { sourceKind: 'official', sessionId: 's1', turn: 1, seq: 1,
       capturedAt: '2026-11-04T00:00:00Z',
       summary: { cwd: workspace, turn: 1, total: 1, added: 3, deleted: 0,
         files: [{ path: file, display: file, added: 3, deleted: 0 }] },
       files: [{ identity: file, diff: { kind: 'text', path: file, display: file, before: false, after: true, coarse: false,
         hunks: [{ oldStart: 0, oldLines: 0, newStart: 1, newLines: 3, lines: ['+A', '+B', '+C'] }] } }] })
-    expect(loadPage(workspace, 's2').items[0]?.added).toBe(3)
+    expect(loadPage(workspace, 's2').items[0]?.added).toBe(1)
     expect(loadPage(workspace, 's2')).toEqual(loadPage(workspace, 's1'))
-    expect(loadDetail(workspace, file)?.item.added).toBe(3)
+    expect(loadDetail(workspace, file)?.item.added).toBe(1)
 
     const item = loadPage(workspace, 's2').items[0]!
     await applyDecide(realFs(), workspace, { sessionId: 's2', id: file, revision: item.revision,
       operationId: 'source-keep', decision: 'accepted', scope: 'file' })
+    expect(loadPage(workspace, 's2').items).toHaveLength(0)
     await writeFile(file, 'A\nB\nC\nD')
     recordWrite({ ...write(file, 'A\nB\nC', 'A\nB\nC\nD', 2), sessionId: 's2' })
     expect(loadPage(workspace, 's1').items[0]?.added).toBe(1)
@@ -417,7 +426,7 @@ describe('待审投影真实往返', () => {
   it('撤销「新建文件 Revert 删除」会把文件按快照重建回来', async () => {
     const file = join(workspace, 'undo-new-create.ts')
     await writeFile(file, 'X', 'utf8')
-    recordWrite(write(file, null, 'X', 0))
+    recordWrite(write(file, null, 'X', 1))
     const item = loadPage(workspace, 's1').items[0]!
     const fs = realFs()
     await applyDecide(fs, workspace, {
@@ -443,7 +452,8 @@ describe('待审投影真实往返', () => {
     const redo = await undoDecide(fs, workspace, { sessionId: 's1', direction: 'redo', operationId: 'op-dr' })
     expect(redo.ok).toBe(true)
     expect(await readFile(file, 'utf8')).toBe('A')
-    expect(loadPage(workspace, 's1').items[0]?.settled).toBe(true)
+    expect(loadPage(workspace, 's1').items).toHaveLength(0)
+    expect(loadDetail(workspace, item.id)?.item.tracking).toBe('closed')
   })
 
   it('方向不合法与空历史都被拒绝', async () => {

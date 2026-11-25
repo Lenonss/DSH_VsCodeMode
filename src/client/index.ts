@@ -46,6 +46,7 @@ import { detectOfficial, installOfficial, registerOfficialFileClaim, OFFICIAL_TA
 import { setNativeCsv, setNativeOpenHandler, resetNativeOpen } from './nativeOpenStore.js'
 import { hasOfficialHtmlPreview, installHtmlPreviewProbe, isHtmlPath } from './htmlPreview.js'
 import { installHtmlPlanActions } from './htmlPlan/planActions.js'
+import { installHtmlPlanModeChip } from './htmlPlan/HtmlPlanModeChip.js'
 import { setFeaturePrefs } from './featurePrefs.js'
 import { SideEditorTab } from './ui/SideEditorTab.js'
 import { OfficialSideTab } from './ui/OfficialSideTab.js'
@@ -333,6 +334,8 @@ export async function apply(ctx: any): Promise<void> {
   ctx.effect(() => installHtmlPreviewProbe(ctx, { schedule }), 'vscode-mode: html preview probe')
   // HTML 计划页动作桥：状态读取 / 官方审批作答 / /plan off / 回填输入框（全部可选服务）。
   ctx.effect(() => installHtmlPlanActions(ctx), 'vscode-mode: html plan actions')
+  // HTML 计划模式 chip：输入框工具行的 list 槽，模式活跃时出现，点击执行 /html-plan off。
+  ctx.effect(() => installHtmlPlanModeChip(ctx), 'vscode-mode: html plan mode chip')
   // 官方代码审阅扩展位（0.2.3+）：变更视图工具条与文件菜单加两条动作。
   // 服务/slot 缺失时零注册，不影响自有 diff 面板。
   ctx.effect(() => installOfficialReview(ctx, {

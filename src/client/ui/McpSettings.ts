@@ -374,13 +374,13 @@ function GeneralSettings({ registry, getShortcuts }) {
     React.createElement('section', { className: 'vsm-panel' },
       React.createElement('h3', { className: 'vsm-panel-title' }, '改动捕获'),
       React.createElement('div', { className: 'vsm-panel-body' },
-        React.createElement(SettingRow, { label: '实时捕获', description: 'agent 用 shell 或脚本（node -e、prettier、生成器）写文件时，改动也会进审查面板；关闭后只认 edit/write 等写工具。' },
+        React.createElement(SettingRow, { label: '实时跟随', description: '只跟随 AI 文件工具动过的文件：AI 一改就开窗，窗口内的保存与脚本改动都并进同一条差异；没被 AI 动过的文件不产生记录。' },
           React.createElement('input', {
             type: 'checkbox', checked: extWatchOn,
             disabled: loading || unavailable || notReady || busy || snapshot?.writable === false,
             onChange: (event) => saveToggle('externalWatch', event.target.checked, setExtWatchOn),
           })),
-        React.createElement(SettingRow, { label: '补扫对齐', description: '启动时与每 10 分钟用版本库比对一次，把漏采的改动补录进来；关闭后仍可手动补扫。' },
+        React.createElement(SettingRow, { label: '定期校准', description: '启动时与每 10 分钟把开窗文件与磁盘对齐一次，补齐漏掉的监听事件；关闭后仍可手动校准。' },
           React.createElement('input', {
             type: 'checkbox', checked: extScanOn,
             disabled: loading || unavailable || notReady || busy || snapshot?.writable === false,

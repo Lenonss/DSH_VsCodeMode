@@ -1,59 +1,58 @@
 ---
 name: dsh-vscodemode-html-plan
-description: 把实施计划写成一份单文件交互式 HTML 计划页（主张树：为什么 › 能做什么 › 怎么做 › 在哪；每条主张配一个图示；需要用户拍板的决策挂在它影响的主张上），并接入 DSH 计划模式的状态、审批与退出流程。
-whenToUse: 用户输入 /html-plan；或 plan 模式下要求给出可逐项作答的 HTML 计划/方案/设计稿/RFC；或计划里有 2~5 个必须用户拍板的岔口时。
+description: 把实施计划写成一份单文件交互式 HTML 计划页（主张树：为什么 › 能做什么 › 怎么做 › 在哪；每条主张配一个图示；需要用户拍板的决策挂在它影响的主张上），用于 DSH 的 HTML 计划模式（独立模式，规则由插件每请求注入，页面由插件打包或兜底渲染）。
+whenToUse: 用户输入 /html-plan；或处于 HTML 计划模式；或计划里有 2~5 个必须用户拍板的岔口、用户想要可逐项作答的 HTML 计划/方案/设计稿/RFC 时。
 ---
 
 # html-plan（DSH 版）
 
 本技能包含上游 anthropics/claude-plugins-community 的 html-plan 运行时与规则（MIT，作者 Thariq Shihipar），
-按 DSH 计划模式改写：页面在 dsh-vscode-mode 的计划页签中渲染，审批与退出仍走官方计划模式。
+按 DSH 的 HTML 计划模式改写：模式由 dsh-vscode-mode 提供（独立投影 + 系统提示规则 + 退出工具 + 底部栏 chip），
+页面在计划签里渲染；审批与退出走官方 `userQuestions` 的 `plan-review` 通道。
 
 ## 0. 快捷入口
 
-- 用户输入 `/html-plan <任务>`：宿主命令会进入计划模式，并把「用本技能产出 HTML 计划页」的指令作为用户消息发出。
-- 只输入 `/html-plan`：同样进入计划模式，但指令要求先问清要规划的任务。
-- 用户已 `/plan`：按本技能正常产出即可，插件在 `exit_plan_mode` 时渲染 HTML 计划页。
+- `/html-plan <任务>`：进入 **HTML 计划模式**，任务作为普通用户消息送进会话；规则由插件注入。
+- `/html-plan`：只进入模式；没有任务时先用一句话问清要规划什么。
+- `/html-plan off` 或批准计划：离开模式；底部栏 chip 与这里等价。
+- `/plan`：切回官方计划模式（两个模式互斥）。
 
 ## 1. 何时用
 
-- 当前处于 plan 模式（/plan），或用户明确要求「先出计划/方案/设计稿/RFC」。
+- 当前处于 HTML 计划模式，或用户明确要求「先出计划/方案/设计稿/RFC」。
 - 计划里存在必须用户拍板的岔口（2~5 个）：范围、取舍、默认值。
 
 ## 2. 产出约定（DSH 特有，必读）
 
-**先落盘，再声明。** 计划模式允许写 `plans/` 下的计划交付物（`plan.html`、`plan.packed.html`、`00-plan.md`），
-不需要用户退出计划模式。**绝不要**要求用户「点退出计划模式 / 点同意执行」才能生成页面。
+**先落盘，再提交。** 模式规则允许写 `plans/<slug>/plan.html`（本模式唯一允许的写操作），
+不需要用户退出模式。**绝不要**要求用户「点退出计划模式 / 点同意执行」才能生成页面。
 
-1. 位置：plans/<slug>/plan.html。slug 用 kebab-case，例如 plans/html-plan/plan.html。
-2. 页面引用（相对路径，运行时由第 3 步的脚本自动放到位）：
+1. 位置：plans/<slug>/plan.html（可选；不写也能交付，插件会用计划正文渲染兜底页）。
+2. 页面引用（相对路径；插件打包时会自动找到运行时）：
    <link rel="stylesheet" href="runtime/htmlplan.css">
    <script src="runtime/htmlplan.js" defer></script>
-3. 一条命令打包（推荐）：
-   `node <本技能目录>/runtime/plan.mjs <slug> --root <工作区绝对路径>`
-   它复制运行时 → 跑 pack.mjs → 成功后删除 runtime/ 与 plan.html，只留 plans/<slug>/plan.packed.html。
-   pack 报 error 时它会保留现场，按报告逐条修再跑；`--keep` 可保留中间文件。
-   手动等价步骤：把 runtime/htmlplan.css、htmlplan.js、pack.mjs 复制到 plans/<slug>/runtime/，
-   运行 `node plans/<slug>/runtime/pack.mjs plans/<slug>/plan.html --root <工作区>`，成功后删掉那两样。
-4. 提交前自检（必做）：`node <本技能目录>/runtime/plan.mjs <slug> --check` 打印 ✓ 才提交。
-   页面没生成成功**不要**写「HTML 计划页：」那一行——宁可只交付 Markdown 计划并说明失败原因，
-   也不要留下指向不存在文件的路径（界面会打开失败，用户拿不到任何东西）。
-5. 提交审批：调用 exit_plan_mode。plan 正文第一行必须是「# 计划：<标题>」，并且**必须包含一行**：
+3. **不需要你自己打包**：计划签打开时插件自动调用 `pack.mjs`，输出到系统临时文件再读回；
+   不删你的 `plan.html` 与 `assets/`。不要为页面跑 `plan.mjs` 或任何 node 命令。
+   只有在没有插件、要手动看文件时，才按旧流程跑
+   `node <本技能目录>/runtime/plan.mjs <slug> --root <工作区绝对路径>`。
+4. 提交（HTML 计划模式）：调用 **exit_html_plan_mode**；plan 正文第一行必须是「# 计划：<标题>」，
+   有作者页时再单独一行：
 
-   HTML 计划页：plans/<slug>/plan.packed.html
+   HTML 计划页：plans/<slug>/plan.html
 
-   插件据这一行在计划页签渲染 HTML；缺少该行则回落 Markdown 计划预览。
-6. 正文同时写 3~6 行摘要与决策清单：官方审批卡片只显示标题与两行纯文本摘要，
+   （指向未打包的 `.html` 也可以；插件会自动打包。页面缺失或打包失败时插件用正文渲染兜底页。）
+5. 提交（官方 `/plan` 模式）：调用 `exit_plan_mode`；有作者页同样加「HTML 计划页：…」一行，
+   插件会自动打包后渲染。
+6. 不要调用另一个模式的退出工具：HTML 计划模式里不要用 `exit_plan_mode`，普通计划模式里不要用 `exit_html_plan_mode`。
+7. 正文同时写 3~6 行摘要与决策清单：官方审批卡片只显示标题与两行纯文本摘要，
    正文是官方「查看全文」与历史卡片的内容来源。
-7. 顺序固定：写 plan.html → 打包 → `--check` 通过 → 才写那一行并调 exit_plan_mode。
-   顺序颠倒或漏打包，是本技能最常见的失败：界面只剩一句「文件不存在」。
-8. 用户在计划页签点「生成 HTML 计划页」时，你会收到一条同样的修复指令：照第 3、4 步做完再重提交。
-   不要回「计划模式不能写文件」——能写，写的是 `plans/` 下的计划交付物。
+8. 顺序：写 plan.html（可选）→ 调对应退出工具。计划签的「重新解析 / ⟳」只重新解析，不会再让 agent 写页。
+   页面确实生成失败时说清原因即可，不要为了页面退出模式。
 
 ### 2.1 附件（图片与文件）
 
 用户把图片/文件拖进对话输入框、连 `/html-plan <任务>` 一起发时，命令会先把它们复制到
-`plans/<slug>/assets/`，并把固定 slug 与文件清单写进给你的指令：
+`plans/<slug>/assets/`，并把固定 slug 与文件清单写进送给你的任务消息：
 
 - slug 已由命令定好：页面写到 `plans/<slug>/plan.html`，不要另起目录。
 - 图片先用 `read_image` 看清内容再写主张；文档、日志用 `read` 读原文。
@@ -66,12 +65,12 @@ whenToUse: 用户输入 /html-plan；或 plan 模式下要求给出可逐项作�
   </doc-attach>
   ```
 
-- `pack.mjs` 把每个 `doc-file` 内联成 data URI，并补 `data-mime` / `data-bytes`；
+- 插件自动打包时把每个 `doc-file` 内联成 data URI，并补 `data-mime` / `data-bytes`；
   图片出缩略图（点开看原图），文件出卡片（带下载）。单文件 >4 MB 不内联，
   卡片显示「未内联」；全页附件 >12 MB 会警告——大文件先裁小或改成文字引用。
-- `plan.mjs --check` 会拒绝仍有未内联附件的页面；打包成功后 `plans/<slug>/assets/` 默认删除。
-  要再打包一次（改页、重跑）就先给 `plan.mjs` 加 `--keep-assets` 保留原图。
-- 页面只引用工作区里的文件：pack 只读 `--root` 与页面目录，围栏与密钥过滤对附件同样生效。
+- 自动打包**不会删除** `plans/<slug>/assets/`；旧的手动 `plan.mjs` 流程打包成功后会删除该目录。
+- 页面只引用工作区里的文件：打包时只读工作区与页面目录，围栏与密钥过滤对附件同样生效。
+
 
 ## 3. 主张树（沿用上游）
 
@@ -164,18 +163,21 @@ HTML 骨架（可复制后改写）：
 
 ## 6. DSH 计划页签与状态
 
-- 计划页签显示状态：计划中 / 待审批 / 已批准（已退出计划模式）/ 继续规划 / 已退出计划模式。
--「同意执行」「继续规划」等价于官方审批卡片的同名操作，走官方问答通道；
-  「退出计划模式」等价于 composer 计划徽标的 /plan off；官方审批卡片仍是权威通道。
+- HTML 计划模式下，计划页签显示：HTML 计划模式中 / 待审批 / 已批准（已退出模式）/ 继续规划 / 已退出模式；
+  页面来源徽标会标出「作者页 / 已打包 / 自动页」。
+- 「同意执行」「继续规划」等价于官方审批卡片的同名操作，走官方问答通道；
+  「退出计划模式」在 HTML 计划模式下等价于 `/html-plan off`，在普通计划模式下等价于 `/plan off`；
+  输入框底部工具行的「HTML 计划模式」chip 也执行 `/html-plan off`。官方审批卡片仍是权威通道。
 - 任一官方客户端服务缺失时按钮降级为提示，不会伪造批准。
 
 ## 7. 委派写页（可选）
 
-- 默认自己写。满足任一条件时，先按 Agent 协作规则征求同意再委派：预计页 >12 KB、主张/图示 ≥4、上下文紧张。
-- 用户写 `/html-plan --delegate` 视为本任务已授权；`--no-delegate` 明确不委派。
+- 默认自己写。HTML 计划模式不再提供 `--delegate` 开关；只有用户明确要求、且页规模大（>12 KB）或主张 ≥4 时，
+  才按 Agent 协作规则征求同意后委派。
 - 用 subagent_fork（cwd = 工作区），父级先定稿主张树，再交固定摘要（模板见 references/subagent-brief.md）。
-- 子级只写页并 pack，返回 packed 路径、lint 结果、主张/决策计数；父级只验 lint、计数与三处抽查，不读全文。
-- 子级失败（不能写文件 / 缺 pack / lint 错）时父级自己写，不中断计划。
+- 子级只写 `plans/<slug>/plan.html`，不要跑打包命令：插件打开计划签时会自动打包。
+- 子级返回页路径与主张/决策计数；父级只验计数与三处抽查，不读全文。
+- 子级失败（不能写文件 / 结构错误）时父级自己写；页面最终写不出来也不影响交付——插件会用计划正文渲染兜底页。
 
 ## 8. 上游资产与许可
 

@@ -1,66 +1,60 @@
-/** 外部改动采集判定链：来源、归属、去重、忽略与预算。 @author ddj 2026年11月24号 */
+/** 差异窗口跟随器：只跟随开窗路径、只折内容、校准与预算。 @author ddj 2026年11月25号 */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { disposeIndex } from '../src/treeIndex.js'
 import type { ExternalSettings } from '../src/pending/externalCapture.js'
-import { isIgnoredPath, installExternalCapture, ALIGN_AFTER_VCS_MS, BURST_NEW_LIMIT, MAX_BATCH } from '../src/pending/externalCapture.js'
+import { isIgnoredPath, installExternalCapture, MAX_BATCH, SYNC_INTERVAL_MS } from '../src/pending/externalCapture.js'
 import { windows } from '../src/pending/provenance.js'
 import type { PendingWrite } from '../src/pending/capture.js'
-import { pendingGaps } from '../src/pending/capture.js'
 import type { StoredEntry } from '../src/pending/persist.js'
 import { entryFromNew } from '../src/pending/kernel.js'
 import { capabilityOf } from '../src/pending/decide.js'
 import { pathKeyOf } from '../src/pending/provenance.js'
-import type { VcsStatus } from '../src/pending/vcs.js'
 import { join } from 'node:path'
 
 const CWD = join(process.cwd(), 'external-capture-fixture')
-const enabled: ExternalSettings = { watch: true, scan: false }
 
 afterEach(() => {
   windows.dispose()
   disposeIndex(CWD)
+  vi.useRealTimers()
 })
 
 /** 造一条已落库条目。 */
 function storedOf(path: string, newText: string, extra?: Partial<StoredEntry['entry']>): StoredEntry {
   const entry = entryFromNew({
     id: path, path, sessionId: 's1', earlierVersion: 'file', oldText: 'OLD', newText, updatedAt: 1,
-    source: 'write', origin: 'agent', baseKind: 'known',
+    source: 'write', origin: 'agent', baseKind: 'known', tracking: 'open', openedAt: 1,
   })
   Object.assign(entry, extra ?? {})
   return { entry, flags: { missing: false, diverged: false, oversized: false, revision: 1 } }
 }
 
 /**
- * @description: 一次采集运行的夹具：注入读盘、条目表、版本库状态与 mtime，记录全部落库写入。
- * @param files 磁盘内容表（绝对路径 → 内容；缺省视为不存在）
- * @param entries 已知条目
- * @param status 版本库状态（null = 拿不到状态）
- * @param mtimes mtime 表（绝对路径 → 毫秒；缺省视为读不到）
- * @param latest 单条最新条目（缺省回落到 entries 快照）
- * @returns 采集器、写入记录与改动磁盘的入口
+ * @description: 一次采集运行的夹具：注入读盘、条目表与折叠入口，记录全部折入。
+ * @param files 磁盘内容表（绝对路径 → 内容；null 表示文件不存在）
+ * @param entries 已知条目（缺省没有条目 = 所有路径都未开窗）
+ * @param settings 跟随开关
+ * @param readOverride 覆盖读盘（模拟读失败）
+ * @returns 跟随器、折入记录与改动磁盘的入口
  */
 function harness(
-  files: Record<string, string | null>, entries: StoredEntry[] = [], status: VcsStatus | null = null,
-  mtimes: Record<string, number> = {}, latest?: (absolute: string) => StoredEntry | undefined,
+  files: Record<string, string | null>, entries: StoredEntry[] = [],
+  settings: ExternalSettings = { watch: true, scan: false },
+  readOverride?: (absolute: string) => Promise<string | null>,
 ) {
   const writes: PendingWrite[] = []
   const disk = new Map(Object.entries(files))
   const capture = installExternalCapture({
     ctx: { get: () => undefined } as never,
-    settings: () => enabled,
-    record: (write) => writes.push(write),
+    settings: () => settings,
+    fold: (write) => { writes.push(write); return true },
     read: async (_cwd, absolute) => {
-      if (!disk.has(absolute)) throw Object.assign(new Error('missing'), { code: 'ENOENT' })
-      const value = disk.get(absolute)
-      return value === undefined ? null : value
+      if (readOverride) return readOverride(absolute)
+      if (!disk.has(absolute)) return null
+      return disk.get(absolute) ?? null
     },
-    entries: () => new Map(entries.map((stored) => [pathKeyOf(stored.entry.id), stored])),
-    status: async () => status,
-    mtime: (_cwd, absolute) => mtimes[absolute],
-    ...latest ? { latest: (_cwd: string, absolute: string) => latest(absolute) } : {},
+    entries: () => entries,
   })
-  // 生产里 startedAt 由 ensure() 里的 startWatch 赋值；夹具走同一条路，mtime 证据才有参照点
   capture.ensure(CWD, 's1')
   return {
     capture,
@@ -68,11 +62,6 @@ function harness(
     /** 改磁盘内容（null = 删除）。 */
     put(path: string, content: string | null): void { disk.set(path, content) },
   }
-}
-
-/** 造一个「一条改动」的版本库状态。 */
-function statusOf(entries: Array<[string, 'modified' | 'added' | 'deleted']>): VcsStatus {
-  return { kind: 'git', root: CWD, entries: new Map(entries.map(([path, status]) => [pathKeyOf(path), { path, status }])) }
 }
 
 describe('撤销白名单（能力位）', () => {
@@ -84,16 +73,11 @@ describe('撤销白名单（能力位）', () => {
     expect(capabilityOf(entry, flags).confirmRevert).toBeUndefined()
   })
 
-  it('外部来源：可撤销但要求确认，并给出可读原因', () => {
-    const entry = storedOf('/w/a.txt', 'NEW', { origin: 'external', source: 'watch', baseKind: 'known' }).entry
+  it('窗口内的编辑器保存：可撤销但要求确认，并给出可读原因', () => {
+    const entry = storedOf('/w/a.txt', 'NEW', { origin: 'editor', source: 'watch', baseKind: 'known' }).entry
     const capability = capabilityOf(entry, flags)
     expect(capability).toMatchObject({ revert: true, confirmRevert: true })
-    expect(capability.reason).toContain('watch')
-  })
-
-  it('版本库基线：同样要求确认', () => {
-    const entry = storedOf('/w/a.txt', 'NEW', { origin: 'external', baseKind: 'vcs' }).entry
-    expect(capabilityOf(entry, flags)).toMatchObject({ revert: true, confirmRevert: true })
+    expect(capability.reason).toContain('编辑器')
   })
 
   it('基线未知：禁用撤销并说明原因，绝不冒充可回退', () => {
@@ -101,73 +85,6 @@ describe('撤销白名单（能力位）', () => {
     const capability = capabilityOf(entry, flags)
     expect(capability.revert).toBe(false)
     expect(capability.reason).toContain('未捕获修改前内容')
-  })
-})
-
-describe('补扫触发点', () => {
-  it('版本库命令后合并成一次延迟补扫', async () => {
-    vi.useFakeTimers()
-    const runs: string[] = []
-    const capture = installExternalCapture({
-      ctx: { get: () => undefined } as never,
-      settings: () => ({ watch: true, scan: true }),
-      record: () => {},
-      read: async () => null,
-      entries: () => new Map(),
-      status: async () => null,
-      align: async (cwd) => { runs.push(cwd) },
-    })
-    capture.ensure(CWD, 's1')
-    await vi.advanceTimersByTimeAsync(0) // 启动对齐跑一次
-    expect(runs).toHaveLength(1)
-    // 版本库写命令连发三次（提交/更新/还原）：只应合并出一次补扫
-    capture.requestAlign(CWD, ALIGN_AFTER_VCS_MS)
-    capture.requestAlign(CWD, ALIGN_AFTER_VCS_MS)
-    capture.requestAlign(CWD, ALIGN_AFTER_VCS_MS)
-    expect(runs).toHaveLength(1)
-    await vi.advanceTimersByTimeAsync(ALIGN_AFTER_VCS_MS + 10)
-    expect(runs).toHaveLength(2)
-    capture.dispose()
-    vi.useRealTimers()
-  })
-
-  it('补扫开关关闭时既不自动跑也不响应命令', async () => {
-    vi.useFakeTimers()
-    const runs: string[] = []
-    const capture = installExternalCapture({
-      ctx: { get: () => undefined } as never,
-      settings: () => ({ watch: true, scan: false }),
-      record: () => {},
-      read: async () => null,
-      entries: () => new Map(),
-      status: async () => null,
-      align: async (cwd) => { runs.push(cwd) },
-    })
-    capture.ensure(CWD, 's1')
-    capture.requestAlign(CWD, 0)
-    await vi.advanceTimersByTimeAsync(5000)
-    expect(runs).toHaveLength(0)
-    capture.dispose()
-    vi.useRealTimers()
-  })
-
-  it('未开始监听的工作区不会被命令触发补扫', async () => {
-    vi.useFakeTimers()
-    const runs: string[] = []
-    const capture = installExternalCapture({
-      ctx: { get: () => undefined } as never,
-      settings: () => ({ watch: true, scan: true }),
-      record: () => {},
-      read: async () => null,
-      entries: () => new Map(),
-      status: async () => null,
-      align: async (cwd) => { runs.push(cwd) },
-    })
-    capture.requestAlign(join(process.cwd(), 'never-ensured'), 0)
-    await vi.advanceTimersByTimeAsync(100)
-    expect(runs).toHaveLength(0)
-    capture.dispose()
-    vi.useRealTimers()
   })
 })
 
@@ -190,213 +107,73 @@ describe('忽略清单', () => {
   })
 })
 
-describe('判定链', () => {
-  it('内容与已知条目相同则不产生记录', async () => {
-    const file = join(CWD, 'a.txt')
-    const { capture, writes } = harness({ [file]: 'SAME' }, [storedOf(file, 'SAME')], statusOf([]))
+describe('只跟随开窗路径', () => {
+  it('没有窗口的路径：Unity 重写也不产生任何记录', async () => {
+    const file = join(CWD, 'index.json')
+    const { capture, writes } = harness({ [file]: 'UNITY CONTENT' }, [])
     capture.enqueue(CWD, file)
     await capture.flush()
     expect(writes).toHaveLength(0)
   })
 
-  it('批次快照过期时不把工具写入再记成版本库同步', async () => {
+  it('开窗中的路径：改动折进同一条，基线取窗口里的旧内容', async () => {
     const file = join(CWD, 'a.txt')
-    // 本批快照还停在 OLD，工具刚把内容写成 NEW 并已落库：最新条目能对上，就不再记一次
-    const fresh = storedOf(file, 'NEW', { source: 'edit' })
-    const { capture, writes } = harness({ [file]: 'NEW' }, [storedOf(file, 'OLD')], statusOf([]), {}, () => fresh)
+    const { capture, writes } = harness({ [file]: 'NEW' }, [storedOf(file, 'OLD')])
+    capture.enqueue(CWD, file)
+    await capture.flush()
+    expect(writes).toHaveLength(1)
+    expect(writes[0]).toMatchObject({ path: file, before: 'OLD', after: 'NEW', tool: 'watch', origin: 'external' })
+  })
+
+  it('已关窗的路径：之后再改也不产生记录', async () => {
+    const file = join(CWD, 'closed.txt')
+    const { capture, writes } = harness({ [file]: 'NEW' }, [storedOf(file, 'OLD', { tracking: 'closed' })])
     capture.enqueue(CWD, file)
     await capture.flush()
     expect(writes).toHaveLength(0)
   })
 
-  it('快照过期但最新条目仍对不上时，照旧记成版本库同步', async () => {
-    const file = join(CWD, 'a.txt')
-    const middle = storedOf(file, 'MID')
-    const { capture, writes } = harness({ [file]: 'NEW' }, [storedOf(file, 'OLD')], statusOf([]), {}, () => middle)
+  it('内容与条目一致时不落库', async () => {
+    const file = join(CWD, 'same.txt')
+    const { capture, writes } = harness({ [file]: 'SAME' }, [storedOf(file, 'SAME')])
+    capture.enqueue(CWD, file)
+    await capture.flush()
+    expect(writes).toHaveLength(0)
+  })
+
+  it('编辑器保存窗口内折入并标成编辑器来源', async () => {
+    const file = join(CWD, 'editor.txt')
+    const { capture, writes } = harness({ [file]: 'NEW' }, [storedOf(file, 'OLD')])
+    windows.markEditor(pathKeyOf(file))
     capture.enqueue(CWD, file)
     await capture.flush()
     expect(writes).toHaveLength(1)
-    expect(writes[0]).toMatchObject({ before: 'MID', after: 'NEW', tool: 'vcs', origin: 'vcs' })
-  })
-
-  it('没有 agent 窗口时归属外部，并带上真实修改前内容', async () => {
-    const file = join(CWD, 'a.txt')
-    const { capture, writes } = harness({ [file]: 'NEW' }, [storedOf(file, 'OLD')], statusOf([[file, 'modified']]))
-    capture.enqueue(CWD, file)
-    await capture.flush()
-    expect(writes).toHaveLength(1)
-    expect(writes[0]).toMatchObject({ before: 'OLD', after: 'NEW', tool: 'watch', origin: 'external', baseKind: 'known' })
-  })
-
-  it('工具调用窗口内归属 agent', async () => {
-    const file = join(CWD, 'a.txt')
-    const { capture, writes } = harness({ [file]: 'NEW' }, [storedOf(file, 'OLD')], statusOf([[file, 'modified']]))
-    windows.enterTool()
-    capture.enqueue(CWD, file)
-    await capture.flush()
-    expect(writes[0]).toMatchObject({ origin: 'agent', tool: 'watch' })
+    expect(writes[0]).toMatchObject({ origin: 'editor', after: 'NEW' })
   })
 
   it('插件自写窗口内的事件直接跳过', async () => {
-    const file = join(CWD, 'a.txt')
-    const { capture, writes } = harness({ [file]: 'NEW' }, [storedOf(file, 'OLD')], statusOf([[file, 'modified']]))
+    const file = join(CWD, 'self.txt')
+    const { capture, writes } = harness({ [file]: 'NEW' }, [storedOf(file, 'OLD')])
     windows.markSelf(pathKeyOf(file))
     capture.enqueue(CWD, file)
     await capture.flush()
     expect(writes).toHaveLength(0)
   })
 
-  it('版本库说干净的路径不建新记录；已有条目折叠成版本库同步', async () => {
-    const fresh = join(CWD, 'fresh.txt')
-    const tracked = join(CWD, 'tracked.txt')
-    const empty = harness({ [fresh]: 'X', [tracked]: 'Y' }, [storedOf(tracked, 'OLD')], statusOf([]))
-    empty.capture.enqueue(CWD, fresh)
-    empty.capture.enqueue(CWD, tracked)
-    await empty.capture.flush()
-    expect(empty.writes).toHaveLength(1)
-    expect(empty.writes[0]).toMatchObject({ path: tracked, tool: 'vcs', origin: 'vcs' })
-  })
-
-  it('编辑器保存窗口内：没有条目就不建行，有条目只推进基线', async () => {
-    const fresh = join(CWD, 'fresh.txt')
-    const known = join(CWD, 'known.txt')
-    const { capture, writes } = harness({ [fresh]: 'X', [known]: 'Y' }, [storedOf(known, 'OLD')], statusOf([]))
-    windows.markEditor(pathKeyOf(fresh))
-    windows.markEditor(pathKeyOf(known))
-    capture.enqueue(CWD, fresh)
-    capture.enqueue(CWD, known)
-    await capture.flush()
-    expect(writes).toHaveLength(1)
-    expect(writes[0]).toMatchObject({ path: known, origin: 'editor', after: 'Y' })
-  })
-})
-
-describe('修改前内容的四级来源', () => {
-  it('首次观察到的内容成为后续改动的基线', async () => {
-    const file = join(CWD, 'a.txt')
-    // 刚被写过的文件：没有版本库状态也能建档，只是基线只能标 unknown
-    const { capture, writes, put } = harness({ [file]: 'FIRST' }, [], null, { [file]: Date.now() })
+  it('文件被删：折成"内容为空 + 缺失"', async () => {
+    const file = join(CWD, 'gone.txt')
+    const { capture, writes } = harness({ [file]: null }, [storedOf(file, 'OLD')])
     capture.enqueue(CWD, file)
     await capture.flush()
     expect(writes).toHaveLength(1)
-    expect(writes[0]).toMatchObject({ before: null, after: 'FIRST', baseKind: 'unknown' })
-    // 之后再改就用首次观察到的内容当真实修改前内容
-    put(file, 'SECOND')
-    capture.enqueue(CWD, file)
-    await capture.flush()
-    expect(writes).toHaveLength(2)
-    expect(writes[1]).toMatchObject({ before: 'FIRST', after: 'SECOND', baseKind: 'known', origin: 'external' })
-  })
-
-  it('版本库说新增时基线是"不存在"', async () => {
-    const file = join(CWD, 'new.cs')
-    const { capture, writes } = harness({ [file]: 'CONTENT' }, [], statusOf([[file, 'added']]))
-    capture.enqueue(CWD, file)
-    await capture.flush()
-    expect(writes[0]).toMatchObject({ before: null, after: 'CONTENT', baseKind: 'absent' })
-  })
-
-  it('拿不到任何基线时标 unknown，交给能力位禁用撤销', async () => {
-    const file = join(CWD, 'a.txt')
-    const { capture, writes } = harness({ [file]: 'NEW' }, [], statusOf([[file, 'modified']]))
-    capture.enqueue(CWD, file)
-    await capture.flush()
-    expect(writes[0]).toMatchObject({ before: null, baseKind: 'unknown', origin: 'external' })
-  })
-})
-
-describe('首次见路径的建档证据（幽灵记录闸门）', () => {
-  it('拿不到版本库状态且文件没被写过：不建档，只记一条缺口', async () => {
-    const file = join(CWD, 'old.txt')
-    const { capture, writes } = harness({ [file]: 'UNTOUCHED' }, [], null, { [file]: Date.now() - 3600_000 })
-    capture.enqueue(CWD, file)
-    capture.enqueue(CWD, file)
-    await capture.flush()
-    expect(writes).toHaveLength(0)
-    const gaps = pendingGaps(CWD).filter((line) => line.includes('old.txt'))
-    expect(gaps).toHaveLength(1)
-    expect(gaps[0]).toContain('未建档')
-  })
-
-  it('拿不到版本库状态但文件刚被写过：仍然建档，基线标 unknown', async () => {
-    const file = join(CWD, 'just-written.txt')
-    const { capture, writes } = harness({ [file]: 'NEW' }, [], null, { [file]: Date.now() })
-    capture.enqueue(CWD, file)
-    await capture.flush()
-    expect(writes).toHaveLength(1)
-    expect(writes[0]).toMatchObject({ before: null, after: 'NEW', baseKind: 'unknown' })
-  })
-
-  it('本会话观察过的路径再变化：mtime 旧也照常记录', async () => {
-    const file = join(CWD, 'seen.txt')
-    const { capture, writes, put } = harness({ [file]: 'V1' }, [], null, { [file]: Date.now() - 3600_000 })
-    // 第一次被闸门挡下，但内容进了本会话的观察快照
-    capture.enqueue(CWD, file)
-    await capture.flush()
-    expect(writes).toHaveLength(0)
-    put(file, 'V2')
-    capture.enqueue(CWD, file)
-    await capture.flush()
-    expect(writes).toHaveLength(1)
-    expect(writes[0]).toMatchObject({ before: 'V1', after: 'V2' })
-  })
-
-  it('版本库说有改动时不受 mtime 闸门影响', async () => {
-    const file = join(CWD, 'vcs-modified.txt')
-    const { capture, writes } = harness({ [file]: 'NEW' }, [], statusOf([[file, 'modified']]), { [file]: Date.now() - 3600_000 })
-    capture.enqueue(CWD, file)
-    await capture.flush()
-    expect(writes).toHaveLength(1)
-    expect(writes[0]).toMatchObject({ after: 'NEW', baseKind: 'unknown' })
-  })
-})
-
-describe('整文件新增熔断', () => {
-  it('短时间超过上限后停止新建，并留下一条缺口', async () => {
-    const files: Record<string, string | null> = {}
-    const mtimes: Record<string, number> = {}
-    const paths: string[] = []
-    for (let index = 0; index < BURST_NEW_LIMIT + 5; index++) {
-      const path = join(CWD, 'burst', `f${index}.txt`)
-      files[path] = 'NEW'
-      mtimes[path] = Date.now()
-      paths.push(path)
-    }
-    const { capture, writes } = harness(files, [], null, mtimes)
-    for (const path of paths) capture.enqueue(CWD, path)
-    for (let round = 0; round < 10; round++) await capture.flush()
-    expect(writes).toHaveLength(BURST_NEW_LIMIT)
-    expect(pendingGaps(CWD).filter((line) => line.includes('暂停')).length).toBe(1)
-  })
-
-  it('熔断静默期内，已有条目的更新照常记录', async () => {
-    const existing = join(CWD, 'burst-keep', 'keep.txt')
-    const files: Record<string, string | null> = { [existing]: 'OLD' }
-    const mtimes: Record<string, number> = { [existing]: Date.now() }
-    const burst: string[] = []
-    for (let index = 0; index < BURST_NEW_LIMIT + 1; index++) {
-      const path = join(CWD, 'burst-more', `f${index}.txt`)
-      files[path] = 'NEW'
-      mtimes[path] = Date.now()
-      burst.push(path)
-    }
-    const { capture, writes, put } = harness(files, [storedOf(existing, 'OLD')], null, mtimes)
-    for (const path of burst) capture.enqueue(CWD, path)
-    for (let round = 0; round < 10; round++) await capture.flush()
-    const afterBurst = writes.length
-    // 熔断后再改已有条目：不走「整文件新增」通道，必须照常落库
-    put(existing, 'UPDATED')
-    capture.enqueue(CWD, existing)
-    await capture.flush()
-    expect(writes.length).toBe(afterBurst + 1)
-    expect(writes[writes.length - 1]).toMatchObject({ path: existing, before: 'OLD', after: 'UPDATED' })
+    expect(writes[0]).toMatchObject({ before: 'OLD', after: null })
   })
 })
 
 describe('去重、顺序与预算', () => {
-  it('同一文件连续 5 次事件只处理一次（同批折叠）', async () => {
+  it('同一文件连续 5 次事件只折一次（同批折叠，取最新内容）', async () => {
     const file = join(CWD, 'a.txt')
-    const { capture, writes, put } = harness({ [file]: 'V1' }, [storedOf(file, 'OLD')], statusOf([[file, 'modified']]))
+    const { capture, writes, put } = harness({ [file]: 'V1' }, [storedOf(file, 'OLD')])
     for (let index = 2; index <= 5; index++) {
       put(file, 'V' + index)
       capture.enqueue(CWD, file)
@@ -413,19 +190,23 @@ describe('去重、顺序与预算', () => {
       const path = join(CWD, `f${index}.txt`)
       files[path] = 'NEW'
       entries.push(storedOf(path, 'OLD'))
-      windows.markSelf(pathKeyOf(path))
     }
-    const { capture, writes } = harness(files, entries, null)
-    // 自写标记会让这些事件全部跳过；这里只验证批量上限本身不越界
+    const { capture, writes } = harness(files, entries)
     for (const path of Object.keys(files)) capture.enqueue(CWD, path)
     await capture.flush()
-    expect(writes).toHaveLength(0)
+    expect(writes).toHaveLength(MAX_BATCH)
+    await capture.flush()
+    expect(writes).toHaveLength(MAX_BATCH + 5)
   })
 
   it('读盘失败只记缺口，不影响同批其它文件', async () => {
     const bad = join(CWD, 'bad.txt')
     const good = join(CWD, 'good.txt')
-    const { capture, writes } = harness({ [good]: 'NEW' }, [storedOf(good, 'OLD'), storedOf(bad, 'OLD')], statusOf([]))
+    const { capture, writes } = harness({ [good]: 'NEW' }, [storedOf(good, 'OLD'), storedOf(bad, 'OLD')], { watch: true, scan: false },
+      async (absolute) => {
+        if (absolute === bad) throw new Error('EACCES')
+        return 'NEW'
+      })
     capture.enqueue(CWD, bad)
     capture.enqueue(CWD, good)
     await capture.flush()
@@ -434,17 +215,55 @@ describe('去重、顺序与预算', () => {
 
   it('监听开关关闭时不落库', async () => {
     const file = join(CWD, 'a.txt')
-    const writes: PendingWrite[] = []
-    const capture = installExternalCapture({
-      ctx: { get: () => undefined } as never,
-      settings: () => ({ watch: false, scan: false }),
-      record: (write) => writes.push(write),
-      read: async () => 'NEW', entries: () => new Map(), status: async () => null,
-    })
-    capture.ensure(CWD, 's1')
+    const { capture, writes } = harness({ [file]: 'NEW' }, [storedOf(file, 'OLD')], { watch: false, scan: false })
     capture.enqueue(CWD, file)
     await capture.flush()
     expect(writes).toHaveLength(0)
+  })
+})
+
+describe('校准', () => {
+  it('启动校准把窗口内漏掉的事件从磁盘补进来（不依赖 watch）', async () => {
+    vi.useFakeTimers()
+    const file = join(CWD, 'missed.txt')
+    const { capture, writes } = harness({ [file]: 'NEW' }, [storedOf(file, 'OLD')], { watch: false, scan: true })
+    await vi.advanceTimersByTimeAsync(0)
+    await capture.flush()
+    expect(writes).toHaveLength(1)
+    expect(writes[0]).toMatchObject({ path: file, after: 'NEW' })
+    capture.dispose()
+  })
+
+  it('扫描开关关闭时不会自动校准（手动按钮仍可用）', async () => {
+    vi.useFakeTimers()
+    const file = join(CWD, 'ignored.txt')
+    const { capture, writes } = harness({ [file]: 'NEW' }, [storedOf(file, 'OLD')], { watch: true, scan: false })
+    await vi.advanceTimersByTimeAsync(SYNC_INTERVAL_MS + 10)
+    await capture.flush()
+    expect(writes).toHaveLength(0)
+    capture.dispose()
+  })
+
+  it('手动校准不受扫描开关限制，且只对齐开窗文件', async () => {
+    const open = join(CWD, 'open.txt')
+    const closed = join(CWD, 'closed.txt')
+    const { capture, writes } = harness(
+      { [open]: 'NEW', [closed]: 'NEW' },
+      [storedOf(open, 'OLD'), storedOf(closed, 'OLD', { tracking: 'closed' })],
+      { watch: true, scan: false },
+    )
+    const outcome = await capture.sync(CWD)
+    expect(writes.map((write) => write.path)).toEqual([open])
+    expect(outcome).toMatchObject({ checked: 1, folded: 1 })
+    capture.dispose()
+  })
+
+  it('校准返回检查与折入条数', async () => {
+    const file = join(CWD, 'report.txt')
+    const { capture } = harness({ [file]: 'NEW' }, [storedOf(file, 'OLD')])
+    const outcome = await capture.sync(CWD)
+    expect(outcome).toMatchObject({ checked: 1, folded: 1 })
+    expect(outcome.gaps).toEqual([])
     capture.dispose()
   })
 })

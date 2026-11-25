@@ -78,4 +78,29 @@ describe('deferred official capture', () => {
     enqueue(collector); await collector.flush(); empty.total = 99
     expect(facts[0].files).toEqual([]); expect(facts[0].summary.total).toBe(0)
   })
+  it('filters untracked files and recomputes totals instead of reporting truncation', async () => {
+    const multiple = structuredClone(summary)
+    multiple.files.push({ path: 'b', display: 'b', added: 2, deleted: 3 }); multiple.total = 2
+    const diffs: Record<number, OfficialDiff> = {
+      0: { ...diff, path: 'a', display: 'a' },
+      1: { ...diff, path: 'b', display: 'b' },
+    }
+    const { collector, facts } = fixture({
+      source: () => ({ summary: () => structuredClone(multiple), diff: async (_session, _seq, index) => diffs[index] }),
+      tracked: async (_cwd, identity) => identity.endsWith('/a'),
+    })
+    enqueue(collector); await collector.flush()
+    expect(facts).toHaveLength(1)
+    expect(facts[0]!.files.map((file) => file.identity)).toEqual(['/work/a'])
+    expect(facts[0]!.summary.files.map((file) => file.path)).toEqual(['a'])
+    expect(facts[0]!.summary.total).toBe(1)
+    expect(facts[0]!.summary.added).toBe(1)
+    expect(facts[0]!.summary.deleted).toBe(0)
+  })
+  it('skips persistence when no file is tracked and marks the capture complete', async () => {
+    const { collector, deps, facts } = fixture({ tracked: () => false })
+    enqueue(collector); await collector.flush()
+    expect(facts).toEqual([])
+    expect(deps.state).toHaveBeenLastCalledWith('/work', expect.objectContaining({ seq: 10 }), 'complete')
+  })
 })

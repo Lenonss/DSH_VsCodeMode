@@ -46,13 +46,20 @@ function batchSnapshot(cwd: string, pending: PendingPage): { ok: true; page: Rev
   // 分页期间有记录被判定掉：数量对不上就不给客户端一份半截快照
   if (official.length !== first.pending) return { ok: false, error: '待审记录数量不完整，未执行批量操作' }
 
-  // 待审投影已接管的路径，官方旧行必须让位，否则同一文件会被批量写两次
+  // 待审投影已接管的路径，官方旧行必须让位，否则同一文件会被批量写两次；
+  // 已关窗的路径也算接管：用户处理完了，旧行不该再回到待办里。
+  const covered = pending.coveredPaths ?? []
   const live = pending.items.filter((item) => !item.settled)
-  const kept = official.filter((row) => !live.some((entry) => pendingSamePath(entry.path, row.currentPath) || pendingSamePath(entry.path, row.path)))
+  const kept = official.filter((row) => !covered.some((entry) => pendingSamePath(entry, row.currentPath) || pendingSamePath(entry, row.path))
+    && !live.some((entry) => pendingSamePath(entry.path, row.currentPath) || pendingSamePath(entry.path, row.path)))
   const items = [...live.map((entry) => pendingItemOf(entry, cwd)), ...kept]
   return {
     ok: true,
-    page: { items, pending: items.length, nextCursor: null, gaps: first.gaps, ...(first.overview ? { overview: first.overview } : {}) },
+    page: {
+      items, pending: items.length, nextCursor: null, gaps: first.gaps,
+      pendingCoveredPaths: pending.coveredPaths ?? [],
+      ...(first.overview ? { overview: first.overview } : {}),
+    },
   }
 }
 
@@ -262,9 +269,10 @@ export function reviewHandlers(ctx: Ctx, registry: Registry): Partial<RpcHandler
         // 否则待审详情（块判定 + 批注 + 让 AI 应答）在这条入口上永远点不到。
         const key = args.path
         const own = pending.items.filter((item) => pendingSamePath(item.path, key)).map((item) => pendingItemOf(item, cwd))
-        // 待审接管后同路径的官方轮次行只是旧口径残影：留着会让人点进只读详情，以为没有判定入口。
-        const history = own.length ? official.items.filter((item) => !pendingSamePath(item.path, key)) : official.items
-        return { ok: true, page: { ...official, items: [...own, ...history] } }
+        // 待审接管后同路径的官方轮次行只是旧口径残影：留档能看到，但不进当前待审入口。
+        const covered = (pending.coveredPaths ?? []).some((path) => pendingSamePath(path, key))
+        const history = own.length || covered ? official.items.filter((item) => !pendingSamePath(item.path, key)) : official.items
+        return { ok: true, page: { ...official, items: [...own, ...history], pendingCoveredPaths: pending.coveredPaths ?? [] } }
       }
       // 待审投影就位后由它承接被覆盖路径，官方旧行让位，同一路径只保留一个权威
       const merged = mergedPage(official, pending, cwd)

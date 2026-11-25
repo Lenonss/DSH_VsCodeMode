@@ -5,7 +5,7 @@
  */
 import type { DiffRecord } from './shared/types.js'
 import type { Ctx, Session } from './store.js'
-import { cwdOfSession, loadBucket } from './store.js'
+import { cwdOfSession, loadBucket, reclaimActive } from './store.js'
 import { SESSION_MISSING_ERROR, SESSION_NO_WORKSPACE_ERROR } from './shared/rpc.js'
 
 /** cwd → 记录桶（内存缓存；随会话销毁清理）。 */
@@ -59,9 +59,14 @@ export function cwdOf(session: Session | undefined): string | null {
 /** 取（或加载）某工作区记录桶。 */
 export function bucketOf(registry: Registry, ctx: Ctx, cwd: string): Promise<Map<string, DiffRecord>> {
   const existing = registry.get(cwd)
-  if (existing) return Promise.resolve(existing)
+  if (existing) {
+    try { reclaimActive(cwd, existing) } catch { /* 重置标记读取失败不影响列表 */ }
+    return Promise.resolve(existing)
+  }
   return loadBucket(ctx, cwd).then((map) => {
     registry.set(cwd, map)
+    // 待审 v7 迁移留下的「旧活跃记录待重置」标记：库内已清空，内存桶也必须一起清
+    try { reclaimActive(cwd, map) } catch { /* 重置标记读取失败不影响列表 */ }
     return map
   })
 }

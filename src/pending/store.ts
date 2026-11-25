@@ -5,22 +5,20 @@
 import type { PendingDecide, PendingDetail, PendingHistoryMove, PendingItem, PendingOrigin, PendingPage } from '../shared/pendingReview.js'
 import type { ReviewBlockState } from '../shared/reviewRegions.js'
 import { reviewBlocks } from '../shared/reviewRegions.js'
-import { addedFiles } from '../reviewDb.js'
 import { pathKeyOf, sourceOfTool, windows } from './provenance.js'
 import type { PendingWrite } from './capture.js'
 import { readText, pendingGaps } from './capture.js'
 import { noteOf } from './notes.js'
-import type { ShellLike, VcsImportOptions } from './vcs.js'
-import { importVcsChanges } from './vcs.js'
 import type { DecideOutcome, WriteResult } from './decide.js'
 import { capabilityOf, decide, diffOf } from './decide.js'
-import { entryFromNew, isSettled, mergeEntries } from './kernel.js'
+import { applyTracking, entryFromNew, isSettled, mergeEntries } from './kernel.js'
 import type { PendingEntry } from './kernel.js'
+import { coveredPathsOf, isOpenEntry, nextTracking, trackingOf } from './tracking.js'
 import type { PendingFlags, StoredEntry } from './persist.js'
 import type { KeepRecord } from './persist.js'
 import {
-  dropEntry, earliestUndone, latestApplied, loadBlocks, loadEntries, loadEntry, pendingDb, purgeEntries, pushHistory,
-  readOp, saveBlocks, saveDecisions, saveEntry, setHistoryState, vacuumEntries, writeOp,
+  dropBlocks, dropEntry, dropHistory, earliestUndone, latestApplied, loadBlocks, loadEntries, loadEntry,
+  purgeEntries, pushHistory, readOp, saveBlocks, saveDecisions, saveEntry, setHistoryState, vacuumEntries, writeOp,
 } from './persist.js'
 import type { HistoryRow, PurgeFilter, PurgeOutcome } from './persist.js'
 
@@ -89,14 +87,14 @@ function blockStatesOf(entry: PendingEntry, revision = -1): ReviewBlockState[] {
 }
 
 /**
- * @author ddj 2026年10月29号
- * @description: 把一次已确认写入折进累计条目：同一身份只保留一条，基线留最早、内容取最新。
- * @param stored 已有条目（可为空）
+ * @private
+ * @author ddj 2026年11月25号
+ * @description: 由一次采集写入构造新窗口条目；基线取写前内容，开窗时刻取本次写入时间。
  * @param write 采集到的写入
- * @returns 折叠后的条目与标记
+ * @returns 新条目（窗口状态 open）
  */
-export function foldWrite(stored: StoredEntry | undefined, write: PendingWrite): StoredEntry {
-  const fresh: PendingEntry = entryFromNew({
+function freshEntryOf(write: PendingWrite, tracking: 'open' | 'closed' = 'open'): PendingEntry {
+  return entryFromNew({
     id: write.identity,
     path: write.path,
     sessionId: write.sessionId,
@@ -109,11 +107,32 @@ export function foldWrite(stored: StoredEntry | undefined, write: PendingWrite):
     baseKind: write.before === null ? 'absent' : (write.baseKind ?? 'known'),
     evidence: write.evidence ?? 'snapshot',
     verdict: write.verdict ?? 'changed',
+    tracking,
+    openedAt: write.now,
   })
+}
+
+/**
+ * @author ddj 2026年10月29号 / 2026年11月25号
+ * @description: 把一次工具写入折进窗口：窗口关闭时按本次写前内容重开新窗口，窗口打开时基线留最早、内容取最新。
+ * 重开属于新窗口，调用方负责清掉旧窗口的块决定与撤销行。
+ * @param stored 已有条目（可为空）
+ * @param write 采集到的写入
+ * @returns 折叠后的条目与标记
+ */
+export function foldWrite(stored: StoredEntry | undefined, write: PendingWrite): StoredEntry {
+  const fresh = freshEntryOf(write)
   if (!stored) {
     return {
       entry: fresh,
       flags: { missing: write.after === null, diverged: false, oversized: false, revision: 0 },
+    }
+  }
+  if (!isOpenEntry(stored.entry)) {
+    // 新窗口：基线是这次写前内容；旧窗口的判定、块与撤销都不跨窗。
+    return {
+      entry: fresh,
+      flags: { missing: write.after === null, diverged: false, oversized: stored.flags.oversized, revision: stored.flags.revision + 1 },
     }
   }
   const merged = mergeEntries(stored.entry, fresh)
@@ -174,6 +193,8 @@ export function itemOf(stored: StoredEntry, baselineEmpty = false): PendingItem 
     baseKind: entry.baseKind ?? 'known',
     evidence: entry.evidence ?? 'snapshot',
     verdict: entry.verdict ?? 'changed',
+    tracking: trackingOf(entry),
+    openedAt: entry.openedAt ?? 0,
   }
   if (entry.lineage !== undefined) item.lineage = entry.lineage
   return item
@@ -181,26 +202,14 @@ export function itemOf(stored: StoredEntry, baselineEmpty = false): PendingItem 
 
 /**
  * @private
- * @author ddj 2026年11月04号
- * @description 从条目来源判断创建基线；任何决定历史都阻止展示层复活已推进的旧基线。
- * @param cwd 工作区
+ * @author ddj 2026年11月04号 / 2026年11月25号
+ * @description: 从条目基线判断创建来源：只有窗口自己的基线是"文件不存在"时才按整文件新增渲染。
+ * 重开窗口的基线是磁盘真实内容，不再借官方快照把整个文件算成新增。
  * @param stored 累计条目
- * @param sourceAdds 单次读取内的来源创建集合缓存
  * @returns 是否将展示基线置空
  */
-function emptyBaseOf(cwd: string, stored: StoredEntry, sourceAdds = new Map<string, Set<string>>()): boolean {
-  if (isSettled(stored.entry)) return false
-  const decided = pendingDb(cwd).prepare('SELECT 1 FROM pending_history WHERE entry_id=? LIMIT 1').get(stored.entry.id)
-  if (decided) return false
-  for (const sourceId of stored.entry.sessionIds) {
-    let createdPaths = sourceAdds.get(sourceId)
-    if (!createdPaths) {
-      createdPaths = addedFiles(cwd, sourceId)
-      sourceAdds.set(sourceId, createdPaths)
-    }
-    if (createdPaths.has(stored.entry.id)) return true
-  }
-  return false
+function emptyBaseOf(stored: StoredEntry): boolean {
+  return stored.entry.earlierVersion === 'none'
 }
 
 /**
@@ -212,14 +221,20 @@ function emptyBaseOf(cwd: string, stored: StoredEntry, sourceAdds = new Map<stri
  */
 export function loadPage(cwd: string, _sessionId?: string): PendingPage {
   const all = loadEntries(cwd)
-  const visible = all
-  const sourceAdds = new Map<string, Set<string>>()
-  const items = visible.map((stored) => withNote(cwd, itemOf(stored, emptyBaseOf(cwd, stored, sourceAdds))))
+  // 列表只显示开窗中的文件：已关窗条目仍留在库里供撤销判定，但不再出现在面板。
+  const visible = all.filter((stored) => isOpenEntry(stored.entry))
+  const items = visible.map((stored) => withNote(cwd, itemOf(stored, emptyBaseOf(stored))))
   const gaps: string[] = pendingGaps(cwd)
   for (const stored of visible) {
     if (stored.flags.oversized) gaps.push(`${stored.entry.path}: 文本超出上限，仅保留标记`)
   }
-  return { items, pending: items.filter((item) => !item.settled).length, nextCursor: null, gaps }
+  return {
+    items,
+    pending: items.filter((item) => !item.settled).length,
+    nextCursor: null,
+    gaps,
+    coveredPaths: coveredPathsOf(all),
+  }
 }
 
 /**
@@ -246,7 +261,7 @@ function withNote(cwd: string, item: PendingItem): PendingItem {
 export function loadDetail(cwd: string, id: string, baselineEmpty = false): PendingDetail | null {
   const stored = loadEntries(cwd).find((item) => item.entry.id === id)
   if (!stored) return null
-  const emptyBase = baselineEmpty || emptyBaseOf(cwd, stored)
+  const emptyBase = baselineEmpty || emptyBaseOf(stored)
   const diff = diffOf(stored.entry, emptyBase)
   return {
     item: withNote(cwd, itemOf(stored, emptyBase)),
@@ -257,52 +272,62 @@ export function loadDetail(cwd: string, id: string, baselineEmpty = false): Pend
 }
 
 /**
- * @author ddj 2026年10月29号
- * @description: 采集入口：折叠写入并落库。
+ * @author ddj 2026年10月29号 / 2026年11月25号
+ * @description: 工具写入入口：开窗或折进当前窗口；关窗后再次写入按新窗口处理。
  * @param write 已确认写入
  * @returns 无
  */
 export function recordWrite(write: PendingWrite): void {
   const stored = loadEntries(write.cwd).find((item) => item.entry.id === write.identity)
-  if (stored && stored.entry.oldText === stored.entry.newText && stored.entry.newText === (write.after ?? '')) return
-  saveEntry(write.cwd, foldWrite(stored, write))
+  // 开窗中的重复上报且内容没变：不重复落库
+  if (stored && isOpenEntry(stored.entry) && stored.entry.oldText === stored.entry.newText
+    && stored.entry.newText === (write.after ?? '')) return
+  const next = foldWrite(stored, write)
+  // 重开属于新窗口：旧窗口的块决定与撤销行不跨窗
+  if (stored && !isOpenEntry(stored.entry)) {
+    dropBlocks(write.cwd, write.identity)
+    dropHistory(write.cwd, write.identity)
+  }
+  saveEntry(write.cwd, withWindow(next))
 }
 
 /**
- * @author ddj 2026年10月29号
- * @description: 外部改动吸收：当前内容与条目最新内容不同时采纳并标分歧，基线不动。
- * @param stored 条目
- * @param content 磁盘当前内容
- * @param now 时间
- * @returns 新条目与标记
+ * @author ddj 2026年11月25号
+ * @description: 外部/编辑器改动入口：只折进已开窗的文件，其余路径一律不建记录。
+ * @param write 采集到的外部改动
+ * @returns 是否折进了窗口
  */
-export function absorbed(stored: StoredEntry, content: string, now: number, origin?: PendingOrigin): StoredEntry {
-  const entry: PendingEntry = { ...stored.entry, newText: content, updatedAt: now, unseen: true }
-  if (origin) entry.origin = origin
-  return {
+export function foldTracked(write: PendingWrite): boolean {
+  const stored = loadEntries(write.cwd).find((item) => item.entry.id === write.identity)
+  if (!stored || !isOpenEntry(stored.entry)) return false
+  const merged = mergeEntries(stored.entry, freshEntryOf(write))
+  merged.path = write.path
+  const closed = nextTracking(merged) === 'closed'
+  const entry = applyTracking(merged, closed ? 'closed' : 'open')
+  // 外部改动默认标未读；已经回到基线的窗口没有可看内容，不标
+  if (!closed) entry.unseen = true
+  saveEntry(write.cwd, {
     entry,
-    flags: { ...stored.flags, diverged: true, missing: false, revision: stored.flags.revision + 1 },
-  }
+    flags: {
+      missing: write.after === null,
+      diverged: !closed,
+      oversized: stored.flags.oversized,
+      revision: stored.flags.revision + 1,
+    },
+  })
+  return true
 }
 
 /**
- * @author ddj 2026年10月29号
- * @description: 读回磁盘并把可读的外部改动吸收进条目；缺失只标标记不删条目。
- * @param stored 条目
- * @param content 磁盘当前内容，null 表示缺失或不可读
- * @param now 时间
- * @returns 需要落库的新状态，无需改动时为 null
+ * @private
+ * @author ddj 2026年11月25号
+ * @description: 按净差异收尾窗口状态：内容回到基线就关窗，否则保持打开。
+ * @param stored 条目与标记
+ * @returns 收尾后的条目与标记
  */
-export function refreshed(stored: StoredEntry, content: string | null, now: number): StoredEntry | null {
-  if (content === null) {
-    if (stored.flags.missing) return null
-    return { entry: stored.entry, flags: { ...stored.flags, missing: true, revision: stored.flags.revision + 1 } }
-  }
-  if (content === stored.entry.newText) {
-    if (!stored.flags.missing) return null
-    return { entry: stored.entry, flags: { ...stored.flags, missing: false, revision: stored.flags.revision + 1 } }
-  }
-  return absorbed(stored, content, now)
+function withWindow(stored: StoredEntry): StoredEntry {
+  const state = nextTracking(stored.entry)
+  return { ...stored, entry: applyTracking(stored.entry, state) }
 }
 
 /**
@@ -364,6 +389,8 @@ export async function applyDecide(
 ): Promise<DecideOutcome | { ok: false; reason: string }> {
   const stored = loadEntries(cwd).find((item) => item.entry.id === request.id)
   if (!stored) return { ok: false, reason: 'unknown-item' }
+  // 撤销会写盘：先打自写标记，避免 watch 把插件自己的写回折成一次外部改动。
+  if (request.decision === 'rejected') windows.markSelf(pathKeyOf(stored.entry.id))
   const beforeBlocks = blockStatesOf(stored.entry, stored.flags.revision)
   const outcome = await decide({
     request,
@@ -379,7 +406,9 @@ export async function applyDecide(
     },
   })
   if (!outcome.ok) return { ok: false, reason: outcome.reason }
-  saveEntry(cwd, { entry: outcome.entry, flags: outcome.flags })
+  // 判定把两侧推平就关窗；还有剩余块就保持打开。
+  const entry = applyTracking(outcome.entry, nextTracking(outcome.entry))
+  saveEntry(cwd, { entry, flags: outcome.flags })
   saveBlocks(cwd, request.id, outcome.blocks)
   // 撤销行按路径覆盖写：同一路径永远只有一行，撤销回到判定前的基线或内容
   pushHistory(cwd, {
@@ -391,7 +420,7 @@ export async function applyDecide(
     content: stored.entry.newText,
     wrote: outcome.wrote,
   }, Date.now())
-  return outcome
+  return { ...outcome, entry }
 }
 
 /** 批量 Keep 的目标条目：display 只用于回报，operationId 由 host 按批次派生。 */
@@ -451,8 +480,12 @@ export async function keepAll(cwd: string, items: PendingKeepTarget[]): Promise<
       continue
     }
     outcome.kept.push({ id: item.id, path: before.entry.path })
-    records.push({ entryId: item.id, stored: before, next: { entry: outcomeOf.entry, flags: outcomeOf.flags },
-      blocks: outcomeOf.blocks })
+    records.push({
+      entryId: item.id,
+      stored: before,
+      next: { entry: applyTracking(outcomeOf.entry, nextTracking(outcomeOf.entry)), flags: outcomeOf.flags },
+      blocks: outcomeOf.blocks,
+    })
   }
 
   // 落库阶段被别的决定抢先推进的条目从 kept 挪到 skipped，如实反映磁盘状态
@@ -462,34 +495,6 @@ export async function keepAll(cwd: string, items: PendingKeepTarget[]): Promise<
     outcome.skipped.push({ id: conflict.id, display: displayOf.get(conflict.id) ?? conflict.id, reason: conflict.reason })
   }
   return outcome
-}
-
-/**
- * @author ddj 2026年10月30号
- * @description: 版本库导入：把工作副本相对基线的改动折进待审条目，已存在条目按折叠规则并入。
- * @param shell shell 能力
- * @param cwd 工作区
- * @param sessionId 触发导入的会话
- * @param options 导入选项
- * @returns 导入条数与探测到的改动数
- */
-export async function importFromVcs(
-  shell: ShellLike, cwd: string, sessionId: string, options: VcsImportOptions = {},
-): Promise<{ imported: number; changes: number }> {
-  const changes = await importVcsChanges(shell, cwd, options)
-  const now = Date.now()
-  for (const change of changes) {
-    recordWrite({
-      cwd,
-      sessionId,
-      path: change.path,
-      identity: change.path,
-      before: change.earlierVersion === 'none' ? null : change.oldText,
-      after: change.newText,
-      now,
-    })
-  }
-  return { imported: changes.length, changes: changes.length }
 }
 
 /**
@@ -517,15 +522,19 @@ export async function undoDecide(
   writeOp(cwd, move.operationId, JSON.stringify(move), 'prepared')
   let wrote = false
   if (target.write) {
+    // 插件写回会触发 watch：先打自写标记，避免折成一次外部改动。
+    windows.markSelf(pathKeyOf(stored.entry.id))
     const result = await writeBack(fs, cwd, stored, target.state, signal, policy)
     if (!result.ok) return { ok: false, reason: result.reason }
     wrote = true
   }
 
-  saveEntry(cwd, { entry: target.state.entry, flags: target.state.flags })
+  // 撤销/重做后按净差异收尾窗口：撤销 Keep 会重新出现差异 → 重开；重做 → 关窗。
+  const entry = applyTracking(target.state.entry, nextTracking(target.state.entry))
+  saveEntry(cwd, { entry, flags: target.state.flags })
   saveBlocks(cwd, record.entryId, target.state.blocks)
   setHistoryState(cwd, record.entryId, move.direction === 'undo' ? 'undone' : 'applied')
-  const outcome = { ok: true as const, item: itemOf({ entry: target.state.entry, flags: target.state.flags }), wrote }
+  const outcome = { ok: true as const, item: itemOf({ entry, flags: target.state.flags }), wrote }
   writeOp(cwd, move.operationId, JSON.stringify(move), 'committed', { result: JSON.stringify(outcome) })
   return outcome
 }

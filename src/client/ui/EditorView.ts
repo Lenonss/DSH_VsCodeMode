@@ -5082,10 +5082,15 @@ export function EditorView(props) {
     return React.createElement('div', { className: 'edrv-mdview-stage' }, React.createElement('div', { className: 'edrv-mdview-doc' }, render))
   }
 
+  /** HTML 计划模式：自动页/作者页都失败时，按计划地址回落到官方 Markdown 预览。 */
+  const [planMarkdownFallback, setPlanMarkdownFallback] = React.useState('')
+
   let body
   if (activePlan) {
+    const planPanelAllowed = Boolean(activePlan.htmlPath || activePlan.htmlPlanMode)
+    const planFallenBack = planMarkdownFallback === activePlan.address
     body = React.createElement('div', { className: 'edrv-mdview', ref: planHostRef, 'data-plan-address': activePlan.address },
-      activePlan.htmlPath
+      planPanelAllowed && !planFallenBack
         ? React.createElement(HtmlPlanPanel, {
             key: activePlan.address,
             sessionId,
@@ -5093,7 +5098,9 @@ export function EditorView(props) {
             address: activePlan.address,
             title: activePlan.title,
             htmlPath: activePlan.htmlPath,
+            htmlPlanMode: activePlan.htmlPlanMode,
             markdown: activePlan.markdown,
+            onMarkdownFallback: () => setPlanMarkdownFallback(activePlan.address),
           })
         : planMarkdownBody(activePlan))
   } else if (pageChanged === pageIdentity && largeCandidate === pageIdentity) {

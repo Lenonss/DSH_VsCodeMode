@@ -75,6 +75,8 @@ function pendingCoverKeys(page: ReviewPage | null): Set<string> {
     keys.add(diffPathKey(item.currentPath || item.path))
     keys.add(diffPathKey(item.id.slice(PENDING_PREFIX.length)))
   }
+  // 已关窗的条目不在 items 里，但路径仍算被窗口接管：旧行与旧工具记录都不能再回来。
+  for (const path of page?.pendingCoveredPaths ?? []) keys.add(diffPathKey(path))
   return keys
 }
 
@@ -128,6 +130,7 @@ export function diffSummary(records: (RecordView & { archived?: boolean })[], pa
     && !pending.covered.has(diffPathKey(record.path)) && !officialPath(record.path, page)))
   const files: DiffFile[] = [...pending.rows]
   for (const file of page?.overview?.files ?? []) {
+    // 被窗口接管过的路径（含已关窗）不再列官方概览行，否则同一文件处理完又会出现一条。
     if (pending.covered.has(diffPathKey(file.path))) continue
     files.push({ ...file, recs: [] })
   }

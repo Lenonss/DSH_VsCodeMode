@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { cachedPlan, clearPlanState, createPlanFeed, isPlanAddress, isPlanPath, planDocument, rememberPlan, type PlanEntry, type PlanWindow } from '../src/client/planState.js'
+import { cachedPlan, clearPlanState, createPlanFeed, isPlanAddress, isPlanPath, planCallIdOf, planDocument, planFromEntries, rememberPlan, type PlanEntry, type PlanWindow } from '../src/client/planState.js'
 afterEach(clearPlanState)
 /** @private @author ddj 2026年10月08号 @param seq Sequence. @param type Event kind. @param data Payload. @returns Durable event entry. */
 function entry(seq: number, type: string, data: unknown): PlanEntry { return { type: 'event', event: { type, seq, data } } }
@@ -94,5 +94,54 @@ describe('plan document cache', () => {
     rememberPlan({ address: 'dsh-resource://plan/s/c', markdown: 'partial', title: 'partial' })
     expect(cachedPlan('dsh-resource://plan/s/%ZZ')).toBeUndefined()
     expect(cachedPlan('dsh-resource://plan/s/c')).toBeUndefined()
+  })
+})
+
+describe('HTML 计划模式提交', () => {
+  it('exit_html_plan_mode 打开计划页签并带 htmlPlanMode', () => {
+    const feed = createPlanFeed('s', '/work')
+    feed.consume(windowOf(0, [], 'replace'))
+    const submission = entry(1, 'tool/call', { callId: 'hp', name: 'exit_html_plan_mode', arguments: JSON.stringify({ plan: '# 执行计划\n步骤' }) })
+    expect(feed.consume(windowOf(1, [submission]))).toEqual([{ plan: {
+      address: 'dsh-resource://plan/s/hp',
+      markdown: '# 执行计划\n步骤',
+      title: '执行计划',
+      htmlPlanMode: true,
+    } }])
+    expect(cachedPlan('dsh-resource://plan/s/hp')).toMatchObject({ htmlPlanMode: true })
+  })
+
+  it('planDocument 保留 htmlPlanMode；官方 exit_plan_mode 提交不带该字段', () => {
+    expect(planDocument('dsh-resource://plan/s/c', { markdown: '# 计划', htmlPlanMode: true })).toEqual({
+      address: 'dsh-resource://plan/s/c', markdown: '# 计划', title: '计划', htmlPlanMode: true,
+    })
+    expect(planDocument('dsh-resource://plan/s/c', { markdown: '# 计划' })).toEqual({
+      address: 'dsh-resource://plan/s/c', markdown: '# 计划', title: '计划',
+    })
+  })
+})
+
+describe('planFromEntries / planCallIdOf', () => {
+  it('从会话窗口里按 callId 找回 HTML 计划模式提交的计划', () => {
+    const address = 'dsh-resource://plan/s/hp1'
+    expect(planCallIdOf(address)).toBe('hp1')
+    expect(planCallIdOf('dsh-resource://plan-review/s/x')).toBe('x')
+    expect(planCallIdOf('not-an-address')).toBeNull()
+
+    const entries = [entry(1, 'tool/call', { callId: 'hp1', name: 'exit_html_plan_mode', arguments: JSON.stringify({ plan: '# 计划：x\n正文' }) })]
+    expect(planFromEntries('s', address, entries)).toMatchObject({ markdown: '# 计划：x\n正文', htmlPlanMode: true })
+
+    const official = [entry(2, 'tool/call', { callId: 'hp1', name: 'exit_plan_mode', arguments: JSON.stringify({ plan: '# 计划：y' }) })]
+    const parsed = planFromEntries('s', address, official)
+    expect(parsed).toMatchObject({ markdown: '# 计划：y' })
+    expect(parsed && 'htmlPlanMode' in parsed).toBe(false)
+  })
+
+  it('callId 不匹配、工具不认识或正文缺标题时返回 undefined', () => {
+    const address = 'dsh-resource://plan/s/hp1'
+    expect(planFromEntries('s', address, [entry(1, 'tool/call', { callId: 'other', name: 'exit_html_plan_mode', arguments: '{"plan":"# x"}' })])).toBeUndefined()
+    expect(planFromEntries('s', address, [entry(1, 'tool/call', { callId: 'hp1', name: 'write', arguments: '{"plan":"# x"}' })])).toBeUndefined()
+    expect(planFromEntries('s', address, [entry(1, 'tool/call', { callId: 'hp1', name: 'exit_html_plan_mode', arguments: '{"plan":"no heading"}' })])).toBeUndefined()
+    expect(planFromEntries('s', address, [])).toBeUndefined()
   })
 })

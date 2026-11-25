@@ -84,7 +84,7 @@ describe('official review workspace boundary', () => {
     const handlers = reviewHandlers(ctx, new Map([['/remote-repo', new Map()]]))
     vi.mocked(reviewPage).mockReturnValue({ items: [], pending: 0, gaps: [], nextCursor: null })
     expect(await handlers['edrv.review.list']!({ sessionId: 'remote' }))
-      .toEqual({ ok: true, page: { items: [], pending: 0, gaps: [], nextCursor: null } })
+      .toEqual({ ok: true, page: { items: [], pending: 0, gaps: [], nextCursor: null, pendingCoveredPaths: [] } })
     expect(reviewPage).toHaveBeenLastCalledWith('/remote-repo', undefined, undefined, undefined)
     vi.mocked(reviewDetail).mockReturnValue(null)
     expect(await handlers['edrv.review.detail']!({ sessionId: 'remote', id: 'remote-id' }))

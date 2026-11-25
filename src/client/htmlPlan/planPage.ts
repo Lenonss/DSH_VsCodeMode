@@ -250,23 +250,91 @@ export function planSlugOf(declared: unknown): string {
   return /^[a-z0-9][a-z0-9-]*$/i.test(raw) ? raw : 'html-plan'
 }
 
+//region 页面来源决策（HTML 计划模式）
+
+/** 计划页读取结果的三态（读不到 / 不存在 / 读到）。 */
+export type PlanPageRead = 'ok' | 'missing' | 'error'
+
+/** 计划签打开页面时要执行的动作。 */
+export type PlanPageAction = 'show' | 'pack' | 'auto' | 'error'
+
+/** 页面动作决策入参。 */
+export interface PlanPageDecisionInput {
+  /** 计划正文声明的页面路径（可能为空）。 */
+  declared: string
+  /** 是否在 HTML 计划模式里提交（允许插件兜底页）。 */
+  htmlPlanMode: boolean
+  /** 声明路径的读取结果。 */
+  read: PlanPageRead
+  /** 读到的页面是否还引用未内联的运行时（需要重新打包）。 */
+  needsPack: boolean
+  /** 备用路径（`.packed.html` ↔ `.html`）是否存在。 */
+  alternateExists: boolean
+}
+
+/** 页面动作决策结果。 */
+export interface PlanPageDecision {
+  /** 动作。 */
+  action: PlanPageAction
+  /** pack 动作的目标路径（绝对或相对，由调用方归位）。 */
+  target?: string
+}
+
 /**
- * 让 agent 生成/重打包 HTML 计划页的修复指令（计划页签「生成 HTML 计划页」按钮发给 agent）。
- * 计划模式允许写 plans/ 下的计划交付物，所以这里明确禁止「请用户退出计划模式」的做法。
+ * 决定计划签怎样拿到一页 HTML。
+ *
+ * 顺序：作者页可直接显示 → 作者页需要打包 → 备用路径打包 → HTML 计划模式下用正文渲染 → 报错。
+ * `htmlPlanMode` 为真时，声明页缺失/读不到也允许兜底渲染，保证模式内不出现「只剩报错」。
+ * @author ddj 2026年11月25号
+ * @param input 决策入参
+ * @returns 动作与打包目标
+ */
+export function planPageDecisionOf(input: PlanPageDecisionInput): PlanPageDecision {
+  const declared = String(input.declared ?? '').trim()
+  if (declared && input.read === 'ok') {
+    return input.needsPack ? { action: 'pack', target: declared } : { action: 'show' }
+  }
+  const alternate = declared ? planPageAltPath(declared) : null
+  if (alternate && input.alternateExists) return { action: 'pack', target: alternate }
+  if (input.htmlPlanMode) return { action: 'auto' }
+  return { action: 'error' }
+}
+
+/**
+ * 推导作者页的备用路径：`plan.packed.html` ↔ `plan.html`。
+ * 没有这两种后缀时返回 null（不做无意义重试）。
+ * @author ddj 2026年11月25号
+ * @param path 声明路径
+ * @returns 备用路径；推导不出时 null
+ */
+export function planPageAltPath(path: unknown): string | null {
+  const value = String(path ?? '').trim().replace(/\\/g, '/')
+  if (!value) return null
+  if (/\.packed\.html?$/i.test(value)) return value.replace(/\.packed\.html?$/i, '.html')
+  if (/\.html?$/i.test(value)) return value.replace(/\.html?$/i, '.packed.html')
+  return null
+}
+
+//endregion
+
+/**
+ * 让 agent 重写作者页的修复指令（计划页签「生成 HTML 计划页」按钮发给 agent）。
+ * 插件会自动打包，所以不再要求模型跑 plan.mjs（那条命令会删中间文件，不能用于用户文件）。
  * @author ddj 2026年11月23号
+ * @author ddj 2026年11月25号（改为「只写页、插件打包」，去掉运行 plan.mjs 的要求）
  * @param declared 计划正文声明的页面路径（可为空）
  * @returns 发给 agent 的用户消息
  */
 export function planRepairInstruction(declared: unknown): string {
   const slug = planSlugOf(declared)
   return [
-    '请按 dsh-vscodemode-html-plan 技能生成并打包 HTML 计划页，然后重新提交计划：',
+    '请按 dsh-vscodemode-html-plan 技能生成 HTML 计划页，然后重新提交计划：',
     '1. 计划模式里允许写 plans/ 下的计划交付物：直接在计划模式里写页面，不要让我退出计划模式。',
-    `2. 先写 plans/${slug}/plan.html，再运行该技能的 runtime/plan.mjs ${slug}（自带复制运行时、pack、清理）。`,
-    `3. 页面若引用附件（<doc-file src="assets/…">），确认文件在 plans/${slug}/assets/，并由 pack 内联成 data URI。`,
-    '   打包成功后该目录会被删除；文件已不在时让我重新附一次附件，不要凭空造图。',
-    `4. 确认 plans/${slug}/plan.packed.html 存在后，再调用 exit_plan_mode：正文第一行「# 计划：<标题>」，并单独一行「HTML 计划页：plans/${slug}/plan.packed.html」。`,
-    '不要只写路径不生成文件；页面确实生成失败就说清原因，并交付纯 Markdown 计划。',
+    `2. 只写 plans/${slug}/plan.html 即可：计划签打开时插件会自动打包，不要运行 plan.mjs 或任何 node 命令。`,
+    `3. 页面若引用附件（<doc-file src="assets/…">），确认文件在 plans/${slug}/assets/；插件打包时会把它们内联。`,
+    '   附件目录不会被插件删除；文件缺失时让我重新附一次，不要凭空造图。',
+    `4. 页面写好后调用 exit_plan_mode：正文第一行「# 计划：<标题>」，并单独一行「HTML 计划页：plans/${slug}/plan.html」。`,
+    '不要只写路径不生成文件；页面确实生成失败就说清原因，并交付纯 Markdown 计划（插件会用正文兜底渲染）。',
   ].join('\n')
 }
 
@@ -300,7 +368,41 @@ export function derivePlanUiState(
   return { mode: 'off', label: '计划模式未开启', active, pending }
 }
 
-/** 选项标签归一：字符串或 { label } 数组。 */
+/**
+ * HTML 计划模式的状态推导（独立模式不走官方 plan 投影）。
+ *
+ * 投影缺失时按「提交即活跃」乐观处理：计划能走到计划签，说明提交时模式是活跃的；
+ * 批准/退出动作后按本地动作收口，避免按钮一直可点。
+ * @author ddj 2026年11月25号
+ * @param mode html-plan 投影快照（{ active } 或 undefined）
+ * @param reviewPending 是否有待审批的 plan-review
+ * @param acted 本地刚完成动作
+ * @returns 计划页签状态
+ */
+export function deriveHtmlPlanUiState(
+  mode: unknown,
+  reviewPending: boolean,
+  acted?: 'approved' | 'revising' | 'exited' | null,
+): PlanUiState {
+  const row = mode !== null && typeof mode === 'object' ? mode as { active?: unknown } : undefined
+  const active = row ? row.active === true : acted !== 'approved' && acted !== 'exited'
+  const pending = false
+  if (acted === 'approved') {
+    return { mode: 'approved', label: active ? '已批准 · 等待退出 HTML 计划模式' : '已批准 · 已退出 HTML 计划模式', active, pending }
+  }
+  if (acted === 'exited' && !active) return { mode: 'exited', label: '已退出 HTML 计划模式', active, pending }
+  if (acted === 'revising' && active) return { mode: 'revising', label: '继续规划中', active, pending }
+  if (active && reviewPending) return { mode: 'reviewing', label: '待审批', active, pending }
+  if (active) return { mode: 'planning', label: 'HTML 计划模式中', active, pending }
+  return { mode: 'off', label: 'HTML 计划模式未开启', active, pending }
+}
+
+/**
+ * 选项标签归一：字符串或 { label } 数组。
+ * @author ddj 2026年11月21号
+ * @param options 选项列表
+ * @returns 非空标签
+ */
 function labelsOf(options: unknown): string[] {
   if (!Array.isArray(options)) return []
   const out: string[] = []

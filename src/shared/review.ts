@@ -89,6 +89,11 @@ export interface ReviewPage {
   pending: number
   nextCursor: number | null
   gaps: CaptureGap[]
+  /**
+   * 已被待审窗口接管过的路径（含已关窗条目，路径与身份两种写法）：
+   * 客户端据此压住同路径的官方概览行与旧工具记录，保证关窗后不再复活。
+   */
+  pendingCoveredPaths?: string[]
 }
 export interface ReviewRequest { sessionId: string }
 export interface DecideReview extends ReviewRequest {

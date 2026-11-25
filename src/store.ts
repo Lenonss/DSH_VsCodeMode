@@ -10,7 +10,7 @@ import { archiveEntryFor, findCanceledPairs, findInversePrior, normalizeRecord }
 import { SIDECAR, SIDECAR_ARCHIVE } from './paths.js'
 import { log } from './log.js'
 import { debugRecord } from './debugLog.js'
-import { activeReady, appendArchive, checkActiveSource, commitActive, committedRecord, migrateActive, restoreReverts, type ActiveChange } from './archiveDb.js'
+import { activeReady, appendArchive, checkActiveSource, commitActive, committedRecord, migrateActive, restoreReverts, takeActiveReset, type ActiveChange } from './archiveDb.js'
 import { pendingSamePath } from './pendingCompat.js'
 import { loadEntries } from './pending/persist.js'
 
@@ -203,6 +203,22 @@ export async function loadBucket(ctx: Ctx, cwd: string): Promise<Map<string, Dif
     if (JSON.stringify(rec) !== previous) commitActive(cwd, { upserts: [rec], removed: [] })
   }
   return map
+}
+
+/**
+ * @author ddj 2026年11月25号
+ * @description: 消费待审 v7 迁移留下的重置标记：把内存桶里的旧工具差异一起清掉并补删库内行，
+ * 避免「库清空了、桶里还有」让旧差异继续显示。
+ * @param cwd 工作区
+ * @param bucket 当前内存记录桶
+ * @returns 清掉的记录数
+ */
+export function reclaimActive(cwd: string, bucket: Map<string, DiffRecord>): number {
+  if (!takeActiveReset(cwd)) return 0
+  const removed = [...bucket.keys()]
+  bucket.clear()
+  if (removed.length) commitActive(cwd, { upserts: [], removed })
+  return removed.length
 }
 
 /**

@@ -30,7 +30,7 @@ import type { LoggerLevel } from './logger.js'
 import type { SvnViewRequest, SvnViewPayload } from './svnExplorer.js'
 import type { DecideReview, KeepAllItem, KeepAllResult, ReviewDetail, ReviewPage, ReviewRequest, UndoAllItem, UndoAllResult } from './review.js'
 import type {
-  PendingDecide, PendingDetail, PendingHistoryMove, PendingImport,
+  PendingDecide, PendingDetail, PendingHistoryMove,
   PendingItem, PendingPage, PendingRemove, PendingRequest,
 } from './pendingReview.js'
 
@@ -390,10 +390,8 @@ export interface RpcRequestMap {
   'edrv.pending.detail': PendingRequest & { id: string }
   'edrv.pending.decide': PendingDecide
   'edrv.pending.remove': PendingRemove
-  'edrv.pending.refresh': PendingRequest & { id: string }
   'edrv.pending.history': PendingHistoryMove
-  'edrv.pending.import': PendingImport
-  'edrv.pending.align': PendingRequest & { includeUntracked?: boolean }
+  'edrv.pending.align': PendingRequest
   'edrv.pending.purge': PendingRequest & { dryRun?: boolean; sources?: string[]; baseKinds?: string[]; before?: number }
   'edrv.pending.version': PendingRequest
   'edrv.list': { sessionId?: string; callIds?: string[]; skipStale?: boolean }
@@ -583,6 +581,10 @@ export interface RpcRequestMap {
   'edrv.uiState.get': { sessionId?: string }
   /** 界面状态镜像写入：把客户端改动过的 `edrv.*` 键增量同步到 host 文件。 */
   'edrv.uiState.set': UiStatePatchInput
+  /** HTML 计划模式：把计划正文渲染成独立 HTML 页（插件兜底页）。 */
+  'edrv.planPage.render': { sessionId?: string; markdown: string }
+  /** HTML 计划模式：把作者页用技能 pack.mjs 打包成单文件 HTML（只写系统临时文件）。 */
+  'edrv.planPage.pack': { sessionId?: string; path: string }
 }
 
 export type RpcMethod = keyof RpcRequestMap
@@ -603,10 +605,8 @@ export interface RpcOkMap {
   'edrv.pending.detail': { detail: PendingDetail }
   'edrv.pending.decide': { item: PendingItem; wrote: boolean }
   'edrv.pending.remove': { removed: boolean }
-  'edrv.pending.refresh': { item: PendingItem }
   'edrv.pending.history': { item: PendingItem; wrote: boolean }
-  'edrv.pending.import': { imported: number; changes: number }
-  'edrv.pending.align': { imported: number; changed: number; gaps: string[] }
+  'edrv.pending.align': { checked: number; folded: number; gaps: string[] }
   'edrv.pending.purge': { matched: number; removed: number; kept: number; vacuumMs?: number }
   'edrv.pending.version': { version: number }
   'edrv.list': { records: RecordView[] }
@@ -787,6 +787,8 @@ export interface RpcOkMap {
   'edrv.dap.command': object
   'edrv.uiState.get': UiStateSnapshot
   'edrv.uiState.set': object
+  'edrv.planPage.render': { html: string }
+  'edrv.planPage.pack': { html: string }
 }
 
 /** 缺失文件预览的稳定拒绝码：客户端据此显示「已删除」终态，而不是把错误原文当加载失败重试。 */

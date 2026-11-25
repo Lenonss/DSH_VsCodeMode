@@ -1,4 +1,4 @@
-/** 外部改动端到端：真实 SQLite + 真实文件，显式 flush 驱动（对应任务书验收 1/2/3/5/6）。 @author ddj 2026年11月24号 */
+/** 差异窗口端到端：真实 SQLite + 真实文件，显式 flush 驱动。 @author ddj 2026年11月25号 */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { readFile, stat, unlink, writeFile } from 'node:fs/promises'
@@ -7,12 +7,12 @@ import { join } from 'node:path'
 import { closeArchiveDbs, migrateActive } from '../src/archiveDb.js'
 import { archiveDbFile } from '../src/paths.js'
 import { loadEntries } from '../src/pending/persist.js'
-import { applyDecide, recordWrite } from '../src/pending/store.js'
+import { applyDecide, foldTracked, loadPage, recordWrite } from '../src/pending/store.js'
 import { installExternalCapture } from '../src/pending/externalCapture.js'
-import { pathKeyOf, windows } from '../src/pending/provenance.js'
+import { windows } from '../src/pending/provenance.js'
 import { rawReviewFile, rawText } from '../src/reviewEvidence.js'
-import type { VcsStatus } from '../src/pending/vcs.js'
 import type { PendingWrite } from '../src/pending/capture.js'
+import { pendingGaps } from '../src/pending/capture.js'
 import { disposeIndex } from '../src/treeIndex.js'
 
 let home = ''
@@ -70,35 +70,16 @@ function realFs() {
 }
 
 /**
- * @description: 端到端夹具：真读盘（严格 UTF-8 往返）、真待审库、可控版本库状态与基线。
- * @returns 采集器、fs 与状态控制器
+ * @description: 端到端夹具：真读盘（严格 UTF-8 往返）、真待审库、真实折叠入口。
+ * @returns 跟随器、fs 与折入记录
  */
 function harness() {
   const fs = realFs()
-  const state: { status: VcsStatus | null; baseline: Record<string, string> } = { status: null, baseline: {} }
   const writes: PendingWrite[] = []
-  // 版本库基线走假 shell：只回答 `git show HEAD:"<relative>"`
-  const shell = {
-    resolve: (request: unknown) => request,
-    execute: async (spec: unknown) => {
-      const command = String((spec as { command: string }).command)
-      const match = /git show HEAD:"([^"]+)"/.exec(command)
-      const text = match ? state.baseline[match[1]!.replace(/\\/g, '/')] : undefined
-      return {
-        result: async () => ({
-          exitCode: text === undefined ? 1 : 0, timedOut: false, aborted: false,
-          stdout: { text: text ?? '' }, stderr: { text: text === undefined ? 'not found' : '' },
-        }),
-      }
-    },
-  }
-  const ctx = {
-    get: (name: string) => (name === 'shell' ? shell : name === 'sessions' ? { get: () => undefined, list: () => [] } : undefined),
-  }
   const capture = installExternalCapture({
-    ctx: ctx as never,
+    ctx: { get: () => undefined } as never,
     settings: () => ({ watch: true, scan: false }),
-    record: (write) => { writes.push(write); recordWrite(write) },
+    fold: (write) => { writes.push(write); return foldTracked(write) },
     read: async (_cwd, absolute) => {
       try {
         const bytes = await readFile(absolute)
@@ -109,56 +90,53 @@ function harness() {
         throw error
       }
     },
-    entries: () => new Map(loadEntries(workspace).map((stored) => [pathKeyOf(stored.entry.id), stored])),
-    status: async () => state.status,
+    entries: () => loadEntries(workspace),
   })
-  return { capture, fs, writes, state }
+  return { capture, fs, writes }
 }
 
-/** 造一份版本库状态。 */
-function statusOf(entries: Array<[string, 'modified' | 'added' | 'deleted']>): VcsStatus {
-  return { kind: 'git', root: workspace, entries: new Map(entries.map(([path, status]) => [pathKeyOf(path), { path, status }])) }
-}
-
-/** 用工具链路先记一条（模拟 edit/write 已经采过）。 */
-function seedToolWrite(path: string, before: string, after: string): void {
+/** 用工具链路开一个窗口（模拟 edit/write 已经采过）。 */
+function openWindow(path: string, before: string, after: string): void {
   recordWrite({ cwd: workspace, sessionId: 's1', path, identity: path, before, after, now: Date.now(), tool: 'write' })
 }
 
-describe('外部改动端到端', () => {
-  it('验收 1：bash 写盘后出现记录，撤销恢复原内容', async () => {
+describe('差异窗口端到端', () => {
+  it('窗口内的外部写盘折进同一条，撤销恢复窗口基线', async () => {
     const file = join(workspace, 'a.txt')
-    await writeFile(file, 'ORIGINAL\n', 'utf8')
-    // 现场没被工具采过：修改前内容来自版本库基线
-    const { capture, fs, state } = harness()
-    state.status = statusOf([[file, 'modified']])
-    state.baseline['a.txt'] = 'ORIGINAL\n'
+    await writeFile(file, 'TOOL\n', 'utf8')
+    openWindow(file, 'ORIGINAL\n', 'TOOL\n')
+    const { capture, fs } = harness()
 
-    // agent 在工具调用窗口里用 node -e 覆写
-    windows.enterTool()
-    await writeFile(file, 'x', 'utf8')
+    await writeFile(file, 'UNITY\n', 'utf8')
     capture.enqueue(workspace, file)
-    windows.exitTool()
     await capture.flush()
 
     const stored = loadEntries(workspace).filter((item) => item.entry.id === file)
     expect(stored).toHaveLength(1)
-    const entry = stored[0]!
-    expect({ ...entry.entry, ...entry.flags }).toMatchObject({
-      newText: 'x', oldText: 'ORIGINAL\n', source: 'watch', origin: 'agent', baseKind: 'vcs',
-    })
+    expect(stored[0]!.entry).toMatchObject({ oldText: 'ORIGINAL\n', newText: 'UNITY\n', tracking: 'open' })
+    expect(loadPage(workspace).items[0]!.source).toBe('write')
 
     const result = await applyDecide(fs as never, workspace, {
-      sessionId: 's1', id: file, revision: entry.flags.revision, operationId: 'op-1', decision: 'rejected', scope: 'file',
+      sessionId: 's1', id: file, revision: stored[0]!.flags.revision, operationId: 'op-1', decision: 'rejected', scope: 'file',
     })
     expect(result.ok, JSON.stringify(result)).toBe(true)
     expect(await readFile(file, 'utf8')).toBe('ORIGINAL\n')
   })
 
-  it('验收 2：连续 5 次写入只产生 1 条记录', async () => {
+  it('没被工具动过的文件：外部写盘不产生任何记录', async () => {
+    const file = join(workspace, 'index.json')
+    await writeFile(file, 'UNITY\n', 'utf8')
+    const { capture } = harness()
+    capture.enqueue(workspace, file)
+    await capture.flush()
+    expect(loadEntries(workspace)).toHaveLength(0)
+    expect(loadPage(workspace).items).toHaveLength(0)
+  })
+
+  it('连续 5 次外部写入只折成一条，内容取最新', async () => {
     const file = join(workspace, 'b.txt')
     await writeFile(file, 'V0', 'utf8')
-    seedToolWrite(file, 'V0', 'V0')
+    openWindow(file, 'OLD', 'V0')
     const { capture } = harness()
     for (let index = 1; index <= 5; index++) {
       await writeFile(file, 'V' + index, 'utf8')
@@ -167,31 +145,13 @@ describe('外部改动端到端', () => {
     await capture.flush()
     const entries = loadEntries(workspace).filter((item) => item.entry.id === file)
     expect(entries).toHaveLength(1)
-    expect(entries[0]!.entry.newText).toBe('V5')
+    expect(entries[0]!.entry).toMatchObject({ oldText: 'OLD', newText: 'V5', tracking: 'open' })
   })
 
-  it('验收 3：新建文件按"基线不存在"记录，撤销即删除', async () => {
-    const file = join(workspace, 'new.cs.meta')
-    const { capture, fs, state } = harness()
-    state.status = statusOf([[file, 'added']])
-    await writeFile(file, 'guid: abc\n', 'utf8')
-    capture.enqueue(workspace, file)
-    await capture.flush()
-
-    const entry = loadEntries(workspace).find((item) => item.entry.id === file)!
-    expect(entry.entry).toMatchObject({ earlierVersion: 'none', source: 'watch', baseKind: 'absent' })
-    const result = await applyDecide(fs as never, workspace, {
-      sessionId: 's1', id: file, revision: entry.flags.revision, operationId: 'op-new', decision: 'rejected', scope: 'file',
-    })
-    expect(result.ok).toBe(true)
-    await expect(stat(file)).rejects.toBeTruthy()
-  })
-
-  it('验收 3：删除文件后可撤销恢复', async () => {
+  it('文件中途删除：窗口折成缺失，撤销恢复基线', async () => {
     const file = join(workspace, 'del.txt')
     await writeFile(file, 'KEEP ME\n', 'utf8')
-    // 文件此前已被采集过，已知内容就是 KEEP ME（累计基线语义：撤销恢复的是基线内容）
-    seedToolWrite(file, 'KEEP ME\n', 'KEEP ME\n')
+    openWindow(file, 'KEEP ME\n', 'TOOL\n')
     const { capture, fs } = harness()
     await unlink(file)
     capture.enqueue(workspace, file)
@@ -207,25 +167,37 @@ describe('外部改动端到端', () => {
     expect(await readFile(file, 'utf8')).toBe('KEEP ME\n')
   })
 
-  it('验收 5：工具写盘之后 watch 不产生第二条记录', async () => {
+  it('Keep 关窗后外部再改不冒记录；AI 再写按新基线重开', async () => {
     const file = join(workspace, 'c.txt')
-    await writeFile(file, 'A', 'utf8')
-    seedToolWrite(file, 'A', 'B')
     await writeFile(file, 'B', 'utf8')
-    const { capture, writes } = harness()
+    openWindow(file, 'A', 'B')
+    const { capture, fs } = harness()
+    const item = loadPage(workspace).items[0]!
+    await applyDecide(fs as never, workspace, {
+      sessionId: 's1', id: item.id, revision: item.revision, operationId: 'op-keep', decision: 'accepted', scope: 'file',
+    })
+    expect(loadPage(workspace).items).toHaveLength(0)
+
+    // 关窗后 Unity 改写：不产生记录
+    await writeFile(file, 'UNITY', 'utf8')
     capture.enqueue(workspace, file)
     await capture.flush()
-    expect(writes).toHaveLength(0)
-    const entries = loadEntries(workspace).filter((item) => item.entry.id === file)
-    expect(entries).toHaveLength(1)
-    expect(entries[0]!.entry.source).toBe('write')
+    expect(loadPage(workspace).items).toHaveLength(0)
+
+    // AI 再写：以这次写前内容（UNITY）为新基线重新开窗
+    openWindow(file, 'UNITY', 'AI2')
+    await writeFile(file, 'AI2', 'utf8')
+    const reopened = loadPage(workspace).items[0]!
+    expect(reopened.tracking).toBe('open')
+    expect(loadEntries(workspace).find((entry) => entry.entry.id === file)!.entry)
+      .toMatchObject({ oldText: 'UNITY', newText: 'AI2', tracking: 'open' })
   })
 
-  it('验收 6：CRLF + BOM 文件分析后字节不变，记录内容逐字符保真', async () => {
+  it('CRLF + BOM 文件分析后字节不变，记录内容逐字符保真', async () => {
     const file = join(workspace, 'd.txt')
     const original = Buffer.from('\uFEFFline1\r\nline2\r\n', 'utf8')
     await writeFile(file, original)
-    seedToolWrite(file, 'OLD', 'OLD')
+    openWindow(file, 'OLD', 'OLD2')
     const { capture } = harness()
     await writeFile(file, Buffer.from('\uFEFFline1\r\nline2 changed\r\n', 'utf8'))
     capture.enqueue(workspace, file)
@@ -240,12 +212,14 @@ describe('外部改动端到端', () => {
 
   it('非 UTF-8 内容不落记录也不改写磁盘，只进缺口', async () => {
     const file = join(workspace, 'gbk.txt')
+    await writeFile(file, 'OLD', 'utf8')
+    openWindow(file, 'OLD', 'OLD2')
     const gbk = Buffer.from([0xb2, 0xe2, 0xca, 0xd4, 0x0a]) // GBK「测试」
     await writeFile(file, gbk)
-    const { capture, writes } = harness()
+    const { capture } = harness()
     capture.enqueue(workspace, file)
     await capture.flush()
-    expect(writes).toHaveLength(0)
     expect((await readFile(file)).equals(gbk)).toBe(true)
+    expect(pendingGaps(workspace).some((line) => line.includes('gbk.txt'))).toBe(true)
   })
 })

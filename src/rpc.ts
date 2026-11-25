@@ -15,6 +15,7 @@ import {
   archiveRecords,
   archiveCanceled,
   autoArchiveStale,
+  reclaimActive,
   retireCovered,
   policyOf,
   resolveTarget,
@@ -28,6 +29,8 @@ import { clearRevertState, listArchives, pageArchives, readArchives, revertState
 import { purgeArchiveDb, scheduleArchiveRewrite } from './archivePurge.js'
 import { hasOfficial } from './reviewDb.js'
 import { log } from './log.js'
+import { planRuntimeAssets, renderAutoPlanPage } from './planAutoPage.js'
+import { packPlanPage } from './planPagePack.js'
 import { beginOperation } from './slowLog.js'
 import type { Registry, SessionScope } from './registry.js'
 import { bucketOf, cwdOfSession, resolveScope, sessionOf } from './registry.js'
@@ -776,6 +779,8 @@ export function buildHandlers(
           await archiveCanceled(ctx, sc.session, sc.cwd, bucket)
           // 已被待审累计基线接管的路径：旧记录直接结案归档，旧通道的 Keep/Undo 随之从界面消失
           await retireCovered(ctx, sc.session, sc.cwd, bucket)
+          // 待审 v7 迁移可能刚清空库内旧记录：同一个请求里的内存桶也要同步清掉
+          reclaimActive(sc.cwd, bucket)
           // #region debug log
           staleMs = performance.now() - staleStart
           // #endregion
@@ -832,6 +837,32 @@ export function buildHandlers(
         return { ok: false, error: failed.error }
       }
       return { ok: true }
+    },
+    /**
+     * HTML 计划模式兜底页：把提交给 exit_html_plan_mode 的计划正文渲染成独立 HTML。
+     * 不读工作区文件，只读随包技能运行时；失败返回可读错误，客户端回落 Markdown。
+     * @author ddj 2026年11月25号
+     */
+    'edrv.planPage.render': async (args) => {
+      try {
+        const assets = await planRuntimeAssets()
+        return { ok: true, html: renderAutoPlanPage(String(args.markdown ?? ''), assets) }
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : String(error) }
+      }
+    },
+    /**
+     * HTML 计划模式作者页打包：只允许会话工作区内的 .html/.htm，结果进内存、不落工作区。
+     * @author ddj 2026年11月25号
+     */
+    'edrv.planPage.pack': async (args) => {
+      const sc = await resolveScope(ctx, args.sessionId)
+      if ('err' in sc) return { ok: false, error: sc.err }
+      try {
+        return { ok: true, html: await packPlanPage(sc.cwd, String(args.path ?? '')) }
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : String(error) }
+      }
     },
     'edrv.accept': async (args) => {
       const sc = await requireSession(ctx, args.sessionId)
