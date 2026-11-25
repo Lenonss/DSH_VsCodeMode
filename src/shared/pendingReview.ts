@@ -18,8 +18,20 @@ export type PendingSource = 'edit' | 'write' | 'remote_ssh_write' | 'tool' | 'wa
 /** 归属：谁动的文件。撤销白名单只看它。 */
 export type PendingOrigin = 'agent' | 'editor' | 'vcs' | 'external'
 
-/** 修改前内容的可信度：known 已知内容，absent 当时不存在，vcs 版本库基线，unknown 拿不到。 */
-export type PendingBaseKind = 'known' | 'absent' | 'vcs' | 'unknown'
+/**
+ * 修改前内容的可信度：known 已知内容，absent 当时不存在，vcs 版本库基线，
+ * normalized 由工具回执文本补出的基线（行尾已归一，写回前必须确认），unknown 拿不到。
+ */
+export type PendingBaseKind = 'known' | 'absent' | 'vcs' | 'normalized' | 'unknown'
+
+/**
+ * 采集证据强度：authoritative 工具回执自带前后全文；receipt 回执只带哈希；
+ * snapshot 只有自己的前后快照；none 没有可用证据。
+ */
+export type PendingEvidence = 'authoritative' | 'receipt' | 'snapshot' | 'none'
+
+/** 一次写入调用的结局：只有 changed 会进待审列表。 */
+export type PendingVerdict = 'changed' | 'noop' | 'failed' | 'unverified'
 
 /** 会话血缘，用于子代理/派生会话归属到同一待审视图。 */
 export interface PendingLineage {
@@ -59,6 +71,12 @@ export interface PendingItem {
   origin?: PendingOrigin
   /** 修改前内容的可信度；旧条目没有该字段，按 `known` 处理。 */
   baseKind?: PendingBaseKind
+  /** 这次差异靠什么证据立起来；旧条目没有该字段，按 `snapshot` 处理。 */
+  evidence?: PendingEvidence
+  /** 这次调用的结局；旧条目没有该字段，按 `changed` 处理。 */
+  verdict?: PendingVerdict
+  /** 只读编辑说明（模型声明，仅展示，不参与判定）；没有时不出现。 */
+  note?: string
 }
 
 /** 一页待审条目。 */

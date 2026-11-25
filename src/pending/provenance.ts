@@ -11,7 +11,7 @@
  * 作者 ddj 2026-11-24
  */
 import { createHash } from 'node:crypto'
-import type { PendingBaseKind, PendingOrigin, PendingSource } from '../shared/pendingReview.js'
+import type { PendingBaseKind, PendingEvidence, PendingOrigin, PendingSource } from '../shared/pendingReview.js'
 import { pathKeyFor } from '../shared/pathKey.js'
 
 // --region 常量
@@ -47,6 +47,11 @@ const SOURCE_OF_TOOL: Record<string, PendingSource> = {
 /** 通道强度：合并同一路径的两次采集时，强通道保留其来源标签。 */
 const SOURCE_RANK: Record<PendingSource, number> = {
   edit: 6, write: 6, remote_ssh_write: 5, tool: 4, watch: 3, scan: 2, vcs: 1,
+}
+
+/** 证据强度：回执说过的话比自己的快照可信，快照又胜过没有任何依据。 */
+const EVIDENCE_RANK: Record<PendingEvidence, number> = {
+  authoritative: 4, receipt: 3, snapshot: 2, none: 1,
 }
 
 // --endregion
@@ -88,6 +93,32 @@ export function strongerSource(earlier: PendingSource | undefined, later: Pendin
 }
 
 /**
+ * @author ddj 2026年11月25号
+ * @description: 合并证据强度：回执胜过快照，同级保留首次值。
+ * @param earlier 已落库证据（可为空）
+ * @param later 本次证据
+ * @returns 应当落库的证据强度
+ */
+export function strongerEvidence(earlier: PendingEvidence | undefined, later: PendingEvidence | undefined): PendingEvidence {
+  const left = earlier ?? 'snapshot'
+  const right = later ?? 'snapshot'
+  return (EVIDENCE_RANK[left] >= EVIDENCE_RANK[right] ? left : right)
+}
+
+/**
+ * @author ddj 2026年11月25号
+ * @description: 证据徽标文案；旧条目没有该字段时按快照处理。
+ * @param evidence 证据强度
+ * @returns 展示文案
+ */
+export function evidenceLabelOf(evidence?: PendingEvidence): string {
+  if (evidence === 'authoritative') return '回执已核'
+  if (evidence === 'receipt') return '回执对账'
+  if (evidence === 'none') return '无回执'
+  return '快照推断'
+}
+
+/**
  * @author ddj 2026-11-24
  * @description: 去重键：路径比较键 + 内容 sha256。只按内容判同一变化，不看时间。
  * @param pathKey 路径比较键
@@ -99,8 +130,8 @@ export function dedupeKey(pathKey: string, content: string | null): string {
 }
 
 /**
- * @author ddj 2026-11-24
- * @description: 撤销白名单：只有 agent 来源且基线可信时才可以直接撤销。
+ * @author ddj 2026-11-24 / 2026年11月25号
+ * @description: 撤销白名单：只有 agent 来源且基线可信时才可以直接撤销；归一基线要确认。
  * @param origin 归属
  * @param baseKind 基线与可信度
  * @returns 可直接撤销 / 需确认 / 禁止
@@ -109,23 +140,26 @@ export function revertPolicyOf(
   origin: PendingOrigin | undefined,
   baseKind: PendingBaseKind | undefined,
 ): 'direct' | 'confirm' | 'blocked' {
-  if ((baseKind ?? 'known') === 'unknown') return 'blocked'
+  const base = baseKind ?? 'known'
+  if (base === 'unknown') return 'blocked'
+  if (base === 'normalized') return 'confirm'
   return (origin ?? 'agent') === 'agent' ? 'direct' : 'confirm'
 }
 
 /**
- * @author ddj 2026-11-24
- * @description: 条目来源徽标文案；官方行没有徽标。
+ * @author ddj 2026-11-24 / 2026年11月25号
+ * @description: 条目来源徽标文案；官方行没有徽标，待审条目在来源后附证据强度。
  * @param entry 待审条目的来源字段
  * @returns 展示文案
  */
-export function sourceLabelOf(entry: { source?: PendingSource; origin?: PendingOrigin }): string {
+export function sourceLabelOf(entry: { source?: PendingSource; origin?: PendingOrigin; evidence?: PendingEvidence }): string {
   const source = entry.source ?? 'tool'
   const origin = entry.origin ?? 'agent'
-  if (origin === 'agent') return source + ' · agent'
-  if (origin === 'editor') return '编辑器保存'
-  if (origin === 'vcs') return '版本库同步'
-  return source + ' · 外部'
+  const badge = ' · ' + evidenceLabelOf(entry.evidence)
+  if (origin === 'agent') return source + ' · agent' + badge
+  if (origin === 'editor') return '编辑器保存' + badge
+  if (origin === 'vcs') return '版本库同步' + badge
+  return source + ' · 外部' + badge
 }
 
 // --endregion

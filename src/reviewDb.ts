@@ -136,7 +136,7 @@ export async function repairPaths(cwd: string, resolvePath: (cwd: string, path: 
   }
 }
 
-/** @private @author ddj 2026年10月26号 @param db Transaction. @param snapshot Source payload. @param hash Source digest. */
+/** @private @author ddj 2026年10月26号 / 2026年11月25号 @param db Transaction. @param snapshot Source payload. @param hash Source digest. */
 function insertSnapshot(db: DatabaseSync, snapshot: ReviewSnapshot, hash: string): void {
   const { sessionId, turn, seq } = snapshot
   const previous = db.prepare('SELECT id,identity,diff,decision FROM review_files WHERE session_id=? AND turn=? AND current=1').all(sessionId, turn) as Row[]
@@ -146,10 +146,33 @@ function insertSnapshot(db: DatabaseSync, snapshot: ReviewSnapshot, hash: string
   const insert = db.prepare('INSERT INTO review_files VALUES(?,?,?,?,?,?,?,?,0,1)')
   for (const [index, file] of snapshot.files.entries()) {
     const encoded = JSON.stringify(file.diff)
+    const summary = JSON.stringify(snapshot.summary.files[index])
+    // 同一路径只留一条：合并时锚点（id/turn/seq）不动，只把差异换成最新；
+    // 完全相同的重发保留既有判定，已判定且内容真的变了才另起一条待审。
+    const prior = latestRowOf(db, file.identity)
+    if (prior) {
+      const identical = String(prior.diff) === encoded
+      if (identical) {
+        db.prepare('UPDATE review_files SET current=1 WHERE id=?').run(String(prior.id))
+        continue
+      }
+      if (prior.decision === 'pending') {
+        const kept = db.prepare('SELECT block_id,decision FROM review_blocks WHERE file_id=?').all(String(prior.id)) as Row[]
+        db.prepare('UPDATE review_files SET summary=?,diff=?,current=1,revision=revision+1 WHERE id=?')
+          .run(summary, encoded, String(prior.id))
+        db.prepare('DELETE FROM review_blocks WHERE file_id=?').run(String(prior.id))
+        seedBlocks(db, String(prior.id), file.diff, 'pending')
+        // 内容没变的块沿用已做出的判定：合并不等于把用户已审过的块重新变成待定
+        const restore = db.prepare('UPDATE review_blocks SET decision=? WHERE file_id=? AND block_id=?')
+        for (const block of kept) restore.run(String(block.decision), String(prior.id), String(block.block_id))
+        continue
+      }
+      dropFile(db, String(prior.id))
+    }
     const unchanged = previous.find((item) => item.identity === file.identity && item.diff === encoded)
     const id = digest(JSON.stringify([sessionId, turn, seq, file.identity]))
     const decision = String(unchanged?.decision ?? 'pending')
-    insert.run(id, sessionId, turn, seq, file.identity, JSON.stringify(snapshot.summary.files[index]), encoded, decision)
+    insert.run(id, sessionId, turn, seq, file.identity, summary, encoded, decision)
     seedBlocks(db, id, file.diff, decision)
     if (unchanged) {
       // A same-turn republish must preserve mixed per-block decisions, not seed all blocks as mixed.
@@ -160,6 +183,44 @@ function insertSnapshot(db: DatabaseSync, snapshot: ReviewSnapshot, hash: string
       db.prepare('INSERT INTO review_evidence SELECT ?,payload FROM review_evidence WHERE file_id=?').run(id, unchanged.id)
     }
   }
+}
+
+/**
+ * @private
+ * @author ddj 2026年11月25号
+ * @description: 取某路径当前最新的一条记录，用于「同路径只留一条」的合并判断。
+ * @param db 已打开连接
+ * @param identity 路径身份
+ * @returns 记录行或 undefined
+ */
+function latestRowOf(db: DatabaseSync, identity: string): Row | undefined {
+  return db.prepare('SELECT id,decision,diff FROM review_files WHERE identity=? ORDER BY rowid DESC LIMIT 1').get(identity) as Row | undefined
+}
+
+/**
+ * @private
+ * @author ddj 2026年11月25号
+ * @description: 清掉某条记录的块决定，合并重算前先归零。
+ * @param db 已打开连接
+ * @param fileId 记录 id
+ * @returns 无
+ */
+function dropBlocksOf(db: DatabaseSync, fileId: string): void {
+  db.prepare('DELETE FROM review_blocks WHERE file_id=?').run(fileId)
+  db.prepare('DELETE FROM review_evidence WHERE file_id=?').run(fileId)
+}
+
+/**
+ * @private
+ * @author ddj 2026年11月25号
+ * @description: 删掉一条官方记录及其块决定：合并语义下旧轮次不再留档。
+ * @param db 已打开连接
+ * @param fileId 记录 id
+ * @returns 无
+ */
+function dropFile(db: DatabaseSync, fileId: string): void {
+  dropBlocksOf(db, fileId)
+  db.prepare('DELETE FROM review_files WHERE id=?').run(fileId)
 }
 
 /** @public @author ddj 2026年10月26号 @param cwd Workspace. @param gap Announced event identity. @param state Durable inbox or explicit failure. */

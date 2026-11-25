@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { closeArchiveDbs, dbFor, migrateActive } from '../src/archiveDb.js'
 import { archiveDbFile } from '../src/paths.js'
 import { pendingDb } from '../src/pending/persist.js'
-import { KEEP_BATCHES, KEEP_HISTORY, purgeArchiveDb, RETENTION_DAYS, sweepArchives } from '../src/archivePurge.js'
+import { KEEP_BATCHES, KEEP_OPS, purgeArchiveDb, RETENTION_DAYS, sweepArchives } from '../src/archivePurge.js'
 
 let home = ''
 let workspace = ''
@@ -111,17 +111,27 @@ describe('归档库清理', () => {
     expect(countOf('batches')).toBe(1)
   })
 
-  it('撤销栈每个条目只留最近 K 步', () => {
+  it('撤销栈每条路径只有一行，清理不再按步裁剪', () => {
     const db = pendingDb(workspace)
-    const add = db.prepare('INSERT INTO pending_history(kind,entry_id,snapshot,created_at) VALUES(?,?,?,?)')
-    for (let index = 0; index < 15; index++) add.run('decide', 'entry-a', '{}', index)
-    for (let index = 0; index < 3; index++) add.run('decide', 'entry-b', '{}', index)
+    const add = db.prepare(`INSERT INTO pending_history(entry_id,path,kind,earlier,baseline,content,digest,wrote,state,merged_at)
+      VALUES(?,?,?,?,?,?,?,?,?,?)
+      ON CONFLICT(entry_id) DO UPDATE SET kind=excluded.kind,baseline=excluded.baseline,
+        content=excluded.content,digest=excluded.digest,merged_at=excluded.merged_at`)
+    add.run('entry-a', 'a.lua', 'keep', 'file', 'A', 'B', 'd1', 0, 'applied', 1)
+    add.run('entry-b', 'b.lua', 'revert', 'file', 'C', 'D', 'd2', 1, 'applied', 2)
+    // 同一路径重复写：主键覆盖，仍然只有一行
+    add.run('entry-a', 'a.lua', 'keep', 'file', 'B', 'C', 'd3', 0, 'applied', 3)
+    const before = db.prepare('SELECT COUNT(*) AS n FROM pending_history').get() as { n: number }
+    expect(Number(before.n)).toBe(2)
+
+    const ops = db.prepare('INSERT INTO pending_ops(operation_id,request,state) VALUES(?,?,?)')
+    for (let index = 0; index < KEEP_OPS + 25; index++) ops.run('op-' + index, '{}', 'committed')
     const outcome = purgeArchiveDb(workspace, { dryRun: false, vacuum: false })
-    expect(outcome.removed.history).toBe(15 - KEEP_HISTORY)
-    const left = db.prepare("SELECT entry_id, COUNT(*) AS n FROM pending_history GROUP BY entry_id").all() as Array<{ entry_id: string; n: number }>
-    const byEntry = new Map(left.map((row) => [row.entry_id, Number(row.n)]))
-    expect(byEntry.get('entry-a')).toBe(KEEP_HISTORY)
-    expect(byEntry.get('entry-b')).toBe(3)
+    expect(outcome.removed.history).toBe(0)
+    const after = db.prepare('SELECT COUNT(*) AS n FROM pending_history').get() as { n: number }
+    expect(Number(after.n)).toBe(2)
+    const left = db.prepare('SELECT COUNT(*) AS n FROM pending_ops').get() as { n: number }
+    expect(Number(left.n)).toBe(KEEP_OPS)
   })
 
   it('删批次时连带清掉它的撤销意图，不留孤儿行', () => {
@@ -140,14 +150,28 @@ describe('归档库清理', () => {
   it('每日扫描能列出本机所有归档库并逐个执行', () => {
     addBatch('h.lua', daysAgo(RETENTION_DAYS + 1))
     const visited: string[] = []
+    const rewrites: string[] = []
     const result = sweepArchives({
       home,
       run: (cwd) => {
         visited.push(cwd)
         return { expired: 0, overCap: 0, keptPending: 0, removed: { records: 0, batches: 0, history: 0 } }
       },
+      rewrite: (jobs) => { for (const job of jobs) rewrites.push(job.file) },
     })
     expect(visited).toEqual([workspace])
     expect(result.workspaces).toBe(1)
+    // 没有删到任何行就不该起重写子进程
+    expect(rewrites).toEqual([])
+  })
+
+  it('删到行之后才把整库重写交给子进程', () => {
+    addBatch('i.lua', daysAgo(RETENTION_DAYS + 1))
+    const rewrites: string[] = []
+    const result = sweepArchives({ home, rewrite: (jobs) => { for (const job of jobs) rewrites.push(job.file) } })
+    expect(result.removed).toBeGreaterThan(0)
+    expect(rewrites).toEqual([archiveDbFile(workspace)])
+    // 进程内不再做 VACUUM：删行已完成
+    expect(result.rewrites).toBe(1)
   })
 })

@@ -1,5 +1,5 @@
 /** Official bulk decisions use persisted metadata, never the visible history page. @author ddj 2026年10月27号 */
-import type { ReviewDetail, ReviewItem, ReviewPage, ReviewResult } from '../shared/review.js'
+import type { ReviewDetail, ReviewItem, ReviewPage, ReviewResult, UndoAllItem, UndoAllResult } from '../shared/review.js'
 import { PENDING_PREFIX } from '../shared/pendingReview.js'
 
 export interface BatchPort {
@@ -12,6 +12,53 @@ export interface BatchPort {
   confirmExternal?: (details: ReviewDetail[]) => boolean
 }
 export interface BatchResult { completed: number; total: number; paths: string[]; error: string }
+
+/** 批量 Undo 的宿主通道：一次往返搞定整批，不再逐条取详情再逐条判定。 */
+export interface UndoAllPort {
+  snapshot: () => Promise<ReviewPage>
+  undoAll: (items: UndoAllItem[], batchId: string, confirmed: boolean) => Promise<ReviewResult<{ result: UndoAllResult }>>
+  /** 需要显式确认时的整批确认；返回 false 视为取消。 */
+  confirmExternal: (count: number) => boolean
+  guard: () => void
+}
+
+/**
+ * @public
+ * @author ddj 2026年11月25号
+ * @description: Undo All 走宿主批量通道：一次 RPC、一次事务，遇冲突即停。
+ * 非本会话工具写入的来源先要一次确认，确认后带 confirmed 重试同一批。
+ * @param port 已鉴权的 RPC 适配器
+ * @returns 与逐条口径一致的批量结果
+ */
+export async function runUndoAll(port: UndoAllPort): Promise<BatchResult> {
+  const result: BatchResult = { completed: 0, total: 0, paths: [], error: '' }
+  try {
+    port.guard()
+    const items = await loadPending(port)
+    // 待审条目走单条判定；批量通道只处理官方审查记录
+    const official = items.filter((item) => !item.id.startsWith(PENDING_PREFIX))
+    if (!official.length) throw new Error('没有可撤销的官方审查记录')
+    result.total = official.length
+
+    const targets: UndoAllItem[] = official.map((item) => ({
+      id: item.id, display: item.display, seq: item.seq, revision: item.revision, operationId: crypto.randomUUID(),
+    }))
+    const batchId = crypto.randomUUID()
+    let reply = await port.undoAll(targets, batchId, false)
+    if (!reply.ok) throw new Error(reply.error)
+    if (reply.result.needsConfirm) {
+      if (!port.confirmExternal(reply.result.needsConfirm)) {
+        throw new Error('已取消：这批修改里有非本会话工具写入的来源，撤销前需要确认')
+      }
+      reply = await port.undoAll(targets, batchId, true)
+      if (!reply.ok) throw new Error(reply.error)
+    }
+    result.completed = reply.result.completed
+    result.paths = reply.result.paths
+    result.error = reply.result.error
+  } catch (cause) { result.error = cause instanceof Error ? cause.message : String(cause) }
+  return result
+}
 
 /**
  * @public

@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { disposeIndex } from '../src/treeIndex.js'
 import type { ExternalSettings } from '../src/pending/externalCapture.js'
-import { isIgnoredPath, installExternalCapture, ALIGN_AFTER_VCS_MS, MAX_BATCH } from '../src/pending/externalCapture.js'
+import { isIgnoredPath, installExternalCapture, ALIGN_AFTER_VCS_MS, BURST_NEW_LIMIT, MAX_BATCH } from '../src/pending/externalCapture.js'
 import { windows } from '../src/pending/provenance.js'
 import type { PendingWrite } from '../src/pending/capture.js'
 import { pendingGaps } from '../src/pending/capture.js'
@@ -37,11 +37,12 @@ function storedOf(path: string, newText: string, extra?: Partial<StoredEntry['en
  * @param entries 已知条目
  * @param status 版本库状态（null = 拿不到状态）
  * @param mtimes mtime 表（绝对路径 → 毫秒；缺省视为读不到）
+ * @param latest 单条最新条目（缺省回落到 entries 快照）
  * @returns 采集器、写入记录与改动磁盘的入口
  */
 function harness(
   files: Record<string, string | null>, entries: StoredEntry[] = [], status: VcsStatus | null = null,
-  mtimes: Record<string, number> = {},
+  mtimes: Record<string, number> = {}, latest?: (absolute: string) => StoredEntry | undefined,
 ) {
   const writes: PendingWrite[] = []
   const disk = new Map(Object.entries(files))
@@ -57,6 +58,7 @@ function harness(
     entries: () => new Map(entries.map((stored) => [pathKeyOf(stored.entry.id), stored])),
     status: async () => status,
     mtime: (_cwd, absolute) => mtimes[absolute],
+    ...latest ? { latest: (_cwd: string, absolute: string) => latest(absolute) } : {},
   })
   // 生产里 startedAt 由 ensure() 里的 startWatch 赋值；夹具走同一条路，mtime 证据才有参照点
   capture.ensure(CWD, 's1')
@@ -197,6 +199,26 @@ describe('判定链', () => {
     expect(writes).toHaveLength(0)
   })
 
+  it('批次快照过期时不把工具写入再记成版本库同步', async () => {
+    const file = join(CWD, 'a.txt')
+    // 本批快照还停在 OLD，工具刚把内容写成 NEW 并已落库：最新条目能对上，就不再记一次
+    const fresh = storedOf(file, 'NEW', { source: 'edit' })
+    const { capture, writes } = harness({ [file]: 'NEW' }, [storedOf(file, 'OLD')], statusOf([]), {}, () => fresh)
+    capture.enqueue(CWD, file)
+    await capture.flush()
+    expect(writes).toHaveLength(0)
+  })
+
+  it('快照过期但最新条目仍对不上时，照旧记成版本库同步', async () => {
+    const file = join(CWD, 'a.txt')
+    const middle = storedOf(file, 'MID')
+    const { capture, writes } = harness({ [file]: 'NEW' }, [storedOf(file, 'OLD')], statusOf([]), {}, () => middle)
+    capture.enqueue(CWD, file)
+    await capture.flush()
+    expect(writes).toHaveLength(1)
+    expect(writes[0]).toMatchObject({ before: 'MID', after: 'NEW', tool: 'vcs', origin: 'vcs' })
+  })
+
   it('没有 agent 窗口时归属外部，并带上真实修改前内容', async () => {
     const file = join(CWD, 'a.txt')
     const { capture, writes } = harness({ [file]: 'NEW' }, [storedOf(file, 'OLD')], statusOf([[file, 'modified']]))
@@ -326,6 +348,48 @@ describe('首次见路径的建档证据（幽灵记录闸门）', () => {
     await capture.flush()
     expect(writes).toHaveLength(1)
     expect(writes[0]).toMatchObject({ after: 'NEW', baseKind: 'unknown' })
+  })
+})
+
+describe('整文件新增熔断', () => {
+  it('短时间超过上限后停止新建，并留下一条缺口', async () => {
+    const files: Record<string, string | null> = {}
+    const mtimes: Record<string, number> = {}
+    const paths: string[] = []
+    for (let index = 0; index < BURST_NEW_LIMIT + 5; index++) {
+      const path = join(CWD, 'burst', `f${index}.txt`)
+      files[path] = 'NEW'
+      mtimes[path] = Date.now()
+      paths.push(path)
+    }
+    const { capture, writes } = harness(files, [], null, mtimes)
+    for (const path of paths) capture.enqueue(CWD, path)
+    for (let round = 0; round < 10; round++) await capture.flush()
+    expect(writes).toHaveLength(BURST_NEW_LIMIT)
+    expect(pendingGaps(CWD).filter((line) => line.includes('暂停')).length).toBe(1)
+  })
+
+  it('熔断静默期内，已有条目的更新照常记录', async () => {
+    const existing = join(CWD, 'burst-keep', 'keep.txt')
+    const files: Record<string, string | null> = { [existing]: 'OLD' }
+    const mtimes: Record<string, number> = { [existing]: Date.now() }
+    const burst: string[] = []
+    for (let index = 0; index < BURST_NEW_LIMIT + 1; index++) {
+      const path = join(CWD, 'burst-more', `f${index}.txt`)
+      files[path] = 'NEW'
+      mtimes[path] = Date.now()
+      burst.push(path)
+    }
+    const { capture, writes, put } = harness(files, [storedOf(existing, 'OLD')], null, mtimes)
+    for (const path of burst) capture.enqueue(CWD, path)
+    for (let round = 0; round < 10; round++) await capture.flush()
+    const afterBurst = writes.length
+    // 熔断后再改已有条目：不走「整文件新增」通道，必须照常落库
+    put(existing, 'UPDATED')
+    capture.enqueue(CWD, existing)
+    await capture.flush()
+    expect(writes.length).toBe(afterBurst + 1)
+    expect(writes[writes.length - 1]).toMatchObject({ path: existing, before: 'OLD', after: 'UPDATED' })
   })
 })
 

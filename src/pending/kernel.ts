@@ -3,9 +3,9 @@
  * 无 IO、无时钟、不改入参；调用方传入 now 与内容，便于测试与复用。
  * @author ddj 2026年10月29号
  */
-import type { PendingBaseKind, PendingEarlier, PendingLineage, PendingOrigin, PendingSource } from '../shared/pendingReview.js'
+import type { PendingBaseKind, PendingEarlier, PendingEvidence, PendingLineage, PendingOrigin, PendingSource, PendingVerdict } from '../shared/pendingReview.js'
 import { logicalLines } from '../shared/lineEndings.js'
-import { strongerSource } from './provenance.js'
+import { strongerEvidence, strongerSource } from './provenance.js'
 
 /** 内存态条目：比展示投影多保存两侧全文。 */
 export interface PendingEntry {
@@ -25,6 +25,10 @@ export interface PendingEntry {
   origin?: PendingOrigin
   /** 修改前内容的可信度；缺省按 `known` 解释。 */
   baseKind?: PendingBaseKind
+  /** 证据强度；缺省按 `snapshot` 解释。 */
+  evidence?: PendingEvidence
+  /** 这次调用的结局；缺省按 `changed` 解释。 */
+  verdict?: PendingVerdict
 }
 
 /** 新建条目的入参。 */
@@ -40,6 +44,8 @@ export interface NewPending {
   source?: PendingSource
   origin?: PendingOrigin
   baseKind?: PendingBaseKind
+  evidence?: PendingEvidence
+  verdict?: PendingVerdict
 }
 
 /** 决定后对条目的局部推进；未出现的字段表示不改。 */
@@ -91,6 +97,9 @@ export function mergeEntries(earlier: PendingEntry, later: PendingEntry): Pendin
     origin: later.origin ?? earlier.origin,
     // 基线一旦落成"已知内容"，就不再退回未知；未知只来自首次观察失败的那条记录。
     baseKind: later.baseKind ?? earlier.baseKind,
+    // 证据强度同样取更强的一侧：回执胜过自己的快照，结局取最近一次调用。
+    evidence: strongerEvidence(earlier.evidence, later.evidence),
+    verdict: later.verdict ?? earlier.verdict,
   }
   if (later.lineage === undefined && earlier.lineage !== undefined) merged.lineage = earlier.lineage
   if (earlier.earlierVersion === 'none' && later.earlierVersion === 'none') {
@@ -125,6 +134,8 @@ export function entryFromNew(input: NewPending): PendingEntry {
   if (input.source !== undefined) entry.source = input.source
   if (input.origin !== undefined) entry.origin = input.origin
   if (input.baseKind !== undefined) entry.baseKind = input.baseKind
+  if (input.evidence !== undefined) entry.evidence = input.evidence
+  if (input.verdict !== undefined) entry.verdict = input.verdict
   return entry
 }
 

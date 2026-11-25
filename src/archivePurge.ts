@@ -10,19 +10,18 @@
  * - 真删之前先留一份同名备份（`<db>.before-purge.bak`，覆盖写），每个工作区只占一份。
  * 作者 ddj 2026-11-24
  */
-import { readdirSync, rmSync } from 'node:fs'
-import { join } from 'node:path'
+import { spawn } from 'node:child_process'
+import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { archiveDbFile, dshHome, PLUGIN_ID } from './paths.js'
-import { dbFor, activeReady } from './archiveDb.js'
+import { dbFor, activeReady, closeArchiveDbs } from './archiveDb.js'
 import { log } from './log.js'
 
 /** 已判定历史默认保留天数。 */
 export const RETENTION_DAYS = 30
 /** 同一路径默认保留多少个归档批次。 */
 export const KEEP_BATCHES = 20
-/** 同一待审条目默认保留多少步撤销栈。 */
-export const KEEP_HISTORY = 10
 /** 幂等操作表默认保留多少条（该表无时间列，按 rowid 保留最近的）。 */
 export const KEEP_OPS = 500
 /** 真删前备份文件名后缀。 */
@@ -34,8 +33,8 @@ export interface ArchivePurgeOptions {
   retentionDays?: number
   /** 每路径保留批次数（缺省 {@link KEEP_BATCHES}）。 */
   keepBatches?: number
-  /** 每条目保留的撤销步数（缺省 {@link KEEP_HISTORY}）。 */
-  keepHistory?: number
+  /** 幂等表保留条数（缺省 {@link KEEP_OPS}）。 */
+  keepOps?: number
   /** true 只报数不删。 */
   dryRun?: boolean
   /** 删除后 VACUUM（缺省 true）。 */
@@ -103,20 +102,16 @@ function pickCandidates(db: ReturnType<typeof dbFor>, options: ArchivePurgeOptio
 }
 
 /**
- * @author ddj 2026-11-24
- * @description: 截断撤销栈与幂等表：每个条目只留最近若干步，避免这两张表跟着天长日久。
+ * @author ddj 2026年11月25号
+ * @description: 截断幂等表：撤销栈已改成「一条路径一行」，不再按步裁剪。
  * @param db 工作区归档库连接
- * @param keepHistory 每条目保留步数
- * @returns 删除的历史行数
+ * @param keepOps 幂等表保留条数
+ * @returns 删除的历史行数（恒为 0，保留字段只为回执口径不变）
  */
-function trimPendingTables(db: ReturnType<typeof dbFor>, keepHistory: number): number {
-  const trimmed = db.prepare(`DELETE FROM pending_history WHERE id NOT IN (
-      SELECT id FROM (
-        SELECT id, ROW_NUMBER() OVER (PARTITION BY entry_id ORDER BY id DESC) AS rn FROM pending_history
-      ) WHERE rn <= ?)`).run(keepHistory)
+function trimPendingTables(db: ReturnType<typeof dbFor>, keepOps: number): number {
   db.prepare(`DELETE FROM pending_ops WHERE rowid NOT IN (
-      SELECT rowid FROM pending_ops ORDER BY rowid DESC LIMIT ?)`).run(KEEP_OPS)
-  return Number(trimmed.changes)
+      SELECT rowid FROM pending_ops ORDER BY rowid DESC LIMIT ?)`).run(keepOps)
+  return 0
 }
 
 /**
@@ -161,14 +156,14 @@ export function purgeArchiveDb(cwd: string, options: ArchivePurgeOptions = {}): 
   const db = dbFor(cwd)
   const { ids, expired, overCap, keptPending } = pickCandidates(db, options)
   const dryRun = options.dryRun !== false
-  const keepHistory = options.keepHistory ?? KEEP_HISTORY
+  const keepOps = options.keepOps ?? KEEP_OPS
   if (dryRun) {
     return { expired, overCap, keptPending, removed: { records: 0, batches: 0, history: 0 } }
   }
   // 没有要删的批次就不备份、不动库：每日扫描绝大多数时候是空跑
   if (ids.length) backupBeforePurge(db, cwd)
   const removedBatches = removeBatches(db, ids)
-  const history = activeReady(cwd) ? trimPendingTables(db, keepHistory) : 0
+  const history = activeReady(cwd) ? trimPendingTables(db, keepOps) : 0
   const outcome: ArchivePurgeOutcome = {
     expired, overCap, keptPending,
     removed: { ...removedBatches, history },
@@ -231,6 +226,16 @@ export interface ArchiveSweepOptions {
   run?: (cwd: string, options: ArchivePurgeOptions) => ArchivePurgeOutcome
   /** 覆盖 DSH home（测试注入）。 */
   home?: string
+  /** 覆盖「重写库文件」的执行体（测试注入；缺省起子进程做 VACUUM）。 */
+  rewrite?: (jobs: RewriteJob[]) => void
+}
+
+/** 交给子进程的重写任务：备份 + 回收页，两件都是整库 IO，必须离开宿主事件循环。 */
+export interface RewriteJob {
+  /** 库文件绝对路径。 */
+  file: string
+  /** 清理前备份路径；空串表示不备份。 */
+  backup: string
 }
 
 /**
@@ -267,27 +272,113 @@ export function listArchiveWorkspaces(home = dshHome()): string[] {
 
 /**
  * @public
- * @author ddj 2026-11-24
- * @description: 对所有工作区归档库跑一遍清理；单个库失败只记日志，不影响其他库。
+ * @author ddj 2026-11-24 / 2026年11月25号
+ * @description: 对所有工作区归档库跑一遍清理；删除在进程内做完（快），整库重写交给子进程。
+ * 单个库失败只记日志，不影响其他库。
  * @param options 扫描选项
  * @returns 扫描到的库数与删除的行数合计
  */
-export function sweepArchives(options: ArchiveSweepOptions = {}): { workspaces: number; removed: number } {
+export function sweepArchives(options: ArchiveSweepOptions = {}): { workspaces: number; removed: number; rewrites: number } {
   const run = options.run ?? purgeArchiveDb
   const workspaces = listArchiveWorkspaces(options.home)
+  const jobs: RewriteJob[] = []
   let removed = 0
   for (const cwd of workspaces) {
     try {
-      const outcome = run(cwd, { dryRun: false })
+      // vacuum:false 先在进程内删行；备份与 VACUUM 一律留到最后统一交给子进程
+      const outcome = run(cwd, { dryRun: false, vacuum: false })
       removed += outcome.removed.batches + outcome.removed.history
-      if (outcome.removed.batches || outcome.removed.history) {
-        log.debug(`归档库清理：${cwd} 批次 ${outcome.removed.batches}，历史 ${outcome.removed.history}，VACUUM ${outcome.vacuumMs ?? 0}ms`)
-      }
+      if (!outcome.removed.batches && !outcome.removed.history) continue
+      jobs.push({ file: archiveDbFile(cwd, options.home), backup: archiveDbFile(cwd, options.home) + BACKUP_SUFFIX })
+      log.debug(`归档库清理：${cwd} 批次 ${outcome.removed.batches}，历史 ${outcome.removed.history}`)
     } catch (error) {
       log.debug('归档库清理跳过：' + cwd + ' ' + String(error))
     }
   }
-  return { workspaces: workspaces.length, removed }
+  if (jobs.length) {
+    const rewrite = options.rewrite ?? rewriteInChild
+    try { rewrite(jobs) } catch (error) { log.warn('归档库重写调度失败（库已删行，未回收空间）：' + String(error)) }
+  }
+  return { workspaces: workspaces.length, removed, rewrites: jobs.length }
+}
+
+/**
+ * @private
+ * @author ddj 2026年11月25号
+ * @description: 起一个独立 Node 子进程做备份与 VACUUM。这两步是整库读写，留在宿主里会把
+ * 事件循环堵住十几秒，所有 RPC（含文件读取、差异渲染）都会一起卡住。
+ * 子进程只认「文件 + 备份路径」，不含任何业务规则，规则仍只有 {@link purgeArchiveDb} 一份。
+ * @param jobs 重写任务
+ * @returns 无（不等待完成）
+ */
+function rewriteInChild(jobs: RewriteJob[]): void {
+  // 子进程要独占写库：先把本进程缓存的连接关掉，否则它会在 busy_timeout 里空转
+  try { closeArchiveDbs() } catch { /* 关闭失败仍交给子进程重试 */ }
+  const script = [
+    "const { DatabaseSync } = require('node:sqlite')",
+    "const { rmSync } = require('node:fs')",
+    'const jobs = JSON.parse(process.argv[1])',
+    'for (const job of jobs) {',
+    '  let db',
+    '  try {',
+    '    db = new DatabaseSync(job.file, { timeout: 15000 })',
+    "    db.exec('PRAGMA busy_timeout=15000')",
+    '    if (job.backup) {',
+    '      try { rmSync(job.backup, { force: true }) } catch (e) { /* 备份覆盖失败不阻断 */ }',
+    "      db.exec(\"VACUUM INTO '\" + job.backup.replace(/'/g, \"''\") + \"'\")",
+    '    }',
+    "    db.exec('VACUUM')",
+    '  } catch (error) {',
+    '    console.error(String(error))',
+    '    process.exitCode = 1',
+    '  } finally {',
+    '    try { db && db.close() } catch (e) { /* 已关闭 */ }',
+    '  }',
+    '}',
+  ].join('\n')
+  const child = spawn(process.execPath, ['-e', script, JSON.stringify(jobs)], { stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true })
+  let stderr = ''
+  child.stderr?.on('data', (chunk) => { stderr += String(chunk) })
+  child.on('error', (error) => log.warn('归档库重写子进程启动失败：' + String(error)))
+  child.on('exit', (code) => {
+    if (code === 0) log.debug('归档库重写完成：' + jobs.length + ' 个库')
+    else log.warn('归档库重写子进程退出码 ' + String(code) + '：' + stderr.slice(0, 300))
+  })
+  if (typeof child.unref === 'function') child.unref()
+}
+
+/**
+ * @public
+ * @author ddj 2026年11月25号
+ * @description: 单个工作区库的备份与回收页交给子进程；RPC 层删完行后调它，不再原地 VACUUM。
+ * @param cwd 工作区
+ * @param home DSH home（测试可注入）
+ * @returns 无
+ */
+export function scheduleArchiveRewrite(cwd: string, home = dshHome()): void {
+  const file = archiveDbFile(cwd, home)
+  try { rewriteInChild([{ file, backup: file + BACKUP_SUFFIX }]) } catch (error) {
+    log.warn('归档库重写调度失败（库已删行，未回收空间）：' + String(error))
+  }
+}
+
+/**
+ * @private
+ * @author ddj 2026年11月25号
+ * @description: 今日是否已经扫过：两个宿主（桌面端与 Web 端）共用同一份 home，避免一天扫两遍。
+ * @param home DSH home
+ * @returns 已扫过返回 true
+ */
+function sweptToday(home: string): boolean {
+  const stamp = join(home, PLUGIN_ID, 'data', 'archive', '.sweep-' + new Date().toISOString().slice(0, 10))
+  try {
+    if (existsSync(stamp)) return true
+    mkdirSync(dirname(stamp), { recursive: true })
+    writeFileSync(stamp, new Date().toISOString(), 'utf8')
+    return false
+  } catch {
+    return false
+  }
 }
 
 /**
@@ -301,6 +392,7 @@ export function startArchiveSweep(options: ArchiveSweepOptions = {}): { dispose(
   let stopped = false
   const run = (): void => {
     if (stopped) return
+    if (sweptToday(options.home ?? dshHome())) return
     try { sweepArchives(options) } catch (error) { log.warn('归档库每日清理失败：' + String(error)) }
   }
   const first = setTimeout(run, options.delayMs ?? SWEEP_FIRST_DELAY_MS)

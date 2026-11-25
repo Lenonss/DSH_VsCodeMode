@@ -9,6 +9,7 @@ import { addedFiles } from '../reviewDb.js'
 import { pathKeyOf, sourceOfTool, windows } from './provenance.js'
 import type { PendingWrite } from './capture.js'
 import { readText, pendingGaps } from './capture.js'
+import { noteOf } from './notes.js'
 import type { ShellLike, VcsImportOptions } from './vcs.js'
 import { importVcsChanges } from './vcs.js'
 import type { DecideOutcome, WriteResult } from './decide.js'
@@ -18,42 +19,73 @@ import type { PendingEntry } from './kernel.js'
 import type { PendingFlags, StoredEntry } from './persist.js'
 import type { KeepRecord } from './persist.js'
 import {
-  dropEntry, earliestUndone, latestApplied, loadBlocks, loadEntries, pendingDb, purgeEntries, pushHistory,
+  dropEntry, earliestUndone, latestApplied, loadBlocks, loadEntries, loadEntry, pendingDb, purgeEntries, pushHistory,
   readOp, saveBlocks, saveDecisions, saveEntry, setHistoryState, vacuumEntries, writeOp,
 } from './persist.js'
-import type { PurgeFilter, PurgeOutcome } from './persist.js'
+import type { HistoryRow, PurgeFilter, PurgeOutcome } from './persist.js'
+
+/** 派生结果缓存：列表每轮都重算全部条目的整文件差异，是卡顿主因之一；键取「revision + 两侧长度」。 */
+const derivedCache = new Map<string, { signature: string; added: number; deleted: number; blocks: ReviewBlockState[] }>()
+/** 派生缓存条数上限：超过就丢最早的一条，避免长会话无限增长。 */
+const DERIVED_MAX = 256
 
 /**
- * @author ddj 2026年10月29号
- * @description: 统计一次差异的增删行数；非文本差异统一记 0/0。
+ * @private
+ * @author ddj 2026年11月25号
+ * @description: 一次 diff 同时给出增删行数与块状态，并按内容签名缓存；内容一变缓存自动失效。
  * @param entry 待审条目
  * @param baselineEmpty 基线置空（新建文件按全量新增计）
- * @returns 增删行数
+ * @param revision 条目版本号；未知时传 -1（按内容长度与时间退化判定）
+ * @returns 增删行数与块状态
  */
-function countsOf(entry: PendingEntry, baselineEmpty = false): { added: number; deleted: number } {
+function derivedOf(entry: PendingEntry, baselineEmpty: boolean, revision: number): { added: number; deleted: number; blocks: ReviewBlockState[] } {
+  const signature = `${revision}:${baselineEmpty ? 1 : 0}:${entry.earlierVersion}:${entry.oldText.length}:${entry.newText.length}:${entry.updatedAt}`
+  const hit = derivedCache.get(entry.id)
+  if (hit && hit.signature === signature) return hit
   const diff = diffOf(entry, baselineEmpty)
-  if (diff.kind !== 'text') return { added: 0, deleted: 0 }
   let added = 0
   let deleted = 0
-  for (const hunk of diff.hunks) {
-    for (const line of hunk.lines) {
-      if (line.startsWith('+')) added++
-      else if (line.startsWith('-')) deleted++
+  let blocks: ReviewBlockState[] = []
+  if (diff.kind === 'text') {
+    for (const hunk of diff.hunks) {
+      for (const line of hunk.lines) {
+        if (line.startsWith('+')) added++
+        else if (line.startsWith('-')) deleted++
+      }
     }
+    blocks = reviewBlocks(diff).map((block) => ({ id: block.id, decision: 'pending' as const }))
   }
-  return { added, deleted }
+  const value = { signature, added, deleted, blocks }
+  if (derivedCache.size >= DERIVED_MAX) {
+    const oldest = derivedCache.keys().next().value
+    if (oldest !== undefined) derivedCache.delete(oldest)
+  }
+  derivedCache.set(entry.id, value)
+  return value
 }
 
 /**
- * @author ddj 2026年10月30号
+ * @author ddj 2026年10月29号 / 2026年11月25号
+ * @description: 统计一次差异的增删行数；非文本差异统一记 0/0。
+ * @param entry 待审条目
+ * @param baselineEmpty 基线置空（新建文件按全量新增计）
+ * @param revision 条目版本号
+ * @returns 增删行数
+ */
+function countsOf(entry: PendingEntry, baselineEmpty = false, revision = -1): { added: number; deleted: number } {
+  const derived = derivedOf(entry, baselineEmpty, revision)
+  return { added: derived.added, deleted: derived.deleted }
+}
+
+/**
+ * @author ddj 2026年10月30号 / 2026年11月25号
  * @description: 由当前累计条目现场推导块身份；块是差异的纯函数，落库的只是决定状态。
  * @param entry 累计条目
+ * @param revision 条目版本号
  * @returns 块状态列表（决定一律 pending，判定推进后由下一次推导自然收窄）
  */
-function blockStatesOf(entry: PendingEntry): ReviewBlockState[] {
-  const diff = diffOf(entry)
-  if (diff.kind !== 'text') return []
-  return reviewBlocks(diff).map((block) => ({ id: block.id, decision: 'pending' as const }))
+function blockStatesOf(entry: PendingEntry, revision = -1): ReviewBlockState[] {
+  return derivedOf(entry, false, revision).blocks
 }
 
 /**
@@ -75,6 +107,8 @@ export function foldWrite(stored: StoredEntry | undefined, write: PendingWrite):
     source: sourceOfTool(write.tool),
     origin: originOf(write),
     baseKind: write.before === null ? 'absent' : (write.baseKind ?? 'known'),
+    evidence: write.evidence ?? 'snapshot',
+    verdict: write.verdict ?? 'changed',
   })
   if (!stored) {
     return {
@@ -119,7 +153,7 @@ function originOf(write: PendingWrite): PendingOrigin {
  */
 export function itemOf(stored: StoredEntry, baselineEmpty = false): PendingItem {
   const { entry, flags } = stored
-  const counts = countsOf(entry, baselineEmpty)
+  const counts = countsOf(entry, baselineEmpty, flags.revision)
   const item: PendingItem = {
     id: entry.id,
     path: entry.path,
@@ -138,6 +172,8 @@ export function itemOf(stored: StoredEntry, baselineEmpty = false): PendingItem 
     source: entry.source ?? 'tool',
     origin: entry.origin ?? 'agent',
     baseKind: entry.baseKind ?? 'known',
+    evidence: entry.evidence ?? 'snapshot',
+    verdict: entry.verdict ?? 'changed',
   }
   if (entry.lineage !== undefined) item.lineage = entry.lineage
   return item
@@ -178,12 +214,25 @@ export function loadPage(cwd: string, _sessionId?: string): PendingPage {
   const all = loadEntries(cwd)
   const visible = all
   const sourceAdds = new Map<string, Set<string>>()
-  const items = visible.map((stored) => itemOf(stored, emptyBaseOf(cwd, stored, sourceAdds)))
+  const items = visible.map((stored) => withNote(cwd, itemOf(stored, emptyBaseOf(cwd, stored, sourceAdds))))
   const gaps: string[] = pendingGaps(cwd)
   for (const stored of visible) {
     if (stored.flags.oversized) gaps.push(`${stored.entry.path}: 文本超出上限，仅保留标记`)
   }
   return { items, pending: items.filter((item) => !item.settled).length, nextCursor: null, gaps }
+}
+
+/**
+ * @private
+ * @author ddj 2026年11月25号
+ * @description: 挂上模型的只读说明；说明只在内存里，不落库也不参与判定。
+ * @param cwd 工作区
+ * @param item 列表项
+ * @returns 可能带说明的列表项
+ */
+function withNote(cwd: string, item: PendingItem): PendingItem {
+  const note = noteOf(cwd, item.id)
+  return note === undefined ? item : { ...item, note }
 }
 
 /**
@@ -200,9 +249,9 @@ export function loadDetail(cwd: string, id: string, baselineEmpty = false): Pend
   const emptyBase = baselineEmpty || emptyBaseOf(cwd, stored)
   const diff = diffOf(stored.entry, emptyBase)
   return {
-    item: itemOf(stored, emptyBase),
+    item: withNote(cwd, itemOf(stored, emptyBase)),
     diff,
-    blocks: blockStatesOf(stored.entry),
+    blocks: blockStatesOf(stored.entry, stored.flags.revision),
     capability: capabilityOf(stored.entry, stored.flags),
   }
 }
@@ -315,7 +364,7 @@ export async function applyDecide(
 ): Promise<DecideOutcome | { ok: false; reason: string }> {
   const stored = loadEntries(cwd).find((item) => item.entry.id === request.id)
   if (!stored) return { ok: false, reason: 'unknown-item' }
-  const beforeBlocks = blockStatesOf(stored.entry)
+  const beforeBlocks = blockStatesOf(stored.entry, stored.flags.revision)
   const outcome = await decide({
     request,
     entry: stored.entry,
@@ -332,12 +381,16 @@ export async function applyDecide(
   if (!outcome.ok) return { ok: false, reason: outcome.reason }
   saveEntry(cwd, { entry: outcome.entry, flags: outcome.flags })
   saveBlocks(cwd, request.id, outcome.blocks)
-  // 记录撤销快照（含是否真的写过盘），撤销/重做都从这条记录反推
-  pushHistory(cwd, 'decide', request.id, JSON.stringify({
-    before: { entry: stored.entry, flags: stored.flags, blocks: beforeBlocks },
-    after: { entry: outcome.entry, flags: outcome.flags, blocks: outcome.blocks as ReviewBlockState[] },
+  // 撤销行按路径覆盖写：同一路径永远只有一行，撤销回到判定前的基线或内容
+  pushHistory(cwd, {
+    entryId: request.id,
+    path: stored.entry.path,
+    kind: request.decision === 'accepted' ? 'keep' : 'revert',
+    earlier: stored.entry.earlierVersion,
+    baseline: stored.entry.oldText,
+    content: stored.entry.newText,
     wrote: outcome.wrote,
-  }), Date.now())
+  }, Date.now())
   return outcome
 }
 
@@ -385,7 +438,7 @@ export async function keepAll(cwd: string, items: PendingKeepTarget[]): Promise<
       continue
     }
 
-    const beforeBlocks = blockStatesOf(before.entry)
+    const beforeBlocks = blockStatesOf(before.entry, before.flags.revision)
     const outcomeOf = await decide({
       request: { sessionId: before.entry.sessionId, id: item.id, revision: before.flags.revision,
         operationId: item.operationId, decision: 'accepted', scope: 'file' },
@@ -399,11 +452,7 @@ export async function keepAll(cwd: string, items: PendingKeepTarget[]): Promise<
     }
     outcome.kept.push({ id: item.id, path: before.entry.path })
     records.push({ entryId: item.id, stored: before, next: { entry: outcomeOf.entry, flags: outcomeOf.flags },
-      blocks: outcomeOf.blocks, snapshot: JSON.stringify({
-        before: { entry: before.entry, flags: before.flags, blocks: beforeBlocks },
-        after: { entry: outcomeOf.entry, flags: outcomeOf.flags, blocks: outcomeOf.blocks },
-        wrote: outcomeOf.wrote,
-      }) })
+      blocks: outcomeOf.blocks })
   }
 
   // 落库阶段被别的决定抢先推进的条目从 kept 挪到 skipped，如实反映磁盘状态
@@ -445,8 +494,8 @@ export async function importFromVcs(
 
 /**
  * @author ddj 2026年10月30号
- * @description: 撤销或重做最近一次判定。先按 operationId 判幂等，再据栈顶记录判定方向是否合法，
- * 只有写盘过的判定才反向写盘，写盘失败时条目状态保持原样。
+ * @description: 撤销或重做最近一次判定。一条路径只有一行撤销记录：撤销回到判定前的两侧内容，
+ * 重做再按同一判定推进一次；只有写盘过的判定才反向写盘，写盘失败时条目状态保持原样。
  * @param fs 文件系统
  * @param cwd 工作区
  * @param move 撤销/重做请求
@@ -461,26 +510,57 @@ export async function undoDecide(
 
   const record = move.direction === 'undo' ? latestApplied(cwd) : earliestUndone(cwd)
   if (!record) return { ok: false, reason: move.direction === 'undo' ? 'no-undo' : 'no-redo' }
-  const snapshot = parseSnapshot(record.snapshot)
-  if (!snapshot) return { ok: false, reason: 'bad-history' }
-  const stored = loadEntries(cwd).find((item) => item.entry.id === record.entryId)
+  const stored = loadEntry(cwd, record.entryId)
   if (!stored) return { ok: false, reason: 'unknown-item' }
-  const target = move.direction === 'undo' ? snapshot.before : snapshot.after
+  const target = replayTargetOf(stored, record, move.direction === 'undo')
 
   writeOp(cwd, move.operationId, JSON.stringify(move), 'prepared')
   let wrote = false
-  if (snapshot.wrote) {
-    const result = await writeBack(fs, cwd, stored, target, signal, policy)
+  if (target.write) {
+    const result = await writeBack(fs, cwd, stored, target.state, signal, policy)
     if (!result.ok) return { ok: false, reason: result.reason }
     wrote = true
   }
 
-  saveEntry(cwd, { entry: target.entry, flags: target.flags })
-  saveBlocks(cwd, record.entryId, target.blocks)
-  setHistoryState(cwd, record.id, move.direction === 'undo' ? 'undone' : 'applied')
-  const outcome = { ok: true as const, item: itemOf({ entry: target.entry, flags: target.flags }), wrote }
+  saveEntry(cwd, { entry: target.state.entry, flags: target.state.flags })
+  saveBlocks(cwd, record.entryId, target.state.blocks)
+  setHistoryState(cwd, record.entryId, move.direction === 'undo' ? 'undone' : 'applied')
+  const outcome = { ok: true as const, item: itemOf({ entry: target.state.entry, flags: target.state.flags }), wrote }
   writeOp(cwd, move.operationId, JSON.stringify(move), 'committed', { result: JSON.stringify(outcome) })
   return outcome
+}
+
+/**
+ * @private
+ * @author ddj 2026年11月25号
+ * @description: 由当前条目与撤销行推导撤销/重做后的状态：Keep 只动基线，Revert 还要把内容写回盘。
+ * @param stored 当前条目
+ * @param record 撤销行
+ * @param undone 是否撤销（false 为重做）
+ * @returns 目标状态与是否需要写盘
+ */
+function replayTargetOf(stored: StoredEntry, record: HistoryRow, undone: boolean): { state: HistoryState; write: boolean } {
+  const revision = stored.flags.revision + 1
+  if (record.kind === 'keep') {
+    const baseline = undone ? record.baseline : stored.entry.newText
+    const entry: PendingEntry = {
+      ...stored.entry,
+      oldText: baseline,
+      earlierVersion: undone ? record.earlier : 'file',
+      updatedAt: Date.now(),
+    }
+    delete entry.unseen
+    return { state: { entry, flags: { ...stored.flags, missing: false, revision }, blocks: [] }, write: false }
+  }
+  // Revert 写过盘：撤销写回判定前的内容，重做写回基线；新建文件的 Revert 重做等价于删除
+  const missing = !undone && record.earlier === 'none'
+  const entry: PendingEntry = {
+    ...stored.entry,
+    newText: missing ? '' : (undone ? record.content : record.baseline),
+    updatedAt: Date.now(),
+  }
+  delete entry.unseen
+  return { state: { entry, flags: { ...stored.flags, missing, revision }, blocks: [] }, write: true }
 }
 
 /**
@@ -501,34 +581,11 @@ async function writeBack(
   return write(target.entry.newText)
 }
 
-/** 历史快照中单侧状态。 */
+/** 撤销/重做时的单侧目标状态。 */
 interface HistoryState {
   entry: PendingEntry
   flags: PendingFlags
   blocks: ReviewBlockState[]
-}
-
-/** 一次判定的双向快照。 */
-interface HistorySnapshot {
-  before: HistoryState
-  after: HistoryState
-  wrote: boolean
-}
-
-/**
- * @author ddj 2026年10月30号
- * @description: 解析历史快照；损坏时返回 null，不猜测内容。
- * @param text 快照文本
- * @returns 快照或 null
- */
-function parseSnapshot(text: string): HistorySnapshot | null {
-  try {
-    const parsed = JSON.parse(text) as HistorySnapshot
-    if (!parsed?.before?.entry || !parsed?.after?.entry) return null
-    return parsed
-  } catch {
-    return null
-  }
 }
 
 /** 稳定快照；缺失与读取失败严格区分，不允许省略现存文件的版本。 */

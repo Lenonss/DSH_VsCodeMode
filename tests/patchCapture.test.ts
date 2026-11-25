@@ -1,8 +1,11 @@
 /** Multi-target patch raw evidence, including partial failures. @author ddj 2026年11月04号 */
 import { describe, it, expect, vi } from 'vitest'
 vi.mock('../src/hostImport.js', () => ({ loadHostModule: async () => ({ parsePatch: () => [{ path: 'a' }, { path: 'src', moveTo: 'dst' }] }) }))
-import { installPending } from '../src/pending/capture.js'
+import { installPending, pendingGaps } from '../src/pending/capture.js'
 import { patchDiagnostics } from '../src/toolTargets.js'
+
+/** 本用例工作区：缺口按它过滤。 */
+const patchGaps = () => pendingGaps('/ws')
 
 /** @private @author ddj 2026年11月04号 @returns Raw provider and actual middleware fixture. */
 function fixture() {
@@ -34,11 +37,12 @@ describe('patch capture', () => {
     ])
     f.capture.dispose()
   })
-  it('preserves original thrown identity and records only effects of partial move', async () => {
+  it('preserves original thrown identity and never attributes a thrown write', async () => {
     const f = fixture(), failure = new Error('partial move')
     await expect(f.run(async () => { f.files.set('/ws/dst', 'SOURCE'); throw failure })).rejects.toBe(failure)
-    expect(f.sink).toHaveBeenCalledTimes(1)
-    expect(f.sink.mock.calls[0][0]).toMatchObject({ path: 'dst', before: null, after: 'SOURCE' })
+    // 工具抛错且没有回执：磁盘变化可能来自它，也可能来自别人，不建条目，只留缺口。
+    expect(f.sink).not.toHaveBeenCalled()
+    expect(patchGaps().some((gap) => gap.includes('无法判断是否本次写入'))).toBe(true)
     f.capture.dispose()
   })
   it('treats null result baselines only as diagnostics, never preimages', () => {

@@ -17,12 +17,13 @@ import { AI_COMMIT_STYLE_LABEL, AI_COMMIT_IDLE, runAiCommit } from '../aiCommit.
 import { svnCommitNow, svnCommitPlan } from '../svnCommit.js'
 import { SVN_ACTION_BY_ID } from '../../shared/svnActions.js'
 import type { SvnChangeEntry } from '../../shared/svn.js'
-import { SVN_STATUS_LABEL, SVN_STATUS_LETTER, SVN_STATUS_TONE } from '../../shared/svn.js'
+import { SVN_STATUS_LABEL, SVN_STATUS_LETTER, SVN_STATUS_TONE, isSvnDiffable } from '../../shared/svn.js'
 import { updateParent } from './svnUpdateModel.js'
 import { entryIconEl } from './icons.js'
 import { isDirOf } from './svnIcons.js'
 import { useSvnEntryKinds } from './useSvnEntryKinds.js'
 import {
+  batchCheckValueOf,
   commitActs,
   commitHintOf,
   commitMessageErrorOf,
@@ -31,7 +32,10 @@ import {
   commitStatsOf,
   defaultCheckedOf,
   groupTriStateOf,
+  moveRowPick,
   nextRowPick,
+  pruneRowPick,
+  rangeCheckValueOf,
 } from './svnCommitModel.js'
 
 /** 状态分级的展示顺序（页脚计数同序，避免数字跳动）。 */
@@ -146,22 +150,22 @@ function useCommitMenu() {
 }
 
 /**
- * 行选中（Ctrl 切换 / Shift 范围）：与更新窗口同一套手势，纯逻辑在 nextRowPick 里可单测。
- * @author ddj 2026年11月21号
+ * 行选中（Ctrl 切换 / Shift 范围 / 方向键移动）：纯逻辑在 nextRowPick 与 moveRowPick 里可单测。
+ * @author ddj 2026年11月21号 / 2026年11月24号
  * @param order 当前显示顺序（路径）
- * @returns 选中路径与选择动作
+ * @returns 选中状态、写入器与手势
  */
 function useRowPick(order) {
   const [pick, setPick] = React.useState({ selected: [], anchor: null })
   const orderRef = React.useRef(order)
   orderRef.current = order
+  // 手势与键盘都要基于「最新一次渲染的选中」算下一态，闭包里读到的是旧值
+  const pickRef = React.useRef(pick)
+  pickRef.current = pick
 
   // 清单重载后丢弃已不存在的路径，避免批量动作打到过期目标
   React.useEffect(() => {
-    setPick((current) => {
-      const selected = current.selected.filter((path) => order.includes(path))
-      return selected.length === current.selected.length ? current : { selected, anchor: null }
-    })
+    setPick((current) => pruneRowPick(current, order))
   }, [order])
 
   /** @private @author ddj 2026年11月21号 @param event 点击事件 @param path 目标路径 @returns void */
@@ -170,20 +174,43 @@ function useRowPick(order) {
     setPick((current) => nextRowPick(current, orderRef.current, path, mode))
   }
 
-  return { selected: pick.selected, choose }
+  /** @private @author ddj 2026年11月24号 @param step 方向（-1 上 / 1 下）@param extend 是否扩选 @returns 移动后的选中 */
+  const move = (step, extend) => {
+    const next = moveRowPick(pickRef.current, orderRef.current, step, extend)
+    setPick(next)
+    return next
+  }
+
+  /** @private @author ddj 2026年11月24号 @returns void */
+  const selectAll = () => {
+    const all = [...orderRef.current]
+    setPick({ selected: all, anchor: all[0] ?? null })
+  }
+
+  return { pick, setPick, choose, move, selectAll }
+}
+
+/**
+ * 事件目标是否落在勾选框列：那里的 Space 与状态切换交给原生控件，行不再重复处理。
+ * @author ddj 2026年11月24号
+ * @param target 事件目标
+ * @returns 是否在勾选框列
+ */
+function isPickBox(target) {
+  return Boolean(target && typeof target.closest === 'function' && target.closest('.edrv-svncommit-pick'))
 }
 
 /**
  * 右键瞬间的生效选中：目标已在选中集合里就批量，否则先把选中改成该行。
- * @author ddj 2026年11月21号
- * @param rowPick 行选中状态 @param entry 右键目标
+ * @author ddj 2026年11月21号 / 2026年11月24号
+ * @param selected 当前选中路径 @param choose 选中手势 @param entry 右键目标
  * @returns 生效选中路径
  */
-function pickPathsOf(rowPick, entry) {
+function pickPathsOf(selected, choose, entry) {
   if (!entry) return []
-  if (rowPick.selected.includes(entry.path)) return rowPick.selected
+  if (selected.includes(entry.path)) return selected
 
-  rowPick.choose({}, entry.path)
+  choose({}, entry.path)
   return [entry.path]
 }
 
@@ -247,15 +274,17 @@ async function pasteInto(s, menu) {
 }
 
 /**
- * 多选菜单：只做勾选与复制；破坏性动作仍限单行，避免一次误点还原多份本地改动。
- * @author ddj 2026年11月21号
- * @param s 视图状态 @param paths 选中路径
+ * 多选菜单：比较（只对右键那一行）+ 批量勾选与复制；破坏性动作仍限单行，
+ * 避免一次误点还原多份本地改动。
+ * @author ddj 2026年11月21号 / 2026年11月25号
+ * @param s 视图状态 @param entry 右键目标 @param paths 选中路径
  * @returns 菜单条目
  */
-function multiRowMenuOf(s, paths) {
+function multiRowMenuOf(s, entry, paths) {
   const busy = Boolean(s.busy || s.aiBusy)
   return [
-    { id: 'pick-on', label: '勾选选中 ' + paths.length + ' 项', disabled: busy, onClick: () => s.setPickChecked(paths, true) },
+    { id: 'compare', label: '与基线比较（这一行）', onClick: () => s.openCompare?.(entry.path) },
+    { id: 'pick-on', label: '勾选选中 ' + paths.length + ' 项', separator: true, disabled: busy, onClick: () => s.setPickChecked(paths, true) },
     { id: 'pick-off', label: '取消勾选选中 ' + paths.length + ' 项', disabled: busy, onClick: () => s.setPickChecked(paths, false) },
     { id: 'copy', label: '复制 ' + paths.length + ' 条路径', separator: true, disabled: busy,
       onClick: () => { void copyText(paths.join('\n'), '已复制路径', s.notify) } },
@@ -263,8 +292,28 @@ function multiRowMenuOf(s, paths) {
 }
 
 /**
- * 单选菜单：核对 / 打开 / 勾选 / 写动作 / 复制；可用性全部来自 commitActs。
- * @author ddj 2026年11月21号
+ * 行比较不可用的原因（空串 = 可以打开差异）。
+ *
+ * 菜单项不再靠 disabled 表达「不能比较」：禁用项点下去毫无反应，
+ * 用户只会以为功能坏了。改为始终可点，点了就用一句话说明为什么打不开。
+ * @author ddj 2026年11月25号
+ * @param entry 待提交条目
+ * @param busy 提交或 AI 生成进行中
+ * @param isDir 该行是否为目录
+ * @returns 不可用原因；空串表示可比较
+ */
+function compareBlockOf(entry, busy, isDir) {
+  if (!entry) return '没有可比较的目标'
+  if (busy) return '提交或 AI 生成进行中，先等结果'
+  if (isDir) return '目录不能逐文件比较，请比较其中的文件'
+
+  return isSvnDiffable(entry.path, entry.status) ? '' : '二进制文件或未纳入版本控制，没有文本基线'
+}
+
+/**
+ * 单行菜单：核对 / 打开 / 勾选 / 写动作 / 复制；可用性全部来自 commitActs。
+ * 「与基线比较」保留可点：不可比较时用提示说明原因（见 compareBlockOf）。
+ * @author ddj 2026年11月21号 / 2026年11月25号
  * @param s 视图状态 @param entry 目标条目
  * @returns 菜单条目
  */
@@ -272,7 +321,7 @@ function oneRowMenuOf(s, entry) {
   const acts = commitActs(entry, Boolean(s.busy || s.aiBusy))
   const picked = s.checked.has(entry.path)
   return [
-    { id: 'compare', label: '与基线比较', disabled: !acts.compare, onClick: () => s.onCompare?.(entry.path) },
+    { id: 'compare', label: '与基线比较', onClick: () => s.openCompare?.(entry.path) },
     { id: 'log', label: '查看日志', disabled: !acts.log, onClick: () => s.onShowLog?.(entry.path) },
     { id: 'open', label: '打开文件', separator: true, disabled: !acts.open, onClick: () => s.onOpenFile?.(entry.path) },
     { id: 'parent', label: '打开父目录', disabled: !acts.openParent, onClick: () => s.onOpenParent?.(updateParent(entry.path)) },
@@ -294,7 +343,7 @@ function rowMenuEntriesOf(s, menu) {
   if (!entry) return []
 
   const paths = menu.paths && menu.paths.length ? menu.paths : [entry.path]
-  if (paths.length > 1) return multiRowMenuOf(s, paths)
+  if (paths.length > 1) return multiRowMenuOf(s, entry, paths)
   return oneRowMenuOf(s, entry)
 }
 
@@ -336,8 +385,8 @@ function msgMenuEntriesOf(s, menu) {
 }
 
 /**
- * 单条待提交文件（勾选 / 状态字母 / 图标 / 路径），支持右键与键盘唤起菜单。
- * @author ddj 2026年11月15号 / 2026年11月21号 / 2026年11月23号
+ * 单条待提交文件（勾选 / 状态字母 / 图标 / 路径），支持双击看差异、右键与键盘唤起菜单。
+ * @author ddj 2026年11月15号 / 2026年11月21号 / 2026年11月23号 / 2026年11月24号
  * @param entry 变更条目 @param checked 是否勾选 @param onToggle 切换 @param s 视图状态（菜单与动作）
  * @returns 行元素
  */
@@ -345,15 +394,20 @@ function rowEl(entry, checked, onToggle, s) {
   const tone = SVN_STATUS_TONE[entry.status] ?? 'plain'
   const opened = Boolean(s.menu && s.menu.kind === 'row' && s.menu.entry && s.menu.entry.path === entry.path)
   const selected = Boolean(s.selection && s.selection.includes(entry.path))
+  const diffable = commitActs(entry, Boolean(s.busy || s.aiBusy)).compare
   return React.createElement('div', {
     className: 'edrv-svncommit-row' + (opened ? ' is-menu' : '') + (selected ? ' is-selected' : ''),
     role: 'row',
     'aria-selected': selected,
     tabIndex: 0,
     key: entry.path,
+    'data-path': entry.path,
+    ref: (node) => s.registerRow?.(entry.path, node),
+    title: diffable ? entry.path + '\n双击或回车：与基线比较' : entry.path,
     onClick: (event) => s.pickRow(event, entry.path),
+    onDoubleClick: (event) => s.diffRow(event, entry),
     onContextMenu: (event) => s.menuOpen(event, 'row', entry),
-    onKeyDown: (event) => openMenuByKey(event, entry, s.menuOpen),
+    onKeyDown: (event) => s.rowKeyDown(event, entry),
   },
     React.createElement('span', { className: 'edrv-svncommit-pick', role: 'cell' }, checkBoxEl(checked, onToggle, entry.path)),
     React.createElement('span', {
@@ -401,8 +455,33 @@ function tableEl(s) {
 }
 
 /**
- * 工具带：最近信息 / AI 风格 / AI 生成 / 保持锁定 / 已选计数。
- * @author ddj 2026年11月15号
+ * 工具带上的批量勾选按钮：只在选中 2 行及以上时出现（选中是批量动作的作用域）。
+ * @author ddj 2026年11月24号
+ * @param s 视图状态
+ * @returns 按钮组元素；选中不足两行返回 null
+ */
+function batchEl(s) {
+  const selected = s.selection ?? []
+  if (selected.length < 2) return null
+
+  const busy = Boolean(s.busy || s.aiBusy)
+  /** @private @author ddj 2026年11月24号 @param on 勾选还是取消 @param label 按钮文案 @returns 按钮 */
+  const cell = (on, label) => React.createElement('button', {
+    type: 'button',
+    className: 'edrv-svn-act edrv-svncommit-ctl',
+    disabled: busy,
+    title: on ? '把选中的 ' + selected.length + ' 项一起勾选（加入提交范围）' : '把选中的 ' + selected.length + ' 项一起取消勾选',
+    onClick: () => s.setPickChecked(selected, on),
+  }, label)
+
+  return React.createElement('span', { className: 'edrv-svncommit-sels' },
+    cell(true, '勾选选中 ' + selected.length + ' 项'),
+    cell(false, '取消勾选 ' + selected.length + ' 项'))
+}
+
+/**
+ * 工具带：最近信息 / AI 风格 / AI 生成 / 批量勾选 / 保持锁定 / 已选计数。
+ * @author ddj 2026年11月15号 / 2026年11月24号
  * @param s 视图状态
  * @returns 工具带元素
  */
@@ -442,6 +521,7 @@ function barEl(s) {
       disabled: s.aiBusy || s.busy || !s.paths.length,
       onClick: s.generate,
     }, '✨ AI 生成提交信息'),
+    batchEl(s),
     React.createElement('label', { className: 'edrv-svn-check', title: '提交后保留锁定（--no-unlock）' },
       React.createElement('input', {
         className: 'edrv-svncommit-cb',
@@ -738,12 +818,157 @@ export function SvnCommitDialog(props) {
   const s = useCommitState(sessionId, seed, notify, onCommitted, props.onChanged)
   const context = useCommitMenu()
   const rowPick = useRowPick(s.rowOrder)
+  // 方向键移动后要把焦点与滚动带到新行：按路径登记行节点，渲染期不查 DOM
+  const rowNodes = React.useRef(new Map())
   const entryKind = useSvnEntryKinds(s.rowOrder, sessionId)
+
+  /**
+   * 登记行节点（行卸载时清掉，避免焦点追到已消失的条目）。
+   * @author ddj 2026年11月24号
+   * @param path 行路径
+   * @param node 行节点
+   * @returns void
+   */
+  const registerRow = (path, node) => {
+    if (node) rowNodes.current.set(path, node)
+    else rowNodes.current.delete(path)
+  }
+
+  /**
+   * 把焦点与滚动带到指定行。
+   * @author ddj 2026年11月24号
+   * @param path 目标行路径
+   * @returns void
+   */
+  const focusRow = (path) => {
+    const node = path ? rowNodes.current.get(path) : null
+    if (!node) return
+
+    node.focus?.()
+    node.scrollIntoView?.({ block: 'nearest' })
+  }
+
+  /**
+   * 判断某行能否比较（不可比较时返回原因，供菜单与双击共用）。
+   * @author ddj 2026年11月25号
+   * @param entry 目标条目
+   * @returns 不可用原因；空串表示可比较
+   */
+  const compareBlock = (entry) => compareBlockOf(
+    entry,
+    Boolean(s.busy || s.aiBusy),
+    Boolean(entry && isDirOf(entry.path, entryKind.dirs, entryKind.kinds)),
+  )
+
+  /**
+   * 打开基线差异：任何打不开的情况都给一句可读提示，不做静默失败。
+   *
+   * 回调本身不带回执，所以这里补一次「窗口有没有出现」的兜底检查：
+   * 接了 onCompare 但差异窗口没渲染出来时，用户至少能看到原因，而不是「点了没反应」。
+   * @author ddj 2026年11月25号
+   * @param path 目标路径
+   * @returns void
+   */
+  const openCompare = (path) => {
+    const entry = s.sections.flatMap((section) => section.entries).find((item) => item.path === path) ?? null
+    const block = compareBlock(entry)
+    if (block) { notify?.(block); return }
+    if (!props.onCompare) { notify?.('差异视图未接入，无法打开比较'); return }
+
+    props.onCompare(path)
+    verifyCompareWindow()
+  }
+
+  /**
+   * 兜底核对差异窗口是否真的出现（只在本机浏览器里跑，测试环境直接跳过）。
+   * @author ddj 2026年11月25号
+   * @returns void
+   */
+  const verifyCompareWindow = () => {
+    if (typeof document === 'undefined' || typeof window === 'undefined' || !window.setTimeout) return
+
+    window.setTimeout(() => {
+      if (document.querySelector('.edrv-svndiff')) return
+      notify?.('差异窗口没有出现：文件可能没有文本基线，或差异视图被遮挡')
+    }, 2500)
+  }
+
+  /**
+   * 双击或回车：可比较才打开基线差异，其余情况说明原因（不弹空窗口）。
+   * @author ddj 2026年11月24号 / 2026年11月25号
+   * @param event 双击/键盘事件
+   * @param entry 目标条目
+   * @returns void
+   */
+  const diffRow = (event, entry) => {
+    if (isPickBox(event && event.target)) return
+
+    openCompare(entry.path)
+  }
+
+  /**
+   * 行点击：Shift 把整段勾选翻面，Ctrl 只切换选中。
+   * @author ddj 2026年11月24号
+   * @param event 点击事件
+   * @param path 目标路径
+   * @returns void
+   */
+  const pickRow = (event, path) => {
+    if (!event.shiftKey) { rowPick.choose(event, path); return }
+
+    // 勾选框自己在 click 之后会切状态：先掐掉原生切换，整段值统一由翻面决定
+    event.preventDefault()
+    const next = nextRowPick(rowPick.pick, s.rowOrder, path, 'range')
+    rowPick.setPick(next)
+    s.setPickChecked(next.selected, rangeCheckValueOf(s.checked, path))
+  }
+
+  /**
+   * 行键盘：Space 批量勾选、Ctrl+A 全选、↑↓ 移动、Enter 看差异；菜单键仍走右键菜单。
+   * @author ddj 2026年11月24号
+   * @param event 键盘事件
+   * @param entry 目标条目
+   * @returns void
+   */
+  const rowKeyDown = (event, entry) => {
+    openMenuByKey(event, entry, menuOpen)
+    if (event.defaultPrevented) return
+
+    // 焦点在勾选框上时 Space 由原生控件处理（切这一行），方向键仍要照常移动
+    if (event.key === ' ' && isPickBox(event.target)) return
+
+    const picked = rowPick.pick.selected.length ? rowPick.pick.selected : [entry.path]
+    if (event.key === ' ') {
+      event.preventDefault()
+      s.setPickChecked(picked, batchCheckValueOf(s.checked, picked))
+      return
+    }
+    if (event.key === 'a' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); rowPick.selectAll(); return }
+    if (event.key === 'Enter') { diffRow(event, entry); return }
+    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
+
+    event.preventDefault()
+    const next = rowPick.move(event.key === 'ArrowDown' ? 1 : -1, event.shiftKey)
+    focusRow(next.selected[next.selected.length - 1])
+  }
+
+  /**
+   * 打开行菜单：批量动作的作用域是右键瞬间的选中。
+   * @author ddj 2026年11月21号 / 2026年11月24号
+   * @param event 右键事件
+   * @param kind 目标种类
+   * @param entry 行条目
+   * @param node 文本框
+   * @returns void
+   */
+  const menuOpen = (event, kind, entry, node) => {
+    context.open(event, kind, entry, node, pickPathsOf(rowPick.pick.selected, rowPick.choose, entry))
+  }
+
   const view = {
-    ...s, onClose, notify, selection: rowPick.selected, pickRow: rowPick.choose,
+    ...s, onClose, notify, selection: rowPick.pick.selected, pickRow, diffRow, openCompare, rowKeyDown, registerRow,
     dirs: entryKind.dirs, kinds: entryKind.kinds,
-    menu: context.menu,
-    menuOpen: (event, kind, entry, node) => context.open(event, kind, entry, node, pickPathsOf(rowPick, entry)),
+    menu: context.menu, menuOpen,
     onCompare: props.onCompare, onShowLog: props.onShowLog,
     onOpenFile: props.onOpenFile, onOpenParent: props.onOpenParent,
   }

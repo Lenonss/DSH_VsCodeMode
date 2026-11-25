@@ -72,7 +72,11 @@ describe('guarded official undo journal', () => {
     const snapshot = JSON.parse(String(reviewDb(cwd).prepare('SELECT payload FROM review_snapshots WHERE turn=7').get()!.payload)) as ReviewSnapshot
     snapshot.seq = 77
     saveSnapshot(cwd, snapshot)
-    const next = reviewPage(cwd).items.find((item) => item.seq === 77)!
+    // 相同内容的重发不换身份：还是同一条记录，块判定与字节证据都保留
+    const page = reviewPage(cwd)
+    const next = page.items.find((item) => item.id === fixture.item.id)!
+    expect(next).toBeDefined()
+    expect(page.items.filter((item) => item.currentPath === next.currentPath)).toHaveLength(1)
     expect(reviewDetail(cwd, next.id)?.blocks.map((block) => block.decision)).toEqual(['accepted', 'pending'])
     expect(reviewDetail(cwd, next.id)?.capability.undo).toBe(true)
   })

@@ -107,7 +107,8 @@ function pendingRowsOf(page: ReviewPage | null): { rows: DiffFile[]; covered: Se
     rows.push({
       path,
       // 非 agent 来源才在标签上带徽标：agent 行保持原样，面板不被新增文案刷屏
-      label: item.sourceLabel && !item.sourceLabel.endsWith('· agent') ? `${label} · ${item.sourceLabel}` : label,
+      // （agent 行现在还会带证据强度后缀，这里按前缀匹配，不看结尾）。
+      label: item.sourceLabel && !/· agent(?: ·|$)/.test(item.sourceLabel) ? `${label} · ${item.sourceLabel}` : label,
       recs: [],
       pending: item.decision === 'pending' ? 1 : 0,
       added: item.added,

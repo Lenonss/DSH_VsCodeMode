@@ -13,6 +13,7 @@ import { resolveScope } from './registry.js'
 import { trackPendingCover } from './pendingCompat.js'
 import { closeArchiveDbs } from './archiveDb.js'
 import { startArchiveSweep } from './archivePurge.js'
+import { startLoopWatchdog } from './slowLog.js'
 import { handleRpc, integrationBaseUrlOf } from './rpc.js'
 import { newSearcher } from './search/orchestrator.js'
 import { newContentSearcher } from './search/content.js'
@@ -26,6 +27,8 @@ import { shellMenuLifecycle } from './integrate.js'
 import { startOpenInbox } from './openInbox.js'
 import { ensureActiveBridge } from './openBridge.js'
 import { installPlanTool } from './svnPlanTool.js'
+import { installNoteTool } from './pending/noteTool.js'
+import { clearNotes } from './pending/notes.js'
 import { disposeIndex } from './treeIndex.js'
 import { sweepTreeCache } from './paths.js'
 import { buildReport } from './compat.js'
@@ -97,6 +100,8 @@ function attachRuntime(ctx: Ctx, runtime: Runtime): { external: ReturnType<typeo
   })
   // 归档库每日清理：保留期 + 每文件上限，独立于会话存续
   const sweep = startArchiveSweep()
+  // 事件循环看门狗：宿主是单进程单事件循环，任何同步大活都会把所有 RPC 一起拖住
+  const loopWatch = startLoopWatchdog()
   /**
    * @author ddj 2026年11月24号
    * @description: 任一工具调用期间都是 agent 写入窗口：bash / python 写盘落在窗口内时归属 agent。
@@ -144,7 +149,9 @@ function attachRuntime(ctx: Ctx, runtime: Runtime): { external: ReturnType<typeo
     evidence.dispose()
     pending.dispose()
     external.dispose()
+    clearNotes()
     sweep.dispose()
+  loopWatch.dispose()
     windows.dispose()
     runtime.fileVersions.dispose()
     closeArchiveDbs()
@@ -232,6 +239,8 @@ export async function apply(ctx: Ctx, config?: unknown): Promise<void> {
   function submitPlan(args: RpcRequestMap['svn.aiPlanSubmit']) { return dispatch('svn.aiPlanSubmit', args) }
   await installPlanTool(ctx, submitPlan)
   await installSvnTools(ctx, runtime.svnRpc.api)
+  // 只读编辑说明：模型可以给文件留一句「为什么改」，只展示、不参与差异判定
+  await installNoteTool(ctx, (session) => cwdOfSession(ctx, session as never))
   ctx.effect(mountInbox, 'vscode-mode:open-inbox')
   ctx.effect(() => shellMenuLifecycle(ctx), 'vscode-mode:integration')
   /** @author ddj 2026年10月12号 @returns Active-profile bridge disposer; failures never block boot. */

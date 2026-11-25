@@ -3,9 +3,10 @@
  * @author ddj 2026年10月29号
  */
 import type { DatabaseSync } from 'node:sqlite'
+import { createHash } from 'node:crypto'
 import { activeReady, dbFor } from '../archiveDb.js'
 import { log } from '../log.js'
-import type { PendingBaseKind, PendingLineage, PendingOrigin, PendingSource } from '../shared/pendingReview.js'
+import type { PendingBaseKind, PendingEvidence, PendingLineage, PendingOrigin, PendingSource, PendingVerdict } from '../shared/pendingReview.js'
 import type { PendingEntry } from './kernel.js'
 
 /** 数据库行。 */
@@ -25,8 +26,8 @@ export interface StoredEntry {
   flags: PendingFlags
 }
 
-/** 待审库版本号，写进 metadata 便于日后迁移。v4 给条目加了采集来源与基线可信度。 */
-const SCHEMA_VERSION = '4'
+/** 待审库版本号，写进 metadata 便于日后迁移。v6 把撤销栈改成「一条路径一行」。 */
+const SCHEMA_VERSION = '6'
 /** 迁移前的备份后缀。 */
 const BACKUP_SUFFIX = '.before-pending.bak'
 /** 工作区待审版本号：条目一落库就自增，供客户端轮询判断是否需要重读列表。 */
@@ -80,7 +81,9 @@ export function pendingDb(cwd: string): DatabaseSync {
   try {
     db.exec(DDL)
     migrateHistory(db)
+    migrateHistoryMerge(db)
     migrateProvenance(db)
+    migrateEvidence(db)
     db.prepare("INSERT INTO metadata(name,value) VALUES('pending_schema',?) ON CONFLICT(name) DO UPDATE SET value=excluded.value")
       .run(SCHEMA_VERSION)
     db.exec('COMMIT')
@@ -101,7 +104,8 @@ CREATE TABLE IF NOT EXISTS pending_entries (
   revision INTEGER NOT NULL DEFAULT 0, session_id TEXT NOT NULL,
   session_ids TEXT NOT NULL, lineage TEXT,
   source TEXT NOT NULL DEFAULT 'tool', origin TEXT NOT NULL DEFAULT 'agent',
-  base_kind TEXT NOT NULL DEFAULT 'known');
+  base_kind TEXT NOT NULL DEFAULT 'known',
+  evidence TEXT NOT NULL DEFAULT 'snapshot', verdict TEXT NOT NULL DEFAULT 'changed');
 CREATE TABLE IF NOT EXISTS pending_blocks (
   entry_id TEXT NOT NULL, block_id TEXT NOT NULL, decision TEXT NOT NULL,
   PRIMARY KEY(entry_id,block_id));
@@ -109,9 +113,10 @@ CREATE TABLE IF NOT EXISTS pending_ops (
   operation_id TEXT PRIMARY KEY, request TEXT NOT NULL, state TEXT NOT NULL,
   result TEXT, undo TEXT);
 CREATE TABLE IF NOT EXISTS pending_history (
-  id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, entry_id TEXT,
-  snapshot TEXT NOT NULL, created_at INTEGER NOT NULL,
-  state TEXT NOT NULL DEFAULT 'applied');
+  entry_id TEXT PRIMARY KEY, path TEXT NOT NULL, kind TEXT NOT NULL,
+  earlier TEXT NOT NULL DEFAULT 'file', baseline TEXT NOT NULL, content TEXT NOT NULL,
+  digest TEXT NOT NULL, wrote INTEGER NOT NULL DEFAULT 0,
+  state TEXT NOT NULL DEFAULT 'applied', merged_at INTEGER NOT NULL);
 `
 
 /**
@@ -130,6 +135,20 @@ function migrateProvenance(db: DatabaseSync): void {
 }
 
 /**
+ * @author ddj 2026年11月25号
+ * @description: v4 → v5：给条目补证据强度与结局两列。旧行按默认值读成「快照 / 真实改动」，
+ * 与 v4 的语义一致，不需要回填。
+ * @param db 已打开的工作区库
+ * @returns 无
+ */
+function migrateEvidence(db: DatabaseSync): void {
+  const columns = db.prepare('PRAGMA table_info(pending_entries)').all() as Row[]
+  const names = new Set(columns.map((column) => String(column.name)))
+  if (!names.has('evidence')) db.exec("ALTER TABLE pending_entries ADD COLUMN evidence TEXT NOT NULL DEFAULT 'snapshot'")
+  if (!names.has('verdict')) db.exec("ALTER TABLE pending_entries ADD COLUMN verdict TEXT NOT NULL DEFAULT 'changed'")
+}
+
+/**
  * @author ddj 2026年10月29号
  * @description: v1 历史表补 state 列（rebuild 成本高于一次 ALTER）。
  * @param db 已打开的工作区库
@@ -142,6 +161,81 @@ function migrateHistory(db: DatabaseSync): void {
 }
 
 /**
+ * @author ddj 2026年11月25号
+ * @description: v5 → v6：把「每次决定一行」的撤销栈折成「每条路径一行」。
+ * 同一路径只保留最近一次判定，用被替换掉的那一侧全文作撤销依据；其余旧行直接丢弃，
+ * 这是合并语义：一段代码改三次仍然只有一份差异，不再堆三次快照。
+ * @param db 已打开的工作区库
+ * @returns 无
+ */
+function migrateHistoryMerge(db: DatabaseSync): void {
+  const columns = db.prepare('PRAGMA table_info(pending_history)').all() as Row[]
+  if (!columns.some((column) => column.name === 'snapshot')) return
+  const rows = db.prepare(`SELECT h.entry_id, h.snapshot, h.created_at, h.state, e.path AS entry_path
+    FROM pending_history h LEFT JOIN pending_entries e ON e.id = h.entry_id
+    WHERE h.id IN (SELECT MAX(id) FROM pending_history GROUP BY entry_id)`).all() as Row[]
+  db.exec(`CREATE TABLE IF NOT EXISTS pending_history_v6 (
+    entry_id TEXT PRIMARY KEY, path TEXT NOT NULL, kind TEXT NOT NULL,
+    earlier TEXT NOT NULL DEFAULT 'file', baseline TEXT NOT NULL, content TEXT NOT NULL,
+    digest TEXT NOT NULL, wrote INTEGER NOT NULL DEFAULT 0,
+    state TEXT NOT NULL DEFAULT 'applied', merged_at INTEGER NOT NULL)`)
+  const insert = db.prepare(`INSERT OR REPLACE INTO pending_history_v6
+    (entry_id,path,kind,earlier,baseline,content,digest,wrote,state,merged_at) VALUES(?,?,?,?,?,?,?,?,?,?)`)
+  for (const row of rows) {
+    const folded = foldLegacySnapshot(row)
+    if (!folded) continue
+    insert.run(String(row.entry_id), String(row.entry_path ?? folded.path), folded.kind, folded.earlier,
+      folded.baseline, folded.content, digestOf(folded.content), folded.wrote ? 1 : 0,
+      row.state === 'undone' ? 'undone' : 'applied', Number(row.created_at) || Date.now())
+  }
+  db.exec('DROP TABLE pending_history')
+  db.exec('ALTER TABLE pending_history_v6 RENAME TO pending_history')
+}
+
+/**
+ * @private
+ * @author ddj 2026年11月25号
+ * @description: 把旧的「before/after 条目快照」还原成一条合并撤销行；解析不了就丢弃。
+ * @param row 旧历史行
+ * @returns 折叠结果，无法解析时为 null
+ */
+function foldLegacySnapshot(row: Row): { kind: 'keep' | 'revert'; earlier: string; baseline: string; content: string; wrote: boolean; path: string } | null {
+  try {
+    const snapshot = JSON.parse(String(row.snapshot)) as {
+      before?: { entry?: { oldText?: unknown; newText?: unknown; earlierVersion?: unknown; path?: unknown } }
+      after?: { entry?: { oldText?: unknown; newText?: unknown } }
+      wrote?: unknown
+    }
+    const before = snapshot.before?.entry
+    const after = snapshot.after?.entry
+    if (!before || !after) return null
+    const baseline = String(before.oldText ?? '')
+    const content = String(before.newText ?? '')
+    return {
+      kind: String(after.oldText ?? '') !== baseline ? 'keep' : 'revert',
+      earlier: String(before.earlierVersion ?? 'file') === 'none' ? 'none' : 'file',
+      baseline,
+      content,
+      wrote: snapshot.wrote === true,
+      path: String(before.path ?? ''),
+    }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * @private
+ * @author ddj 2026年11月25号
+ * @description: 撤销行内容指纹，用于重试幂等与诊断，不参与判定。
+ * @param text 被替换掉的那一侧全文
+ * @returns 十六进制摘要
+ */
+function digestOf(text: string): string {
+  return createHash('sha256').update(text).digest('hex').slice(0, 32)
+}
+
+/**
  * @author ddj 2026年10月29号
  * @description: 读出全部待审条目，按更新时间升序。
  * @param cwd 工作区
@@ -150,6 +244,21 @@ function migrateHistory(db: DatabaseSync): void {
 export function loadEntries(cwd: string): StoredEntry[] {
   const rows = pendingDb(cwd).prepare('SELECT * FROM pending_entries ORDER BY updated_at ASC').all() as Row[]
   return rows.map((row) => ({ entry: entryOfRow(row), flags: flagsOfRow(row) }))
+}
+
+/**
+ * @author ddj 2026年11月25号
+ * @description: 按身份读单条条目：watch 批次快照可能早于工具落库，重读一条比整表便宜。
+ * @param cwd 工作区
+ * @param id 条目身份（后端进程路径）
+ * @returns 条目与标记，缺失时 undefined
+ */
+export function loadEntry(cwd: string, id: string): StoredEntry | undefined {
+  const db = pendingDb(cwd)
+  // Windows 上盘符与路径大小写不敏感：精确命中失败再按 NOCASE 找一次。
+  const row = (db.prepare('SELECT * FROM pending_entries WHERE id=?').get(id)
+    ?? db.prepare('SELECT * FROM pending_entries WHERE id=? COLLATE NOCASE').get(id)) as Row | undefined
+  return row ? { entry: entryOfRow(row), flags: flagsOfRow(row) } : undefined
 }
 
 /**
@@ -175,17 +284,19 @@ function upsertEntry(db: DatabaseSync, cwd: string, stored: StoredEntry): void {
   const { entry, flags } = stored
   db.prepare(`INSERT INTO pending_entries
     (id,path,earlier,old_text,new_text,updated_at,unseen,missing,diverged,oversized,revision,session_id,session_ids,lineage,
-     source,origin,base_kind)
-    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+     source,origin,base_kind,evidence,verdict)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     ON CONFLICT(id) DO UPDATE SET path=excluded.path,earlier=excluded.earlier,old_text=excluded.old_text,
       new_text=excluded.new_text,updated_at=excluded.updated_at,unseen=excluded.unseen,missing=excluded.missing,
       diverged=excluded.diverged,oversized=excluded.oversized,revision=excluded.revision,
       session_id=excluded.session_id,session_ids=excluded.session_ids,lineage=excluded.lineage,
-      source=excluded.source,origin=excluded.origin,base_kind=excluded.base_kind`)
+      source=excluded.source,origin=excluded.origin,base_kind=excluded.base_kind,
+      evidence=excluded.evidence,verdict=excluded.verdict`)
     .run(entry.id, entry.path, entry.earlierVersion, entry.oldText, entry.newText, entry.updatedAt,
       entry.unseen === true ? 1 : 0, flags.missing ? 1 : 0, flags.diverged ? 1 : 0, flags.oversized ? 1 : 0,
       flags.revision, entry.sessionId, JSON.stringify(entry.sessionIds), entry.lineage ? JSON.stringify(entry.lineage) : null,
-      entry.source ?? 'tool', entry.origin ?? 'agent', entry.baseKind ?? 'known')
+      entry.source ?? 'tool', entry.origin ?? 'agent', entry.baseKind ?? 'known',
+      entry.evidence ?? 'snapshot', entry.verdict ?? 'changed')
   bumpVersion(cwd)
 }
 
@@ -296,90 +407,106 @@ export function writeOp(
 }
 
 /**
- * @author ddj 2026年10月29号
- * @description: 追加一条撤销栈记录，并截断重做分支（新决定之后旧的"已撤销"记录不能再重做）。
+ * @author ddj 2026年10月29号 / 2026年11月25号
+ * @description: 写一条撤销行（同一路径覆盖写）。
  * @param cwd 工作区
- * @param kind 操作种类
- * @param entryId 涉及的条目
- * @param snapshot 可重放快照
+ * @param record 撤销行内容
  * @param now 时间
  * @returns 无
  */
-export function pushHistory(cwd: string, kind: string, entryId: string, snapshot: string, now: number): void {
-  insertHistory(pendingDb(cwd), kind, entryId, snapshot, now)
+export function pushHistory(cwd: string, record: HistoryRecord, now: number): void {
+  insertHistory(pendingDb(cwd), record, now)
 }
 
 /**
  * @private
- * @author ddj 2026年11月03号
- * @description: 在给定连接上追加撤销栈记录并截断重做分支，供单条与批量两个入口复用。
+ * @author ddj 2026年11月03号 / 2026年11月25号
+ * @description: 写一条合并撤销行：同一路径永远只有一行，新判定覆盖写，不再堆叠。
  * @param db 已迁移连接（可能已在事务中）
- * @param kind 操作种类
- * @param entryId 涉及的条目
- * @param snapshot 可重放快照
+ * @param record 撤销行内容
  * @param now 时间
  * @returns 无
  */
-function insertHistory(db: DatabaseSync, kind: string, entryId: string, snapshot: string, now: number): void {
-  db.prepare("DELETE FROM pending_history WHERE state='undone'").run()
-  db.prepare("INSERT INTO pending_history(kind,entry_id,snapshot,created_at,state) VALUES(?,?,?,?,'applied')")
-    .run(kind, entryId, snapshot, now)
+function insertHistory(db: DatabaseSync, record: HistoryRecord, now: number): void {
+  db.prepare(`INSERT INTO pending_history(entry_id,path,kind,earlier,baseline,content,digest,wrote,state,merged_at)
+    VALUES(?,?,?,?,?,?,?,?,'applied',?)
+    ON CONFLICT(entry_id) DO UPDATE SET path=excluded.path,kind=excluded.kind,earlier=excluded.earlier,
+      baseline=excluded.baseline,content=excluded.content,digest=excluded.digest,wrote=excluded.wrote,
+      state='applied',merged_at=excluded.merged_at`)
+    .run(record.entryId, record.path, record.kind, record.earlier, record.baseline, record.content,
+      digestOf(record.content), record.wrote ? 1 : 0, now)
 }
 
 /**
- * @author ddj 2026年10月30号
- * @description: 取最近一条仍生效的历史记录，撤销就作用在它上面。
+ * @author ddj 2026年10月30号 / 2026年11月25号
+ * @description: 取最近一条仍生效的撤销行，撤销就作用在它上面。
  * @param cwd 工作区
  * @returns 记录或 undefined
  */
 export function latestApplied(cwd: string): HistoryRow | undefined {
   const row = pendingDb(cwd).prepare(
-    "SELECT id,kind,entry_id,snapshot FROM pending_history WHERE state='applied' ORDER BY id DESC LIMIT 1",
+    "SELECT * FROM pending_history WHERE state='applied' ORDER BY merged_at DESC LIMIT 1",
   ).get() as Row | undefined
   return row ? rowOfHistory(row) : undefined
 }
 
 /**
- * @author ddj 2026年10月30号
- * @description: 取最早一条被撤销的记录，重做按"撤销的逆序"重新生效。
+ * @author ddj 2026年10月30号 / 2026年11月25号
+ * @description: 取最早一条被撤销的记录，重做按「撤销的逆序」重新生效。
  * @param cwd 工作区
  * @returns 记录或 undefined
  */
 export function earliestUndone(cwd: string): HistoryRow | undefined {
   const row = pendingDb(cwd).prepare(
-    "SELECT id,kind,entry_id,snapshot FROM pending_history WHERE state='undone' ORDER BY id ASC LIMIT 1",
+    "SELECT * FROM pending_history WHERE state='undone' ORDER BY merged_at ASC LIMIT 1",
   ).get() as Row | undefined
   return row ? rowOfHistory(row) : undefined
 }
 
 /**
- * @author ddj 2026年10月30号
- * @description: 翻转一条历史记录的生效状态。
+ * @author ddj 2026年10月30号 / 2026年11月25号
+ * @description: 翻转一条撤销行的生效状态。
  * @param cwd 工作区
- * @param id 记录主键
+ * @param entryId 条目身份（一条路径一行）
  * @param state applied / undone
  * @returns 无
  */
-export function setHistoryState(cwd: string, id: number, state: 'applied' | 'undone'): void {
-  pendingDb(cwd).prepare('UPDATE pending_history SET state=? WHERE id=?').run(state, id)
+export function setHistoryState(cwd: string, entryId: string, state: 'applied' | 'undone'): void {
+  pendingDb(cwd).prepare('UPDATE pending_history SET state=? WHERE entry_id=?').run(state, entryId)
 }
 
 /**
- * @author ddj 2026年10月30号
- * @description: 把数据库行还原成历史记录。
+ * @author ddj 2026年10月30号 / 2026年11月25号
+ * @description: 把数据库行还原成撤销记录。
  * @param row 数据库行
  * @returns 记录
  */
 function rowOfHistory(row: Row): HistoryRow {
-  return { id: Number(row.id), kind: String(row.kind), entryId: String(row.entry_id), snapshot: String(row.snapshot) }
+  return {
+    entryId: String(row.entry_id), path: String(row.path),
+    kind: String(row.kind) === 'revert' ? 'revert' : 'keep',
+    earlier: String(row.earlier ?? 'file') === 'none' ? 'none' : 'file',
+    baseline: String(row.baseline), content: String(row.content),
+    wrote: Number(row.wrote) === 1, state: row.state === 'undone' ? 'undone' : 'applied',
+    mergedAt: Number(row.merged_at) || 0,
+  }
 }
 
-/** 历史记录行形态（快照为 JSON 文本）。 */
-export interface HistoryRow {
-  id: number
-  kind: string
+/** 一条撤销行的内容：被这次判定替换掉的两侧全文，用于撤销与重做。 */
+export interface HistoryRecord {
   entryId: string
-  snapshot: string
+  path: string
+  kind: 'keep' | 'revert'
+  earlier: 'file' | 'none'
+  baseline: string
+  content: string
+  wrote: boolean
+}
+
+/** 撤销行形态（一条路径一行）。 */
+export interface HistoryRow extends HistoryRecord {
+  state: 'applied' | 'undone'
+  mergedAt: number
 }
 
 /**
@@ -408,6 +535,8 @@ function entryOfRow(row: Row): PendingEntry {
     source: sourceOfRow(row),
     origin: originOfRow(row),
     baseKind: baseKindOfRow(row),
+    evidence: evidenceOfRow(row),
+    verdict: verdictOfRow(row),
   }
   if (Number(row.unseen) === 1) entry.unseen = true
   if (lineage !== undefined) entry.lineage = lineage
@@ -448,7 +577,31 @@ function originOfRow(row: Row): PendingOrigin {
  */
 function baseKindOfRow(row: Row): PendingBaseKind {
   const value = String(row.base_kind ?? 'known')
-  return value === 'absent' || value === 'vcs' || value === 'unknown' ? value : 'known'
+  return value === 'absent' || value === 'vcs' || value === 'normalized' || value === 'unknown' ? value : 'known'
+}
+
+/**
+ * @private
+ * @author ddj 2026年11月25号
+ * @description: 读证据强度列；v4 旧库升级后该列有默认值，异常值按 `snapshot` 处理。
+ * @param row 数据库行
+ * @returns 证据强度
+ */
+function evidenceOfRow(row: Row): PendingEvidence {
+  const value = String(row.evidence ?? 'snapshot')
+  return value === 'authoritative' || value === 'receipt' || value === 'none' ? value : 'snapshot'
+}
+
+/**
+ * @private
+ * @author ddj 2026年11月25号
+ * @description: 读调用结局列；异常值按 `changed` 处理（旧条目的语义就是真实改动）。
+ * @param row 数据库行
+ * @returns 调用结局
+ */
+function verdictOfRow(row: Row): PendingVerdict {
+  const value = String(row.verdict ?? 'changed')
+  return value === 'noop' || value === 'failed' || value === 'unverified' ? value : 'changed'
 }
 
 /**
@@ -466,13 +619,12 @@ function flagsOfRow(row: Row): PendingFlags {
   }
 }
 
-/** 批量 Keep 的一条落库记录：stored 提供 CAS 依据与撤销快照 before，next 是推进后的条目。 */
+/** 批量 Keep 的一条落库记录：stored 提供 CAS 依据与撤销依据，next 是推进后的条目。 */
 export interface KeepRecord {
   entryId: string
   stored: StoredEntry
   next: StoredEntry
   blocks: { id: string; decision: string }[]
-  snapshot: string
 }
 
 /**
@@ -489,7 +641,8 @@ export function saveDecisions(cwd: string, records: KeepRecord[]): { id: string;
   const db = pendingDb(cwd)
   const skipped: { id: string; reason: string }[] = []
   const advance = db.prepare(`UPDATE pending_entries SET path=?,earlier=?,old_text=?,new_text=?,updated_at=?,unseen=?,
-    missing=?,diverged=?,oversized=?,revision=?,session_id=?,session_ids=?,lineage=?,source=?,origin=?,base_kind=?
+    missing=?,diverged=?,oversized=?,revision=?,session_id=?,session_ids=?,lineage=?,source=?,origin=?,base_kind=?,
+    evidence=?,verdict=?
     WHERE id=? AND revision=?`)
 
   db.exec('BEGIN IMMEDIATE')
@@ -502,6 +655,7 @@ export function saveDecisions(cwd: string, records: KeepRecord[]): { id: string;
         flags.revision, entry.sessionId, JSON.stringify(entry.sessionIds),
         entry.lineage ? JSON.stringify(entry.lineage) : null,
         entry.source ?? 'tool', entry.origin ?? 'agent', entry.baseKind ?? 'known',
+        entry.evidence ?? 'snapshot', entry.verdict ?? 'changed',
         record.entryId, expected)
       // 读条目到落库之间被别的决定推进过：只放弃这一条
       if (changed.changes !== 1) {
@@ -509,7 +663,16 @@ export function saveDecisions(cwd: string, records: KeepRecord[]): { id: string;
         continue
       }
       writeBlocks(db, record.entryId, record.blocks)
-      insertHistory(db, 'decide', record.entryId, record.snapshot, Date.now())
+      // 撤销行每条路径只留一行：批量 Keep 也按同一口径覆盖写，不再追加
+      insertHistory(db, {
+        entryId: record.entryId,
+        path: record.stored.entry.path,
+        kind: 'keep',
+        earlier: record.stored.entry.earlierVersion,
+        baseline: record.stored.entry.oldText,
+        content: record.stored.entry.newText,
+        wrote: false,
+      }, Date.now())
     }
     db.exec('COMMIT')
     if (records.length) bumpVersion(cwd)

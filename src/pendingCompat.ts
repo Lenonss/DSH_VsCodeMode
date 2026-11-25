@@ -119,8 +119,21 @@ export function pendingItemOf(item: PendingItem, cwd?: string): ReviewItem {
     current: true,
   }
   // 来源徽标只对待审条目有意义：官方行没有采集通道。
-  if (item.settled !== true) row.sourceLabel = sourceLabelOf(item)
+  if (item.settled !== true) row.sourceLabel = withNote(sourceLabelOf(item), item.note)
   return row
+}
+
+/**
+ * @private
+ * @author ddj 2026年11月25号
+ * @description: 把只读说明接在来源徽标后面；列表里只给前 40 字，避免长句刷屏。
+ * @param label 来源徽标
+ * @param note 只读说明
+ * @returns 展示文案
+ */
+function withNote(label: string, note: string | undefined): string {
+  if (!note) return label
+  return label + ' · 备注：' + (note.length > 40 ? note.slice(0, 40) + '…' : note)
 }
 
 /**

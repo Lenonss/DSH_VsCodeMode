@@ -1,7 +1,7 @@
 /** Session-scoped official review RPC. @author ddj 2026年10月26号 */
 import { createHash } from 'node:crypto'
 import type { RpcHandlerMap } from './shared/rpc.js'
-import type { KeepAllItem, KeepAllResult, ReviewDetail, ReviewItem, ReviewPage } from './shared/review.js'
+import type { KeepAllItem, KeepAllResult, ReviewDetail, ReviewItem, ReviewPage, UndoAllItem, UndoAllResult } from './shared/review.js'
 import type { PendingPage } from './shared/pendingReview.js'
 import { decideReview, keepOfficialAll, reviewDetail, reviewPage } from './reviewDb.js'
 import { undoReview } from './reviewUndo.js'
@@ -355,6 +355,52 @@ export function reviewHandlers(ctx: Ctx, registry: Registry): Partial<RpcHandler
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
         log.warn(`[review] keepAll 失败: ${message}`)
+        return { ok: false, error: message }
+      }
+    },
+    'edrv.review.undoAll': async (args) => {
+      // 批量 Undo 每条都要写回源文件：必须由会话活跃的一端执行，冷端给可读原因而不是 500。
+      try {
+        const scope = await scopeOf(args.sessionId)
+        if (!scope.live) return { ok: false, error: UNDO_NEEDS_LIVE }
+        const items = Array.isArray(args.items) ? args.items : []
+        if (!items.length) return { ok: false, error: '没有可撤销的记录' }
+        if (items.length > BATCH_LIMIT) {
+          return { ok: false, error: `记录过多（${items.length} 条，上限 ${BATCH_LIMIT}），请先分批处理后重试` }
+        }
+        if (items.some((item) => item.id.startsWith(PENDING_PREFIX))) {
+          return { ok: false, error: '待审条目请逐条判定；批量 Undo 只处理官方审查记录' }
+        }
+
+        // 非本会话工具写入的来源先统一确认一次，避免整批撤销误伤用户代码
+        if (args.confirmed !== true) {
+          const externals = items.filter((item) => reviewDetail(scope.cwd, item.id)?.capability.confirmUndo === true)
+          if (externals.length) {
+            return { ok: true, result: { completed: 0, total: items.length, paths: [], needsConfirm: externals.length, error: '' } }
+          }
+        }
+
+        const result: UndoAllResult = { completed: 0, total: items.length, paths: [], error: '' }
+        const session = sessionOf(ctx, args.sessionId)
+        for (const item of items) {
+          try {
+            await undoReview(ctx, session, scope.cwd, {
+              sessionId: args.sessionId, id: item.id, seq: item.seq, revision: item.revision,
+              operationId: item.operationId, decision: 'rejected', scope: 'file',
+            })
+            result.completed++
+            result.paths.push(item.display)
+          } catch (error) {
+            // 与既有口径一致：遇冲突即停止，不声称原子多文件回滚
+            result.error = (error instanceof Error ? error.message : String(error))
+            break
+          }
+        }
+        log.info(`[review] undoAll live=1 total=${result.total} done=${result.completed}`)
+        return { ok: true, result }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        log.warn(`[review] undoAll 失败: ${message}`)
         return { ok: false, error: message }
       }
     },

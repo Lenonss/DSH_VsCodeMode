@@ -8,8 +8,9 @@
  *   同一毫秒内的多次写入 mtime 相同，用它排序反而可能造出倒序 diff。
  * - 判定顺序固定：已知内容未变 → 跳过；插件自写窗口 → 跳过；编辑器保存窗口 → 只推进基线；
  *   版本库说干净 → 跳过或标成版本库同步；拿不到版本库状态且是首次见到的路径 → 必须自带 mtime 证据
- *   （文件确实在监听开始之后被写过），否则只记缺口不建档；其余按窗口判定归属后落库。
- *   绝不按时间戳猜重复，也绝不把「被读过」当成「被改过」。
+ *   （文件确实在监听开始之后被写过），否则只记缺口不建档；整文件新增短时间成批出现 → 熔断静默一段时间。
+ *   写记录前按身份重读一次条目：本批快照可能早于工具落库，不重读就会把工具写入再记成版本库同步。
+ *   其余按窗口判定归属后落库。绝不按时间戳猜重复，也绝不把「被读过」当成「被改过」。
  * - 递归监听不可用（Linux）时降级为逐子目录非递归监听；仍不可用就只靠补扫，并把原因写进缺口。
  * - 读盘一律走待审采集的严格 UTF-8 往返：二进制、GBK 等无法字节往返的内容不落记录（记缺口），
  *   绝不因为"分析"而改写任何字节。
@@ -23,7 +24,7 @@ import { log } from '../log.js'
 import type { PendingWrite } from './capture.js'
 import { noteCaptureGap, readText } from './capture.js'
 import type { StoredEntry } from './persist.js'
-import { loadEntries } from './persist.js'
+import { loadEntries, loadEntry } from './persist.js'
 import { FILE_EXCLUDES, EXCLUDES } from '../search/ripgrep.js'
 import { pathKeyOf, windows } from './provenance.js'
 import type { VcsStatus } from './vcs.js'
@@ -59,6 +60,12 @@ export const GAP_KEY_MAX = 500
 export const STATUS_NOTE_MIN_MS = 5 * 60_000
 /** mtime 证据的时钟容差：监听开始前这段时间内写过的文件也算「刚被写过」。 */
 export const WATCH_SKEW_MS = 2000
+/** 熔断窗口：统计「整文件新增」记录的时间窗。 */
+export const BURST_WINDOW_MS = 5 * 60_000
+/** 窗口内最多允许的整文件新增条数：超过即判定为批量噪声。 */
+export const BURST_NEW_LIMIT = 200
+/** 熔断后的静默期：这段时间只更新已有条目，不新建。 */
+export const BURST_COOLDOWN_MS = 10 * 60_000
 
 /** 会改动工作副本的版本库 RPC：只有这些方法之后才值得补扫。 */
 export const VCS_WRITE_METHODS = new Set([
@@ -141,6 +148,8 @@ export interface ExternalCaptureDeps {
   align?(cwd: string, sessionId: string): Promise<void>
   /** 覆盖 mtime 读取（测试注入）；缺省 statSync。拿不到返回 undefined。 */
   mtime?(cwd: string, absolute: string): number | undefined
+  /** 覆盖单条最新条目读取（测试注入）；缺省按身份查一条。 */
+  latest?(cwd: string, absolute: string): StoredEntry | undefined
   now?(): number
 }
 
@@ -184,6 +193,11 @@ interface Workspace {
   gapKeys: Set<string>
   /** 上次把「版本库状态不可用」写进缺口的时刻。 */
   statusNoteAt: number
+  /** 熔断窗口起点与窗口内已建的整文件新增条数。 */
+  burstAt: number
+  burstCount: number
+  /** 熔断静默截止时刻：在此之前不新建整文件新增记录。 */
+  burstMutedUntil: number
 }
 
 // --endregion
@@ -219,6 +233,7 @@ export function installExternalCapture(deps: ExternalCaptureDeps): ExternalCaptu
       timer: null, firstAt: 0, flushing: false, again: false, degraded: '',
       statusAt: 0, status: undefined, alignedAt: 0, alignTimer: null, requestTimer: null,
       startedAt: 0, gapKeys: new Set(), statusNoteAt: 0,
+      burstAt: 0, burstCount: 0, burstMutedUntil: 0,
     }
     spaces.set(key, created)
     return created
@@ -313,6 +328,24 @@ export function installExternalCapture(deps: ExternalCaptureDeps): ExternalCaptu
     const map = new Map<string, StoredEntry>()
     for (const stored of loadEntries(cwd)) map.set(pathKeyOf(stored.entry.id), stored)
     return map
+  }
+
+  /**
+   * @private
+   * @author ddj 2026年11月25号
+   * @description: 取某路径的最新条目：批次快照可能早于工具落库，写记录前按身份重读一条。
+   * @param space 工作区状态
+   * @param absolute 绝对路径
+   * @param fallback 批次内的旧条目
+   * @returns 最新条目（读不到时回落到旧条目）
+   */
+  function latestOf(space: Workspace, absolute: string, fallback: StoredEntry | undefined): StoredEntry | undefined {
+    try {
+      if (deps.latest) return deps.latest(space.cwd, absolute) ?? fallback
+      return loadEntry(space.cwd, absolute) ?? fallback
+    } catch {
+      return fallback
+    }
   }
 
   /**
@@ -418,6 +451,30 @@ export function installExternalCapture(deps: ExternalCaptureDeps): ExternalCaptu
 
   /**
    * @private
+   * @author ddj 2026-11-24
+   * @description: 整文件新增的熔断：短时间成批出现「没有基线的整文件新增」时判定为批量噪声，
+   * 静默一段时间不新建档，只留一条缺口。已有条目的更新不受影响。
+   * @param space 工作区状态
+   * @param absolute 触发熔断的路径
+   * @returns 允许新建返回 true
+   */
+  function allowNewWholeFile(space: Workspace, absolute: string): boolean {
+    const at = now()
+    if (space.burstMutedUntil > at) return false
+    if (at - space.burstAt > BURST_WINDOW_MS) {
+      space.burstAt = at
+      space.burstCount = 0
+    }
+    space.burstCount += 1
+    if (space.burstCount <= BURST_NEW_LIMIT) return true
+    space.burstMutedUntil = at + BURST_COOLDOWN_MS
+    noteGapOnce(space, 'burst:' + String(space.burstMutedUntil), absolute,
+      `短时间内新建 ${space.burstCount} 条整文件新增记录：疑似批量噪声，暂停 ${Math.round(BURST_COOLDOWN_MS / 60000)} 分钟`)
+    return false
+  }
+
+  /**
+   * @private
    * @description: 处理一个路径：判定链见文件头注释。
    * @param space 工作区状态
    * @param absolute 绝对路径
@@ -446,16 +503,21 @@ export function installExternalCapture(deps: ExternalCaptureDeps): ExternalCaptu
       space.seen.set(key, content)
       // 编辑器保存：只推进基线；已有条目按外部改动吸收（基线不动、标分歧），不新开行
       if (!stored) return false
-      deps.record(writeOf(space, absolute, stored.entry.newText, content, at, 'watch', 'editor', 'known'))
+      const current = latestOf(space, absolute, stored)
+      if (!current || current.entry.newText === (content ?? '')) return false
+      deps.record(writeOf(space, absolute, current.entry.newText, content, at, 'watch', 'editor', 'known'))
       return true
     }
 
     const status = await statusOf(space)
     if (status && !status.entries.has(key)) {
-      // 版本库说这个路径相对基线干净：内容变化只能来自版本库同步
+      // 版本库说这个路径相对基线干净：可能是版本库同步，也可能是工具刚写完、
+      // 而本批快照还停在上一轮（git 忽略的路径根本不出现在 status 里）。
       space.seen.set(key, content)
       if (!stored) return false
-      deps.record(writeOf(space, absolute, stored.entry.newText, content, at, 'vcs', 'vcs', 'known'))
+      const current = latestOf(space, absolute, stored)
+      if (!current || current.entry.newText === (content ?? '')) return false
+      deps.record(writeOf(space, absolute, current.entry.newText, content, at, 'vcs', 'vcs', 'known'))
       return true
     }
     // 拿不到版本库状态时，首次见到的路径必须自带证据：文件真的在监听开始之后被写过。
@@ -470,6 +532,11 @@ export function installExternalCapture(deps: ExternalCaptureDeps): ExternalCaptu
     if (before.text === null && content === null) {
       // 观察不到任何内容（既没文件也没基线）：没有可审的差异
       space.seen.set(key, null)
+      return false
+    }
+    // 没有基线的整文件新增是幽灵记录的典型形态：短时间成批出现就熔断，避免一次噪声刷满面板
+    if (!stored && before.text === null && !allowNewWholeFile(space, absolute)) {
+      space.seen.set(key, content)
       return false
     }
     deps.record(writeOf(space, absolute, before.text, content, at, 'watch',

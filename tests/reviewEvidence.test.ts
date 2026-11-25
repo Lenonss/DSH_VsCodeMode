@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { evidenceBlocks, evidenceText, rawReviewFile } from '../src/reviewEvidence.js'
+import { reviewBlocks } from '../src/shared/reviewRegions.js'
 import type { OfficialDiff } from '../src/shared/review.js'
 const diff: OfficialDiff = { kind: 'text', path: 'a', display: 'a', before: true, after: true, coarse: false,
   hunks: [{ oldStart: 1, oldLines: 3, newStart: 1, newLines: 3, lines: [' head', '-old', '+new', ' tail'] }] }
@@ -9,7 +10,7 @@ describe('raw official review evidence', () => {
   it('retains BOM, mixed endings and missing EOF newline byte-for-byte', () => {
     const pair = evidence('\uFEFFhead\r\nold\ntail', '\uFEFFhead\r\nnew\ntail')
     expect(evidenceText(pair).before).toBe('\uFEFFhead\r\nold\ntail')
-    expect(evidenceBlocks(diff, pair)).toEqual([{ id: '0:2:2', before: 'old\n', after: 'new\n', offset: 7 }])
+    expect(evidenceBlocks(diff, pair)).toEqual([{ id: reviewBlocks(diff)[0]!.id, before: 'old\n', after: 'new\n', offset: 7 }])
   })
   it('rejects hidden line-ending changes outside official blocks and incomplete baselines', () => {
     expect(() => evidenceBlocks(diff, evidence('head\r\nold\ntail', 'head\nnew\ntail'))).toThrow('行尾')

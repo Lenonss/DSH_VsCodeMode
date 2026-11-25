@@ -1,6 +1,6 @@
-/** 待审采集作用域、异步收尾与故障隔离。 @author ddj 2026年11月04号 */
+/** 待审采集作用域、异步收尾、故障隔离与工具回执对账。 @author ddj 2026年11月04号 */
 import { describe, expect, it, vi } from 'vitest'
-import { installPending, readText } from '../src/pending/capture.js'
+import { installPending, pendingGaps, readText } from '../src/pending/capture.js'
 
 /**
  * @private
@@ -28,7 +28,14 @@ function harness() {
   const sink = vi.fn()
   const capture = installPending(ctx, sink)
   const exec = { name: 'write', arguments: { path: 'a.ts' }, agent: { session: { id: 's1', header: { cwd: '/initial' } } } }
-  return { fs, files, sink, capture, cd: (path: string) => { cwd = path }, run: (next: () => Promise<unknown>) => handler(exec, next) }
+  const runAs = (name: string, next: () => Promise<unknown>) =>
+    handler({ name, arguments: { path: 'a.ts', file_path: 'a.ts' }, agent: { session: { id: 's1', header: { cwd: '/initial' } } } }, next)
+  return {
+    fs, files, sink, capture,
+    cd: (path: string) => { cwd = path },
+    run: (next: () => Promise<unknown>) => handler(exec, next),
+    runAs,
+  }
 }
 
 describe('待审采集', () => {
@@ -80,5 +87,44 @@ describe('待审采集', () => {
     await expect(readText(fixture.fs, '/current/a.ts')).rejects.toBe(failure)
     expect(await fixture.run(async () => 'executed')).toBe('executed')
     expect(fixture.sink).not.toHaveBeenCalled()
+  })
+
+  it('工具报错就判无效果：文件没变时既不建条目也不记缺口', async () => {
+    const fixture = harness()
+    const failure = new Error('tool failed')
+    await expect(fixture.runAs('edit', async () => { throw failure })).rejects.toBe(failure)
+    expect(fixture.sink).not.toHaveBeenCalled()
+    expect(pendingGaps('/current')).toHaveLength(0)
+    fixture.capture.dispose()
+  })
+
+  it('回执给的前后内容与磁盘一致时才建条目，并标回执证据', async () => {
+    const fixture = harness()
+    await fixture.runAs('edit', async () => {
+      fixture.files.set('/current/a.ts', 'B')
+      return { value: { path: 'a.ts', before: 'A', after: 'B' } }
+    })
+    expect(fixture.sink).toHaveBeenCalledWith(expect.objectContaining({
+      before: 'A', after: 'B', evidence: 'authoritative', verdict: 'changed',
+    }))
+    fixture.capture.dispose()
+  })
+
+  it('回执与磁盘对不上时不建条目，只记缺口', async () => {
+    const fixture = harness()
+    await fixture.runAs('edit', async () => {
+      fixture.files.set('/current/a.ts', 'B')
+      return { value: { path: 'a.ts', before: 'A', after: 'X' } }
+    })
+    expect(fixture.sink).not.toHaveBeenCalled()
+    expect(pendingGaps('/current').some((gap) => gap.includes('回执与磁盘不一致'))).toBe(true)
+    fixture.capture.dispose()
+  })
+
+  it('回执说写后与写前相同：同内容写入不产生条目', async () => {
+    const fixture = harness()
+    await fixture.runAs('write', async () => ({ value: { path: 'a.ts', operation: 'update', before: 'A', after: 'A' } }))
+    expect(fixture.sink).not.toHaveBeenCalled()
+    fixture.capture.dispose()
   })
 })

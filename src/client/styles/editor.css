@@ -828,6 +828,8 @@
 [data-edrv-view] .edrv-svncommit-close:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary, #2869b4); outline-offset: 1px; }
 [data-edrv-view] .edrv-svncommit-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; flex: none; min-height: 34px; padding: 6px 14px; border-bottom: 1px solid var(--dsw-alias-border-l1, #d9e0e4); background: var(--dsw-alias-bg-layer-1, #fff); }
 [data-edrv-view] .edrv-svncommit-ctl { flex: none; max-width: 160px; height: 24px; padding: 0 8px; font-size: 11px; line-height: 22px; }
+[data-edrv-view] .edrv-svncommit-sels { display: inline-flex; flex: none; gap: 6px; }
+[data-edrv-view] .edrv-svncommit-sels .edrv-svn-act { height: 24px; padding: 0 8px; font-size: 11px; line-height: 22px; }
 [data-edrv-view] .edrv-svncommit-bar .edrv-svn-check { flex: none; gap: 4px; font-size: 11px; color: var(--dsw-alias-label-secondary, #485762); }
 [data-edrv-view] .edrv-svncommit-badge { flex: none; margin-left: auto; padding: 1px 8px; border: 1px solid var(--dsw-alias-border-l1, #d9e0e4); border-radius: 10px; background: var(--dsw-alias-bg-layer-2, #f1f4f5); color: var(--dsw-alias-label-secondary, #485762); font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 [data-edrv-view] .edrv-svncommit-table { display: flex; flex-direction: column; flex: 1; min-height: 120px; margin: 10px 14px 0; border: 1px solid var(--dsw-alias-border-l1, #d9e0e4); border-radius: 5px; overflow: hidden; background: var(--dsw-alias-bg-layer-1, #fff); }
@@ -839,7 +841,7 @@
 [data-edrv-view] .edrv-svncommit-gname { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 [data-edrv-view] .edrv-svncommit-gnote { flex: none; padding: 0 6px; border-radius: 8px; background: var(--dsw-alias-interactive-bg-hover, #e7edf0); color: var(--dsw-alias-state-warn-primary, #a05d22); font-size: 10px; font-weight: 400; }
 [data-edrv-view] .edrv-svncommit-gcount { flex: none; margin-left: auto; color: var(--dsw-alias-label-tertiary, #65737c); font-size: 10px; font-weight: 400; font-variant-numeric: tabular-nums; }
-[data-edrv-view] .edrv-svncommit-row { height: 26px; padding: 0 10px; font-size: 12px; color: var(--dsw-alias-label-primary, #202932); }
+[data-edrv-view] .edrv-svncommit-row { height: 26px; padding: 0 10px; font-size: 12px; color: var(--dsw-alias-label-primary, #202932); -webkit-user-select: none; user-select: none; }
 [data-edrv-view] .edrv-svncommit-row:hover { background: var(--dsw-alias-interactive-bg-hover, #ecf3f9); }
 [data-edrv-view] .edrv-svncommit-row.is-menu { background: var(--dsw-alias-interactive-bg-hover, #ecf3f9); box-shadow: inset 2px 0 0 var(--dsw-alias-brand-primary, #2869b4); }
 [data-edrv-view] .edrv-svncommit-row.is-selected { background: var(--dsw-alias-interactive-bg-hover, #dceaf9); box-shadow: inset 2px 0 0 var(--dsw-alias-brand-primary, #2869b4); }

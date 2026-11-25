@@ -7,6 +7,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   IGNORE_ON_COMMIT,
+  batchCheckValueOf,
   commitActs,
   commitHintOf,
   commitMessageErrorOf,
@@ -16,7 +17,10 @@ import {
   commitStatsOf,
   defaultCheckedOf,
   groupTriStateOf,
+  moveRowPick,
   nextRowPick,
+  pruneRowPick,
+  rangeCheckValueOf,
 } from '../src/client/ui/svnCommitModel.js'
 
 const entries = [
@@ -183,5 +187,49 @@ describe('空分区（仅登记过 changelist）', () => {
     const sections = commitSectionsOf([{ path: 'a.txt', status: 'modified', versioned: true, changelist: 'core' }], ['core'])
     expect(sections.filter((section) => section.key === 'changelist:core')).toHaveLength(1)
     expect(sections[0].entries).toHaveLength(1)
+  })
+})
+
+describe('批量勾选取值', () => {
+  it('Shift 整段翻面只看目标行：未勾则整段勾上，已勾则整段取消', () => {
+    expect(rangeCheckValueOf(new Set(), 'a.txt')).toBe(true)
+    expect(rangeCheckValueOf(new Set(['a.txt', 'b.txt']), 'a.txt')).toBe(false)
+  })
+
+  it('批量勾选：全已勾则取消，否则勾上；空范围按勾上处理', () => {
+    expect(batchCheckValueOf(new Set(['a', 'b']), ['a', 'b'])).toBe(false)
+    expect(batchCheckValueOf(new Set(['a']), ['a', 'b'])).toBe(true)
+    expect(batchCheckValueOf(new Set(), ['a'])).toBe(true)
+    expect(batchCheckValueOf(new Set(), [])).toBe(true)
+  })
+})
+
+describe('方向键移动与清单清理', () => {
+  const order = ['a', 'b', 'c', 'd']
+
+  it('上下移动单选，越界停在首尾', () => {
+    expect(moveRowPick({ selected: ['b'], anchor: 'b' }, order, 1, false)).toEqual({ selected: ['c'], anchor: 'c' })
+    expect(moveRowPick({ selected: ['b'], anchor: 'b' }, order, -1, false)).toEqual({ selected: ['a'], anchor: 'a' })
+    expect(moveRowPick({ selected: ['d'], anchor: 'd' }, order, 1, false)).toEqual({ selected: ['d'], anchor: 'd' })
+    expect(moveRowPick({ selected: ['a'], anchor: 'a' }, order, -1, false)).toEqual({ selected: ['a'], anchor: 'a' })
+  })
+
+  it('没有选中时向下取首行、向上取末行', () => {
+    expect(moveRowPick({ selected: [], anchor: null }, order, 1, false)).toEqual({ selected: ['a'], anchor: 'a' })
+    expect(moveRowPick({ selected: [], anchor: null }, order, -1, false)).toEqual({ selected: ['d'], anchor: 'd' })
+    expect(moveRowPick({ selected: [], anchor: null }, [], 1, false)).toEqual({ selected: [], anchor: null })
+  })
+
+  it('Shift 扩选从锚点取范围，锚点保持不变', () => {
+    expect(moveRowPick({ selected: ['a', 'b'], anchor: 'a' }, order, 1, true)).toEqual({ selected: ['a', 'b', 'c'], anchor: 'a' })
+    expect(moveRowPick({ selected: ['b'], anchor: null }, order, 1, true)).toEqual({ selected: ['b', 'c'], anchor: 'b' })
+  })
+
+  it('清单重载后丢掉消失的路径，锚点失效时清空，无变化时返回原对象', () => {
+    const stale = { selected: ['a', 'zzz'], anchor: 'zzz' }
+    expect(pruneRowPick(stale, order)).toEqual({ selected: ['a'], anchor: null })
+
+    const live = { selected: ['a', 'b'], anchor: 'a' }
+    expect(pruneRowPick(live, order)).toBe(live)
   })
 })

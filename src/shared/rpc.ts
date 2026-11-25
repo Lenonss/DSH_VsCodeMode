@@ -28,7 +28,7 @@ import { DAP_ACTIONS } from './dap.js'
 import { transportUrl } from './remoteChannel.js'
 import type { LoggerLevel } from './logger.js'
 import type { SvnViewRequest, SvnViewPayload } from './svnExplorer.js'
-import type { DecideReview, KeepAllItem, KeepAllResult, ReviewDetail, ReviewPage, ReviewRequest } from './review.js'
+import type { DecideReview, KeepAllItem, KeepAllResult, ReviewDetail, ReviewPage, ReviewRequest, UndoAllItem, UndoAllResult } from './review.js'
 import type {
   PendingDecide, PendingDetail, PendingHistoryMove, PendingImport,
   PendingItem, PendingPage, PendingRemove, PendingRequest,
@@ -385,6 +385,7 @@ export interface RpcRequestMap {
   'edrv.review.detail': ReviewRequest & { id: string }
   'edrv.review.decide': DecideReview
   'edrv.review.keepAll': ReviewRequest & { batchId: string; items: KeepAllItem[] }
+  'edrv.review.undoAll': ReviewRequest & { batchId: string; items: UndoAllItem[]; confirmed?: boolean }
   'edrv.pending.list': PendingRequest
   'edrv.pending.detail': PendingRequest & { id: string }
   'edrv.pending.decide': PendingDecide
@@ -412,7 +413,7 @@ export interface RpcRequestMap {
   'edrv.archiveList': { sessionId?: string }
   'edrv.archivePage': { sessionId?: string; cursor?: string; limit?: number }
   'edrv.archiveRead': { sessionId?: string; path?: string; batch?: number | null }
-  'edrv.archive.purge': { sessionId?: string; dryRun?: boolean; retentionDays?: number; keepBatches?: number; keepHistory?: number; vacuum?: boolean }
+  'edrv.archive.purge': { sessionId?: string; dryRun?: boolean; retentionDays?: number; keepBatches?: number; keepOps?: number; vacuum?: boolean }
   'edrv.rollback': { sessionId?: string; path: string; batch?: number }
   'edrv.debug': { sessionId?: string; text: string; level?: LoggerLevel }
   'edrv.dlog.list': { sessionId?: string }
@@ -597,6 +598,7 @@ export interface RpcOkMap {
   'edrv.review.detail': { detail: ReviewDetail }
   'edrv.review.decide': { revision: number }
   'edrv.review.keepAll': { result: KeepAllResult }
+  'edrv.review.undoAll': { result: UndoAllResult }
   'edrv.pending.list': { page: PendingPage }
   'edrv.pending.detail': { detail: PendingDetail }
   'edrv.pending.decide': { item: PendingItem; wrote: boolean }

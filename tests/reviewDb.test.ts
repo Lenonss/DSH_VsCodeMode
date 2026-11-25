@@ -41,36 +41,45 @@ describe('official immutable ledger and decisions', () => {
   })
   it('keeps cross-turn pending; read-only keep is idempotent and CAS conflicts stay pending', () => {
     saveSnapshot(cwd, snapshot(2, 20, 'C'))
-    expect(reviewPage(cwd).pending).toBe(2)
-    const second = reviewPage(cwd).items.find((row) => row.turn === 2)!
-    const request = decision(second.id, 20)
-    expect(decideReview(cwd, request)).toEqual({ revision: 1 })
-    expect(decideReview(cwd, request)).toEqual({ revision: 1 })
+    // 同一路径跨轮次合并成一条：锚点仍是第一次采集的轮次，差异取最新
+    const merged = reviewPage(cwd).items
+    expect(merged).toHaveLength(1)
+    expect(merged[0]).toMatchObject({ turn: 1, seq: 10, currentPath: cwd + '/a.lua', added: 1, deleted: 1 })
+    const request = { ...decision(merged[0].id, merged[0].seq), revision: merged[0].revision }
+    const first = decideReview(cwd, request)
+    expect(first.revision).toBe(merged[0].revision + 1)
+    // 同一 operationId 重放返回同一结果，不再推进 revision
+    expect(decideReview(cwd, request)).toEqual(first)
     expect(() => decideReview(cwd, { ...request, operationId: 'other' })).toThrow('版本冲突')
     expect(() => decideReview(cwd, { ...request, id: 'other' })).toThrow('operationId')
-    expect(reviewPage(cwd).items.map((row) => row.turn)).toEqual([1])
+    expect(reviewPage(cwd).pending).toBe(0)
   })
   it('same-turn unchanged payload carries decision; changed payload reopens; late seq cannot replace', () => {
     saveSnapshot(cwd, snapshot(2, 21, 'C'))
+    // 内容完全相同的重发不重开：已判定的记录保持已判定
     expect(reviewPage(cwd, 0, true).items[0].decision).toBe('accepted')
     saveSnapshot(cwd, snapshot(2, 23, 'D'))
-    expect(reviewPage(cwd).pending).toBe(2)
+    // 内容真的变了：旧行丢弃，另起一条待审
+    expect(reviewPage(cwd).pending).toBe(1)
     expect(saveSnapshot(cwd, snapshot(2, 22, 'late'))).toBe(false)
     expect(reviewPage(cwd).items.find((row) => row.turn === 2)?.seq).toBe(23)
     expect(() => saveSnapshot(cwd, snapshot(2, 23, 'tampered'))).toThrow('内容发生变化')
   })
-  it('empty latest snapshot withdraws only that turn, retains old facts and other pending', () => {
+  it('empty latest snapshot withdraws the merged record for that turn', () => {
     const empty = snapshot(2, 24); empty.files = []; empty.summary.files = []; empty.summary.total = 0
     saveSnapshot(cwd, empty)
-    expect(reviewPage(cwd).pending).toBe(1)
-    expect(reviewPage(cwd, 0, true).items.find((row) => row.seq === 23)?.current).toBe(false)
+    // 合并后每条路径只有一行，撤回该轮就等于撤回这一行（旧轮次不再单独留档）
+    expect(reviewPage(cwd).pending).toBe(0)
+    expect(reviewPage(cwd, 0, true).items.every((row) => row.current === false)).toBe(true)
   })
   it('failed staging and explicit gap preserve previous complete facts', () => {
     const broken = snapshot(1, 11); broken.files = []
     expect(() => saveSnapshot(cwd, broken)).toThrow('采集不完整')
     captureState(cwd, { sessionId: 'source', turn: 1, seq: 11, error: 'snapshot read failed' }, 'gap')
     expect(reviewPage(cwd).gaps[0].error).toBe('snapshot read failed')
-    expect(reviewPage(cwd).items[0].seq).toBe(10)
+    // 采集失败只记缺口，不写入任何记录，也不把当前待审带进坏状态
+    expect(reviewPage(cwd).pending).toBe(0)
+    expect(reviewPage(cwd, 0, true).items.some((row) => row.seq === 11)).toBe(false)
   })
   it('binary/oversized and capped official lists retain metadata and expose capability', () => {
     const capped = snapshot(3, 30); capped.summary.total = 5
@@ -83,21 +92,30 @@ describe('official immutable ledger and decisions', () => {
     expect(reviewDetail(cwd, row.id)?.item.decision).toBe('pending')
   })
   it('201+ pending survive pagination, unrelated sessions and restart', () => {
+    // 分页用例必须用不同路径：同一路径会被合并成一条
     for (let index = 0; index < 205; index++) {
       const next = snapshot(100 + index, 1000 + index)
-      next.sessionId = 'other-source'; saveSnapshot(cwd, next)
+      next.sessionId = 'other-source'
+      next.summary.files[0].path = 'p' + index + '.lua'
+      next.summary.files[0].display = 'p' + index + '.lua'
+      if (next.files[0].diff.kind === 'text') {
+        next.files[0].diff.path = 'p' + index + '.lua'
+        next.files[0].diff.display = 'p' + index + '.lua'
+      }
+      next.files[0].identity = cwd + '/p' + index + '.lua'
+      saveSnapshot(cwd, next)
     }
     closeArchiveDbs()
     const first = reviewPage(cwd)
-    expect(first.pending).toBe(207); expect(first.items).toHaveLength(50); expect(first.nextCursor).toBe(50)
-    expect(reviewPage(cwd, 200).items).toHaveLength(7)
+    expect(first.pending).toBe(206); expect(first.items).toHaveLength(50); expect(first.nextCursor).toBe(50)
+    expect(reviewPage(cwd, 200).items).toHaveLength(6)
   })
   it('navigation aggregates every pending record across pages and scopes a file detail list', () => {
     const page = reviewPage(cwd)
-    expect(page.overview?.files).toEqual([{ sourceKind: 'official', path: cwd + '/a.lua', label: 'a.lua', pending: 207 }])
+    expect(page.overview?.files).toHaveLength(206)
     expect(page.overview?.coveredPaths).toContain(cwd + '/a.lua')
     expect(reviewPage(cwd, 0, false, cwd + '/missing.lua').items).toEqual([])
-    expect(reviewPage(cwd, 0, false, cwd + '/a.lua').items).toHaveLength(50)
+    expect(reviewPage(cwd, 0, false, cwd + '/p0.lua').items).toHaveLength(1)
   })
   it('repairs persisted object identities without changing IDs, decisions, operations or source facts', async () => {
     const broken = snapshot(999, 9999)

@@ -31,12 +31,15 @@ describe('提交窗口右键菜单条目', () => {
     expect(entries.map((item) => item.id)).toEqual(['compare', 'log', 'open', 'parent', 'toggle', 'add', 'revert', 'copy'])
     expect(entries.find((item) => item.id === 'revert').danger).toBe(true)
     expect(entries.find((item) => item.id === 'toggle').label).toBe('取消勾选此项')
+    // 「与基线比较」不做禁用：不可比较时由 openCompare 用提示说明原因
+    expect(entries.find((item) => item.id === 'compare').disabled).toBeUndefined()
   })
 
-  it('多选行：只给批量勾选与批量复制，破坏性动作不下放', () => {
+  it('多选行：比较针对右键行，其余只给批量勾选与批量复制', () => {
     const entries = commitMenuEntriesOf(view, { kind: 'row', entry, paths: ['a.cs', 'b.txt'] })
-    expect(entries.map((item) => item.id)).toEqual(['pick-on', 'pick-off', 'copy'])
-    expect(entries[2].label).toBe('复制 2 条路径')
+    expect(entries.map((item) => item.id)).toEqual(['compare', 'pick-on', 'pick-off', 'copy'])
+    expect(entries[0].label).toBe('与基线比较（这一行）')
+    expect(entries[3].label).toBe('复制 2 条路径')
   })
 
   it('未版本控制行：加入可用、还原置灰', () => {
@@ -45,9 +48,10 @@ describe('提交窗口右键菜单条目', () => {
     expect(entries.find((item) => item.id === 'revert').disabled).toBe(true)
   })
 
-  it('提交进行中：写动作与勾选全部置灰', () => {
+  it('提交进行中：写动作与勾选全部置灰，比较改为提示而非禁用', () => {
     const entries = commitMenuEntriesOf({ ...view, busy: true }, { kind: 'row', entry, paths: ['a.cs'] })
-    expect(['toggle', 'add', 'revert', 'compare', 'log'].every((id) => entries.find((item) => item.id === id).disabled)).toBe(true)
+    expect(['toggle', 'add', 'revert', 'log'].every((id) => entries.find((item) => item.id === id).disabled)).toBe(true)
+    expect(entries.find((item) => item.id === 'compare').disabled).toBeUndefined()
   })
 
   it('菜单目标缺失或缺条目时返回空表而不是抛异常', () => {

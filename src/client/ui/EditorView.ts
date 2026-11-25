@@ -26,7 +26,7 @@ import { bindPanelCommand } from '../panelCommands.js'
 import { dbg, isDebug, rpc } from '../rpc.js'
 import { refreshFeed, subscribeErrors, subscribeRecords } from '../state/recordsFeed.js'
 import { subscribeReview, refreshReview } from '../state/reviewFeed.js'
-import { runReviewBatch } from '../reviewBatch.js'
+import { runUndoAll } from '../reviewBatch.js'
 import { runKeepAll } from '../reviewKeepAll.js'
 import { toastDom } from '../externalOpen.js'
 import { ReviewAllConfirm } from './ReviewAllConfirm.js'
@@ -3843,16 +3843,15 @@ export function EditorView(props) {
     return res.page
   }
 
-  /** @private @author ddj 2026年11月03号 @param token 起批时的会话寿命 @returns 逐条 Undo 的精确部分完成（冲突处停止） */
+  /** @private @author ddj 2026年11月03号 / 2026年11月25号 @param token 起批时的会话寿命 @returns 一次往返的批量 Undo（遇冲突即停） */
   function undoAllBatch(token) {
-    return runReviewBatch({
+    return runUndoAll({
       snapshot: batchSnapshot,
-      detail: async (id) => { const res = await rpc('edrv.review.detail', { sessionId, id }); if (!res.ok) throw new Error(res.error); return res.detail },
-      decide: (detail, undo, operationId) => rpc('edrv.review.decide', { sessionId, id: detail.item.id, seq: detail.item.seq, revision: detail.item.revision, operationId, scope: 'file', decision: undo ? 'rejected' : 'accepted' }),
-      confirmExternal: (details) => window.confirm(
-        `这批修改里有 ${details.length} 条不是本会话工具写入的来源（例如编辑器保存、版本库基线或外部脚本）。\n确认整批撤销并写回修改前内容？`),
-      guard: () => guardReviewAll(true, token), operation: batchOperation,
-    }, true)
+      undoAll: (items, batchId, confirmed) => rpc('edrv.review.undoAll', { sessionId, batchId, items, confirmed }),
+      confirmExternal: (count) => window.confirm(
+        `这批修改里有 ${count} 条不是本会话工具写入的来源（例如编辑器保存、版本库基线或外部脚本）。\n确认整批撤销并写回修改前内容？`),
+      guard: () => guardReviewAll(true, token),
+    })
   }
 
   /** @private @author ddj 2026年11月03号 @param token 起批时的会话寿命 @returns 一次 RPC 的批量 Keep 结果（跳过项不算失败） */

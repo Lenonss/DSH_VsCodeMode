@@ -265,6 +265,69 @@ export interface RowPick {
 }
 
 /**
+ * Shift 点击时整段要写入的勾选值：只看目标行当前状态，取反。
+ * 锚点不参与取值，否则「整段翻面」会退化成逐行取反。
+ * @author ddj 2026年11月24号
+ * @param checked 勾选路径集合
+ * @param path 目标行路径
+ * @returns true = 整段勾上；false = 整段取消
+ */
+export function rangeCheckValueOf(checked: ReadonlySet<string>, path: string): boolean {
+  return !checked.has(path)
+}
+
+/**
+ * 批量勾选要写入的值：全已勾则整批取消，否则整批勾上。
+ * @author ddj 2026年11月24号
+ * @param checked 勾选路径集合
+ * @param paths 作用范围（空范围返回 true，调用方按无操作处理）
+ * @returns true = 勾上；false = 取消
+ */
+export function batchCheckValueOf(checked: ReadonlySet<string>, paths: readonly string[]): boolean {
+  if (!paths.length) return true
+
+  return !paths.every((path) => checked.has(path))
+}
+
+/**
+ * 方向键移动选中：单步移动，或从锚点扩选。
+ * @author ddj 2026年11月24号
+ * @param pick 当前选中
+ * @param order 显示顺序
+ * @param step -1 向上 / 1 向下
+ * @param extend 是否扩选（Shift + 方向键）
+ * @returns 新的选中状态（顺序恒按显示顺序）
+ */
+export function moveRowPick(pick: RowPick, order: readonly string[], step: number, extend: boolean): RowPick {
+  if (!order.length) return pick
+
+  const last = pick.selected[pick.selected.length - 1]
+  const from = last ? order.indexOf(last) : -1
+  const base = from >= 0 ? from : (step > 0 ? -1 : order.length)
+  const path = order[Math.min(order.length - 1, Math.max(0, base + step))]
+  if (!path) return pick
+
+  if (extend) return nextRowPick({ selected: pick.selected, anchor: pick.anchor ?? last ?? path }, order, path, 'range')
+
+  return { selected: [path], anchor: path }
+}
+
+/**
+ * 清单重载后清理选中：丢掉已消失的路径，锚点不在清单里时一并清空。
+ * @author ddj 2026年11月24号
+ * @param pick 当前选中
+ * @param order 显示顺序
+ * @returns 新的选中状态；无需变更时返回原对象（避免多余渲染）
+ */
+export function pruneRowPick(pick: RowPick, order: readonly string[]): RowPick {
+  const selected = pick.selected.filter((path) => order.includes(path))
+  const anchor = pick.anchor && order.includes(pick.anchor) ? pick.anchor : null
+  if (selected.length === pick.selected.length && anchor === pick.anchor) return pick
+
+  return { selected, anchor }
+}
+
+/**
  * 行选中变更：单击选中、Ctrl 切换、Shift 从锚点取范围。
  * @author ddj 2026年11月21号
  * @param pick 当前选中 @param order 显示顺序 @param path 目标路径 @param mode single | toggle | range

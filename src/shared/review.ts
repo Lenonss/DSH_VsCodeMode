@@ -122,3 +122,20 @@ export interface KeepAllResult {
   skipped: KeepAllSkip[]
   error: string
 }
+/** 批量 Undo 的一条目标：与单条 decide 同口径，operationId 由客户端按批次派生。 */
+export interface UndoAllItem {
+  id: string
+  display: string
+  seq: number
+  revision: number
+  operationId: string
+}
+/** 批量 Undo 的结果：遇冲突即停止并如实记录，不声称原子回滚。 */
+export interface UndoAllResult {
+  completed: number
+  total: number
+  paths: string[]
+  /** 因需要显式确认而没有执行的条数（非 0 时客户端应确认后重试）。 */
+  needsConfirm?: number
+  error: string
+}

@@ -146,3 +146,20 @@ composer 草稿已清空；`src/search/ripgrep.ts`（flush 测试用）已 `git 
 | 回退路径 | — | 官方渲染器缺失、计划页缺失/未打包两类回退未逐项演练（有单测覆盖） |
 
 **未覆盖**：SVN 提交对话框真机（见上节静态夹具验收）；交互式 HTML（需开发者工具）与相对图片内联未验。
+
+### v0.37.0 · 2026-11-24 · SVN 提交窗口多选与双击差异
+
+| 项 | 结果 | 证据 |
+| --- | --- | --- |
+| 双击行看差异 | ✅（组件级） | `tests/svnCommitInteraction.test.ts`：双击文件行调用 `onCompare('c.txt')`；双击勾选框列不触发 |
+| 不可比较行 | ✅（组件级） | 未版本控制行双击只走 `notify`（「没有可比较的文本基线」），不调用 `onCompare` |
+| Shift 整段翻面 | ✅（组件级） | 单击第 1 行设锚点后 Shift 点第 3 行：三行勾选同时置 false，`preventDefault` 被调用（掐掉原生复选框切换） |
+| Space 批量勾选 | ✅（组件级） | Ctrl 选中两行后按 Space：两行勾选翻转，未选中的第 3 行不变 |
+| 方向键 / Ctrl+A | ✅（组件级） | 空选中按 ↓ 落在首行，再按 ↓ 到第二行；Ctrl+A 后全部行 `aria-selected` |
+| 批量按钮 | ✅（组件级） | 选中 <2 行时无 `.edrv-svncommit-sels`；选中 2 行后出现 |
+| 纯函数 | ✅ | `tests/svnCommitModel.test.ts` 27/27（新增整段取值、批量取值、方向键移动、清单清理） |
+| 类型 / 构建 | ✅ | `pnpm run typecheck` 0 error；`pnpm run build` 通过，`lib/client.js` 命中 `edrv-svncommit-sels` / `双击或回车：与基线比较` |
+| 真机（SVN 工作副本） | — | 本会话工作区不是受管 SVN 工作副本，未能在运行中的 GUI 打开真实提交对话框 |
+
+**未覆盖**：真机鼠标手势（Shift 点击命中原生复选框、双击速度判定的浏览器差异）、窄窗（<620px）下工具带两个批量按钮的换行实测、暗色主题实测。已避开 `window.confirm` 之外的阻塞式交互，逻辑改动全部落在可单测的纯函数与组件回调上。
+

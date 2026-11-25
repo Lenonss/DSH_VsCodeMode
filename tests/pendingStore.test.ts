@@ -9,7 +9,8 @@ import { archiveDbFile } from '../src/paths.js'
 import { saveSnapshot } from '../src/reviewDb.js'
 import { pendingHandlers } from '../src/pendingRpc.js'
 import { applyDecide, keepAll, loadDetail, loadPage, recordWrite, removeEntry, undoDecide, writerFor } from '../src/pending/store.js'
-import { PENDING_PREFIX, mergedPage, pendingCoverOwner, pendingCovers, pendingDetailOf, pendingRawId, setPendingCovers, trackPendingCover } from '../src/pendingCompat.js'
+import { declareNote, clearNotes } from '../src/pending/notes.js'
+import { PENDING_PREFIX, mergedPage, pendingCoverOwner, pendingCovers, pendingDetailOf, pendingItemOf, pendingRawId, setPendingCovers, trackPendingCover } from '../src/pendingCompat.js'
 
 let home = ''
 let workspace = ''
@@ -97,6 +98,43 @@ describe('待审投影真实往返', () => {
     expect(detail?.diff).toMatchObject({ kind: 'text' })
   })
 
+  it('证据强度与结局跟条目一起落库，来源徽标带出证据', async () => {
+    const file = join(workspace, 'evidence.ts')
+    await writeFile(file, 'B', 'utf8')
+    recordWrite({ ...write(file, 'A', 'B', 1), tool: 'edit', evidence: 'authoritative', verdict: 'changed' })
+    const item = loadPage(workspace, 's1').items[0]!
+    expect(item).toMatchObject({ evidence: 'authoritative', verdict: 'changed' })
+    expect(pendingItemOf(item).sourceLabel).toBe('edit · agent · 回执已核')
+
+    // 同一条目后续走快照采集：证据强度取更强的一侧，不被降级
+    await writeFile(file, 'C', 'utf8')
+    recordWrite({ ...write(file, 'B', 'C', 2), tool: 'write', evidence: 'snapshot' })
+    expect(loadPage(workspace, 's1').items[0]!.evidence).toBe('authoritative')
+  })
+
+  it('只读说明挂在列表项上，清掉后就不出现', async () => {
+    const file = join(workspace, 'note.ts')
+    await writeFile(file, 'B', 'utf8')
+    recordWrite(write(file, 'A', 'B', 1))
+    declareNote(workspace, file, '补默认值')
+    const item = loadPage(workspace, 's1').items[0]!
+    expect(item.note).toBe('补默认值')
+    expect(pendingItemOf(item).sourceLabel).toContain('备注：补默认值')
+    clearNotes(workspace)
+    expect(loadPage(workspace, 's1').items[0]!.note).toBeUndefined()
+  })
+
+  it('归一基线的撤销要求先确认', async () => {
+    const file = join(workspace, 'normalized.ts')
+    await writeFile(file, 'B', 'utf8')
+    recordWrite({ ...write(file, 'A', 'B', 1), tool: 'edit', evidence: 'authoritative', baseKind: 'normalized' })
+    const item = loadPage(workspace, 's1').items[0]!
+    const detail = loadDetail(workspace, item.id)!
+    expect(detail.capability.revert).toBe(true)
+    expect(detail.capability.confirmRevert).toBe(true)
+    expect(detail.capability.reason).toContain('归一')
+  })
+
   it('内核按原始 id 存取：列表 id 必须剥掉待审前缀才取得到详情', async () => {
     const file = join(workspace, 'prefix.ts')
     await writeFile(file, 'x\n', 'utf8')
@@ -113,7 +151,8 @@ describe('待审投影真实往返', () => {
     const item = loadPage(workspace, 's1').items[0]!
     const detail = loadDetail(workspace, item.id)!
     expect(detail.blocks).toHaveLength(1)
-    expect(detail.blocks[0]!.id).toMatch(/^0:\d+:\d+$/)
+    // 块身份 = 差异内容指纹：行号飘动不影响同一个块的身份
+    expect(detail.blocks[0]!.id).toMatch(/^0:[0-9a-f]{8}:0$/)
 
     const outcome = await applyDecide(realFs(), workspace, {
       sessionId: 's1', id: item.id, revision: item.revision, operationId: 'op-blocks', decision: 'accepted', scope: 'file',

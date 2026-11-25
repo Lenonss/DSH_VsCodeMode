@@ -161,12 +161,38 @@ function pickBlocks(blocks: ReviewBlock[], input: DecideInput): ReviewBlock[] | 
   const scope = input.request.scope
   if (scope === 'file' || scope === 'all') return []
   if (scope === 'block') {
-    const block = blocks.find((item) => item.id === input.request.blockId)
+    const block = findBlock(blocks, input.request.blockId)
     return block ? [block] : null
   }
   const start = input.request.startLine ?? 0
   const end = input.request.endLine ?? start
   return blocks.filter((block) => block.newStart <= end && block.newStart + Math.max(block.newLines.length, 1) >= start)
+}
+
+/**
+ * @private
+ * @author ddj 2026年11月25号
+ * @description: 按 id 找块，找不到再按内容指纹、最后按旧坐标 id 兜底。
+ * 块身份现在是内容指纹，上游行号飘动不会让同一个块换名；旧客户端发来的
+ * `hunkIndex:oldLine:newLine` 仍按行号唯一匹配。
+ * @param blocks 当前差异块
+ * @param blockId 请求里的块 id
+ * @returns 唯一命中的块，找不到或不唯一时 undefined
+ */
+function findBlock(blocks: ReviewBlock[], blockId: string | undefined): ReviewBlock | undefined {
+  if (!blockId) return undefined
+  const exact = blocks.find((block) => block.id === blockId)
+  if (exact) return exact
+  const fingerprint = blockId.split(':')[1]
+  if (fingerprint !== undefined && fingerprint !== '') {
+    const byFingerprint = blocks.filter((block) => block.id.split(':')[1] === fingerprint)
+    if (byFingerprint.length === 1) return byFingerprint[0]
+  }
+  const legacy = /^(\d+):(\d+):(\d+)$/.exec(blockId)
+  if (!legacy) return undefined
+  const byCoordinate = blocks.filter((block) => block.hunkIndex === Number(legacy[1])
+    && block.oldStart === Number(legacy[2]) && block.newStart === Number(legacy[3]))
+  return byCoordinate.length === 1 ? byCoordinate[0] : undefined
 }
 
 /**
@@ -200,6 +226,12 @@ export function capabilityOf(entry: PendingEntry, flags: PendingFlags): { keep: 
   if (flags.oversized) return { keep: false, revert: false, reason: 'oversized' }
   if (entry.baseKind === 'unknown') {
     return { keep: true, revert: false, reason: '未捕获修改前内容（外部写入）：留档可见，但不能撤销，否则会删掉现有代码' }
+  }
+  if (entry.baseKind === 'normalized') {
+    return {
+      keep: true, revert: true, confirmRevert: true,
+      reason: '基线与行尾已归一（来自工具回执）：撤销会按归一文本写回，写前请确认',
+    }
   }
   if (entry.earlierVersion === 'none' && entry.newText.length === 0) {
     return { keep: true, revert: false, reason: 'empty-create' }

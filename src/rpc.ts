@@ -25,9 +25,10 @@ import { cp, mkdir, readFile, rename, rm, stat, writeFile, readdir } from 'node:
 import { basename, dirname, join } from 'node:path'
 import { archiveEntryFor, markDecision, recordResolved, reconstructOriginal } from './model.js'
 import { clearRevertState, listArchives, pageArchives, readArchives, revertState, setRevertState, startReverts } from './archiveDb.js'
-import { purgeArchiveDb } from './archivePurge.js'
+import { purgeArchiveDb, scheduleArchiveRewrite } from './archivePurge.js'
 import { hasOfficial } from './reviewDb.js'
 import { log } from './log.js'
+import { beginOperation } from './slowLog.js'
 import type { Registry, SessionScope } from './registry.js'
 import { bucketOf, cwdOfSession, resolveScope, sessionOf } from './registry.js'
 import type { SearchOrchestrator } from './search/orchestrator.js'
@@ -1146,13 +1147,16 @@ export function buildHandlers(
       const sc = await resolveScope(ctx, args.sessionId)
       if ('err' in sc) return { ok: false, error: sc.err }
       try {
+        // 删行在进程内做（快）；备份与 VACUUM 是整库 IO，交给子进程，避免堵住事件循环
         const outcome = purgeArchiveDb(sc.cwd, {
           dryRun: args.dryRun !== false,
           retentionDays: args.retentionDays,
           keepBatches: args.keepBatches,
-          keepHistory: args.keepHistory,
-          vacuum: args.vacuum,
+          keepOps: args.keepOps,
+          vacuum: false,
         })
+        const changed = outcome.removed.batches + outcome.removed.history
+        if (args.dryRun === false && changed && args.vacuum !== false) scheduleArchiveRewrite(sc.cwd)
         return { ok: true, ...outcome }
       } catch (error) {
         return { ok: false, error: '归档清理失败：' + String(error) }
@@ -1924,8 +1928,13 @@ export async function handleRpc<M extends RpcMethod>(
   svnHandlers?: Partial<RpcHandlerMap>,
   dapHandlers?: Partial<RpcHandlerMap>,
 ): Promise<RpcResult<M>> {
-  const handlers = buildHandlers(ctx, registry, searcher, contentSearcher, lspHandlers, aiHandlers, fileVersions, svnHandlers, dapHandlers)
-  const handler = Object.hasOwn(handlers, method) ? handlers[method] : undefined
-  if (typeof handler !== 'function') return { ok: false, error: '未知方法: ' + String(method) } as RpcResult<M>
-  return handler(args)
+  const done = beginOperation('rpc:' + String(method))
+  try {
+    const handlers = buildHandlers(ctx, registry, searcher, contentSearcher, lspHandlers, aiHandlers, fileVersions, svnHandlers, dapHandlers)
+    const handler = Object.hasOwn(handlers, method) ? handlers[method] : undefined
+    if (typeof handler !== 'function') return { ok: false, error: '未知方法: ' + String(method) } as RpcResult<M>
+    return await handler(args)
+  } finally {
+    done()
+  }
 }

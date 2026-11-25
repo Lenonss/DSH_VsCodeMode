@@ -1,6 +1,7 @@
 /** 官方变更视图的行级注解源：块映射、详情拉取与失效回收。作者 ddj 2026年11月23号 */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { OfficialDiff, ReviewItem, ReviewPage } from '../src/shared/review.js'
+import { reviewBlocks } from '../src/shared/reviewRegions.js'
 
 /** 轮询入口与详情接口的替身记录表。 */
 const state = vi.hoisted(() => ({
@@ -111,8 +112,9 @@ describe('placesOf', () => {
   it('maps a modification block to the new side of the diff', () => {
     const annotations = placesOf({ diff: modifyDiff(), blocks: [] }, 'pending:item', 3)
     expect(annotations).toHaveLength(1)
+    const blockId = reviewBlocks(modifyDiff())[0]!.id
     expect(annotations[0]).toEqual({
-      key: 'vsm-pending:pending:item:0:11:11',
+      key: 'vsm-pending:pending:item:' + blockId,
       place: { side: 'R', startLine: 11, endLine: 12 },
       version: '3:R:11-12',
     })
@@ -126,11 +128,12 @@ describe('placesOf', () => {
 
   it('skips blocks already accepted or rejected', () => {
     const diff = modifyDiff()
-    const accepted = placesOf({ diff, blocks: [{ id: '0:11:11', decision: 'accepted' }] }, 'item', 2)
-    const rejected = placesOf({ diff, blocks: [{ id: '0:11:11', decision: 'rejected' }] }, 'item', 2)
+    const blockId = reviewBlocks(diff)[0]!.id
+    const accepted = placesOf({ diff, blocks: [{ id: blockId, decision: 'accepted' }] }, 'item', 2)
+    const rejected = placesOf({ diff, blocks: [{ id: blockId, decision: 'rejected' }] }, 'item', 2)
     expect(accepted).toHaveLength(0)
     expect(rejected).toHaveLength(0)
-    expect(placesOf({ diff, blocks: [{ id: '0:11:11', decision: 'pending' }] }, 'item', 2)).toHaveLength(1)
+    expect(placesOf({ diff, blocks: [{ id: blockId, decision: 'pending' }] }, 'item', 2)).toHaveLength(1)
   })
 
   it('caps the annotations of one file', () => {

@@ -2,6 +2,7 @@
  * 待审差异采集：环绕一次文件写入读取真实前后内容，只有内容确实变化才落库。
  * @author ddj 2026年10月29号
  */
+import { createHash } from 'node:crypto'
 import { cwdOfSession } from '../store.js'
 import type { Ctx } from '../store.js'
 import { log } from '../log.js'
@@ -9,7 +10,10 @@ import { toolTargets, patchDiagnostics, OPS_PREFIX } from '../toolTargets.js'
 import { replaceCandidates, BULK_LIMIT } from './bulkTargets.js'
 import type { BulkSearcher } from './bulkTargets.js'
 import { rawText, rawReviewFile } from '../reviewEvidence.js'
-import type { PendingBaseKind, PendingOrigin } from '../shared/pendingReview.js'
+import type { PendingBaseKind, PendingEvidence, PendingOrigin, PendingVerdict } from '../shared/pendingReview.js'
+import { receiptsOf } from './receipt.js'
+import type { ToolReceipt } from './receipt.js'
+import { verdictOf } from './verdict.js'
 
 /** 可被采信为待审来源的写文件工具（含 dsh-ops 的单目标写工具）。 */
 const WRITE_TOOLS = [
@@ -67,6 +71,10 @@ export interface PendingWrite {
   origin?: PendingOrigin
   /** 修改前内容的可信度（外部采集用）；缺省按 before 是否为空推断。 */
   baseKind?: PendingBaseKind
+  /** 证据强度；缺省按快照处理。 */
+  evidence?: PendingEvidence
+  /** 这次调用的结局；缺省按 changed 处理。 */
+  verdict?: PendingVerdict
 }
 
 /** 采集器。 */
@@ -121,10 +129,12 @@ export function installPending(
 
 /**
  * @author ddj 2026年10月30号
- * @description: 判定本次调用是否值得采集；不值得时返回 null，调用方直接透传原始分发。
- * @param ctx Host 生命周期
+ * @description: 判定本次调用是否值得采集并冻结写前基线；同目标并发调用改记「无基线」，
+ * 交给工具回执补前像，不再整次丢弃。
+ * @param scope 工作区作用域
  * @param state 采集状态
- * @param exec 工具分发上下文
+ * @param requested 目标路径
+ * @param tool 工具名
  * @returns 采集计划或 null
  */
 async function planOf(scope: { cwd: string; sessionId: string; fs: any }, state: CaptureState, requested: string, tool: string): Promise<CapturePlan | null> {
@@ -132,15 +142,17 @@ async function planOf(scope: { cwd: string; sessionId: string; fs: any }, state:
   if (state.stopped || state.disposed.has(sessionId)) return null
   const target = await fs.resolve(requested, { cwd })
   const identity = fs.processPath(target)
-  if (state.stopped || state.disposed.has(sessionId) || typeof identity !== 'string' || !identity || state.busy.has(identity)) return null
+  if (state.stopped || state.disposed.has(sessionId) || typeof identity !== 'string' || !identity) return null
+  const base = { cwd: String(cwd), sessionId, path: requested, identity, target, fs, tool }
+  if (state.busy.has(identity)) return { ...base, before: undefined, hashBefore: null, held: false }
   state.busy.add(identity)
   try {
-    const before = await readText(fs, target)
-    if (state.stopped || state.disposed.has(sessionId) || (before !== null && before.length > MAX_TEXT)) {
+    const snapshot = await readSnapshot(fs, target)
+    if (state.stopped || state.disposed.has(sessionId) || (snapshot.text !== null && snapshot.text.length > MAX_TEXT)) {
       state.busy.delete(identity)
       return null
     }
-    return { cwd: String(cwd), sessionId, path: requested, identity, before, target, fs, tool }
+    return { ...base, before: snapshot.text, hashBefore: snapshot.hash, held: true }
   } catch (error) {
     state.busy.delete(identity)
     throw error
@@ -153,7 +165,12 @@ interface CapturePlan {
   sessionId: string
   path: string
   identity: string
-  before: string | null
+  /** 写前原始文本；undefined = 同目标并发占用，没取到基线。 */
+  before: string | null | undefined
+  /** 写前原始字节的 SHA-256；没有基线时为 null。 */
+  hashBefore: string | null
+  /** 本次计划是否占住 busy；只有占住的一方负责释放。 */
+  held: boolean
   target: unknown
   fs: any
   /** 触发本次写入的工具名，用于记录采集通道。 */
@@ -268,9 +285,18 @@ async function buildPlans(
   return plans
 }
 
+/** 上报阶段共享的调用事实。 */
+interface WriteContext {
+  scope: { cwd: string; sessionId: string; fs: any }
+  exec: WriteExec
+  isError: boolean
+  receipts: Map<string, ToolReceipt>
+}
+
 /**
- * @author ddj 2026年10月30号
- * @description: 写工具执行前后各读一次，内容变化才上报；任何采集异常都不改变工具结果。
+ * @author ddj 2026年10月30号 / 2026年11月25号
+ * @description: 写工具执行前后各读一次，并用工具自己的回执对账；只有确认变化的调用才上报。
+ * 任何采集异常都不改变工具结果。
  * @param ctx Host 生命周期
  * @param state 采集状态
  * @param sink 已确认写入的接收方
@@ -306,45 +332,157 @@ async function aroundTool(
   }
   const plans = await buildPlans(scope, state, exec, targets.paths)
 
+  let result: unknown
+  let failed: unknown
   try {
-    const result = await next()
+    result = await next()
     if (bulk && !state.stopped && !state.disposed.has(scope.sessionId)) await reconcileBulk(scope, exec, result, plans)
     if (name === 'apply_patch' && !state.stopped && !state.disposed.has(scope.sessionId)) {
       for (const diagnostic of patchDiagnostics(result)) recordGap(scope, exec, 'apply_patch', diagnostic)
     }
     return result
+  } catch (error) {
+    failed = error
+    throw error
   } finally {
-    for (const plan of plans) {
-      try { await reportWrite(state, sink, plan) }
-      catch (error) { if (!state.stopped && !state.disposed.has(scope.sessionId)) recordGap(scope, exec, plan.path, error); log.debug('待审上报失败：' + String(error)) }
-      finally { state.busy.delete(plan.identity) }
+    await settle(scope, state, sink, exec, plans, result, failed)
+  }
+}
+
+/**
+ * @private
+ * @author ddj 2026年11月25号
+ * @description: 解析回执并逐条收尾；单条失败只记缺口，绝不改变工具结果与 busy 释放。
+ * @param scope 工作区作用域
+ * @param state 采集状态
+ * @param sink 已确认写入的接收方
+ * @param exec 工具分发上下文
+ * @param plans 写前冻结的采集计划
+ * @param result 工具结果
+ * @param failure 工具抛出的错误（没有则 undefined）
+ * @returns 无
+ */
+async function settle(
+  scope: { cwd: string; sessionId: string; fs: any }, state: CaptureState, sink: (write: PendingWrite) => void,
+  exec: WriteExec, plans: CapturePlan[], result: unknown, failure: unknown,
+): Promise<void> {
+  const flagError = Boolean((result as { isError?: unknown } | undefined)?.isError)
+  const context: WriteContext = {
+    scope, exec, isError: failure !== undefined || flagError, receipts: await receiptsFor(scope, exec, result),
+  }
+  for (const plan of plans) {
+    try {
+      await reportWrite(state, sink, plan, context)
+    } catch (error) {
+      if (!state.stopped && !state.disposed.has(scope.sessionId)) recordGap(scope, exec, plan.path, error)
+      log.debug('待审上报失败：' + String(error))
+    } finally {
+      if (plan.held) state.busy.delete(plan.identity)
     }
   }
 }
 
 /**
- * @author ddj 2026年11月04号
- * @description: 固定目标写后读回；内容一致不产生条目，卸载后不再上报。
- * @param state 采集生命周期状态
- * @param sink 已确认写入的接收方
- * @param plan 采集计划
- * @returns 无；读回失败只记日志
+ * @private
+ * @author ddj 2026年11月25号
+ * @description: 把回执里的路径解析成条目身份；解析不了的回执丢弃，退回快照判定。
+ * @param scope 工作区作用域
+ * @param exec 工具分发上下文
+ * @param result 工具结果
+ * @returns 身份 → 回执
  */
-async function reportWrite(state: CaptureState, sink: (write: PendingWrite) => void, plan: CapturePlan): Promise<void> {
-  if (state.stopped || state.disposed.has(plan.sessionId)) return
-  // 目录、provider 和目标均在写前冻结，切目录或卸载不能将内容串到其他工作区。
-  const after = await readText(plan.fs, plan.target)
-  if (state.stopped || state.disposed.has(plan.sessionId)) return
-  if (after !== null && after.length > MAX_TEXT) throw new Error('capture text budget exceeded')
+async function receiptsFor(
+  scope: { cwd: string; sessionId: string; fs: any }, exec: WriteExec, result: unknown,
+): Promise<Map<string, ToolReceipt>> {
+  const map = new Map<string, ToolReceipt>()
+  if (result === undefined) return map
+  let receipts: ToolReceipt[]
+  try {
+    receipts = receiptsOf(String(exec.name), result, Boolean((result as { isError?: unknown }).isError))
+  } catch {
+    return map
+  }
+  for (const receipt of receipts) {
+    try {
+      const target = await scope.fs.resolve(receipt.path, { cwd: scope.cwd })
+      const identity = scope.fs.processPath(target)
+      if (typeof identity === 'string' && identity) map.set(identity, receipt)
+    } catch {
+      log.debug('回执路径不可解析：' + receipt.path)
+    }
+  }
+  return map
+}
+
+/**
+ * @private
+ * @author ddj 2026年11月25号
+ * @description: 该路径的旧缺口在本次写入被正式采用后清掉，避免缺口里留着已解决的原因。
+ * @param plan 采集计划
+ * @returns 无
+ */
+function clearGapsOf(plan: CapturePlan): void {
   for (const [key, gap] of captureGaps) {
     const identity = JSON.parse(key) as unknown[]
     if (gap.cwd === plan.cwd && gap.sessionId === plan.sessionId && identity[3] === plan.path) captureGaps.delete(key)
   }
-  if (plan.before === after) return
-  sink({
-    cwd: plan.cwd, sessionId: plan.sessionId, path: plan.path, identity: plan.identity,
-    before: plan.before, after, now: Date.now(), tool: plan.tool,
+}
+
+/**
+ * @author ddj 2026年11月04号 / 2026年11月25号
+ * @description: 固定目标写后读回并按回执判定；不一致只记缺口，未确认变化一律不建条目。
+ * @param state 采集生命周期状态
+ * @param sink 已确认写入的接收方
+ * @param plan 采集计划
+ * @param context 本次调用的事实
+ * @returns 无；读回失败只记日志
+ */
+async function reportWrite(
+  state: CaptureState, sink: (write: PendingWrite) => void, plan: CapturePlan, context: WriteContext,
+): Promise<void> {
+  if (state.stopped || state.disposed.has(plan.sessionId)) return
+  const receipt = context.receipts.get(plan.identity)
+  // 没有基线也没有回执：这次调用改了什么无从判断，跳过（与旧行为一致，不造条目）。
+  if (plan.before === undefined && !receipt) {
+    log.debug('同目标并发写入且没有回执，跳过该次采集：' + plan.path)
+    return
+  }
+  // 目录、provider 和目标均在写前冻结，切目录或卸载不能将内容串到其他工作区。
+  const after = await readSnapshot(plan.fs, plan.target)
+  if (state.stopped || state.disposed.has(plan.sessionId)) return
+  if (after.text !== null && after.text.length > MAX_TEXT) throw new Error('capture text budget exceeded')
+  clearGapsOf(plan)
+
+  const judged = verdictOf({
+    receipt, isError: context.isError, hasBaseline: plan.before !== undefined,
+    beforeRead: plan.before ?? null, afterRead: after.text,
+    hashBefore: plan.hashBefore, hashAfter: after.hash,
   })
+  if (judged.verdict === 'unverified') {
+    recordGap(context.scope, context.exec, plan.path, '回执与磁盘不一致，未记录该次调用：' + judged.reason)
+    return
+  }
+  if (judged.verdict !== 'changed') {
+    // 没记成条目却看到磁盘变了：可能是部分写入，也可能是别人写的，都不能冒充本次差异。
+    if (plan.before !== undefined && plan.before !== after.text) {
+      const reason = judged.verdict === 'failed'
+        ? '工具报错后文件内容发生变化，无法判断是否本次写入：'
+        : '回执声明没有变化但磁盘内容变了，未记录该次调用：'
+      recordGap(context.scope, context.exec, plan.path, reason + judged.reason)
+    }
+    return
+  }
+
+  // 没取到基线时用回执的前像补，条目会标成归一基线，撤销前必须确认。
+  const before = plan.before === undefined ? (receipt?.before ?? null) : plan.before
+  if (before === after.text) return
+  const write: PendingWrite = {
+    cwd: plan.cwd, sessionId: plan.sessionId, path: plan.path, identity: plan.identity,
+    before, after: after.text, now: Date.now(), tool: plan.tool,
+    evidence: judged.evidence, verdict: judged.verdict,
+  }
+  if (plan.before === undefined && judged.evidence === 'authoritative') write.baseKind = 'normalized'
+  sink(write)
 }
 
 /**
@@ -354,15 +492,44 @@ async function reportWrite(state: CaptureState, sink: (write: PendingWrite) => v
  * @param target 目标
  * @returns 文本或 null
  */
-export async function readText(fs: any, target: any, signal?: AbortSignal): Promise<string | null> {
+/** 一次读盘的原始快照：文本用于写回，哈希用于与工具回执对账。 */
+export interface TextSnapshot {
+  /** 原始文本；null = 文件不存在。 */
+  text: string | null
+  /** 原始字节的 SHA-256；文件不存在时为 null。 */
+  hash: string | null
+}
+
+/**
+ * @author ddj 2026年10月29号 / 2026年11月25号
+ * @description: 读原始字节并同时给出文本与 sha256；只有明确缺失返回空，不可读或超限保留失败语义。
+ * @param fs 文件系统
+ * @param target 目标
+ * @param signal 取消信号
+ * @returns 文本与哈希
+ */
+export async function readSnapshot(fs: any, target: any, signal?: AbortSignal): Promise<TextSnapshot> {
   try {
-    if (typeof fs.readBytes === 'function') {
-      return rawText(rawReviewFile(await fs.readBytes(target, signal, MAX_TEXT)))
-    }
-    throw new Error('Raw byte capture unavailable')
+    if (typeof fs.readBytes !== 'function') throw new Error('Raw byte capture unavailable')
+    const bytes = await fs.readBytes(target, signal, MAX_TEXT)
+    if (bytes === null || bytes === undefined) return { text: null, hash: null }
+    const payload = Buffer.from(bytes)
+    return { text: rawText(rawReviewFile(payload)), hash: createHash('sha256').update(payload).digest('hex') }
   } catch (error) {
     const code = (error as { code?: string }).code
-    if (code === 'ENOENT' || code === 'FS_NOT_FOUND') return null
+    if (code === 'ENOENT' || code === 'FS_NOT_FOUND') return { text: null, hash: null }
     throw error
   }
+}
+
+/**
+ * @author ddj 2026年10月29号
+ * @description: 读取全文；只有明确缺失返回 null，不可读或超限错误保留失败语义。
+ * @param fs 文件系统
+ * @param target 目标
+ * @param signal 取消信号
+ * @returns 文本或 null
+ */
+export async function readText(fs: any, target: any, signal?: AbortSignal): Promise<string | null> {
+  return (await readSnapshot(fs, target, signal)).text
 }

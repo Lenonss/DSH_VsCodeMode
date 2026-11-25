@@ -15,9 +15,12 @@ describe('logical line matrix', () => {
   it.each(endings.flatMap((ending) => contents.map((content) => ({ ending, content }))))('locates patch ending $ending against $content', ({ ending, content }) => {
     const patch = { ...diff, hunks: diff.hunks.map((hunk) => ({ ...hunk, lines: hunk.lines.map((line) => line + ending) })) }
     const regions = reviewRegions(patch, 'r', [{ id: '0:2:2', decision: 'accepted' }], content)
-    expect(regions.map((region) => [region.id, region.start, region.end, region.status])).toEqual([
-      ['0:2:2', 2, 3, 'accepted'], ['0:4:4', 4, 5, 'pending'],
+    // 位置与判定不变；块身份改成内容指纹，旧坐标 id 仍能兜底命中判定
+    expect(regions.map((region) => [region.start, region.end, region.status])).toEqual([
+      [2, 3, 'accepted'], [4, 5, 'pending'],
     ])
+    expect(regions.map((region) => region.id)).toEqual(reviewBlocks(patch).map((block) => block.id))
+    expect(regions[0]!.id).not.toBe('0:2:2')
     expect(reviewBlocks(patch)).toEqual(reviewBlocks(diff))
     expect(JSON.stringify(patch)).toContain(JSON.stringify(' head' + ending).slice(1, -1))
   })
