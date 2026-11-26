@@ -2,11 +2,12 @@
  * dsh-vscode-mode client — HTML 计划页签面板：状态条 + 官方动作 + 沙箱 iframe。
  *
  * 页面来源按优先级解析：作者页（已打包直接显示、未打包自动打包、声明缺失时试备用路径）
- * → HTML 计划模式下用计划正文渲染自动页 → 报错（并把回落控制权交回 EditorView）。
+ * → HTML 计划模式下用计划正文渲染标准页 → 报错（并把回落控制权交回 EditorView）。
  * 同意执行 / 继续规划走官方 userQuestions 答案通道，退出计划模式走官方 /plan off，
  * 页面答复经桥接脚本回填对话输入框。iframe 一律 sandbox 且不给 allow-same-origin。
  * @author ddj 2026年11月21号
- * @author ddj 2026年11月25号（HTML 计划模式：模式徽标、自动页、页面来源与 Markdown 回落）
+ * @author ddj 2026年11月25号（HTML 计划模式：模式徽标、标准页、页面来源与 Markdown 回落）
+ * @author ddj 2026年11月26号（作者页没有计划结构时改用标准页，页签可切回作者页）
  */
 import React from 'react'
 import { rpc } from '../rpc.js'
@@ -14,6 +15,8 @@ import {
   buildPlanSrcDoc,
   deriveHtmlPlanUiState,
   derivePlanUiState,
+  hasPlanRuntime,
+  hasPlanStructure,
   isMissingPage,
   planAttachInfoOf,
   planPageAltPath,
@@ -56,12 +59,14 @@ export interface HtmlPlanPanelProps {
 type PlanAct = 'approved' | 'revising' | 'exited'
 type ReadResult = { ok?: boolean; content?: string; error?: string; code?: string }
 type PageSource = 'authored' | 'packed' | 'auto'
+/** 页面显示偏好：作者页与标准页之间切换。 */
+type PageViewMode = 'auto' | 'authored' | 'standard'
 
 /** 页面来源徽标文案。 */
 const SOURCE_LABEL: Record<PageSource, string> = {
   authored: '作者页',
   packed: '已打包',
-  auto: '自动页',
+  auto: '标准页',
 }
 
 /**
@@ -91,6 +96,10 @@ export function HtmlPlanPanel(props: HtmlPlanPanelProps) {
   const [reloadToken, setReloadToken] = React.useState(0)
   const [missing, setMissing] = React.useState(false)
   const [repairing, setRepairing] = React.useState(false)
+  /** 模型写的作者页（HTML 计划模式下保留，供「看作者页 / 用标准页」切换）。 */
+  const [authored, setAuthored] = React.useState<string | null>(null)
+  /** 页面显示偏好：auto=有结构就显示作者页、否则标准页；authored=只看作者页；standard=只看标准页。 */
+  const [pageMode, setPageMode] = React.useState<PageViewMode>('auto')
   const frameRef = React.useRef<HTMLIFrameElement | null>(null)
   const pollRef = React.useRef<number | null>(null)
   const aliveRef = React.useRef(true)
@@ -143,9 +152,9 @@ export function HtmlPlanPanel(props: HtmlPlanPanelProps) {
   }
 
   /**
-   * 调 host 用计划正文渲染自动页。
+   * 调 host 用计划正文渲染标准页。
    * @author ddj 2026年11月25号
-   * @returns 自动页 HTML 或错误
+   * @returns 标准页 HTML 或错误
    */
   async function renderAutoPage(): Promise<{ ok: boolean; html?: string; error?: string }> {
     try {
@@ -157,7 +166,13 @@ export function HtmlPlanPanel(props: HtmlPlanPanelProps) {
     }
   }
 
-  // 读取计划页：作者页 → 自动打包 → 备用路径 → 自动页 → 报错/回落。
+  // 换一页计划时清掉上一页的作者页与显示偏好，避免「看作者页」拿到上一页的内容。
+  React.useEffect(() => {
+    setAuthored(null)
+    setPageMode('auto')
+  }, [absPath, declared])
+
+  // 读取计划页：作者页 → 自动打包 → 备用路径 → 标准页 → 报错/回落。
   React.useEffect(() => {
     aliveRef.current = true
     setHtml(null)
@@ -169,6 +184,49 @@ export function HtmlPlanPanel(props: HtmlPlanPanelProps) {
 
     let alive = true
     const isAlive = (): boolean => alive && aliveRef.current
+
+    /**
+     * 页面已就绪时收口：HTML 计划模式下，没有计划结构的作者页换成标准页。
+     *
+     * 生成 HTML 是模型的弱项（GPT 系列常写出自造样式的文档页）：这类页面留在计划签里
+     * 既占地方又不像计划，所以默认用计划正文渲染标准页；想看原页就点「看作者页」。
+     * @author ddj 2026年11月26号
+     * @param pageHtml 页面 HTML
+     * @param pageSource 页面来源
+     * @param refs 未内联的运行时引用
+     * @param baseNotice 原本要展示的提示
+     */
+    async function applyPage(pageHtml: string, pageSource: PageSource, refs: string[], baseNotice: string): Promise<void> {
+      const structured = hasPlanStructure(pageHtml)
+      // 未打包的作者页必须自己引用运行时；打包页的运行时已内联，不必再查。
+      const runtimeOk = pageSource === 'packed' || hasPlanRuntime(pageHtml)
+      const wantStandard = pageMode === 'standard' || (pageMode === 'auto' && !(structured && runtimeOk))
+      if (htmlPlanMode && wantStandard) {
+        const rendered = await renderAutoPage()
+        if (!isAlive()) return
+        if (rendered.ok && rendered.html !== undefined) {
+          setAuthored(pageHtml)
+          setHtml(rendered.html)
+          setStaleRefs([])
+          setSource('auto')
+          setMissing(false)
+          setNotice((pageMode === 'standard'
+            ? '标准计划页：由计划正文渲染'
+            : (structured ? '作者页没有引用 htmlplan 运行时，样式会缺失' : '作者页没有计划结构（doc-plan / doc-claim）')
+              + '，已改用计划正文生成标准计划页')
+            + (baseNotice ? '；' + baseNotice : ''))
+          return
+        }
+      }
+      setAuthored(htmlPlanMode ? pageHtml : null)
+      setHtml(pageHtml)
+      setStaleRefs(refs)
+      setSource(pageSource)
+      setMissing(false)
+      setNotice(htmlPlanMode && !(structured && runtimeOk)
+        ? '正在看作者页：' + (structured ? '它没有引用 htmlplan 运行时' : '它没有计划结构（doc-plan / doc-claim）') + '，点「用标准页」换回来'
+        : baseNotice)
+    }
 
     /**
      * 页面解析主流程（异步，失败一律落到可读状态，不抛）。
@@ -202,10 +260,7 @@ export function HtmlPlanPanel(props: HtmlPlanPanelProps) {
       const decision = planPageDecisionOf({ declared, htmlPlanMode, read, needsPack, alternateExists })
 
       if (decision.action === 'show') {
-        setHtml(rawText)
-        setStaleRefs(rawRefs)
-        setSource('authored')
-        setMissing(false)
+        await applyPage(rawText, 'authored', rawRefs, '')
         return
       }
 
@@ -214,19 +269,12 @@ export function HtmlPlanPanel(props: HtmlPlanPanelProps) {
         const packed = await packPage(target)
         if (!isAlive()) return
         if (packed.ok && packed.html !== undefined) {
-          setHtml(packed.html)
-          setStaleRefs([])
-          setSource('packed')
-          setMissing(false)
-          setNotice('已自动打包计划页')
+          await applyPage(packed.html, 'packed', [], '已自动打包计划页')
           return
         }
         // 打包失败但作者页本身读得到：原样展示并保留告警，不吞掉内容。
         if (read === 'ok') {
-          setHtml(rawText)
-          setStaleRefs(rawRefs)
-          setSource('authored')
-          setNotice('自动打包失败：' + String(packed.error ?? '未知原因'))
+          await applyPage(rawText, 'authored', rawRefs, '自动打包失败：' + String(packed.error ?? '未知原因'))
           return
         }
         // 否则继续走兜底/报错。
@@ -241,10 +289,10 @@ export function HtmlPlanPanel(props: HtmlPlanPanelProps) {
           setStaleRefs([])
           setSource('auto')
           setMissing(false)
-          setNotice('自动页：由计划正文渲染，作者页可让它更丰富')
+          setNotice('标准计划页：由计划正文渲染')
           return
         }
-        setError('自动页渲染失败：' + String(rendered.error ?? '未知原因') + '；已回落 Markdown 计划')
+        setError('标准页渲染失败：' + String(rendered.error ?? '未知原因') + '；已回落 Markdown 计划')
         props.onMarkdownFallback?.()
         return
       }
@@ -263,7 +311,7 @@ export function HtmlPlanPanel(props: HtmlPlanPanelProps) {
     void resolvePage()
     return () => { alive = false }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [absPath, declared, htmlPlanMode, markdownKey(props.markdown), sessionId, reloadToken, props.cwd])
+  }, [absPath, declared, htmlPlanMode, markdownKey(props.markdown), sessionId, reloadToken, props.cwd, pageMode])
 
   // 计划状态读取一律不可抛：侧栏 slot 里抛一次异常就会把整片正文刷空（连编辑器一起消失）。
   const refresh = React.useCallback(() => {
@@ -471,6 +519,13 @@ export function HtmlPlanPanel(props: HtmlPlanPanelProps) {
       title: copied ? '把页面答复填入对话输入框（不自动发送）' : '先在页面里点 Copy response',
       onClick: () => { void run('fill') },
     }, '填入对话输入框'),
+    (authored !== null ? React.createElement('button', {
+      className: 'edrv-pill edrv-pill-ghost',
+      title: source === 'auto'
+        ? '直接看模型写的作者页（可能没有计划结构）'
+        : '改看插件用计划正文生成的标准页',
+      onClick: () => { setPageMode(source === 'auto' ? 'authored' : 'standard') },
+    }, source === 'auto' ? '看作者页' : '用标准页') : null),
     (!htmlPlanMode && (missing || !absPath) ? React.createElement('button', {
       className: 'edrv-pill edrv-pill-accent',
       disabled: repairing || !sessionId,

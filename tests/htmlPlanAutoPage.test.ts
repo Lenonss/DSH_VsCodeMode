@@ -83,7 +83,7 @@ describe('renderAutoPlanPage', () => {
     expect(html).toContain('<script data-htmlplan>')
     expect(html).toContain('console.log("htmlplan")')
     expect(html).toContain('data-feedback="off"')
-    expect(html).toContain('<title>计划：测试</title>')
+    expect(html).toContain('<title>测试</title>')
     expect(html).not.toContain('runtime/htmlplan.css')
     expect(html).not.toContain('runtime/htmlplan.js')
   })
@@ -103,5 +103,66 @@ describe('planRuntimeAssets', () => {
     const assets = await planRuntimeAssets()
     expect(assets.css).toContain('.nw-')
     expect(assets.js).toContain('HtmlPlan')
+  })
+})
+
+describe('renderAutoPlanPage · 结构化计划页', () => {
+  const PLAN = [
+    '# 计划：完善 ui-builder 规范',
+    '',
+    '一句摘要。',
+    '',
+    '## 为什么',
+    '',
+    '- 命名靠人记，常写错前缀。',
+    '',
+    '## 新建预制体统一根节点命名。',
+    '',
+    '根节点写成 `prefab_ui_` 加业务名。',
+    '',
+    '## 决策清单',
+    '',
+    '1. 前缀写法 | `prefab_ui_` 加驼峰 | 直接拼接',
+    '',
+    '## 不改什么',
+    '',
+    '- 不批量重命名旧预制体。',
+  ].join('\n')
+
+  it('按正文生成主张树、决策与不改什么，并打开答复条', () => {
+    const html = renderAutoPlanPage(PLAN, ASSETS)
+    expect(html).toContain('<h1>完善 ui-builder 规范</h1>')
+    expect(html).toContain('<doc-plan>')
+    expect(html).toContain('<details class="thread"><summary>为什么 · 1 个诉求</summary>')
+    expect(html).toContain('<p>新建预制体统一根节点命名。</p>')
+    expect(html).toContain('<ul><li>不批量重命名旧预制体。</li></ul>')
+    expect(html).toContain('<doc-claim aux="scope">')
+    expect(html).toContain('<doc-ask id="d1" kind="decision">')
+    expect(html).toContain('<input type="radio" name="d1" value="prefab_ui_ 加驼峰" checked>')
+    expect(html).toContain('data-feedback="on"')
+  })
+
+  it('决策项没有选项时给自由填写框', () => {
+    const html = renderAutoPlanPage('# 计划：加缓存\n\n## 决策清单\n\n1. 缓存放哪', ASSETS)
+    expect(html).toContain('<textarea name="d1"')
+    expect(html).not.toContain('<div class="opts-row">')
+  })
+
+  it('标题里出现「选择」不误判成决策小节', () => {
+    const html = renderAutoPlanPage('# 计划：x\n\n## 文字按效果图选择 TMP 样式。\n\n正文', ASSETS)
+    expect(html).not.toContain('<doc-ask')
+    expect(html).toContain('<p>文字按效果图选择 TMP 样式。</p>')
+  })
+
+  it('没有小节标题时退回文档式渲染，不臆造主张树', () => {
+    const html = renderAutoPlanPage('# 计划：纯文档\n\n一段正文。\n\n- 一项', ASSETS)
+    expect(html).not.toContain('<doc-plan>')
+    expect(html).toContain('<ul><li>一项</li></ul>')
+    expect(html).toContain('data-feedback="off"')
+  })
+
+  it('正文按转义输出，代码块不会截断页面', () => {
+    const html = renderAutoPlanPage('# 计划：x\n\n## 代码\n\n```html\n<b>&</b>\n```', ASSETS)
+    expect(html).toContain('<textarea class="src" hidden>&lt;b&gt;&amp;&lt;/b&gt;</textarea>')
   })
 })

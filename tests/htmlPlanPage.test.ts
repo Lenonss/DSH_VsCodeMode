@@ -8,6 +8,8 @@ import {
   deriveHtmlPlanUiState,
   derivePlanUiState,
   findPendingReview,
+  hasPlanRuntime,
+  hasPlanStructure,
   isMissingPage,
   planAttachInfoOf,
   planPageAltPath,
@@ -191,6 +193,41 @@ describe('planPageAltPath', () => {
     expect(planPageAltPath('plans\\x\\plan.html')).toBe('plans/x/plan.packed.html')
     expect(planPageAltPath('plans/x/plan.txt')).toBeNull()
     expect(planPageAltPath('')).toBeNull()
+  })
+})
+
+describe('hasPlanStructure', () => {
+  it('认 doc-plan / doc-claim 标记（打包页也能认出来）', () => {
+    expect(hasPlanStructure('<main><doc-plan>\n<doc-claim><p>a</p></doc-claim>\n</doc-plan></main>')).toBe(true)
+    expect(hasPlanStructure('<main><doc-claim aux="scope"><p>不改</p></doc-claim></main>')).toBe(true)
+    expect(hasPlanStructure('<style>doc-plan{}</style><doc-plan><doc-claim><p>a</p></doc-claim></doc-plan>')).toBe(true)
+  })
+
+  it('只有运行时脚本/样式提到标签名时不算计划结构', () => {
+    expect(hasPlanStructure('<script>var x = "doc-plan";</script><p>文档页</p>')).toBe(false)
+    expect(hasPlanStructure('<style>.doc-claim{}</style><div class="doc-claim">x</div>')).toBe(false)
+    expect(hasPlanStructure('<!-- doc-claim --><p>文档页</p>')).toBe(false)
+  })
+
+  it('空值与非字符串按没有结构处理', () => {
+    expect(hasPlanStructure('')).toBe(false)
+    expect(hasPlanStructure('   ')).toBe(false)
+    expect(hasPlanStructure(null)).toBe(false)
+    expect(hasPlanStructure(42)).toBe(false)
+  })
+})
+
+describe('hasPlanRuntime', () => {
+  it('认 link/script 引用与内联的 data-htmlplan 样式', () => {
+    expect(hasPlanRuntime('<link rel="stylesheet" href="runtime/htmlplan.css">')).toBe(true)
+    expect(hasPlanRuntime('<script src="runtime/htmlplan.js" defer></script>')).toBe(true)
+    expect(hasPlanRuntime('<style data-htmlplan>body{}</style>')).toBe(true)
+  })
+
+  it('自造样式、没有运行时的页面不算', () => {
+    expect(hasPlanRuntime('<style>body{}</style><div class="card">x</div>')).toBe(false)
+    expect(hasPlanRuntime('')).toBe(false)
+    expect(hasPlanRuntime(undefined)).toBe(false)
   })
 })
 

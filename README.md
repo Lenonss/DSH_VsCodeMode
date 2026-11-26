@@ -694,13 +694,13 @@ profile 请替换为实际目标，不要把示例目录当成当前运行 profi
 
 ```bash
 # ① Git 安装（clone + prepare 构建；推荐打固定 tag）
-dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.41.0
+dsh plugin --profile web add github:Lenonss/DSH_VsCodeMode#v0.43.0
 
 # ② npm 注册表（发布到 npm 后）
-dsh plugin --profile web add dsh-vscode-mode@0.41.0
+dsh plugin --profile web add dsh-vscode-mode@0.43.0
 
 # ③ GitHub Release tgz 直装（Release asset 可用后）
-dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.41.0/dsh-vscode-mode-0.41.0.tgz
+dsh plugin --profile web add https://github.com/Lenonss/DSH_VsCodeMode/releases/download/v0.43.0/dsh-vscode-mode-0.43.0.tgz
 ```
 
 > **DSH 版本政策（0.17.0 起）**：六项 DSH peer 仍统一声明为 `*`，另以

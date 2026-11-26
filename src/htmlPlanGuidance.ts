@@ -25,6 +25,7 @@ export const HTML_PLAN_STATUS_INACTIVE = 'HTML plan mode is inactive. The html-p
 /**
  * HTML 计划模式的规则正文（不含首句范围限定）。
  * @author ddj 2026年11月25号
+ * @author ddj 2026年11月26号（默认路径改为「只交 Markdown」，弱模型也能拿到同样的计划页）
  * @returns 多行规则文本
  */
 export function htmlPlanRulesText(): string {
@@ -32,12 +33,22 @@ export function htmlPlanRulesText(): string {
     'HTML 计划模式已开启（与官方计划模式同级）。',
     '',
     '限制：只探索、只规划；不改源码，不运行会修改文件的命令。',
-    '交付物：一页 HTML 计划页。页面由插件负责：',
-    '  - 可选：把页面写到 plans/<slug>/plan.html（这是本模式唯一允许的写操作），',
-    '    并在提交正文里加一行「HTML 计划页：plans/<slug>/plan.html」；插件会自动打包。',
-    '  - 不写也可以：插件会用你提交的计划正文渲染一页。',
-    '提交：调用 exit_html_plan_mode；plan 正文第一行必须是「# 计划：<标题>」，',
-    '并给出 3~6 行摘要与待决策清单。',
+    '交付物：一页计划页。页面由插件负责生成，默认不需要你写 HTML。',
+    '',
+    '【默认】只提交计划正文（Markdown），插件按正文渲染标准计划页。正文写成：',
+    '  - 第一行「# 计划：<标题>」，紧接着 1~3 行摘要；',
+    '  - 每条主张一个「## <一句话主张>」，依据写在下面（列表、代码、表格都行）；',
+    '  - 「## 为什么」写用户诉求；「## 决策清单」每条写「问题 | 选项A | 选项B」；',
+    '  - 「## 不改什么」写这次明确不动的东西。',
+    '  写成这样，任何模型（含 GPT 系列）都能得到与作者页同样的版式。',
+    '',
+    '【可选】只有需要界面稿、流程图这类图示时，才写 plans/<slug>/plan.html：',
+    '  - 必须引用 runtime/htmlplan.css 与 runtime/htmlplan.js（插件会自动打包）；',
+    '  - 只用 doc-plan / doc-claim / doc-ask 等运行时元素，不要自带布局 CSS、不要自己画卡片；',
+    '  - 提交正文里单独一行「HTML 计划页：plans/<slug>/plan.html」。',
+    '  没有 doc-plan / doc-claim 的页面会被当成文档页，计划签默认改用标准页。',
+    '',
+    '提交：调用 exit_html_plan_mode；plan 正文第一行必须是「# 计划：<标题>」。',
     '不要运行打包命令，不要为页面退出模式，不要调用 exit_plan_mode（那是另一个模式的工具）。',
     '如果用户还没有给出任务，先用一句话问清要规划什么，再开始。',
   ].join('\n')

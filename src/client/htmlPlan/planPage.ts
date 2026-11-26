@@ -318,6 +318,39 @@ export function planPageAltPath(path: unknown): string | null {
 //endregion
 
 /**
+ * 检测页面里是否真有计划结构（`doc-plan` / `doc-claim` 元素）。
+ *
+ * 只看标记，不看脚本与样式：运行时脚本里本来就写着 `doc-plan` 这些标签名，
+ * 不剥掉就会把「自造样式的文档页」误判成合规计划页。打包后的页面标记还在，不受影响。
+ * @author ddj 2026年11月26号
+ * @param html 页面文本（作者页或打包页）
+ * @returns 是否带计划结构
+ */
+export function hasPlanStructure(html: unknown): boolean {
+  const text = typeof html === 'string' ? html : ''
+  if (!text.trim()) return false
+  const markup = text
+    .replace(/<script\b[\s\S]*?<\/script\s*>/gi, '')
+    .replace(/<style\b[\s\S]*?<\/style\s*>/gi, '')
+    .replace(/<!--[\s\S]*?-->/g, '')
+  return /<doc-plan\b|<doc-claim\b/i.test(markup)
+}
+
+/**
+ * 检测页面是否引用了 htmlplan 运行时（未打包页看 link/script，打包页看内联标记）。
+ *
+ * 打包脚本本来就要求页面链接 `htmlplan.css` / `htmlplan.js`（或内联带 `data-htmlplan`
+ * 的 style/script），所以「读得到但没引用运行时」的作者页必然没打包，样式是空的。
+ * @author ddj 2026年11月26号
+ * @param html 页面文本
+ * @returns 是否引用运行时
+ */
+export function hasPlanRuntime(html: unknown): boolean {
+  const text = typeof html === 'string' ? html : ''
+  return /htmlplan\.(?:css|js)/i.test(text) || /<style\b[^>]*data-htmlplan/i.test(text)
+}
+
+/**
  * 让 agent 重写作者页的修复指令（计划页签「生成 HTML 计划页」按钮发给 agent）。
  * 插件会自动打包，所以不再要求模型跑 plan.mjs（那条命令会删中间文件，不能用于用户文件）。
  * @author ddj 2026年11月23号
