@@ -5,8 +5,24 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
 
 # dsh-vscode-mode 开发/发布经验集（自我更新型技能）
 
-> updated: 2026-11-25 · 维护者：ddj（AI 会话按文末协议更新，保持精炼、去重）
+> updated: 2026-11-26 · 维护者：ddj（AI 会话按文末协议更新，保持精炼、去重）
 > **发布时先读「发布流程」与「失败恢复」**；下方实录是历史证据，不授权当前重跑发布、改 tag 或部署。冲突旧口径以更新后的规则为准。
+- 2026-11-26 实录（v0.40.0：`/test-check` 测试验收模式 + 侧栏「测试验收」面板；基线 v0.39.0 @ `aee6722`，
+  发布提交 `64de5b4`，45 文件 / 29 新增）。本地三门：typecheck 0 / vitest **366 文件通过 + 2 跳过、
+  4539 通过 / 22 跳过（34.83s）** / `node --test` 9/9 / build `index.js` 1,604,385 B + `client.js` 1,366,657 B。
+  main CI `45742513500` **首跑挂已知抖动 `tests/dapFakeAdapter.test.ts:26`**（本地绿、不在本次 diff）→
+  `gh run rerun --failed` 一次绿 1m47s；Release `45742972841` **一次全绿**（含 Publish + Verify）。
+  四向闭环：registry `0.40.0` `gitHead=64de5b4`、latest=0.40.0、`dist.integrity` 与实包 sha512 一致、
+  shasum `c5ae23c9…`、包内 17,755,567 B 且 `lib/index.js`/`lib/client.js`/`skills/dsh-vscodemode-test-check/SKILL.md`
+  齐全、新标记 `test_check_report`/`edrv.testCheck.policy.save`/`测试验收`/`edrv.testCheck.sheets` 都在；
+  GitHub asset 17,755,589 B、`sha256:5c55621d…` 与 API digest 一致（差 22 B 仍是 publish 重跑 prepare 的压缩顺序）。
+  **本次新坑（抽取型用例依赖漂移，第二次踩）**：`EditorView` 的 `renderGroup` 从 `planTabExtras` 改读组件级
+  `tabExtras`（计划 + 验收单两行）后，`tests/editorPane.test.ts` 的 `new Function(...scope)` 抽取执行报
+  `tabExtras is not defined`；而**全量 4538 例只有这 1 例红**，定位起点是「失败用例是否抽取生产代码」。
+  修法 = 在抽取 scope 补 `tabExtras`/`sheetActive`（按既有 `useOffice` 同法只注入语义最小桩），不改生产代码。
+  **事实更正**：本仓 `plans/` 已在 `.gitignore`（计划页与发布 worktree 都不进库），此前「`git add -A` 会带上
+  plans/」的说法不再成立；本次仅 `.dsh-ops/`、`.dsh/cache/`、`.sansheng/`、`*-trace.json.gz`、
+  `tests/.open-migration-*`、`docs/acceptance-*.html` 属未跟踪残留，按精确清单排除即可。
 - 2026-11-25 实录（v0.39.0：AI 追踪窗口差异模型 + 并行 WIP 的 HTML 计划模式，经用户确认一并发布；
   基线 v0.38.0 @ `a0ea8ec`，发布提交 `b71c817`）。
   **发布前做了隔离树校验**：`git diff --cached --binary --output=tmp/release.patch` → `git worktree add --detach tmp/release-tree HEAD`
