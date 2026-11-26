@@ -377,11 +377,14 @@ cmaps 支持中文渲染）；工具条进入注释编辑：✎ 文本框 / 🖌
 
 一组 `SKILL.md` 随包分发并注册进 DSH 技能系统（自定义 skill provider，
 `ctx.skills.registerProvider`）——**装了本插件即可用**，无需手工放到
-`~/.dsh/skills`。当前收录两个技能：**`dsh-vscodemode-mcp`**（MCP 配置与使用指南：
-两种作用域 / `.mcp.json` 写法 / `mcp.*` RPC / 命名与冲突 / 工作区隔离 / 故障排查表）
-与 **`dsh-vscodemode-html-plan`**（HTML 计划页：主张树 + 图示 + 决策，运行时按上游
-html-plan 的 MIT 许可随包）。装载状态见 设置 → VSCodeMode →「兼容性」→「插件技能组」；
-编辑 SKILL.md 即时生效（fs.watch → invalidate）。
+`~/.dsh/skills`。当前收录四个技能：**`dsh-vscodemode-mcp`**（MCP 配置与使用指南：
+两种作用域 / `.mcp.json` 写法 / `mcp.*` RPC / 命名与冲突 / 工作区隔离 / 故障排查表）、
+**`dsh-vscodemode-html-plan`**（HTML 计划页：主张树 + 图示 + 决策，运行时按上游
+html-plan 的 MIT 许可随包）、**`dsh-vscodemode-test-check`**（`/test-check` 测试验收模式：
+验收单 → 带证据的逐条结果 → 可交付快照）与 **`dsh-vscodemode-ui-kit`**
+（UI 预制体搭建母版：按项目探测生成项目侧技能与结构库，并把一屏设计渲染成
+可拖、可改文字、能回传 patch 的单文件 HTML 设计页）。装载状态见 设置 → VSCodeMode →
+「兼容性」→「插件技能组」；编辑 SKILL.md 即时生效（fs.watch → invalidate）。
 
 - **命名硬约束**：技能名必须 kebab-case（`/^[a-z0-9]+(?:-[a-z0-9]+)*$/`），
   下划线非法（`@deepseek-ai/dsh-skill` 直接拒绝）；本插件另加前缀白名单

@@ -1,0 +1,65 @@
+{
+  "v": 1,
+  "page": "design",
+  "screen": { "name": "自检 · 邮件弹窗", "w": 1080, "h": 1920 },
+  "nodes": [
+    {
+      "id": "Popup/Root",
+      "parent": null,
+      "kind": "group",
+      "rect": [90, 640, 900, 640],
+      "anchor": { "min": [0.5, 0.5], "max": [0.5, 0.5], "pivot": [0.5, 0.5] }
+    },
+    {
+      "id": "Popup/Root/Title",
+      "parent": "Popup/Root",
+      "kind": "text",
+      "rect": [40, 36, 600, 52],
+      "text": { "s": "邮件", "size": 40, "color": "#4a3b2a" },
+      "bind": "UI.Mail.Title",
+      "anchor": { "min": [0, 1], "max": [0, 1], "pivot": [0, 1] }
+    },
+    {
+      "id": "Popup/Root/Close",
+      "parent": "Popup/Root",
+      "kind": "prefab",
+      "rect": [812, 32, 48, 48],
+      "prefab": "Assets/UI/Common/CloseBtn.prefab",
+      "opaque": true,
+      "anchor": { "min": [1, 1], "max": [1, 1], "pivot": [1, 1] }
+    },
+    {
+      "id": "Popup/Root/Desc",
+      "parent": "Popup/Root",
+      "kind": "text",
+      "rect": [40, 112, 820, 96],
+      "text": { "s": "这里是说明文字，用来验证长文本换行与字号。", "size": 28, "color": "#6b6459" },
+      "anchor": { "min": [0, 1], "max": [1, 1], "pivot": [0, 1] }
+    },
+    {
+      "id": "Popup/Root/List",
+      "parent": "Popup/Root",
+      "kind": "list",
+      "rect": [40, 236, 820, 300],
+      "ref": "lib:list-cell-basic@1",
+      "params": { "count": 4, "gap": 12 },
+      "anchor": { "min": [0, 1], "max": [1, 1], "pivot": [0, 1] }
+    },
+    {
+      "id": "Popup/Root/Ok",
+      "parent": "Popup/Root",
+      "kind": "button",
+      "rect": [300, 560, 300, 72],
+      "anchor": { "min": [0.5, 0], "max": [0.5, 0], "pivot": [0.5, 0] }
+    },
+    {
+      "id": "Popup/Root/Ok/Label",
+      "parent": "Popup/Root/Ok",
+      "kind": "text",
+      "rect": [0, 16, 300, 40],
+      "text": { "s": "领取", "size": 30, "color": "#ffffff" },
+      "bind": "UI.Mail.Ok",
+      "anchor": { "min": [0, 0], "max": [1, 0], "pivot": [0, 0] }
+    }
+  ]
+}

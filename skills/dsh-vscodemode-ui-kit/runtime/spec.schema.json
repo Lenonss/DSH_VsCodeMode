@@ -1,0 +1,79 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ui-kit spec v1",
+  "type": "object",
+  "required": ["v", "screen", "nodes"],
+  "additionalProperties": true,
+  "properties": {
+    "v": { "const": 1 },
+    "page": { "enum": ["design", "library"], "default": "design" },
+    "hash": { "type": "string", "pattern": "^[0-9a-f]{8}$" },
+    "screen": {
+      "type": "object",
+      "required": ["w", "h"],
+      "properties": {
+        "name": { "type": "string" },
+        "w": { "type": "number", "exclusiveMinimum": 0 },
+        "h": { "type": "number", "exclusiveMinimum": 0 }
+      }
+    },
+    "mock": {
+      "type": ["object", "null"],
+      "required": ["src"],
+      "properties": {
+        "src": { "type": "string" },
+        "w": { "type": "number" },
+        "h": { "type": "number" },
+        "scale": { "type": "number", "default": 1 }
+      }
+    },
+    "nodes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "kind", "rect"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[^/][^\\s]*$" },
+          "parent": { "type": ["string", "null"] },
+          "kind": { "enum": ["group", "text", "image", "sprite", "button", "list", "prefab"] },
+          "rect": {
+            "type": "array",
+            "minItems": 4,
+            "maxItems": 4,
+            "items": { "type": "number" }
+          },
+          "anchor": {
+            "type": "object",
+            "properties": {
+              "min": { "type": "array", "minItems": 2, "maxItems": 2, "items": { "type": "number" } },
+              "max": { "type": "array", "minItems": 2, "maxItems": 2, "items": { "type": "number" } },
+              "pivot": { "type": "array", "minItems": 2, "maxItems": 2, "items": { "type": "number" } }
+            }
+          },
+          "text": {
+            "type": "object",
+            "required": ["s"],
+            "properties": {
+              "s": { "type": "string" },
+              "size": { "type": "number" },
+              "color": { "type": "string" },
+              "align": { "enum": ["left", "center", "right"] }
+            }
+          },
+          "bind": { "type": "string" },
+          "ref": { "type": "string", "pattern": "^lib:" },
+          "params": { "type": "object" },
+          "prefab": { "type": "string" },
+          "opaque": { "type": "boolean" },
+          "src": { "type": "string" }
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "page": { "const": "design" } } },
+      "then": { "required": ["nodes"] }
+    }
+  ]
+}
