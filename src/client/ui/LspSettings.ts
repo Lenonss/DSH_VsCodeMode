@@ -13,6 +13,7 @@ import '../styles/mcp.css'
 const LANG_META = {
   lua: { label: 'Lua（EmmyLua / LuaLS）', hint: '优先使用已安装 EmmyLua；未安装时回退 LuaLS 或 PATH 中的 lua-language-server' },
   csharp: { label: 'C#（Roslyn / DotRush / OmniSharp）', hint: '优先自动发现 ms-dotnettools.csharp / DotRush 扩展（DotRush 需 .NET 10 运行时）；也可手动指定' },
+  cpp: { label: 'C/C++（clangd）', hint: '自动发现 PATH、Homebrew（llvm）与 Xcode 工具链中的 clangd；精准跳转依赖 compile_commands.json / compile_flags.txt，或在工作区根放一份 .clangd 声明 include 目录' },
 }
 
 /** 语言展示元数据（含未知 id 兜底）。 */

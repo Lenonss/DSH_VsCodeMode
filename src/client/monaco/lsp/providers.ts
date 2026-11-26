@@ -22,7 +22,9 @@ import {
 import { luaKeywordsAt, luaTypesAt, mergeKeywords } from './keywords.js'
 import { warmModelFor } from '../../state/modelWarmer.js'
 
-const LSP_LANGS = ['lua', 'csharp']
+// 这里是 Monaco languageId：头文件与 .c 文件在 loader 里都映射为 'c'，
+// .cpp/.hpp 为 'cpp'，两者都要注册，否则同一套 provider 在头文件上不生效
+export const LSP_LANGS = ['lua', 'csharp', 'cpp', 'c']
 
 /**
  * 补全触发字符（按语言）。
@@ -34,6 +36,9 @@ const LSP_LANGS = ['lua', 'csharp']
 const COMPLETION_TRIGGERS = {
   lua: ['.', ':', '(', '['],
   csharp: ['.', ':', '(', '[', '<', '@'],
+  // C/C++：成员访问（. / ->）、模板与函数调用
+  cpp: ['.', '>', '('],
+  c: ['.', '>', '('],
 }
 
 /** 签名帮助触发字符（与 LSP 服务器声明的 triggerCharacters 对齐）。 */

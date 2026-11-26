@@ -4967,7 +4967,7 @@ export function EditorView(props) {
   const lspProgress = typeof lspServer?.progress === 'number' ? Math.round(lspServer.progress) : null
   // 状态段行内样式：单行状态栏内的一段；LSP 段弹性占满空闲宽度，把后续段推到行尾
   const lspSegStyle = { display: 'inline-flex', alignItems: 'center', gap: '10px', minWidth: 0, flex: '1 1 auto' }
-  const lspSeg = (lspLanguage === 'lua' || lspLanguage === 'csharp')
+  const lspSeg = (lspLanguage === 'lua' || lspLanguage === 'csharp' || lspLanguage === 'cpp' || lspLanguage === 'c')
     ? React.createElement('span', { className: 'edrv-status-seg', style: lspSegStyle, title: lspServer?.progressMessage || lspLabel },
         React.createElement('span', { className: 'edrv-lsp-status-dot ' + (lspServer?.phase === 'ready' ? 'ready' : lspServer?.phase === 'indexing' || lspServer?.phase === 'starting' ? 'busy' : 'idle') }),
         React.createElement('span', { className: 'edrv-sp-lsp' }, lspLabel),
