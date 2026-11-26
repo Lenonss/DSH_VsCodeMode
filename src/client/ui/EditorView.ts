@@ -45,6 +45,7 @@ import { clampZoom, clearZoomMem, dataUrlOf, isImagePath, isSvgPath, recallZoom,
 import { isMarkdownPath } from '../markdownPreview.js'
 import { hasOfficialHtmlPreview, isHtmlPath } from '../htmlPreview.js'
 import { HtmlPlanPanel } from '../htmlPlan/HtmlPlanPanel.js'
+import { TestCheckPanel } from '../testCheck/TestCheckPanel.js'
 import { isExcelPath } from '../excel/model.js'
 import { isUniverPath, isOfficePath } from '../../shared/univer.js'
 import { routesUniver } from '../univer/routing.js'
@@ -301,10 +302,18 @@ export function EditorView(props) {
   const planHostRef = React.useRef(null)
   // 进入只读计划预览前的磁盘选中页签，关闭该计划页签时恢复，避免跳到第一个页签。
   const planReturnRef = React.useRef(null)
-  React.useEffect(() => { setPlanTabs([]); setPlanActive(null) }, [sessionId, cwd])
+  // 测试验收单：与计划页签同一套虚拟页签轨道（只存内存，不落磁盘、不进保存/差异/LSP 流程）。
+  const [sheetTabs, setSheetTabs] = React.useState([])
+  const [sheetActive, setSheetActive] = React.useState(null)
+  const sheetActiveRef = React.useRef(null)
+  sheetActiveRef.current = sheetActive
+  const sheetHostRef = React.useRef(null)
+  const sheetReturnRef = React.useRef(null)
+  React.useEffect(() => { setPlanTabs([]); setPlanActive(null); setSheetTabs([]); setSheetActive(null) }, [sessionId, cwd])
   /** @private @author ddj 2026年10月08号 @param path Disk tab selection. Leave read-only plan mode before any disk navigation. */
   function setActive(path) {
     setPlanActive(null)
+    setSheetActive(null)
     setDiskActive(path)
     setWorkbench((current) => syncTabs(current, tabsRef.current, path))
   }
@@ -4269,6 +4278,7 @@ export function EditorView(props) {
 
   /** 关闭当前活动页签（Ctrl+F4 与菜单动作共用；无页签时提示）。 */
   const closeActiveTab = () => {
+    if (sheetActiveRef.current) { closeSheet(sheetActiveRef.current); return }
     if (planActiveRef.current) { closePlan(planActiveRef.current); return }
     if (!activeRef.current) { setStatus('无打开的文件'); return }
     closeTab(activeRef.current)
@@ -4466,8 +4476,32 @@ export function EditorView(props) {
     planReturnRef.current = null
     setActive(tabsRef.current.some((tab) => tab.path === previous) ? previous : (tabsRef.current[0]?.path ?? null))
   }
+  /** @private @author ddj 2026年11月25号 @param sheet 验收单身份。打开只读虚拟页签，不碰磁盘/保存/LSP。 */
+  function openSheetDoc(sheet) {
+    const id = typeof sheet?.id === 'string' ? sheet.id.trim() : ''
+    if (!id) return
+    flushSave()
+    saveViewState(active)
+    if (!sheetActiveRef.current) sheetReturnRef.current = active
+    setDiskActive(null)
+    const title = typeof sheet?.title === 'string' && sheet.title ? sheet.title : '验收单 · ' + id
+    setSheetTabs((prev) => [...prev.filter((item) => item.id !== id), { id, title }].slice(-8))
+    setSheetActive(id)
+    setError(null)
+    setStatus('验收单 · 数据自动刷新')
+  }
+  /** @private @author ddj 2026年11月25号 @param id 验收单 id。 @param event 可选的关闭点击。只移除内存页签。 */
+  function closeSheet(id, event) {
+    event?.stopPropagation()
+    setSheetTabs((prev) => prev.filter((item) => item.id !== id))
+    if (sheetActiveRef.current !== id) return
+    const previous = sheetReturnRef.current
+    sheetReturnRef.current = null
+    setActive(tabsRef.current.some((tab) => tab.path === previous) ? previous : (tabsRef.current[0]?.path ?? null))
+  }
   /** @private @author ddj 2026年10月08号 @param request Claimed disk or virtual open. Flushes saves without replacing dirty models. */
   function openReceiptFile(request) {
+    if (request.sheet) { openSheetDoc(request.sheet); return }
     if (request.plan) { openPlanDoc(request.plan); return }
     if (!request.path) return
     let path = receiptTabPath(request.path, cwd)
@@ -4523,6 +4557,8 @@ export function EditorView(props) {
       const host = viewRootRef.current?.querySelector('.edrv-uv-host')
       return request.sessionId === sessionId && sameFile(active, request.path) && host?.getAttribute('data-univer-path') === active
     }
+    if (request.sheet) return request.sessionId === sessionId && sheetActive === request.sheet.id
+      && sheetHostRef.current?.getAttribute('data-sheet-id') === request.sheet.id
     if (request.plan) return request.sessionId === sessionId && planActive === request.plan.address
       && planTabs.some((item) => item.address === request.plan.address && item.markdown === request.plan.markdown)
       && planHostRef.current?.getAttribute('data-plan-address') === request.plan.address
@@ -4530,6 +4566,7 @@ export function EditorView(props) {
   }
   /** @private @author ddj 2026年09月28号 @param request Claimed target. @returns Only its current load/render error. */
   function receiptError(request) {
+    if (request.sheet) return request.sheet.id ? null : '验收单 id 无效'
     if (request.plan) return planDocument(request.plan.address, request.plan) ? null : '计划内容或资源地址无效'
     return receiptErrorFor(request, receiptView(request))
   }
@@ -4847,9 +4884,9 @@ export function EditorView(props) {
     // 页面工具列固定在行尾（滚动区之外，横滚不带走）。焦点落在浮窗时，这一行仍留在页面分组上，
     // 避免整条工具栏跟着搬进浮窗；页签缓存 ref 只认页面上的这条行。
     const chrome = !floating && id === rowOwner
-    // 计划预览占用的正文只会在焦点组里；承载页签行的组同时收起磁盘选中态，保证整屏只有计划页签一条下划线。
-    const hideDiskActive = Boolean(planActive) && (chrome || focused)
-    return React.createElement(EditorPane, { key: id, group, focused, dirty: dirtyMap, suppressActive: hideDiskActive, previewActive: chrome ? planActive : undefined, tabsRef: chrome ? tabsHostRef : undefined, extras: chrome ? planTabExtras : undefined, tools: chrome ? rowTools : undefined, onSelect: selectGroup, onClose: closeTab, onMenu: paneMenu, onDrag: dragTab, consumeClick: consumeDrag },
+    // 计划预览 / 验收单占用的正文只会在焦点组里；承载页签行的组同时收起磁盘选中态，保证整屏只有一条下划线。
+    const hideDiskActive = Boolean(planActive || sheetActive) && (chrome || focused)
+    return React.createElement(EditorPane, { key: id, group, focused, dirty: dirtyMap, suppressActive: hideDiskActive, previewActive: chrome ? (planActive ?? sheetActive) : undefined, tabsRef: chrome ? tabsHostRef : undefined, extras: chrome ? tabExtras : undefined, tools: chrome ? rowTools : undefined, onSelect: selectGroup, onClose: closeTab, onMenu: paneMenu, onDrag: dragTab, consumeClick: consumeDrag },
       focused ? React.createElement('div', { className: 'edrv-full-slot', ref: mountFull }) : React.createElement(React.Fragment, null,
         React.createElement(GroupPathbar, { path: group.active, onFocus: () => selectGroup(id) }),
         React.createElement(PassiveEditor, { key: JSON.stringify([scope, sessionId, group.active]), path: group.active, groupId: id, mount: passiveMount })))
@@ -4870,12 +4907,27 @@ export function EditorView(props) {
     }, React.createElement('span', { className: 'edrv-group-tab-name' }, plan.title),
     React.createElement('span', { className: 'edrv-tab-x', title: '关闭', onClick: (event) => closePlan(plan.address, event) }, '×')))
     : null
+  const sheetTabExtras = sheetTabs.length
+    ? sheetTabs.map((sheet) => React.createElement('div', {
+      key: 'sheet:' + sheet.id, className: 'edrv-tab edrv-tab-plan edrv-tab-sheet' + (sheet.id === sheetActive ? ' edrv-tab-active' : ''),
+      title: sheet.title + '（测试验收单 · 数据自动刷新）', onClick: () => openSheetDoc(sheet),
+    }, React.createElement('span', { className: 'edrv-group-tab-name' }, sheet.title),
+    React.createElement('span', { className: 'edrv-tab-x', title: '关闭', onClick: (event) => closeSheet(sheet.id, event) }, '×')))
+    : null
+  // 计划页签与验收单页签共用同一条滚动区（EditorPane 的 extras）：整块工作台仍然只有一行页签。
+  const tabExtras = (planTabExtras || sheetTabExtras)
+    ? React.createElement(React.Fragment, null, planTabExtras, sheetTabExtras)
+    : null
   const openControl = openInput
     ? React.createElement('input', { className: 'edrv-path-input', autoFocus: true, placeholder: '输入工作区相对/绝对路径，回车打开', value: pathDraft, onChange: (e) => setPathDraft(e.target.value), onKeyDown: (e) => { if (e.key === 'Enter') openPath(); if (e.key === 'Escape') setOpenInput(false) } })
     : React.createElement('button', { className: 'edrv-tab-add', title: '打开文件（输入路径）', onClick: () => setOpenInput(true) }, '+')
 
   const activePlan = planTabs.find((plan) => plan.address === planActive)
-  const pathBar = activePlan ? React.createElement('div', { className: 'edrv-pathbar', title: activePlan.address },
+  const activeSheet = sheetTabs.find((sheet) => sheet.id === sheetActive)
+  const pathBar = activeSheet ? React.createElement('div', { className: 'edrv-pathbar', title: 'test-check://' + activeSheet.id },
+    React.createElement('span', { className: 'edrv-pb-name' }, activeSheet.title),
+    React.createElement('span', { className: 'edrv-pb-meta' }, '测试验收单 · 结果随 events/ 自动刷新'))
+    : activePlan ? React.createElement('div', { className: 'edrv-pathbar', title: activePlan.address },
     React.createElement('span', { className: 'edrv-pb-name' }, activePlan.title),
     React.createElement('span', { className: 'edrv-pb-meta' }, '计划预览 · 只读 · 审批请使用对话中的官方控件'))
     : React.createElement('div', { className: 'edrv-pathbar', title: active || '' },
@@ -5086,7 +5138,16 @@ export function EditorView(props) {
   const [planMarkdownFallback, setPlanMarkdownFallback] = React.useState('')
 
   let body
-  if (activePlan) {
+  if (activeSheet) {
+    body = React.createElement('div', { className: 'edrv-testcheck-host', ref: sheetHostRef, 'data-sheet-id': activeSheet.id },
+      React.createElement(TestCheckPanel, {
+        key: activeSheet.id,
+        sessionId,
+        cwd,
+        id: activeSheet.id,
+        title: activeSheet.title,
+      }))
+  } else if (activePlan) {
     const planPanelAllowed = Boolean(activePlan.htmlPath || activePlan.htmlPlanMode)
     const planFallenBack = planMarkdownFallback === activePlan.address
     body = React.createElement('div', { className: 'edrv-mdview', ref: planHostRef, 'data-plan-address': activePlan.address },
@@ -5353,6 +5414,8 @@ export function EditorView(props) {
     sessionId,
     // 当前会话工作区（反应式 cwd；规则面板项目 Tab 自动匹配）
     cwd: cwd ?? null,
+    // 编辑器里正开着的验收单：测试验收面板据此认定「当前验收项」
+    testCheckId: activeSheet?.id,
     // 状态作用域键（工作区优先，无 cwd 回退会话；面板持久化统一走它）
     scope,
     openFile: (p) => openFile(p, false),

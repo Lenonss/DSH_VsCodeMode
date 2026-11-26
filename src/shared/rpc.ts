@@ -33,6 +33,17 @@ import type {
   PendingDecide, PendingDetail, PendingHistoryMove,
   PendingItem, PendingPage, PendingRemove, PendingRequest,
 } from './pendingReview.js'
+import type { TestCheckSheetSummary, TestCheckView } from './testCheck.js'
+
+/** 项目测试规范读写结果（三个 policy 方法共用）。 */
+export interface TestCheckPolicyPayload {
+  /** 规范文件绝对路径（`<项目根>/.dsh/test-check/policy.md`）。 */
+  path: string
+  /** 当前生效正文（有文件用文件内容，否则默认规则；超 8 KB 已截断）。 */
+  text: string
+  /** true = 用的是默认规则（文件不存在或空白）。 */
+  isDefault: boolean
+}
 
 /** webServer 精确路由。 */
 export const RPC_PATH = '/edrv/rpc'
@@ -585,6 +596,30 @@ export interface RpcRequestMap {
   'edrv.planPage.render': { sessionId?: string; markdown: string }
   /** HTML 计划模式：把作者页用技能 pack.mjs 打包成单文件 HTML（只写系统临时文件）。 */
   'edrv.planPage.pack': { sessionId?: string; path: string }
+  /** 测试验收模式：读派生视图（页签与 chip 轮询；force 跳过缓存）。 */
+  'edrv.testCheck.get': { sessionId?: string; id?: string; force?: boolean }
+  /** 测试验收模式：手动上报一条结果（页签工具栏；summary 就是证据）。 */
+  'edrv.testCheck.report': {
+    sessionId?: string
+    id: string
+    item: string
+    status: 'pass' | 'fail' | 'blocked' | 'skip'
+    summary: string
+  }
+  /** 测试验收模式：导出交付快照到 docs/acceptance-<id>.html。 */
+  'edrv.testCheck.snapshot': { sessionId?: string; id: string }
+  /** 测试验收模式：读项目测试规范（有文件用文件，否则默认规则）。 */
+  'edrv.testCheck.policy.get': { sessionId?: string }
+  /** 测试验收模式：保存项目测试规范（空文本＝删除文件回默认）。 */
+  'edrv.testCheck.policy.save': { sessionId?: string; text: string }
+  /** 测试验收模式：重置项目测试规范（删文件回默认）。 */
+  'edrv.testCheck.policy.reset': { sessionId?: string }
+  /** 测试验收模式：读随包技能正文（面板只读展示）。 */
+  'edrv.testCheck.skill': {}
+  /** 测试验收模式：列出项目内全部验收单与快照状态（force 跳过 30 秒列表缓存）。 */
+  'edrv.testCheck.sheets': { sessionId?: string; force?: boolean }
+  /** 测试验收模式：删除一张验收单目录与对应快照。 */
+  'edrv.testCheck.remove': { sessionId?: string; id: string }
 }
 
 export type RpcMethod = keyof RpcRequestMap
@@ -789,6 +824,15 @@ export interface RpcOkMap {
   'edrv.uiState.set': object
   'edrv.planPage.render': { html: string }
   'edrv.planPage.pack': { html: string }
+  'edrv.testCheck.get': { view: TestCheckView }
+  'edrv.testCheck.report': { view: TestCheckView; filed: string }
+  'edrv.testCheck.snapshot': { path: string; view: TestCheckView }
+  'edrv.testCheck.policy.get': TestCheckPolicyPayload
+  'edrv.testCheck.policy.save': TestCheckPolicyPayload
+  'edrv.testCheck.policy.reset': TestCheckPolicyPayload
+  'edrv.testCheck.skill': { name: string; path: string; content: string }
+  'edrv.testCheck.sheets': { root: string; sheets: TestCheckSheetSummary[] }
+  'edrv.testCheck.remove': { removed: string[] }
 }
 
 /** 缺失文件预览的稳定拒绝码：客户端据此显示「已删除」终态，而不是把错误原文当加载失败重试。 */

@@ -173,7 +173,9 @@ describe('actual workbench adapters', () => {
       workbench: layout, dirtyMap: {}, planActive, sessionId: 'test-session', React, EditorPane, GroupPathbar: () => null, PassiveEditor: () => null,
       mountFull: () => {}, passiveMount: () => {}, scope: 'w', selectGroup: vi.fn(), closeTab: vi.fn(), paneMenu: vi.fn(), dragTab: vi.fn(), consumeDrag: () => false,
       // 页签行归属在组件体里算好（浮窗聚焦时回落到主组），renderGroup 只按 id 认领这一行。
-      rowOwner: layout.focused, tabsHostRef: { current: null }, planTabExtras: [{}], rowTools: {},
+      // 0.40 起页签行内容收在组件级 tabExtras（计划 + 验收单两类），抽取执行时按「有一行」注入。
+      rowOwner: layout.focused, tabsHostRef: { current: null }, planTabExtras: [{}], sheetTabExtras: null,
+      sheetActive: null, tabExtras: [{}], rowTools: {},
     })
     const preview = layout.groups.map((group) => renderWith('dsh-resource://plan/s/c')(group.id))
     for (const [index, group] of layout.groups.entries()) {

@@ -74,6 +74,7 @@ import { createTextPages } from './textPages.js'
 import { reviewHandlers } from './reviewRpc.js'
 import { pendingHandlers } from './pendingRpc.js'
 import { univerHandlers } from './univerRpc.js'
+import { checkHandlers } from './testCheckRpc.js'
 import { fileAbsent, missingReview, missingDecide, missingPath, refusalCodeOf } from './missingReview.js'
 import { pendingCovers } from './pendingCompat.js'
 import { runReplace } from './search/replaceRun.js'
@@ -750,6 +751,8 @@ export function buildHandlers(
     ...(reviewHandlers(ctx, registry) as RpcHandlerMap),
     ...(pendingHandlers(ctx, registry) as RpcHandlerMap),
     ...(univerHandlers(ctx) as RpcHandlerMap),
+    // edrv.testCheck.* 由 checkHandlers 提供（验收单视图/上报/导出），这里并入。
+    ...(checkHandlers(ctx) as RpcHandlerMap),
     'edrv.list': async (args) => {
       // #region debug log
       const start = performance.now()

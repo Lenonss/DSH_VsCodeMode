@@ -55,6 +55,8 @@ export interface AttachmentStageDeps {
   readFile: (ref: unknown, signal?: AbortSignal) => Promise<Uint8Array>
   /** 写一个附件（参数是工作区相对路径）。 */
   write: (relativePath: string, bytes: Uint8Array) => Promise<void>
+  /** 落盘根目录（工作区相对路径）；缺省 `plans/<slug>`，测试验收模式用它指到 `.dsh/test-check/<id>`。 */
+  root?: string
   /** 单文件上限，默认 25 MB。 */
   maxBytes?: number
   /** 附件数量上限，默认 12 个。 */
@@ -287,7 +289,8 @@ function refOf(block: unknown): AttachmentRefView | null {
  */
 export async function stageAttachments(deps: AttachmentStageDeps): Promise<AttachmentStage> {
   const slug = String(deps.slug ?? '')
-  const dir = 'plans/' + slug + '/' + ATTACHMENTS_DIR
+  const root = typeof deps.root === 'string' && deps.root.trim() ? deps.root.trim().replace(/\/+$/, '') : 'plans/' + slug
+  const dir = root + '/' + ATTACHMENTS_DIR
   const maxBytes = deps.maxBytes ?? MAX_ATTACHMENT_BYTES
   const maxCount = deps.maxCount ?? MAX_ATTACHMENTS
   const files: StagedAttachment[] = []

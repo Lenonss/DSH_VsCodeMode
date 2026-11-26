@@ -3,8 +3,10 @@ import { createRequestId } from './requestId.js'
 
 import type { PlanDocument } from './planState.js'
 
-export interface EditorRequest { requestId: string; sessionId: string; path: string | null; line?: number; column?: number; preview?: boolean; plan?: PlanDocument }
-export interface OpenOptions { preview?: boolean; plan?: PlanDocument; signal?: AbortSignal; timeoutMs?: number }
+export interface EditorRequest { requestId: string; sessionId: string; path: string | null; line?: number; column?: number; preview?: boolean; plan?: PlanDocument; sheet?: SheetRef }
+/** 测试验收单页签身份（虚拟页签，不落磁盘）。 */
+export interface SheetRef { id: string; title: string }
+export interface OpenOptions { preview?: boolean; plan?: PlanDocument; sheet?: SheetRef; signal?: AbortSignal; timeoutMs?: number }
 interface Waiter { request: EditorRequest; finish: (success: boolean) => void; claimed?: boolean }
 const waiters = new Map<string, Waiter>()
 
@@ -47,6 +49,7 @@ export function requestOpen(path: string | null, line?: number, column?: number,
   const request: EditorRequest = { requestId, sessionId, path, line, column }
   if (options.preview !== undefined) request.preview = options.preview
   if (options.plan) request.plan = options.plan
+  if (options.sheet) request.sheet = options.sheet
   return new Promise((resolve) => {
     let timer: ReturnType<typeof setTimeout>
     /** @private @author ddj 2026年09月28号 Complete once and release the deadline. */

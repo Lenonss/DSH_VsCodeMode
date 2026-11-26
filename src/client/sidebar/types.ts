@@ -14,6 +14,8 @@ export interface SidebarCtx {
   visible?: boolean
   /** 当前会话工作区 cwd（来自 sessions 快照；规则面板项目 Tab 自动匹配用）。 */
   cwd?: string | null
+  /** 编辑器里正开着的验收单 id（测试验收面板据此认定「当前验收项」，没开页签时不带）。 */
+  testCheckId?: string
   /** 状态作用域键（工作区优先，无 cwd 回退会话；面板持久化统一走它，scopeStore 产出）。 */
   scope?: string
   openFile: (path: string) => void

@@ -1277,3 +1277,81 @@
 .edrv-htmlplan-chip-glyph { font-size: 9px; }
 .edrv-htmlplan-chip-x { font-size: 10px; opacity: .75; }
 .edrv-htmlplan-chip-error { font-size: 11px; color: var(--dsw-alias-state-warning-primary, #b45309); }
+
+/* ── 测试验收模式：验收单页签（编辑器面板内） ── */
+[data-edrv-view] .edrv-testcheck-host { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; position: relative; }
+[data-edrv-view] .edrv-testcheck { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
+[data-edrv-view] .edrv-testcheck-bar { display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 10px; flex: 0 0 auto; border-bottom: 1px solid var(--dsw-alias-border-l1, rgba(0,0,0,.08)); }
+[data-edrv-view] .edrv-testcheck-title { font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 260px; }
+[data-edrv-view] .edrv-testcheck-tally { font-size: 11.5px; opacity: .8; white-space: nowrap; }
+[data-edrv-view] .edrv-testcheck-frame { flex: 1 1 auto; width: 100%; min-height: 0; border: none; background: #fff; }
+[data-edrv-view] .edrv-testcheck-notice { font-size: 11.5px; color: var(--dsw-alias-label-secondary, #6b6659); padding: 4px 10px; flex: 0 0 auto; }
+[data-edrv-view] .edrv-testcheck-error { font-size: 12px; color: var(--dsw-alias-state-danger-primary, #b42318); padding: 6px 10px; flex: 0 0 auto; }
+[data-edrv-view] .edrv-testcheck-guide { flex: 1 1 auto; overflow: auto; padding: 14px 16px; }
+[data-edrv-view] .edrv-testcheck-guide h3 { font-size: 14px; margin: 0 0 8px; }
+[data-edrv-view] .edrv-testcheck-guide p { font-size: 12.5px; margin: 0 0 8px; line-height: 1.6; }
+[data-edrv-view] .edrv-testcheck-guide code { font-family: ui-monospace, Consolas, monospace; font-size: 11.5px; background: var(--dsw-alias-markdown-code-block, rgba(0,0,0,.05)); padding: 1px 4px; border-radius: 3px; }
+[data-edrv-view] .edrv-testcheck-errors { margin: 0 0 8px; padding-left: 18px; font-size: 12.5px; color: var(--dsw-alias-state-danger-primary, #b42318); }
+[data-edrv-view] .edrv-testcheck-pre { margin: 6px 0 10px; padding: 10px 12px; border-radius: 6px; background: var(--dsw-alias-markdown-code-block, rgba(0,0,0,.05)); overflow: auto; font-family: ui-monospace, Consolas, monospace; font-size: 11.5px; line-height: 1.5; white-space: pre; }
+[data-edrv-view] .edrv-testcheck-actions { display: flex; gap: 8px; margin: 4px 0 10px; }
+[data-edrv-view] .edrv-testcheck-details { margin-top: 10px; font-size: 12.5px; }
+[data-edrv-view] .edrv-testcheck-snippet { margin-top: 8px; }
+[data-edrv-view] .edrv-testcheck-snippet-head { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 12px; }
+[data-edrv-view] .edrv-testcheck-manual { display: flex; gap: 8px; align-items: center; padding: 8px 10px; border-bottom: 1px solid var(--dsw-alias-border-l1, rgba(0,0,0,.08)); flex: 0 0 auto; }
+[data-edrv-view] .edrv-testcheck-manual select, [data-edrv-view] .edrv-testcheck-input { height: 26px; font-size: 12px; border-radius: 6px; border: 1px solid var(--dsw-alias-border-l1, rgba(0,0,0,.18)); background: transparent; color: inherit; padding: 0 6px; }
+[data-edrv-view] .edrv-testcheck-input { flex: 1 1 auto; min-width: 120px; }
+[data-edrv-view] .edrv-tab-sheet { border-left: 2px solid var(--dsw-alias-state-success-primary, #15803d); }
+
+/* ── 测试验收：侧栏面板（说明 + 技能 + 规范 + 当前项/全部单两张列表） ── */
+[data-edrv-view] .edrv-tc-panel { flex: 1 1 auto; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 12px; padding: 10px 10px 16px; font-size: 12px; }
+[data-edrv-view] .edrv-tc-block { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+[data-edrv-view] .edrv-tc-row { display: flex; align-items: center; gap: 8px; min-height: 22px; min-width: 0; }
+[data-edrv-view] .edrv-tc-label { font-weight: 600; white-space: nowrap; color: var(--dsw-alias-label-primary, #1f2933); }
+[data-edrv-view] .edrv-tc-dim { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dsw-alias-label-tertiary, #9aa5b1); font-size: 11px; }
+[data-edrv-view] .edrv-tc-btn { flex: 0 0 auto; height: 22px; padding: 0 9px; border-radius: 6px; border: 1px solid var(--dsw-alias-border-l1, #e0e6e8); background: transparent; color: var(--dsw-alias-label-secondary, #52606d); font-size: 11.5px; cursor: pointer; white-space: nowrap; }
+[data-edrv-view] .edrv-tc-btn:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover, rgba(15,157,88,.08)); }
+[data-edrv-view] .edrv-tc-btn:disabled { opacity: .45; cursor: default; }
+[data-edrv-view] .edrv-tc-btn.primary { border-color: var(--dsw-alias-brand-primary, #0f9d58); color: var(--dsw-alias-brand-primary, #0f9d58); }
+[data-edrv-view] .edrv-tc-btn.danger { border-color: var(--dsw-alias-state-error-primary, rgba(217,83,79,.45)); color: var(--dsw-alias-state-error-primary, #d9534f); }
+[data-edrv-view] .edrv-tc-icon-btn { flex: 0 0 auto; width: 20px; height: 20px; padding: 0; border-radius: 50%; border: 1px solid var(--dsw-alias-border-l1, #e0e6e8); background: transparent; color: var(--dsw-alias-label-secondary, #52606d); font-size: 11px; line-height: 18px; cursor: pointer; }
+[data-edrv-view] .edrv-tc-icon-btn:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(15,157,88,.08)); }
+[data-edrv-view] .edrv-tc-editor { min-height: 108px; max-height: 220px; resize: vertical; padding: 8px; border-radius: 8px; border: 1px solid var(--dsw-alias-border-l1, #e0e6e8); background: var(--dsw-alias-bg-layer-2, #f0f4f4); color: var(--dsw-alias-label-primary, #1f2933); font-family: var(--ds-font-family-code, ui-monospace, Consolas, monospace); font-size: 11.5px; line-height: 1.6; }
+[data-edrv-view] .edrv-tc-editor:disabled { opacity: .6; }
+[data-edrv-view] .edrv-tc-status { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dsw-alias-label-secondary, #52606d); font-size: 11px; }
+[data-edrv-view] .edrv-tc-hint { color: var(--dsw-alias-label-tertiary, #9aa5b1); font-size: 10.5px; line-height: 1.55; overflow-wrap: anywhere; }
+[data-edrv-view] .edrv-tc-hint.warn { color: var(--dsw-alias-state-warn-primary, #d97706); }
+[data-edrv-view] .edrv-tc-error { color: var(--dsw-alias-state-error-primary, #d9534f); font-size: 11.5px; line-height: 1.5; overflow-wrap: anywhere; }
+[data-edrv-view] .edrv-tc-actions { display: flex; gap: 6px; }
+[data-edrv-view] .edrv-tc-list { max-height: 180px; overflow: auto; display: flex; flex-direction: column; gap: 1px; padding: 3px; border-radius: 8px; border: 1px solid var(--dsw-alias-border-l1, #e0e6e8); background: var(--dsw-alias-bg-layer-1, #ffffff); }
+[data-edrv-view] .edrv-tc-item, [data-edrv-view] .edrv-tc-sheet { display: flex; align-items: center; gap: 6px; min-width: 0; padding: 3px 6px; border-radius: 5px; cursor: pointer; }
+[data-edrv-view] .edrv-tc-item:hover, [data-edrv-view] .edrv-tc-sheet:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(15,157,88,.08)); }
+[data-edrv-view] .edrv-tc-item:focus-visible, [data-edrv-view] .edrv-tc-sheet:focus-visible { outline: 1px solid var(--dsw-alias-brand-primary, #0f9d58); outline-offset: -1px; }
+/* 有快照的行：移除按钮平时收起来，悬停或键盘聚焦时才显形（点行本身是「打开」，别让误触删数据） */
+[data-edrv-view] .edrv-tc-sheet:not(.is-missing) .edrv-tc-btn.danger { opacity: 0; pointer-events: none; transition: opacity .12s; }
+[data-edrv-view] .edrv-tc-sheet:not(.is-missing):hover .edrv-tc-btn.danger,
+[data-edrv-view] .edrv-tc-sheet:not(.is-missing):focus-within .edrv-tc-btn.danger { opacity: 1; pointer-events: auto; }
+[data-edrv-view] .edrv-tc-sheet.is-missing { opacity: .82; }
+[data-edrv-view] .edrv-tc-dot { flex: 0 0 auto; font-size: 9px; line-height: 1; color: var(--dsw-alias-label-tertiary, #9aa5b1); }
+[data-edrv-view] .edrv-tc-dot.is-pass { color: var(--dsw-alias-state-success-primary, #0f9d58); }
+[data-edrv-view] .edrv-tc-dot.is-fail { color: var(--dsw-alias-state-error-primary, #d9534f); }
+[data-edrv-view] .edrv-tc-dot.is-blocked, [data-edrv-view] .edrv-tc-dot.is-stale, [data-edrv-view] .edrv-tc-dot.is-claimed { color: var(--dsw-alias-state-warn-primary, #d97706); }
+[data-edrv-view] .edrv-tc-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dsw-alias-label-primary, #1f2933); }
+[data-edrv-view] .edrv-tc-tag { flex: 0 0 auto; color: var(--dsw-alias-label-tertiary, #9aa5b1); font-size: 10.5px; }
+[data-edrv-view] .edrv-tc-tag.warn { color: var(--dsw-alias-state-warn-primary, #d97706); }
+[data-edrv-view] .edrv-tc-empty { padding: 8px; border-radius: 8px; border: 1px dashed var(--dsw-alias-border-l1, #e0e6e8); color: var(--dsw-alias-label-tertiary, #9aa5b1); font-size: 11.5px; line-height: 1.6; overflow-wrap: anywhere; }
+[data-edrv-view] .edrv-tc-dialog { display: flex; flex-direction: column; max-height: min(78vh, 720px); }
+[data-edrv-view] .edrv-tc-dialog-head { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--dsw-alias-border-l1, #e0e6e8); }
+[data-edrv-view] .edrv-tc-dialog-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; font-size: 13px; }
+[data-edrv-view] .edrv-tc-dialog-sub { flex: 0 0 auto; padding: 6px 12px 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dsw-alias-label-tertiary, #9aa5b1); font-size: 11px; }
+[data-edrv-view] .edrv-tc-dialog-body { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 10px 12px 14px; }
+[data-edrv-view] .edrv-tc-dialog-body p { margin: 0 0 8px; font-size: 12.5px; line-height: 1.7; }
+[data-edrv-view] .edrv-tc-pre { margin: 0; padding: 10px 12px; border-radius: 8px; background: var(--dsw-alias-markdown-code-block, rgba(0,0,0,.05)); font-family: ui-monospace, Consolas, monospace; font-size: 11.5px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
+
+/* ── 测试验收模式：输入框底部栏 chip（composer 区，不在编辑器面板内，选择器不加作用域） ── */
+.edrv-testcheck-chip-wrap { display: inline-flex; align-items: center; gap: 6px; }
+.edrv-testcheck-chip { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 10px; border-radius: 13px; border: 1px solid var(--dsw-alias-state-success-primary, #15803d); background: transparent; color: var(--dsw-alias-state-success-primary, #15803d); font-size: 12px; font-weight: 600; cursor: pointer; }
+.edrv-testcheck-chip:hover:not(:disabled) { filter: brightness(.96); }
+.edrv-testcheck-chip:disabled { opacity: .55; cursor: default; }
+.edrv-testcheck-chip-glyph { font-size: 10px; }
+.edrv-testcheck-chip-open { font-size: 12px; opacity: .7; }
+.edrv-testcheck-chip-error { font-size: 11px; color: var(--dsw-alias-state-warning-primary, #b45309); }

@@ -9,11 +9,11 @@
  * 处理器把字节复制到 `plans/<slug>/assets/`（作者页可引用），并把路径写进送给模型的任务消息。
  * @author ddj 2026年11月25号
  */
-import { mkdir, rmdir, unlink, writeFile } from 'node:fs/promises'
+import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { log } from './log.js'
 import { cwdOfSession, type Ctx } from './store.js'
-import { attachmentLines, slugFromTask, stageAttachments, type AttachmentStage } from './htmlPlanAttachments.js'
+import { attachmentLines, slugFromTask, stageAttachments } from './htmlPlanAttachments.js'
+import { readChunks, rollbackFiles, toBytes } from './attachmentBytes.js'
 import { HTML_PLAN_COMMAND } from './shared/htmlPlanMode.js'
 
 //region 命令元信息
@@ -120,64 +120,6 @@ function messageOf(error: unknown): string {
   return String(error ?? '未知错误')
 }
 
-/**
- * 把流式字节拼成一个 Uint8Array（附件可能是任意长度，不假设单块）。
- * @author ddj 2026年11月25号
- * @param source 按顺序产出的字节块
- * @returns 拼接后的字节
- */
-async function readChunks(source: AsyncIterable<Uint8Array>): Promise<Uint8Array> {
-  const parts: Uint8Array[] = []
-  let total = 0
-  for await (const part of source) {
-    parts.push(part)
-    total += part.byteLength
-  }
-
-  const merged = new Uint8Array(total)
-  let offset = 0
-  for (const part of parts) {
-    merged.set(part, offset)
-    offset += part.byteLength
-  }
-  return merged
-}
-
-/**
- * 归一化附件存储返回的字节。
- * @author ddj 2026年11月25号
- * @param value 服务返回值
- * @returns 字节视图
- * @throws 无法识别时抛错（由上层记入 skipped）
- */
-function toBytes(value: unknown): Uint8Array {
-  if (value instanceof Uint8Array) return value
-  if (value instanceof ArrayBuffer) return new Uint8Array(value)
-  if (ArrayBuffer.isView(value)) return new Uint8Array(value.buffer, value.byteOffset, value.byteLength)
-  throw new Error('附件存储返回了无法识别的字节')
-}
-
-/**
- * 回滚本次写入的附件：逐个删除文件，再尝试移除空目录。
- * @author ddj 2026年11月25号
- * @param workspace 工作区绝对路径
- * @param stage 落盘结果
- * @returns 完成后的 Promise（单步失败只忽略）
- */
-async function rollbackStage(workspace: string, stage: AttachmentStage): Promise<void> {
-  for (const file of stage.files) {
-    try {
-      await unlink(join(workspace, file.relativePath))
-    } catch {
-      /* 文件可能已被删除 */
-    }
-  }
-  try {
-    await rmdir(join(workspace, stage.dir))
-  } catch {
-    /* 目录非空或已不存在 */
-  }
-}
 
 /**
  * 默认附件准备：把 composer 的图片/文件复制到 plans/<slug>/assets/。
@@ -232,7 +174,7 @@ export async function stagePlanFiles(
       slug,
       count: stage.files.length,
       lines: attachmentLines(stage),
-      rollback: () => rollbackStage(workspace, stage),
+      rollback: () => rollbackFiles(workspace, stage),
     }
   } catch (error) {
     return { slug: null, count: 0, lines: ['附件读取失败：' + messageOf(error) + '；本次按无附件规划。'], rollback: async () => {} }

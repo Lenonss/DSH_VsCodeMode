@@ -44,6 +44,8 @@ import { createDapRpc } from './dap/rpc.js'
 import { installRulesSection } from './rules.js'
 import { installSkillGroup } from './skills.js'
 import { installHtmlPlanMode } from './htmlPlanMode.js'
+import { installCheckMode } from './testCheckMode.js'
+import { disposeTestCheck } from './testCheckStore.js'
 import type { RpcHandlerMap, RpcMethod, RpcRequestMap } from './shared/rpc.js'
 import type { Registry } from './registry.js'
 import type { Ctx } from './store.js'
@@ -147,6 +149,7 @@ function attachRuntime(ctx: Ctx, runtime: Runtime): void {
     loopWatch.dispose()
     windows.dispose()
     runtime.fileVersions.dispose()
+    disposeTestCheck()
     closeArchiveDbs()
     disposeAllServers()
     const tasks = [() => runtime.lspManager.disposeAll(), () => runtime.svnRpc.dispose(), () => runtime.dapRpc.dispose()]
@@ -186,6 +189,7 @@ export async function apply(ctx: Ctx, config?: unknown): Promise<void> {
   attachRuntime(ctx, runtime)
   installContent(ctx)
   if (!installHtmlPlanMode(ctx)) log.warn('/html-plan 未调度：DSH 未提供 ctx.inject')
+  if (!installCheckMode(ctx)) log.warn('/test-check 未调度：DSH 未提供 ctx.inject')
   /** @author ddj 2026年09月28号 @param method RPC name. @param args Typed request. @returns RPC result. */
   function dispatch<M extends RpcMethod>(method: M, args: RpcRequestMap[M]) {
     const { registry, searcher, contentSearcher, lspRpc, aiRpc, fileVersions, svnRpc, dapRpc } = runtime

@@ -47,6 +47,7 @@ import { setNativeCsv, setNativeOpenHandler, resetNativeOpen } from './nativeOpe
 import { hasOfficialHtmlPreview, installHtmlPreviewProbe, isHtmlPath } from './htmlPreview.js'
 import { installHtmlPlanActions } from './htmlPlan/planActions.js'
 import { installHtmlPlanModeChip } from './htmlPlan/HtmlPlanModeChip.js'
+import { installCheckChip } from './testCheck/TestCheckChip.js'
 import { setFeaturePrefs } from './featurePrefs.js'
 import { SideEditorTab } from './ui/SideEditorTab.js'
 import { OfficialSideTab } from './ui/OfficialSideTab.js'
@@ -64,6 +65,7 @@ import { createSearchPanel } from './sidebar/panels/index.js'
 import { createRulesPanel } from './sidebar/panels/index.js'
 import { createSvnPanel } from './sidebar/panels/index.js'
 import { createDebugPanel } from './sidebar/panels/index.js'
+import { createTestCheckPanel } from './sidebar/panels/TestCheckPanel.js'
 import { createTreeMenuRegistry } from './sidebar/contextMenu.js'
 import { createDefaultFileMenuItems } from './sidebar/menuItems.js'
 import { createOutlinePanel } from './outline/index.js'
@@ -336,6 +338,8 @@ export async function apply(ctx: any): Promise<void> {
   ctx.effect(() => installHtmlPlanActions(ctx), 'vscode-mode: html plan actions')
   // HTML 计划模式 chip：输入框工具行的 list 槽，模式活跃时出现，点击执行 /html-plan off。
   ctx.effect(() => installHtmlPlanModeChip(ctx), 'vscode-mode: html plan mode chip')
+  // 测试验收模式 chip：同一槽位，显示「验收 x/y」，点开文件编辑里的验收单页签。
+  ctx.effect(() => installCheckChip(ctx), 'vscode-mode: test-check chip')
   // 官方代码审阅扩展位（0.2.3+）：变更视图工具条与文件菜单加两条动作。
   // 服务/slot 缺失时零注册，不影响自有 diff 面板。
   ctx.effect(() => installOfficialReview(ctx, {
@@ -525,6 +529,8 @@ export async function apply(ctx: any): Promise<void> {
   ctx.effect(() => sidebarPanels.register(createSvnPanel()), 'vscode-mode: sidebar panel svn')
   // 调试面板：活动栏「调试」页签（VS Code 调试视图四段布局 + REPL；DAP 桥接）
   ctx.effect(() => sidebarPanels.register(createDebugPanel()), 'vscode-mode: sidebar panel debug')
+  // 测试验收面板：活动栏「测试验收」页签（使用说明 + 专属技能 + 项目规范 + 两张验收单列表）
+  ctx.effect(() => sidebarPanels.register(createTestCheckPanel()), 'vscode-mode: sidebar panel testcheck')
   // 客户端（重）装配对账：host 的 DapSession 常驻，而本模块状态随刷新/HMR 归零，
   // 不对账则调试面板与暂停态 hover 静默失效（见 dapStore.resync）。
   void dapStore.resync()
