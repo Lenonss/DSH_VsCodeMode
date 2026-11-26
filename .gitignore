@@ -44,5 +44,5 @@ tests/fixtures/*.xml
 # apply-patches.mjs 备份文件
 *.bak-patch-*
 
-# ui-kit 自检产物（--selftest 生成��单文件页，不入库）
+# ui-kit 自检产物（--selftest 生成的单文件页，不入库）
 skills/dsh-vscodemode-ui-kit/fixtures/selftest/plan.selftest.html
