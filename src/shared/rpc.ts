@@ -34,6 +34,7 @@ import type {
   PendingItem, PendingPage, PendingRemove, PendingRequest,
 } from './pendingReview.js'
 import type { TestCheckSheetSummary, TestCheckView } from './testCheck.js'
+import type { UiIntakeAsset, UiIntakeForm } from './uiIntake.js'
 
 /** 项目测试规范读写结果（三个 policy 方法共用）。 */
 export interface TestCheckPolicyPayload {
@@ -620,6 +621,36 @@ export interface RpcRequestMap {
   'edrv.testCheck.sheets': { sessionId?: string; force?: boolean }
   /** 测试验收模式：删除一张验收单目录与对应快照。 */
   'edrv.testCheck.remove': { sessionId?: string; id: string }
+  /** UI 材料页提交：回执/base64 已由客户端转换，宿主复核页面令牌与项目边界后落盘。 */
+  'edrv.uiIntake.save': {
+    sessionId?: string
+    pagePath: string
+    token: string
+    submissionId: string
+    form: Partial<UiIntakeForm> & Record<string, unknown>
+    files: Array<{
+      role: 'mock' | 'material'
+      originalName: string
+      mediaType: string
+      width?: number
+      height?: number
+      /** 官方 fileUpload 回执（优先通道）。 */
+      receiptId?: string
+      /** base64 字节（回退通道）。 */
+      data?: string
+    }>
+  }
+  /** UI 材料页：读本页最近一次提交（刷新/重载后恢复状态）。 */
+  'edrv.uiIntake.latest': { sessionId?: string; pagePath: string; token: string }
+  /** UI 材料页：记录一次送达（客户端在 prompt 受理后调用）。 */
+  'edrv.uiIntake.markSent': {
+    sessionId?: string
+    pagePath: string
+    token: string
+    submissionId: string
+    confirmed?: boolean
+    messageId?: string
+  }
 }
 
 export type RpcMethod = keyof RpcRequestMap
@@ -833,6 +864,29 @@ export interface RpcOkMap {
   'edrv.testCheck.skill': { name: string; path: string; content: string }
   'edrv.testCheck.sheets': { root: string; sheets: TestCheckSheetSummary[] }
   'edrv.testCheck.remove': { removed: string[] }
+  'edrv.uiIntake.save': {
+    submissionId: string
+    manifestPath: string
+    absoluteManifestPath: string
+    message: string
+    assets: UiIntakeAsset[]
+    duplicate: boolean
+    title: string
+    screen: { w: number; h: number }
+    sentAt?: string
+  }
+  'edrv.uiIntake.latest': {
+    found: boolean
+    submissionId?: string
+    manifestPath?: string
+    absoluteManifestPath?: string
+    sentAt?: string
+    sentConfirmed?: boolean
+    form?: UiIntakeForm
+    assets?: UiIntakeAsset[]
+    message?: string
+  }
+  'edrv.uiIntake.markSent': { sentAt: string; confirmed: boolean }
 }
 
 /** 缺失文件预览的稳定拒绝码：客户端据此显示「已删除」终态，而不是把错误原文当加载失败重试。 */
@@ -841,7 +895,7 @@ export type MissingRefusal = 'official-covered' | 'official-decided' | 'no-recor
 /** 统一响应：{ok:true, ...payload} 或 {ok:false, error}。 */
 export type RpcResult<M extends RpcMethod> =
   | ({ ok: true } & RpcOkMap[M])
-  | { ok: false; error: string; code?: 'file-too-large' | 'file-missing' | 'invalid-utf8' | 'not-repairable' | 'enc-conflict' | MissingRefusal; reason?: Extract<import('./textPages.js').TextPageResult, { ok: false }>['reason'] }
+  | { ok: false; error: string; code?: 'file-too-large' | 'file-missing' | 'invalid-utf8' | 'not-repairable' | 'enc-conflict' | 'receipt-unavailable' | MissingRefusal; reason?: Extract<import('./textPages.js').TextPageResult, { ok: false }>['reason'] }
 
 /** 每个方法的 handler 签名（host 分发表与 client 类型检查共用）。 */
 export type RpcHandler<M extends RpcMethod> = (

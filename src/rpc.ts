@@ -78,6 +78,9 @@ import { checkHandlers } from './testCheckRpc.js'
 import { fileAbsent, missingReview, missingDecide, missingPath, refusalCodeOf } from './missingReview.js'
 import { pendingCovers } from './pendingCompat.js'
 import { runReplace } from './search/replaceRun.js'
+import { projectRootOf } from './uiIntakePage.js'
+import { latestIntakeSubmission, markIntakeSent, saveIntakeSubmission, type IncomingIntakeFile } from './uiIntakeStore.js'
+import { UI_INTAKE_DEFAULT_LIMITS } from './shared/uiIntake.js'
 import { resolveRefPath } from './refPointer.js'
 
 /** Process-local cursor signer; reads must stay on the Host filesystem capability. */
@@ -144,6 +147,52 @@ async function requireSession(ctx: Ctx, sessionId: string | undefined): Promise<
   const cwd = cwdOfSession(ctx, session)
   if (!cwd) return { err: SESSION_NO_WORKSPACE_ERROR }
   return { session, cwd }
+}
+
+/** 材料页所在项目根（与 ui_builder_intake 工具同一探测规则）。 */
+async function projectRootOfCwd(cwd: string): Promise<string> {
+  const root = await projectRootOf(cwd, async (path) => {
+    try {
+      await stat(path)
+      return true
+    } catch {
+      return false
+    }
+  })
+  return root.root
+}
+
+/** 官方 fileUpload 回执 → 原始字节；只读附件服务，不写库。 */
+async function receiptBytes(ctx: Ctx, session: Session, receiptId: string): Promise<Uint8Array | { err: string }> {
+  const agents = ctx.get('agents') as { get?: (id: string) => unknown } | undefined
+  const uploads = ctx.get('fileUploads') as {
+    resolve?: (agent: unknown, id: unknown) => { type?: string; attachment?: unknown } | undefined
+  } | undefined
+  const agent = agents && typeof agents.get === 'function' ? agents.get(session.id) : undefined
+  if (!agent || !uploads || typeof uploads.resolve !== 'function') return { err: '当前宿主没有可用的附件回执通道' }
+  let staged: { type?: string; attachment?: unknown } | undefined
+  try {
+    staged = uploads.resolve(agent, receiptId)
+  } catch {
+    staged = undefined
+  }
+  if (!staged || staged.type !== 'file' || !staged.attachment) return { err: '附件回执不可用（可能已过期）' }
+  const attachments = ctx.get('attachments') as {
+    readFileStream?: (ref: unknown, signal?: AbortSignal) => AsyncIterable<Uint8Array>
+  } | undefined
+  if (!attachments || typeof attachments.readFileStream !== 'function') return { err: '当前宿主没有可用的附件读取通道' }
+  const chunks: Uint8Array[] = []
+  let total = 0
+  try {
+    for await (const chunk of attachments.readFileStream(staged.attachment)) {
+      total += chunk.byteLength
+      if (total > UI_INTAKE_DEFAULT_LIMITS.maxFileBytes) return { err: '附件超过单张图片大小上限' }
+      chunks.push(chunk)
+    }
+  } catch (error) {
+    return { err: '读取附件失败：' + String(error) }
+  }
+  return Buffer.concat(chunks, total)
 }
 
 /** 片段文件保存时的沙箱策略：用户显式 GUI 写操作，放开到 danger-full-access（镜像 rules.fullPolicy）。 */
@@ -1940,6 +1989,100 @@ export function buildHandlers(
         return { ok: true, doc: result.doc }
       } catch (error) {
         return { ok: false, error: '保存悬浮按钮位置失败：' + String(error) }
+      }
+    },
+    'edrv.uiIntake.save': async (args) => {
+      const sc = await requireSession(ctx, args.sessionId)
+      if ('err' in sc) return { ok: false, error: sc.err }
+      const projectRoot = await projectRootOfCwd(sc.cwd)
+      const files: IncomingIntakeFile[] = []
+      for (const file of args.files) {
+        let bytes: Uint8Array
+        if (typeof file.receiptId === 'string' && file.receiptId) {
+          const read = await receiptBytes(ctx, sc.session, file.receiptId)
+          if ('err' in read) return { ok: false, error: read.err, code: 'receipt-unavailable' }
+          bytes = read
+        } else if (typeof file.data === 'string' && file.data) {
+          bytes = Buffer.from(file.data, 'base64')
+        } else {
+          return { ok: false, error: '图片缺少回执或数据：' + String(file.originalName ?? '') }
+        }
+        files.push({
+          role: file.role,
+          originalName: String(file.originalName ?? ''),
+          mediaType: String(file.mediaType ?? ''),
+          ...(typeof file.width === 'number' ? { width: file.width } : {}),
+          ...(typeof file.height === 'number' ? { height: file.height } : {}),
+          bytes,
+        })
+      }
+      try {
+        const result = await saveIntakeSubmission({
+          projectRoot,
+          sessionId: sc.session.id,
+          pagePath: args.pagePath,
+          token: args.token,
+          submissionId: args.submissionId,
+          form: args.form,
+          files,
+        })
+        if (!result.ok) return { ok: false, error: result.error }
+        return {
+          ok: true,
+          submissionId: result.submissionId,
+          manifestPath: result.manifestPath,
+          absoluteManifestPath: result.absoluteManifestPath,
+          message: result.message,
+          assets: result.assets,
+          duplicate: result.duplicate,
+          title: result.manifest.title,
+          screen: result.manifest.screen,
+          ...(result.sentAt ? { sentAt: result.sentAt } : {}),
+        }
+      } catch (error) {
+        return { ok: false, error: '材料保存失败：' + String(error) }
+      }
+    },
+    'edrv.uiIntake.latest': async (args) => {
+      const sc = await requireSession(ctx, args.sessionId)
+      if ('err' in sc) return { ok: false, error: sc.err }
+      const projectRoot = await projectRootOfCwd(sc.cwd)
+      try {
+        const result = await latestIntakeSubmission({ projectRoot, pagePath: args.pagePath, token: args.token })
+        if (!result.ok) return { ok: false, error: result.error ?? '读取材料提交失败' }
+        return {
+          ok: true,
+          found: result.found === true,
+          ...(result.submissionId ? { submissionId: result.submissionId } : {}),
+          ...(result.manifestPath ? { manifestPath: result.manifestPath } : {}),
+          ...(result.absoluteManifestPath ? { absoluteManifestPath: result.absoluteManifestPath } : {}),
+          ...(result.sentAt ? { sentAt: result.sentAt } : {}),
+          ...(result.sentConfirmed === undefined ? {} : { sentConfirmed: result.sentConfirmed }),
+          ...(result.form ? { form: result.form } : {}),
+          ...(result.assets ? { assets: result.assets } : {}),
+          ...(result.message ? { message: result.message } : {}),
+        }
+      } catch (error) {
+        return { ok: false, error: '读取材料提交失败：' + String(error) }
+      }
+    },
+    'edrv.uiIntake.markSent': async (args) => {
+      const sc = await requireSession(ctx, args.sessionId)
+      if ('err' in sc) return { ok: false, error: sc.err }
+      const projectRoot = await projectRootOfCwd(sc.cwd)
+      try {
+        const result = await markIntakeSent({
+          projectRoot,
+          pagePath: args.pagePath,
+          token: args.token,
+          submissionId: args.submissionId,
+          confirmed: args.confirmed,
+          ...(args.messageId ? { messageId: args.messageId } : {}),
+        })
+        if (!result.ok) return { ok: false, error: result.error ?? '写入送达状态失败' }
+        return { ok: true, sentAt: result.sentAt as string, confirmed: result.confirmed === true }
+      } catch (error) {
+        return { ok: false, error: '写入送达状态失败：' + String(error) }
       }
     },
   }

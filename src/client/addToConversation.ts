@@ -281,7 +281,7 @@ export type TaskSendMode = 'queue' | 'steer'
 /** Public Controller subset; old Hosts need not provide retain/binding. */
 interface SessionBridge {
   retain?: (id: string, options: { source: 'controllerOperation'; signal: AbortSignal }) => {
-    ready: Promise<{ session: { prompt(content: { type: 'text'; text: string }[], mode: TaskSendMode, signal: AbortSignal): Promise<{ ok: boolean }> } }>
+    ready: Promise<{ session: { prompt(content: unknown[], mode: TaskSendMode, signal: AbortSignal): Promise<{ ok: boolean }> } }>
     release(): void
   }
   binding?: (id: string) => { ctx: unknown } | undefined
@@ -319,7 +319,7 @@ async function sendOwned(
   ctx: CtxLike,
   sessions: SessionBridge,
   id: string,
-  text: string,
+  content: unknown[],
   mode: TaskSendMode = 'queue',
 ): Promise<TaskSendResult> {
   const controller = new AbortController()
@@ -342,7 +342,7 @@ async function sendOwned(
     if (controller.signal.aborted) result = { status: 'cancelled', legacyOk: false }
     else {
       started = true
-      result = taskReceipt(await binding.session.prompt([{ type: 'text', text }], mode, controller.signal))
+      result = taskReceipt(await binding.session.prompt(content, mode, controller.signal))
     }
   } catch {
     result = { status: started ? 'unknown' : 'unavailable', legacyOk: false }
@@ -572,6 +572,11 @@ export interface AddToConversation {
    * `mode` 默认 queue；`steer` 送进当前回合（会话在跑时 agent 下一次请求就能看到）。
    */
   sendTaskResult?(sessionId: string | undefined, text: string, mode?: TaskSendMode): Promise<TaskSendResult>
+  /**
+   * 带官方附件回执投递一条文本（UI 材料页用）：文本 + 已上传文件回执。
+   * 旧宿主没有 retain/回执通道时返回 unavailable，调用方应改走纯文本。
+   */
+  sendTaskWithFiles?(sessionId: string | undefined, text: string, receiptIds: readonly string[], mode?: TaskSendMode): Promise<TaskSendResult>
 }
 
 /**
@@ -768,10 +773,41 @@ export function createAddToConversation(ctx: CtxLike): AddToConversation {
     if (!sessionId) return { status: 'unavailable', legacyOk: false }
     try {
       const sessions = ctx.get('sessions') as SessionBridge | undefined
-      if (typeof sessions?.retain === 'function') return await sendOwned(ctx, sessions, sessionId, text, mode)
+      if (typeof sessions?.retain === 'function') return await sendOwned(ctx, sessions, sessionId, [{ type: 'text', text }], mode)
       return await sendLegacy(ctx, sessionId, text, mode)
     } catch { return { status: 'unavailable', legacyOk: false } }
   }
 
-  return { appendReference, appendText, startDraftSession, sendTask, sendTaskResult }
+  /**
+   * 带官方文件回执投递：回执由 dsh-client-file-upload 暂存，Host 在受理 prompt 时
+   * 校验并绑定到本条消息，既保证附件真实存在，也让回执随消息受理自动退休。
+   * @author ddj 2026年11月26号
+   * @param sessionId 目标会话
+   * @param text 消息正文
+   * @param receiptIds 本批上传的官方回执
+   * @param mode 投递方式，默认 queue
+   * @returns 受理证据；旧宿主缺 retain 时返回 unavailable（调用方降级纯文本）
+   */
+  const sendTaskWithFiles: NonNullable<AddToConversation['sendTaskWithFiles']> = async (
+    sessionId,
+    text,
+    receiptIds,
+    mode = 'queue',
+  ) => {
+    if (!sessionId) return { status: 'unavailable', legacyOk: false }
+    if (!receiptIds.length) return sendTaskResult(sessionId, text, mode)
+    try {
+      const sessions = ctx.get('sessions') as SessionBridge | undefined
+      if (typeof sessions?.retain !== 'function') return { status: 'unavailable', legacyOk: false }
+      const content = [
+        { type: 'text', text },
+        ...receiptIds.map((receiptId) => ({ type: 'file', receiptId })),
+      ]
+      return await sendOwned(ctx, sessions, sessionId, content, mode)
+    } catch {
+      return { status: 'unavailable', legacyOk: false }
+    }
+  }
+
+  return { appendReference, appendText, startDraftSession, sendTask, sendTaskResult, sendTaskWithFiles }
 }

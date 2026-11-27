@@ -87,6 +87,7 @@ import { disposeLaunchJson } from './dap/launchSnippetProvider.js'
 import { disposeAiInline } from './ai/inlineProvider.js'
 import { readSessionScope, subscribeScope } from './sessionScope.js'
 import { installPlanBridge } from './planBridge.js'
+import { installUiIntakeBridge } from './uiIntakeBridge.js'
 import { installPageReload } from './pageReload.js'
 import { installFilesCss } from './filesCssCompat.js'
 import { installUpdateNotice } from './updateNotice.js'
@@ -332,6 +333,8 @@ export async function apply(ctx: any): Promise<void> {
   let claimDisposer: (() => void) | null = null
   /** 「添加到对话」动作集：编辑区/Tab 右键菜单注入文件引用与代码块（conversation 服务缺失时各动作安全降级）。 */
   const addToConversation = createAddToConversation(ctx)
+  // UI 材料页桥：官方 HTML 预览里的页面提交 → 材料落盘 → 当前会话收到清单。
+  ctx.effect(() => installUiIntakeBridge(ctx, { addToConversation, schedule }), 'vscode-mode: ui intake bridge')
   // 官方 HTML 渲染器探针：可选服务，缺失/旧版一律回退文本编辑，不阻断装配。
   ctx.effect(() => installHtmlPreviewProbe(ctx, { schedule }), 'vscode-mode: html preview probe')
   // HTML 计划页动作桥：状态读取 / 官方审批作答 / /plan off / 回填输入框（全部可选服务）。

@@ -1,5 +1,24 @@
 # 落地与对账
 
+## 材料页回归（升级后先跑）
+
+```bash
+node .dsh/skills/ui-builder/runtime/intake.mjs --selftest
+node .dsh/skills/ui-builder/runtime/intake.mjs --selftest-http
+```
+
+- `--selftest` 应输出 `6/6 passed`：生成、复用、覆盖、缺 config 默认值、非法 slug、页面路径。
+- `--selftest-http` 必须真实启动服务，覆盖：空草稿、图片原始字节、文字/图片乱序、正式清单原名与字节、同一 `submissionId` 幂等、错误令牌、无效尺寸、服务停止；输出 `16 checks passed` 一类带数量的结果，不只看 HTTP 200。
+- 浏览器侧必须在独立临时目录起服务，验证：
+  1. 普通浏览器：填表 + 选择/拖入图片 → 草稿保存 → 提交 → 显示“材料已保存”与继续指令。
+  2. `srcdoc` + `sandbox="allow-scripts"`（无 same-origin、无 `allow-forms`）：按钮可点、能保存、无宿主时显示复制指令。
+  3. 销毁并重建 iframe：字段、尺寸、路径、效果图、素材、提交结果全部恢复；移除的图片不复活。
+  4. 修改文字/图片：旧清单失效；重新提交生成新清单。
+  5. 停服务后提交：显示具体失败原因，表单和图片保留；`--resume` 后重试成功。
+  6. 无效名称/尺寸/类型/超量：页面或服务拒绝，`submissions/` 不新增目录。
+- 普通浏览器、受限 iframe、真实 DSH 容器分别报告；没点过的容器写“未验证”，不要用 HTTP 200 代替按钮证据。
+- 测试结束删除临时项目/服务/页面；不要动真实项目的 `intake/draft` 或 `submissions`。
+
 ## 三条落地路径（由 `config.editor.way` 决定）
 
 | way | 谁写预制体 | 能回读吗 | 适用 |

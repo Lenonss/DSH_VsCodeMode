@@ -1,0 +1,1507 @@
+<!doctype html>
+<html lang="zh-CN" data-dsh-ui-intake="materials">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>UI 材料 · 提交后继续设计</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f3f6fa;
+    --panel: #ffffff;
+    --panel-2: #f8fafc;
+    --text: #1f2937;
+    --muted: #61708a;
+    --line: #d9e2ee;
+    --line-strong: #b9c8da;
+    --accent: #2563eb;
+    --accent-soft: #e8f0ff;
+    --ok: #067a55;
+    --ok-soft: #e7f7f0;
+    --warn: #a15c00;
+    --warn-soft: #fff5e5;
+    --bad: #c02626;
+    --bad-soft: #fdeceb;
+    --shadow: 0 12px 32px rgba(31, 55, 90, .08);
+    font-family: "Microsoft YaHei UI", "PingFang SC", "Segoe UI", system-ui, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1620;
+      --panel: #182230;
+      --panel-2: #121b27;
+      --text: #e5edf7;
+      --muted: #9bacc2;
+      --line: #2a3a4d;
+      --line-strong: #40546b;
+      --accent: #6aa8ff;
+      --accent-soft: #172c4a;
+      --ok: #6ee7b7;
+      --ok-soft: #102e25;
+      --warn: #f2c66d;
+      --warn-soft: #33270f;
+      --bad: #fca5a5;
+      --bad-soft: #3a1717;
+      --shadow: 0 12px 32px rgba(0, 0, 0, .35);
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--text); }
+  body { font-size: 14px; line-height: 1.6; }
+  button, input, textarea { font: inherit; color: inherit; }
+  button { cursor: pointer; }
+  .app { min-height: 100vh; display: flex; flex-direction: column; }
+  header {
+    display: flex; align-items: center; gap: 14px; padding: 16px 22px;
+    background: var(--panel); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 20;
+  }
+  .brand { font-size: 17px; font-weight: 700; letter-spacing: .02em; white-space: nowrap; }
+  .brand small { display: block; font-size: 11px; font-weight: 400; color: var(--muted); letter-spacing: 0; }
+  .project { min-width: 0; flex: 1; font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .project b { color: var(--text); font-weight: 600; }
+  .conn { display: inline-flex; align-items: center; gap: 7px; padding: 6px 11px; border-radius: 999px; font-size: 12px; border: 1px solid var(--line); background: var(--panel-2); white-space: nowrap; }
+  .conn .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--warn); box-shadow: 0 0 0 3px var(--warn-soft); }
+  .conn.ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 35%, var(--line)); background: var(--ok-soft); }
+  .conn.ok .dot { background: var(--ok); box-shadow: 0 0 0 3px var(--ok-soft); }
+  .conn.bad { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 35%, var(--line)); background: var(--bad-soft); }
+  .conn.bad .dot { background: var(--bad); box-shadow: 0 0 0 3px var(--bad-soft); }
+  .notice { margin: 12px 22px 0; padding: 10px 14px; border-radius: 10px; font-size: 13px; border: 1px solid var(--warn); color: var(--warn); background: var(--warn-soft); }
+  .notice.bad { border-color: var(--bad); color: var(--bad); background: var(--bad-soft); }
+  .notice.ok { border-color: var(--ok); color: var(--ok); background: var(--ok-soft); }
+  .notice[hidden] { display: none; }
+  main {
+    flex: 1; display: grid; gap: 16px; padding: 16px 22px 12px;
+    grid-template-columns: minmax(250px, 320px) minmax(280px, 1fr) minmax(260px, 350px);
+    align-items: start;
+  }
+  @media (max-width: 1080px) { main { grid-template-columns: minmax(240px, 1fr) minmax(260px, 1fr); } .materials { grid-column: 1 / -1; } }
+  @media (max-width: 760px) { main { grid-template-columns: 1fr; } .materials { grid-column: auto; } }
+  section.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 16px; box-shadow: var(--shadow); }
+  h2 { font-size: 14px; margin: 0 0 12px; letter-spacing: .02em; display: flex; align-items: baseline; gap: 8px; }
+  h2 .sub { font-size: 11px; font-weight: 400; color: var(--muted); }
+  label.field { display: block; margin: 13px 0 0; font-size: 12px; font-weight: 600; color: var(--muted); }
+  label.field .tip { font-weight: 400; }
+  input[type="text"], input[type="number"], textarea {
+    width: 100%; margin-top: 5px; border: 1px solid var(--line-strong); border-radius: 8px;
+    padding: 9px 10px; background: var(--panel-2); color: var(--text); outline: none;
+  }
+  input:focus, textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  textarea { resize: vertical; min-height: 74px; line-height: 1.6; }
+  .sizes { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .facts { margin-top: 14px; display: flex; flex-wrap: wrap; gap: 6px; }
+  .fact { font-size: 11px; color: var(--muted); background: var(--panel-2); border: 1px solid var(--line); border-radius: 999px; padding: 3px 8px; }
+  .canvas {
+    width: min(100%, 340px); max-height: 58vh; margin: 0 auto;
+    aspect-ratio: var(--ratio, 1080 / 2400); border-radius: 12px; border: 1px solid var(--line-strong);
+    background:
+      linear-gradient(var(--panel-2) 1px, transparent 1px) 0 0 / 24px 24px,
+      linear-gradient(90deg, var(--panel-2) 1px, transparent 1px) 0 0 / 24px 24px,
+      var(--panel);
+    display: flex; align-items: center; justify-content: center; overflow: hidden; position: relative;
+  }
+  .canvas img { width: 100%; height: 100%; object-fit: contain; background: var(--panel); }
+  .canvas .empty { text-align: center; padding: 20px; max-width: 230px; color: var(--muted); }
+  .canvas .empty b { display: block; color: var(--text); font-size: 14px; margin-bottom: 6px; }
+  .drop { border: 1.5px dashed var(--line-strong); border-radius: 12px; padding: 12px; margin-top: 12px; background: var(--panel-2); text-align: center; transition: .15s border-color, .15s background; }
+  .drop.over { border-color: var(--accent); background: var(--accent-soft); }
+  .drop strong { display: block; font-size: 13px; margin-bottom: 4px; }
+  .drop p { margin: 4px 0 0; font-size: 11px; color: var(--muted); }
+  .drop input[type="file"] { margin-top: 8px; max-width: 100%; font-size: 12px; }
+  .drop button { margin-top: 8px; }
+  .files { display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 8px; margin-top: 10px; }
+  .filecard { position: relative; border: 1px solid var(--line); border-radius: 9px; overflow: hidden; background: var(--panel-2); }
+  .filecard img { display: block; width: 100%; height: 72px; object-fit: cover; background: var(--panel); }
+  .filecard .meta { padding: 5px 6px 7px; }
+  .filecard .name { font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .filecard .size { font-size: 10px; color: var(--muted); }
+  .filecard .remove {
+    position: absolute; top: 4px; right: 4px; width: 22px; height: 22px; padding: 0;
+    border-radius: 50%; border: 1px solid rgba(0,0,0,.15); background: rgba(255,255,255,.9); color: #333;
+    font-size: 14px; line-height: 18px; opacity: 0; transition: .15s opacity;
+  }
+  .filecard:hover .remove, .filecard:focus-within .remove { opacity: 1; }
+  .empty-files { font-size: 12px; color: var(--muted); padding: 4px 0 0; }
+  footer {
+    position: sticky; bottom: 0; z-index: 20; display: flex; gap: 14px; align-items: center;
+    padding: 12px 22px; border-top: 1px solid var(--line); background: color-mix(in srgb, var(--panel) 92%, transparent);
+    backdrop-filter: blur(8px);
+  }
+  .status { flex: 1; min-width: 0; font-size: 12px; color: var(--muted); }
+  .status[data-kind="ok"] { color: var(--ok); }
+  .status[data-kind="warn"] { color: var(--warn); }
+  .status[data-kind="bad"] { color: var(--bad); }
+  .status .path { display: block; margin-top: 3px; font-family: ui-monospace, Consolas, monospace; font-size: 11px; color: var(--muted); overflow-wrap: anywhere; }
+  .bar { width: 150px; height: 4px; border-radius: 999px; background: var(--line); overflow: hidden; display: none; }
+  .bar.on { display: block; }
+  .bar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .25s; }
+  .bar.indeterminate i { width: 38%; animation: slide 1.1s infinite ease-in-out; }
+  @keyframes slide { 0% { transform: translateX(-110%); } 100% { transform: translateX(300%); } }
+  .actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+  .btn {
+    border: 1px solid var(--line-strong); background: var(--panel-2); color: var(--text);
+    border-radius: 8px; padding: 8px 13px; font-size: 13px; white-space: nowrap;
+  }
+  .btn:hover:not(:disabled) { border-color: var(--accent); }
+  .btn:disabled { opacity: .55; cursor: not-allowed; }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  .btn.primary:hover:not(:disabled) { filter: brightness(1.06); }
+  .btn.ghost { background: transparent; }
+  .hint { font-size: 11px; color: var(--muted); margin: 6px 0 0; }
+  .sr { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+  .statusRows { display: flex; flex-wrap: wrap; gap: 8px 18px; font-size: 12px; color: var(--muted); margin: 8px 0 4px; }
+  .statusRows span { white-space: nowrap; }
+  .statusRows span.bad { color: var(--bad); }
+  .statusRows span.ok { color: var(--ok); }
+  .result { max-width: 1600px; margin: 0 auto 40px; padding: 18px 26px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+  .result h2 { margin: 0 0 8px; font-size: 17px; }
+  .result textarea { width: 100%; min-height: 118px; font: inherit; line-height: 1.6; border: 1px solid var(--line-strong); border-radius: 6px; padding: 10px; background: var(--panel-2); color: var(--text); }
+  .resultActions { margin-top: 8px; }
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <div class="brand">UI 材料台<small>先在 DSH 内收材料，再生成设计页</small></div>
+    <div class="project" id="projectLine"></div>
+    <div class="conn" id="conn"><span class="dot"></span><span id="connText">正在连接 DSH…</span></div>
+  </header>
+  <div class="notice" id="notice">此页需要 DSH 的交互式 HTML 预览。若没有出现「已连接」，页面不会自动提交，也不会假装提交成功。</div>
+
+  <main>
+    <section class="panel">
+      <h2>界面信息</h2>
+      <label class="field" for="title">界面名称 <span class="tip">（必填）</span></label>
+      <input id="title" type="text" maxlength="120" autocomplete="off" placeholder="例如：限时礼包弹窗">
+      <div class="sizes">
+        <div>
+          <label class="field" for="width">设计宽度</label>
+          <input id="width" type="number" min="100" max="10000" step="1">
+        </div>
+        <div>
+          <label class="field" for="height">设计高度</label>
+          <input id="height" type="number" min="100" max="10000" step="1">
+        </div>
+      </div>
+      <p class="hint">默认尺寸来自项目 config.json；界面尺寸由你确认，不要用场景里别的尺寸覆盖。</p>
+      <label class="field" for="notes">设计说明</label>
+      <textarea id="notes" maxlength="12000" placeholder="哪些区域滚动、哪些按钮固定、文字/交互/复用要求，都可以写在这里。"></textarea>
+      <div class="facts" id="facts"></div>
+    </section>
+
+    <section class="panel">
+      <h2>效果图 <span class="sub">没有效果图也能按文字需求继续</span></h2>
+      <div class="canvas" id="canvas">
+        <div class="empty" id="empty"><b>从一张效果图开始</b>拖入后在这里预览；也可以只填设计说明。</div>
+        <img id="mockPreview" alt="效果图预览" hidden>
+      </div>
+      <div class="drop" id="mockDrop">
+        <strong>拖入效果图，或选择文件</strong>
+        <input id="mockInput" type="file" accept="image/png,image/jpeg,image/webp,image/gif" aria-label="选择效果图">
+        <p id="mockLimit">PNG / JPG / WebP / GIF</p>
+        <button class="btn ghost" id="clearMock" type="button" hidden>移除效果图</button>
+      </div>
+      <label class="field" for="mockPath">也可以填写本机效果图路径 <span class="tip">（选填；不读取文件内容，只记录路径）</span></label>
+      <input id="mockPath" type="text" maxlength="1024" autocomplete="off" placeholder="例如：D:/Art/礼包效果图.png">
+    </section>
+
+    <section class="panel materials">
+      <h2>素材图 <span class="sub" id="materialCount">0 张</span></h2>
+      <div class="drop" id="materialDrop">
+        <strong>把按钮、图标、背景拖到这里</strong>
+        <input id="materialInput" type="file" multiple accept="image/png,image/jpeg,image/webp,image/gif" aria-label="选择素材图">
+        <p id="materialLimit">可多次添加；图片保留原始字节</p>
+      </div>
+      <div class="files" id="files"></div>
+      <p class="empty-files" id="filesEmpty">还没有素材图。已有素材可以只填下面的项目路径或 Sprite 名称。</p>
+      <label class="field" for="assetPaths">已有项目资源路径 / 本机素材目录</label>
+      <textarea id="assetPaths" maxlength="12000" placeholder="每行一项，例如：Assets/GameData/Atlas/UI/Common&#10;Z:/Art/UI/Gift"></textarea>
+      <label class="field" for="sprites">Sprite 名称</label>
+      <textarea id="sprites" maxlength="4000" placeholder="每行一个，例如：btn_close&#10;bg_gift_panel"></textarea>
+      <label class="field" for="targetPrefab">目标 Prefab 路径 <span class="tip">（本阶段只记录，不搭建）</span></label>
+      <input id="targetPrefab" type="text" maxlength="512" autocomplete="off" placeholder="Assets/…/GiftPopup.prefab">
+    </section>
+  </main>
+
+  <footer>
+    <div class="bar" id="bar"><i id="barFill"></i></div>
+    <div class="status" id="status" role="status" aria-live="polite">材料只保存在当前项目；提交后会生成材料清单并发送到当前会话。</div>
+    <div class="statusRows" id="statusRows" hidden>
+      <span id="saveStatus">材料：未保存</span>
+      <span id="sendStatus">对话：未连接</span>
+      <span id="draftStatus">草稿：准备中</span>
+    </div>
+    <div class="actions">
+      <button class="btn" id="retryRestore" type="button" hidden>重试读取草稿</button>
+      <button class="btn" id="saveDraft" type="button" hidden>保存草稿</button>
+      <button class="btn" id="retrySend" type="button" hidden>发送到对话</button>
+      <button class="btn" id="resubmit" type="button" hidden>再提交一次</button>
+      <button class="btn primary" id="submit" type="button" disabled>提交并继续设计</button>
+    </div>
+  </footer>
+</div>
+
+<section id="result" class="result" hidden>
+  <h2>材料已保存</h2>
+  <p id="resultNote"></p>
+  <textarea id="reply" readonly aria-label="继续设计指令"></textarea>
+  <div class="resultActions"><button class="btn" id="copy" type="button">复制继续指令</button></div>
+</section>
+
+<script type="application/json" id="dsh-ui-intake-config">__DSH_UI_INTAKE_CONFIG__</script>
+<script>
+(() => {
+  'use strict'
+  const cfg = JSON.parse(document.getElementById('dsh-ui-intake-config').textContent)
+  // 带 endpoint 的页面由本机材料服务接管（草稿/恢复/提交走 HTTP）；宿主模式由下方旧脚本处理。
+  if (cfg.endpoint) return
+  const limits = cfg.limits || {}
+  const mediaTypes = Array.isArray(limits.mediaTypes) && limits.mediaTypes.length ? limits.mediaTypes : ['image/png', 'image/jpeg', 'image/webp', 'image/gif']
+  const maxFiles = Number(limits.maxFiles) || 50
+  const maxFileBytes = Number(limits.maxFileBytes) || 8 * 1024 * 1024
+  const maxTotalBytes = Number(limits.maxTotalBytes) || 32 * 1024 * 1024
+  const hostSource = 'edrv-ui-intake-host'
+  const pageSource = 'edrv-ui-intake'
+  const state = {
+    conn: 'connecting',
+    phase: 'idle',
+    mock: null,
+    materials: [],
+    submissionId: uuid(),
+    saved: null,
+    accepted: false,
+    busy: false,
+    helloAttempt: 0,
+    helloTimer: 0,
+    submitTimer: 0,
+    thumbUrls: [],
+    mockUrl: '',
+  }
+
+  const el = (id) => document.getElementById(id)
+  const titleInput = el('title')
+  const widthInput = el('width')
+  const heightInput = el('height')
+  const notesInput = el('notes')
+  const mockPathInput = el('mockPath')
+  const assetPathsInput = el('assetPaths')
+  const spritesInput = el('sprites')
+  const targetPrefabInput = el('targetPrefab')
+  const mockInput = el('mockInput')
+  const materialInput = el('materialInput')
+  const mockPreview = el('mockPreview')
+  const emptyHint = el('empty')
+  const clearMock = el('clearMock')
+  const submitButton = el('submit')
+  const resubmitButton = el('resubmit')
+  const statusLine = el('status')
+  const noticeLine = el('notice')
+  const connBox = el('conn')
+  const connText = el('connText')
+  const bar = el('bar')
+  const barFill = el('barFill')
+
+  /** 生成提交编号（crypto 不可用时退回随机串）。 */
+  function uuid() {
+    try { if (crypto && typeof crypto.randomUUID === 'function') return crypto.randomUUID() } catch (error) {}
+    let out = ''
+    for (let i = 0; i < 32; i += 1) out += Math.floor(Math.random() * 16).toString(16)
+    return out.slice(0, 8) + '-' + out.slice(8, 12) + '-' + out.slice(12, 16) + '-' + out.slice(16, 20) + '-' + out.slice(20)
+  }
+
+  /** 格式化字节。 */
+  function bytesText(bytes) {
+    const value = Number(bytes) || 0
+    if (value < 1024) return value + ' B'
+    if (value < 1024 * 1024) return (value / 1024).toFixed(1) + ' KB'
+    return (value / 1024 / 1024).toFixed(1) + ' MB'
+  }
+
+  /** 设置底部状态。 */
+  function setStatus(text, kind, path) {
+    statusLine.textContent = text
+    if (kind) statusLine.dataset.kind = kind
+    else delete statusLine.dataset.kind
+    let pathLine = statusLine.querySelector('.path')
+    if (path) {
+      if (!pathLine) { pathLine = document.createElement('span'); pathLine.className = 'path'; statusLine.append(pathLine) }
+      pathLine.textContent = path
+    } else if (pathLine) pathLine.remove()
+  }
+
+  /** 设置连接状态。 */
+  function setConn(kind, text) {
+    state.conn = kind
+    connBox.className = 'conn' + (kind === 'ok' ? ' ok' : kind === 'bad' ? ' bad' : '')
+    connText.textContent = text
+    updateButtons()
+  }
+
+  /** 顶部提示条。 */
+  function setNotice(text, kind) {
+    if (!text) { noticeLine.hidden = true; return }
+    noticeLine.hidden = false
+    noticeLine.className = 'notice' + (kind ? ' ' + kind : '')
+    noticeLine.textContent = text
+  }
+
+  /** 进度条。 */
+  function setBar(mode, ratio) {
+    if (!mode) { bar.className = 'bar'; barFill.style.width = '0'; return }
+    bar.className = 'bar on' + (mode === 'indeterminate' ? ' indeterminate' : '')
+    barFill.style.width = mode === 'determinate' ? Math.max(0, Math.min(100, ratio)) + '%' : '38%'
+  }
+
+  /** 当前提交是否可点。 */
+  function updateButtons() {
+    const connected = state.conn === 'ok'
+    const accepted = state.phase === 'accepted'
+    if (state.phase === 'uploading' || state.phase === 'saving' || state.phase === 'sending') {
+      submitButton.disabled = true
+    } else if (accepted) {
+      submitButton.disabled = true
+      submitButton.textContent = '已提交'
+    } else if (state.phase === 'saved') {
+      submitButton.disabled = false
+      submitButton.textContent = '重试发送'
+    } else if (state.phase === 'unconfirmed') {
+      submitButton.disabled = true
+      submitButton.textContent = '已发出（未确认）'
+    } else {
+      submitButton.disabled = !connected || state.busy
+      submitButton.textContent = '提交并继续设计'
+    }
+    resubmitButton.hidden = !accepted
+    resubmitButton.disabled = !connected
+  }
+
+  /** 填项目事实。 */
+  function renderFacts() {
+    const facts = el('facts')
+    facts.replaceChildren()
+    const ui = cfg.ui || {}
+    const assets = cfg.assets || {}
+    const rows = [
+      ui.system ? 'UI ' + ui.system : '',
+      cfg.screen ? '默认 ' + cfg.screen.w + '×' + cfg.screen.h : '',
+      ui.matchMode ? '适配 ' + (ui.matchMode === 'width' ? '按宽' : ui.matchMode === 'height' ? '按高' : ui.matchMode) : '',
+      ui.bindStyle ? '绑定 ' + ui.bindStyle : '',
+      ui.commonDir ? '通用控件 ' + ui.commonDir : '',
+      assets.inProject ? '项目素材 ' + assets.inProject : '',
+      assets.artRoot ? '美术盘 ' + assets.artRoot : '',
+      cfg.pagesDir ? '设计目录 ' + cfg.pagesDir : '',
+    ].filter(Boolean)
+    for (const row of rows) {
+      const span = document.createElement('span')
+      span.className = 'fact'
+      span.textContent = row
+      facts.append(span)
+    }
+    const project = String(cfg.projectRoot || '').split(/[\\/]/).filter(Boolean).pop() || cfg.projectRoot || ''
+    el('projectLine').innerHTML = ''
+    const label = document.createElement('span')
+    label.textContent = '项目 '
+    const name = document.createElement('b')
+    name.textContent = project
+    const slug = document.createElement('span')
+    slug.textContent = ' · ' + cfg.slug + ' · ' + cfg.pagePath
+    el('projectLine').append(label, name, slug)
+    el('mockLimit').textContent = 'PNG / JPG / WebP / GIF，每张最多 ' + bytesText(maxFileBytes)
+    el('materialLimit').textContent = '可多次添加；最多 ' + maxFiles + ' 张，总计最多 ' + bytesText(maxTotalBytes)
+  }
+
+  /** 画布比例。 */
+  function syncCanvas() {
+    const w = Number(widthInput.value) || 0
+    const h = Number(heightInput.value) || 0
+    if (w > 0 && h > 0) el('canvas').style.setProperty('--ratio', w + ' / ' + h)
+  }
+
+  /** 文件类型/大小校验；返回通过的文件。 */
+  function acceptFiles(files, remaining) {
+    const out = []
+    for (const file of files) {
+      if (!mediaTypes.includes(file.type)) { setStatus('只支持 ' + mediaTypes.join(' / ') + '，已跳过 ' + file.name, 'bad'); continue }
+      if (file.size > maxFileBytes) { setStatus('单张图片最多 ' + bytesText(maxFileBytes) + '，已跳过 ' + file.name, 'bad'); continue }
+      if (out.length >= remaining) { setStatus('一次最多 ' + maxFiles + ' 张，已忽略后面的文件', 'warn'); break }
+      out.push(file)
+    }
+    return out
+  }
+
+  /** 效果图预览。 */
+  function setMock(file) {
+    if (state.mockUrl) URL.revokeObjectURL(state.mockUrl)
+    state.mock = file || null
+    if (!file) {
+      mockPreview.hidden = true
+      mockPreview.removeAttribute('src')
+      emptyHint.hidden = false
+      clearMock.hidden = true
+      setStatus('已移除效果图；可以只按设计说明继续。', '')
+      return
+    }
+    state.mockUrl = URL.createObjectURL(file)
+    mockPreview.src = state.mockUrl
+    mockPreview.hidden = false
+    emptyHint.hidden = true
+    clearMock.hidden = false
+    setStatus('已选择效果图：' + file.name + '（' + bytesText(file.size) + '）', '')
+  }
+
+  /** 素材列表。 */
+  function renderMaterials() {
+    for (const url of state.thumbUrls) URL.revokeObjectURL(url)
+    state.thumbUrls = []
+    const list = el('files')
+    list.replaceChildren()
+    el('materialCount').textContent = state.materials.length + ' 张'
+    el('filesEmpty').hidden = state.materials.length > 0
+    state.materials.forEach((file, index) => {
+      const card = document.createElement('div')
+      card.className = 'filecard'
+      const image = document.createElement('img')
+      image.alt = ''
+      const url = URL.createObjectURL(file)
+      state.thumbUrls.push(url)
+      image.src = url
+      const meta = document.createElement('div')
+      meta.className = 'meta'
+      const name = document.createElement('div')
+      name.className = 'name'
+      name.textContent = file.name
+      name.title = file.name
+      const size = document.createElement('div')
+      size.className = 'size'
+      size.textContent = bytesText(file.size)
+      meta.append(name, size)
+      const remove = document.createElement('button')
+      remove.type = 'button'
+      remove.className = 'remove'
+      remove.textContent = '×'
+      remove.title = '移除 ' + file.name
+      remove.setAttribute('aria-label', '移除 ' + file.name)
+      remove.addEventListener('click', () => {
+        state.materials.splice(index, 1)
+        renderMaterials()
+        setStatus('已移除素材：' + file.name, '')
+      })
+      card.append(image, meta, remove)
+      list.append(card)
+    })
+  }
+
+  /** 追加素材（多选/多次拖入）。 */
+  function addMaterials(files) {
+    const remaining = maxFiles - state.materials.length
+    if (remaining <= 0) { setStatus('素材最多 ' + maxFiles + ' 张，请先移除一些', 'warn'); return }
+    const accepted = acceptFiles(files, remaining)
+    let added = 0
+    for (const file of accepted) {
+      const duplicate = state.materials.some((item) => item.name === file.name && item.size === file.size && item.lastModified === file.lastModified)
+      if (duplicate) continue
+      state.materials.push(file)
+      added += 1
+    }
+    renderMaterials()
+    if (added) setStatus('已加入 ' + added + ' 张素材，共 ' + state.materials.length + ' 张。', '')
+  }
+
+  /** 拖放区绑定。 */
+  function bindDrop(id, receive) {
+    const zone = el(id)
+    zone.addEventListener('dragover', (event) => { event.preventDefault(); zone.classList.add('over') })
+    zone.addEventListener('dragleave', () => zone.classList.remove('over'))
+    zone.addEventListener('drop', (event) => {
+      event.preventDefault()
+      zone.classList.remove('over')
+      const files = Array.from(event.dataTransfer && event.dataTransfer.files ? event.dataTransfer.files : [])
+      receive(files)
+    })
+  }
+
+  /** 收集表单。 */
+  function readForm() {
+    const title = String(titleInput.value || '').trim()
+    const width = Math.round(Number(widthInput.value))
+    const height = Math.round(Number(heightInput.value))
+    if (!title) return { error: '请填写界面名称。' }
+    if (!Number.isInteger(width) || !Number.isInteger(height) || width < 100 || width > 10000 || height < 100 || height > 10000) {
+      return { error: '设计宽高必须是 100~10000 之间的整数。' }
+    }
+    return {
+      form: {
+        title,
+        width,
+        height,
+        notes: String(notesInput.value || ''),
+        targetPrefab: String(targetPrefabInput.value || ''),
+        mockPath: String(mockPathInput.value || ''),
+        assetPaths: String(assetPathsInput.value || ''),
+        sprites: String(spritesInput.value || ''),
+      },
+    }
+  }
+
+  /** 总文件数与总大小校验。 */
+  function collectFiles() {
+    const files = []
+    if (state.mock) files.push({ role: 'mock', file: state.mock })
+    for (const file of state.materials) files.push({ role: 'material', file })
+    if (files.length > maxFiles) return { error: '一次最多 ' + maxFiles + ' 张图片，请减少素材。' }
+    const total = files.reduce((sum, item) => sum + item.file.size, 0)
+    if (total > maxTotalBytes) return { error: '图片总量最多 ' + bytesText(maxTotalBytes) + '，请减少或压缩。' }
+    return { files }
+  }
+
+  /** 发一次提交（只发一次；重复点击由 busy/phase 拦住）。 */
+  async function submit() {
+    if (state.conn !== 'ok') { setNotice('当前没有连上 DSH 宿主，不能自动提交。请确认页面是在 DSH 的 HTML 预览中打开，并已开启交互式预览。', 'bad'); return }
+    if (state.phase === 'saved') { retrySend(); return }
+    if (state.busy) return
+    const parsed = readForm()
+    if (parsed.error) { setStatus(parsed.error, 'bad'); return }
+    const collected = collectFiles()
+    if (collected.error) { setStatus(collected.error, 'bad'); return }
+    state.busy = true
+    state.phase = 'uploading'
+    clearTimeout(state.submitTimer)
+    setBar('indeterminate')
+    setStatus('正在读取图片并上传（' + collected.files.length + ' 张）…', '')
+    updateButtons()
+    try {
+      const files = []
+      for (const item of collected.files) {
+        files.push({
+          role: item.role,
+          originalName: item.file.name,
+          mediaType: item.file.type,
+          bytes: await item.file.arrayBuffer(),
+        })
+      }
+      const payload = {
+        source: pageSource,
+        type: 'submit',
+        token: cfg.token,
+        pagePath: cfg.pagePath,
+        projectRoot: cfg.projectRoot,
+        submissionId: state.submissionId,
+        form: parsed.form,
+        files,
+      }
+      window.parent.postMessage(payload, '*')
+      state.submitTimer = setTimeout(() => {
+        if (state.phase === 'uploading' || state.phase === 'saving' || state.phase === 'sending') {
+          state.busy = false
+          state.phase = 'failed'
+          setBar(null)
+          setStatus('还没有收到保存结果。材料页连接可能已失效；内容仍保留，可稍后重试。', 'warn')
+          updateButtons()
+        }
+      }, 5 * 60 * 1000)
+    } catch (error) {
+      state.busy = false
+      state.phase = 'failed'
+      setBar(null)
+      setStatus('读取图片失败：' + String(error), 'bad')
+      updateButtons()
+    }
+  }
+
+  /** 重发已保存的材料清单（不重新上传）。 */
+  function retrySend() {
+    if (!state.saved) { setStatus('还没有已保存的材料；请先提交。', 'bad'); return }
+    if (state.busy) return
+    state.busy = true
+    state.phase = 'sending'
+    setBar('indeterminate')
+    setStatus('正在重发材料清单，不会重复保存…', '')
+    updateButtons()
+    try {
+      window.parent.postMessage({
+        source: pageSource,
+        type: 'retry-send',
+        token: cfg.token,
+        pagePath: cfg.pagePath,
+        projectRoot: cfg.projectRoot,
+        submissionId: state.saved.submissionId,
+      }, '*')
+    } catch (error) {
+      state.busy = false
+      state.phase = 'saved'
+      setBar(null)
+      setStatus('发送失败：' + String(error), 'bad')
+      updateButtons()
+    }
+  }
+
+  /** 受理后允许再提交一次（新材料用新编号）。 */
+  function resubmit() {
+    if (state.phase !== 'accepted') return
+    state.submissionId = uuid()
+    state.saved = null
+    state.accepted = false
+    state.busy = false
+    state.phase = 'idle'
+    setBar(null)
+    setStatus('已开始一次新的提交；可以修改内容后再次提交。', '')
+    updateButtons()
+  }
+
+  /** 宿主 hello 确认。 */
+  function onHello(data) {
+    clearTimeout(state.helloTimer)
+    if (data.ok === true) {
+      setConn('ok', '已连接 DSH')
+      setNotice('')
+      state.busy = false
+      if (state.phase === 'idle' || state.phase === 'failed') state.phase = 'idle'
+      updateButtons()
+      const last = data.last
+      if (last && !state.accepted) restoreLast(last)
+      return
+    }
+    if (data.retry) {
+      state.helloAttempt += 1
+      if (state.helloAttempt <= 18) {
+        state.helloTimer = setTimeout(hello, 1500)
+        return
+      }
+    }
+    setConn('bad', '未连接')
+    const reason = String(data.message || '当前页面没有连接到 DSH 宿主')
+    setNotice(reason + '。材料不会被提交；已填写内容仍保留。', 'bad')
+    updateButtons()
+  }
+
+  /** 恢复上次保存/送达状态（页面刷新或插件重载后）。 */
+  function restoreLast(last) {
+    if (!last) return
+    if (last.form) {
+      if (!titleInput.value) titleInput.value = last.form.title || ''
+      if (!widthInput.value) widthInput.value = last.form.width || cfg.screen.w
+      if (!heightInput.value) heightInput.value = last.form.height || cfg.screen.h
+      if (!notesInput.value) notesInput.value = last.form.notes || ''
+      if (!targetPrefabInput.value) targetPrefabInput.value = last.form.targetPrefab || ''
+      if (!mockPathInput.value) mockPathInput.value = last.form.mockPath || ''
+      if (!assetPathsInput.value) assetPathsInput.value = last.form.assetPaths || ''
+      if (!spritesInput.value) spritesInput.value = last.form.sprites || ''
+      syncCanvas()
+    }
+    if (!last.submissionId) return
+    state.submissionId = last.submissionId
+    state.saved = {
+      submissionId: last.submissionId,
+      manifestPath: last.manifestPath || '',
+    }
+    if (last.sentAt) {
+      if (last.sentConfirmed === false) {
+        state.phase = 'unconfirmed'
+        setBar(null)
+        setStatus('上一次材料已发出，但当前宿主无法确认送达；为避免重复，不再自动重发。', 'warn', last.manifestPath)
+      } else {
+        state.accepted = true
+        state.phase = 'accepted'
+        setBar(null)
+        setStatus('上一次材料已被当前会话接收。', 'ok', last.manifestPath)
+      }
+      updateButtons()
+      return
+    }
+    state.phase = 'saved'
+    setStatus('已恢复上一次保存的材料；发送尚未确认，可点「重试发送」。', 'warn', last.manifestPath)
+    updateButtons()
+  }
+
+  /** 宿主消息。 */
+  function onMessage(event) {
+    if (event.source !== window.parent) return
+    const data = event.data
+    if (!data || typeof data !== 'object' || data.source !== hostSource) return
+    if (data.type === 'hello-ack') { onHello(data); return }
+    if (data.type === 'progress') {
+      if (data.stage === 'upload') {
+        state.phase = 'uploading'
+        const total = Number(data.total) || 0
+        const done = Number(data.done) || 0
+        setBar(total ? 'determinate' : 'indeterminate', total ? (done / total) * 100 : 0)
+        setStatus('正在上传图片（' + done + '/' + total + '）…', '')
+      } else if (data.stage === 'save') {
+        state.phase = 'saving'
+        setBar('indeterminate')
+        setStatus('正在把材料保存到当前项目…', '')
+      } else if (data.stage === 'send') {
+        state.phase = 'sending'
+        setBar('indeterminate')
+        setStatus('材料已保存，正在发送到当前会话…', '')
+      }
+      updateButtons()
+      return
+    }
+    if (data.type !== 'result') return
+    clearTimeout(state.submitTimer)
+    state.busy = false
+    setBar(null)
+    if (data.stage === 'accepted' && data.ok) {
+      state.accepted = true
+      state.phase = 'accepted'
+      state.saved = {
+        submissionId: String(data.submissionId || state.submissionId),
+        manifestPath: String(data.manifestPath || (state.saved && state.saved.manifestPath) || ''),
+      }
+      setStatus('材料已被当前会话接收；回到对话继续设计即可。', 'ok', state.saved.manifestPath)
+      updateButtons()
+      return
+    }
+    if (data.stage === 'unconfirmed') {
+      state.phase = 'unconfirmed'
+      state.saved = {
+        submissionId: String(data.submissionId || state.submissionId),
+        manifestPath: String((state.saved && state.saved.manifestPath) || ''),
+      }
+      setStatus(String(data.message || '已发出，但当前宿主没有提供投递确认。'), 'warn', state.saved.manifestPath)
+      updateButtons()
+      return
+    }
+    if (data.stage === 'saved') {
+      state.phase = data.sending ? 'sending' : 'saved'
+      state.saved = {
+        submissionId: String(data.submissionId || state.submissionId),
+        manifestPath: String(data.manifestPath || ''),
+      }
+      if (data.sending) setStatus('材料已保存，正在发送到当前会话…', '')
+      else setStatus('材料已保存；发送尚未确认，可点「重试发送」。', 'warn', state.saved.manifestPath)
+      updateButtons()
+      return
+    }
+    if (data.stage === 'save') {
+      state.phase = state.saved ? 'saved' : 'failed'
+      setStatus('保存失败：' + String(data.message || '未知原因') + '。已填写内容保留，可重试。', 'bad')
+      updateButtons()
+      return
+    }
+    if (data.stage === 'send') {
+      if (data.saved) {
+        state.phase = 'saved'
+        state.saved = {
+          submissionId: String(data.submissionId || (state.saved && state.saved.submissionId) || state.submissionId),
+          manifestPath: String((state.saved && state.saved.manifestPath) || ''),
+        }
+      } else {
+        state.phase = 'failed'
+      }
+      setStatus(String(data.message || '发送失败') + '。材料已保留，可重试。', 'bad', state.saved && state.saved.manifestPath)
+      updateButtons()
+      return
+    }
+    state.phase = 'failed'
+    setStatus(String(data.message || '提交失败，请重试。'), 'bad')
+    updateButtons()
+  }
+
+  /** 向宿主发 hello（没有确认就重试；页面切到前台时再试一次）。 */
+  function hello() {
+    clearTimeout(state.helloTimer)
+    try {
+      window.parent.postMessage({
+        source: pageSource,
+        type: 'hello',
+        token: cfg.token,
+        pagePath: cfg.pagePath,
+        projectRoot: cfg.projectRoot,
+      }, '*')
+    } catch (error) {
+      setConn('bad', '无法连接')
+      setNotice('页面无法向 DSH 发送消息：' + String(error), 'bad')
+      return
+    }
+    state.helloAttempt += 1
+    if (state.helloAttempt === 6) {
+      setConn('bad', '未连接（仍在重试）')
+      setNotice('还没有连上 DSH 宿主：页面可能是在外部浏览器打开，或当前宿主版本不支持自动提交。已填写内容会保留，但提交不可用。', 'bad')
+    }
+    if (state.helloAttempt <= 6) state.helloTimer = setTimeout(hello, 1500)
+    else state.helloTimer = setTimeout(hello, 15000)
+  }
+
+  // 事件绑定
+  widthInput.addEventListener('input', syncCanvas)
+  heightInput.addEventListener('input', syncCanvas)
+  mockInput.addEventListener('change', () => {
+    const file = mockInput.files && mockInput.files[0] ? mockInput.files[0] : null
+    if (file) {
+      const accepted = acceptFiles([file], 1)
+      if (accepted.length) setMock(accepted[0])
+    }
+    mockInput.value = ''
+  })
+  materialInput.addEventListener('change', () => {
+    addMaterials(Array.from(materialInput.files || []))
+    materialInput.value = ''
+  })
+  clearMock.addEventListener('click', () => setMock(null))
+  bindDrop('mockDrop', (files) => {
+    const accepted = acceptFiles(files.slice(0, 1), 1)
+    if (accepted.length) setMock(accepted[0])
+  })
+  bindDrop('materialDrop', addMaterials)
+  submitButton.addEventListener('click', submit)
+  resubmitButton.addEventListener('click', resubmit)
+  window.addEventListener('message', onMessage)
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && state.conn !== 'ok') {
+      state.helloAttempt = 0
+      hello()
+    }
+  })
+
+  // 初始化：config 默认值、事实、事件、hello
+  renderFacts()
+  titleInput.value = cfg.title || ''
+  widthInput.value = cfg.screen ? cfg.screen.w : ''
+  heightInput.value = cfg.screen ? cfg.screen.h : ''
+  syncCanvas()
+  setConn('connecting', '正在连接 DSH…')
+  setStatus('材料只保存在当前项目；提交后会生成材料清单并发送到当前会话。')
+  hello()
+})()
+</script>
+<script>
+(() => {
+  'use strict'
+  const cfg = JSON.parse(document.getElementById('dsh-ui-intake-config').textContent)
+  if (!cfg.endpoint) return
+  const endpoint = String(cfg.endpoint).replace(/\/+$/u, '')
+  const token = String(cfg.token || '')
+  const apiBase = endpoint + '/t/' + encodeURIComponent(token)
+  const hostSource = 'edrv-ui-intake-host'
+  const pageSource = 'edrv-ui-intake'
+  const fieldIds = ['title', 'width', 'height', 'notes', 'targetPrefab', 'mockPath', 'assetPaths', 'sprites']
+  const maxFiles = Number(cfg.limits?.maxFiles) || 50
+  const maxFileBytes = Number(cfg.limits?.maxFileBytes) || 8 * 1024 * 1024
+  const maxTotalBytes = Number(cfg.limits?.maxTotalBytes) || 32 * 1024 * 1024
+  const mediaTypes = Array.isArray(cfg.limits?.mediaTypes) && cfg.limits.mediaTypes.length
+    ? cfg.limits.mediaTypes : ['image/png', 'image/jpeg', 'image/webp', 'image/gif']
+  const form = document.querySelector('main') || document.body
+  const mockInput = document.getElementById('mockInput')
+  const materialInput = document.getElementById('materialInput')
+  const submit = document.getElementById('submit')
+  const saveDraftButton = document.getElementById('saveDraft')
+  const retryRestore = document.getElementById('retryRestore')
+  const retrySend = document.getElementById('retrySend')
+  const resubmit = document.getElementById('resubmit')
+  const status = document.getElementById('status')
+  const saveStatus = document.getElementById('saveStatus')
+  const sendStatus = document.getElementById('sendStatus')
+  const draftStatus = document.getElementById('draftStatus')
+  const statusRows = document.getElementById('statusRows')
+  const resultBox = document.getElementById('result')
+  const resultNote = document.getElementById('resultNote')
+  const reply = document.getElementById('reply')
+  const copy = document.getElementById('copy')
+  const connText = document.getElementById('connText')
+  const connBox = document.getElementById('conn')
+  const notice = document.getElementById('notice')
+  const projectLine = document.getElementById('projectLine')
+  const facts = document.getElementById('facts')
+  const mockPreview = document.getElementById('mockPreview')
+  const empty = document.getElementById('empty')
+  const clearMockButton = document.getElementById('clearMock')
+  const filesBox = document.getElementById('files')
+  const filesEmpty = document.getElementById('filesEmpty')
+  const materialCount = document.getElementById('materialCount')
+  const baseRevision = Date.now() * 1000
+  let textRevision = baseRevision
+  let assetRevision = baseRevision
+  let mockFile = null
+  let materialFiles = []
+  let mockUrl = ''
+  let thumbUrls = []
+  let restoring = true
+  let submitting = false
+  let dirtyText = false
+  let dirtyAssets = false
+  let flushPromise = null
+  let saveError = null
+  let lastDraft = null
+  let lastResult = null
+  let submitPhase = 'idle'
+  let submissionId = ''
+  let hostReady = false
+  let hostTimer = null
+  let helloAttempt = 0
+  let helloTimer = null
+  let editTimer = null
+
+  /** 取元素。 */
+  function byId(id) { return document.getElementById(id) }
+  /** 设置总状态。 */
+  function setStatus(message, bad) {
+    status.textContent = message
+    status.dataset.error = bad ? '1' : ''
+  }
+  /** 设置材料保存状态。 */
+  function setSave(message, kind) {
+    saveStatus.textContent = message
+    saveStatus.className = kind === 'ok' ? 'ok' : kind === 'bad' ? 'bad' : ''
+  }
+  /** 设置对话状态。 */
+  function setSend(message, kind) {
+    sendStatus.textContent = message
+    sendStatus.className = kind === 'ok' ? 'ok' : kind === 'bad' ? 'bad' : ''
+  }
+  /** 设置草稿状态。 */
+  function setDraft(message, kind) {
+    draftStatus.textContent = message
+    draftStatus.className = kind === 'ok' ? 'ok' : kind === 'bad' ? 'bad' : ''
+  }
+  /** 设置连接状态。 */
+  function setConn(kind, message) {
+    connText.textContent = message
+    connBox.className = 'conn' + (kind === 'ok' ? ' ok' : kind === 'bad' ? ' bad' : '')
+  }
+  /** 读表单字段。 */
+  function fields() {
+    const out = {}
+    for (const id of fieldIds) out[id] = byId(id).value
+    return out
+  }
+  /** 当前选择的图片。 */
+  function allFiles() {
+    return [...(mockFile ? [mockFile] : []), ...materialFiles]
+  }
+  /** 校验一组图片。 */
+  function validFiles(list) {
+    if (list.some((file) => !mediaTypes.includes(file.type))) {
+      setStatus('请选择 PNG、JPG、WebP 或 GIF 图片。', true)
+      return false
+    }
+    if (list.some((file) => file.size > maxFileBytes)) {
+      setStatus('每张图片最多 ' + Math.round(maxFileBytes / 1024 / 1024) + ' MB；大图可以改填本机路径。', true)
+      return false
+    }
+    if (list.length > maxFiles || list.reduce((sum, file) => sum + file.size, 0) > maxTotalBytes) {
+      setStatus('材料过多，请减少图片，或填写本机素材目录。', true)
+      return false
+    }
+    return true
+  }
+  /** 把 File 列表写回 input，便于浏览器文件选择显示。 */
+  function syncFiles(input, list) {
+    try {
+      const transfer = new DataTransfer()
+      for (const file of list) transfer.items.add(file)
+      input.files = transfer.files
+    } catch {
+      // 某些沙箱不允许设置 files；页面仍用内存 File 提交，不影响保存。
+    }
+  }
+  /** 文字/尺寸修改：版本号前进，旧结果失效。 */
+  function bumpText() {
+    textRevision = Math.max(textRevision + 1, Date.now() * 1000)
+    invalidated()
+    if (restoring || submitting) return
+    clearTimeout(editTimer)
+    editTimer = setTimeout(() => scheduleSave(false), 250)
+  }
+  /** 图片修改：版本号前进，旧结果失效。 */
+  function bumpAssets() {
+    assetRevision = Math.max(assetRevision + 1, Date.now() * 1000)
+    invalidated()
+    if (!restoring && !submitting) scheduleSave(true)
+  }
+  /** 内容改动后，旧提交结果不能继续显示。 */
+  function invalidated() {
+    if (submitPhase === 'idle') return
+    submitPhase = 'idle'
+    submissionId = ''
+    hideResult()
+    resubmit.hidden = true
+    submit.disabled = false
+    setSave('材料：有未保存修改', '')
+    setSend('对话：尚未提交', '')
+    setStatus('内容已修改，上次提交结果已失效；重新提交后会生成新的材料清单。')
+  }
+  /** 显示继续指令。 */
+  function showResult(result) {
+    if (!result || !result.text) return
+    lastResult = result
+    reply.value = result.text
+    resultNote.textContent = '材料已保存到项目：' + (result.manifestPath || result.requestPath || '') + '。没有自动确认对话时，复制下面的指令回到当前对话即可。'
+    resultBox.hidden = false
+  }
+  /** 隐藏旧结果。 */
+  function hideResult() {
+    lastResult = null
+    resultBox.hidden = true
+    reply.value = ''
+    resultNote.textContent = ''
+    retrySend.hidden = true
+  }
+  /** 兼容不支持 randomUUID 的宿主。 */
+  function newSubmissionId() {
+    if (globalThis.crypto && typeof globalThis.crypto.randomUUID === 'function') return globalThis.crypto.randomUUID()
+    return 'sub-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10)
+  }
+  /** 带超时的 JSON 请求。 */
+  async function api(route, options = {}) {
+    const control = new AbortController()
+    const timer = setTimeout(() => control.abort(), 30000)
+    try {
+      const response = await fetch(apiBase + route, { ...options, credentials: 'omit', signal: control.signal })
+      let data = null
+      try { data = await response.json() } catch { data = null }
+      if (!response.ok) throw new Error((data && data.message) || ('本机材料服务返回 HTTP ' + response.status))
+      if (!data || data.ok !== true) throw new Error((data && data.message) || '本机材料服务返回错误')
+      return data
+    } catch (error) {
+      if (error && error.name === 'AbortError') throw new Error('请求超时（30 秒）；材料可能已保存，请重试或检查服务')
+      throw error
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+  /** 保存草稿；文字与图片的版本分开。 */
+  async function saveDraft(withFiles) {
+    const payload = new FormData()
+    const current = fields()
+    for (const id of fieldIds) payload.append(id, current[id])
+    payload.append('textRevision', String(textRevision))
+    payload.append('assetRevision', String(assetRevision))
+    payload.append('replaceAssets', withFiles ? '1' : '0')
+    if (withFiles) {
+      if (mockFile) payload.append('mock', mockFile, mockFile.name)
+      for (const file of materialFiles) payload.append('materials', file, file.name)
+    }
+    setDraft(withFiles ? '草稿保存中：正在上传图片…' : '草稿保存中：文字…')
+    try {
+      const data = await api('/draft', { method: 'POST', body: payload })
+      lastDraft = data.draft
+      saveError = null
+      if (withFiles) {
+        if (dirtyAssets) setDraft('上一批图片已保存；还有新图片在保存，请稍候', '')
+        else setDraft('草稿已保存：图片已落盘，可以离开本页', 'ok')
+      } else if (dirtyAssets) setDraft('文字已保存；图片仍在保存，请稍候', '')
+      else setDraft('草稿已保存到项目', 'ok')
+    } catch (error) {
+      saveError = error
+      dirtyText = true
+      if (withFiles) dirtyAssets = true
+      setDraft('草稿未保存：' + error.message + '；内容保留，可重试', 'bad')
+      throw error
+    }
+  }
+  /** 串行保存队列，旧响应不覆盖新内容。 */
+  function scheduleSave(withFiles) {
+    if (restoring || submitting) return
+    dirtyText = true
+    if (withFiles) dirtyAssets = true
+    if (flushPromise) return
+    flushPromise = (async () => {
+      try {
+        while ((dirtyText || dirtyAssets) && !restoring) {
+          const withFilesNow = dirtyAssets
+          dirtyAssets = false
+          dirtyText = false
+          await saveDraft(withFilesNow)
+        }
+        if (!saveError) setDraft('草稿已保存到项目：文字和图片都已落盘，可以离开', 'ok')
+      } catch {
+        // 错误已在 saveDraft 中显示；保留 dirty 标记供手动重试。
+      } finally {
+        flushPromise = null
+      }
+    })()
+  }
+  /** 手动保存。 */
+  async function saveNow() {
+    if (restoring || submitting) return
+    if (!dirtyText && !dirtyAssets) {
+      setStatus('没有需要保存的修改。')
+      return
+    }
+    scheduleSave(dirtyAssets)
+    if (flushPromise) await flushPromise
+    if (saveError) setStatus('草稿保存失败：' + saveError.message + '。材料仍保留在本页，可重试。', true)
+    else setStatus('草稿已保存到项目。')
+  }
+  /** 预览效果图。 */
+  function renderMock() {
+    if (mockUrl) URL.revokeObjectURL(mockUrl)
+    mockUrl = ''
+    if (mockFile) {
+      mockUrl = URL.createObjectURL(mockFile)
+      mockPreview.src = mockUrl
+      mockPreview.hidden = false
+      empty.hidden = true
+      clearMockButton.hidden = false
+    } else {
+      mockPreview.removeAttribute('src')
+      mockPreview.hidden = true
+      empty.hidden = false
+      clearMockButton.hidden = true
+    }
+  }
+  /** 渲染素材缩略图。 */
+  function renderMaterials() {
+    for (const url of thumbUrls) URL.revokeObjectURL(url)
+    thumbUrls = []
+    filesBox.replaceChildren()
+    materialCount.textContent = materialFiles.length + ' 张'
+    filesEmpty.hidden = materialFiles.length > 0
+    for (const file of materialFiles) {
+      const card = document.createElement('div')
+      card.className = 'filecard'
+      const image = document.createElement('img')
+      image.alt = ''
+      image.src = URL.createObjectURL(file)
+      thumbUrls.push(image.src)
+      const meta = document.createElement('div')
+      meta.className = 'meta'
+      const name = document.createElement('div')
+      name.className = 'name'
+      name.textContent = file.name
+      const size = document.createElement('div')
+      size.className = 'size'
+      size.textContent = Math.max(1, Math.round(file.size / 1024)) + ' KB'
+      meta.append(name, size)
+      const remove = document.createElement('button')
+      remove.type = 'button'
+      remove.className = 'remove'
+      remove.textContent = '×'
+      remove.setAttribute('aria-label', '移除 ' + file.name)
+      remove.addEventListener('click', () => {
+        materialFiles = materialFiles.filter((item) => item !== file)
+        syncFiles(materialInput, materialFiles)
+        renderMaterials()
+        bumpAssets()
+      })
+      card.append(image, meta, remove)
+      filesBox.append(card)
+    }
+  }
+  /** 设置效果图。 */
+  function setMock(files) {
+    const selected = files.slice(0, 1)
+    if (selected.length && !validFiles([...selected, ...materialFiles])) return
+    mockFile = selected[0] || null
+    syncFiles(mockInput, mockFile ? [mockFile] : [])
+    renderMock()
+    bumpAssets()
+  }
+  /** 添加素材。 */
+  function addMaterials(files) {
+    const combined = [...materialFiles]
+    for (const file of files) {
+      if (!combined.some((item) => item.name === file.name && item.size === file.size)) combined.push(file)
+    }
+    if (!validFiles([...(mockFile ? [mockFile] : []), ...combined])) return
+    materialFiles = combined
+    syncFiles(materialInput, materialFiles)
+    renderMaterials()
+    bumpAssets()
+  }
+  /** 绑定拖放。 */
+  function bindDrop(id, receive) {
+    const zone = byId(id)
+    zone.addEventListener('dragover', (event) => { event.preventDefault(); zone.classList.add('over') })
+    zone.addEventListener('dragleave', () => zone.classList.remove('over'))
+    zone.addEventListener('drop', (event) => {
+      event.preventDefault()
+      zone.classList.remove('over')
+      receive(Array.from(event.dataTransfer.files))
+    })
+  }
+  /** 从当前草稿恢复。 */
+  async function restore() {
+    restoring = true
+    form.inert = true
+    submit.disabled = true
+    saveDraftButton.disabled = true
+    retryRestore.hidden = true
+    statusRows.hidden = false
+    setStatus('正在读取项目草稿…')
+    setDraft('正在读取项目草稿…')
+    try {
+      const data = await api('/draft')
+      const draft = data.draft || {}
+      const hasDraft = Boolean(draft.textRevision || draft.assetRevision || draft.submitted)
+      if (hasDraft && draft.fields) {
+        for (const id of fieldIds) if (Object.prototype.hasOwnProperty.call(draft.fields, id)) byId(id).value = draft.fields[id]
+      }
+      if (!byId('title').value) byId('title').value = cfg.title || ''
+      if (!byId('width').value) byId('width').value = cfg.screen ? cfg.screen.w : ''
+      if (!byId('height').value) byId('height').value = cfg.screen ? cfg.screen.h : ''
+      if (!byId('targetPrefab').value) byId('targetPrefab').value = cfg.targetPrefab || ''
+      const assets = Array.isArray(draft.assets) ? draft.assets : []
+      const restored = []
+      for (const asset of assets) {
+        const response = await fetch(apiBase + '/asset/' + encodeURIComponent(asset.file), { credentials: 'omit' })
+        if (!response.ok) throw new Error('无法恢复图片：' + (asset.originalName || asset.file))
+        const blob = await response.blob()
+        restored.push({ asset, file: new File([blob], asset.originalName || 'image.png', { type: asset.mediaType || blob.type || 'image/png' }) })
+      }
+      mockFile = restored.find((item) => item.asset.role === 'mock')?.file || null
+      materialFiles = restored.filter((item) => item.asset.role !== 'mock').map((item) => item.file)
+      syncFiles(mockInput, mockFile ? [mockFile] : [])
+      syncFiles(materialInput, materialFiles)
+      renderMock()
+      renderMaterials()
+      textRevision = Math.max(baseRevision, Number(draft.textRevision) || 0, Number(draft.assetRevision) || 0)
+      assetRevision = textRevision
+      restoring = false
+      form.inert = false
+      submit.disabled = false
+      saveDraftButton.disabled = false
+      if (draft.submitted && draft.submitted.text) {
+        submitPhase = 'saved'
+        submissionId = draft.submitted.submissionId || ''
+        showResult(draft.submitted)
+        setSave('材料：已保存', 'ok')
+        setSend(hostReady ? '对话：上次已保存，可重新发送' : '对话：未连接', hostReady ? '' : 'bad')
+        setStatus('已恢复上次保存的材料；修改内容后可重新提交。')
+        resubmit.hidden = false
+      } else {
+        setSave('材料：未保存', '')
+        setSend('对话：未提交', '')
+        setStatus(hasDraft ? '已恢复本机草稿，包括已选图片。' : '填写内容会自动保存到项目。')
+      }
+      setDraft(hasDraft ? '已恢复草稿；文字和图片都已恢复' : '填写内容会自动保存到项目', 'ok')
+    } catch (error) {
+      restoring = true
+      form.inert = true
+      submit.disabled = true
+      saveDraftButton.disabled = true
+      retryRestore.hidden = false
+      setSave('材料：未保存', 'bad')
+      setDraft('草稿读取失败：' + error.message, 'bad')
+      setStatus('草稿读取失败：' + error.message + '。为避免空白内容覆盖原草稿，提交已禁用；恢复服务后点「重试读取草稿」。', true)
+    }
+  }
+  /** 发送“材料已保存”通知给 DSH；没有宿主时只显示复制入口。 */
+  function sendSaved(result) {
+    if (!result || !result.submissionId) return
+    if (!hostReady) {
+      setSend('对话：未连接', 'bad')
+      setStatus('材料已保存；当前页面没有对话连接，请复制下方继续指令回到当前对话。')
+      retrySend.hidden = true
+      return
+    }
+    clearTimeout(hostTimer)
+    setSend('对话：正在发送给对话…')
+    setStatus('材料已保存，正在发送给当前对话…')
+    retrySend.hidden = true
+    try {
+      window.parent.postMessage({
+        source: pageSource,
+        type: 'saved',
+        token,
+        pagePath: cfg.pagePath,
+        projectRoot: cfg.projectRoot,
+        submissionId: result.submissionId,
+      }, '*')
+    } catch {
+      setSend('对话：发送失败', 'bad')
+      setStatus('材料已保存，但发送给对话失败；请复制继续指令。', true)
+      return
+    }
+    hostTimer = setTimeout(() => {
+      if (submitPhase !== 'saved') return
+      setSend('对话：未确认', 'bad')
+      setStatus('材料已保存，但当前对话未确认收到；请复制继续指令或点「发送到对话」。', true)
+      retrySend.hidden = false
+    }, 10000)
+  }
+  /** 提交：先保存草稿，再用提交编号生成正式材料。 */
+  async function onSubmit() {
+    if (restoring || submitting) return
+    const title = byId('title').value.trim()
+    const width = Number(byId('width').value)
+    const height = Number(byId('height').value)
+    if (!title) { setStatus('请填写界面名称。', true); byId('title').focus(); return }
+    if (!Number.isInteger(width) || !Number.isInteger(height) || width < 100 || width > 10000 || height < 100 || height > 10000) {
+      setStatus('设计尺寸必须是 100~10000 之间的整数。', true); return
+    }
+    if (!validFiles(allFiles())) return
+    submitting = true
+    submit.disabled = true
+    saveDraftButton.disabled = true
+    form.inert = true
+    setSave('材料：保存中…', '')
+    setSend('对话：等待提交', '')
+    setStatus('正在保存材料，请保留本页；大图保存完成前不要离开。')
+    try {
+      if (dirtyAssets) scheduleSave(true)
+      else if (dirtyText) scheduleSave(false)
+      if (flushPromise) await flushPromise
+      if (saveError) throw new Error('草稿保存失败：' + saveError.message)
+      if (dirtyText || dirtyAssets) throw new Error('还有内容未保存完成，请稍候重试')
+      submissionId = submissionId || newSubmissionId()
+      const payload = new FormData()
+      const current = fields()
+      for (const id of fieldIds) payload.append(id, current[id])
+      payload.append('textRevision', String(textRevision))
+      payload.append('assetRevision', String(assetRevision))
+      payload.append('submissionId', submissionId)
+      const data = await api('/submit', { method: 'POST', body: payload })
+      submitPhase = 'saved'
+      resubmit.hidden = false
+      setSave('材料：已保存', 'ok')
+      showResult(data)
+      setStatus('材料已保存到项目。')
+      if (hostReady) sendSaved(data)
+      else {
+        setSend('对话：未连接', 'bad')
+        setStatus('材料已保存；当前页面没有对话连接，请复制下方继续指令回到当前对话。')
+      }
+    } catch (error) {
+      if (String(error.message).includes('刷新草稿')) {
+        setStatus('页面草稿已被更新，正在重新读取…')
+        await restore()
+        setStatus('草稿已更新；请确认内容后重新提交。', true)
+      } else {
+        submitPhase = 'failed'
+        setSave('材料：未保存', 'bad')
+        setStatus('提交未成功：' + error.message + '。材料仍保留在本页，可重试。', true)
+        submit.disabled = false
+      }
+    } finally {
+      submitting = false
+      form.inert = false
+      saveDraftButton.disabled = false
+      if (submitPhase !== 'saved' && submitPhase !== 'accepted') submit.disabled = false
+    }
+  }
+  /** 复制继续指令。 */
+  async function copyReply() {
+    reply.focus()
+    reply.select()
+    try {
+      await navigator.clipboard.writeText(reply.value)
+      setStatus('继续指令已复制，粘贴到当前对话即可。')
+    } catch {
+      setStatus('已选中继续指令，请按 Ctrl+C 复制。')
+    }
+  }
+  /** DSH 宿主消息。 */
+  function onHostMessage(event) {
+    if (event.source !== window.parent || window.parent === window) return
+    const message = event.data
+    if (!message || message.source !== hostSource) return
+    if (message.submissionId && submissionId && message.submissionId !== submissionId) return
+    if (message.type === 'hello-ack') {
+      if (message.ok === true) {
+        hostReady = true
+        setConn('ok', '已连接 DSH')
+        if (submitPhase === 'saved') setSend('对话：已连接，可发送', '')
+      } else {
+        setConn('connecting', '正在连接 DSH…')
+      }
+      return
+    }
+    if (message.type === 'progress' && message.stage === 'send') {
+      setSend('对话：正在发送给对话…')
+      return
+    }
+    if (message.type !== 'result') return
+    if (!['saved', 'accepted', 'failed'].includes(submitPhase)) return
+    clearTimeout(hostTimer)
+    if (message.ok === true && message.stage === 'accepted') {
+      submitPhase = 'accepted'
+      setSend('对话：已确认收到', 'ok')
+      setStatus('对话已确认收到材料；可以继续设计。')
+      retrySend.hidden = true
+      return
+    }
+    if (message.ok === true && message.stage === 'unconfirmed') {
+      setSend('对话：已发出，未确认', 'bad')
+      setStatus(message.message || '材料已保存并发出，但宿主没有提供投递确认；请复制继续指令。', true)
+      retrySend.hidden = !hostReady
+      return
+    }
+    if (message.ok === false) {
+      setSend('对话：发送失败', 'bad')
+      setStatus(message.message || '材料已保存，但发送给对话失败；请复制继续指令。', true)
+      retrySend.hidden = !hostReady
+    }
+  }
+  /** 向 DSH 问好；没有宿主不影响本机保存。 */
+  function hello() {
+    if (window.parent === window) {
+      setConn('bad', '未连接 DSH（本机保存可用）')
+      return
+    }
+    try {
+      window.parent.postMessage({ source: pageSource, type: 'hello', token, pagePath: cfg.pagePath, projectRoot: cfg.projectRoot }, '*')
+    } catch {
+      return
+    }
+    helloAttempt += 1
+    if (helloAttempt === 6 && !hostReady) setConn('bad', '未连接 DSH（本机保存可用）')
+    helloTimer = setTimeout(hello, helloAttempt <= 6 ? 1500 : 15000)
+  }
+  /** 初始化页面。 */
+  function init() {
+    projectLine.textContent = cfg.projectRoot + ' · ' + cfg.slug + ' · ' + (cfg.pagePath || '')
+    facts.replaceChildren()
+    const addFact = (label, value) => {
+      const row = document.createElement('span')
+      row.className = 'fact'
+      const key = document.createElement('span')
+      key.textContent = label + ' '
+      const text = document.createElement('b')
+      text.textContent = value
+      row.append(key, text)
+      facts.append(row)
+    }
+    addFact('UI 体系', cfg.ui?.system || 'other')
+    addFact('绑定', cfg.ui?.bindStyle || 'componentName')
+    addFact('素材目录', cfg.assets?.inProject || '未配置')
+    notice.textContent = '本机材料服务模式：草稿和正式材料保存到当前项目的 intake/ 目录；没有 DSH 对话连接时，提交后复制继续指令回到对话。'
+    statusRows.hidden = false
+    saveDraftButton.hidden = false
+    setConn('connecting', '正在连接 DSH…')
+    setSave('材料：未保存', '')
+    setSend('对话：连接中', '')
+    setDraft('草稿：准备中', '')
+    bindDrop('mockDrop', (files) => setMock(files))
+    bindDrop('materialDrop', (files) => addMaterials(files))
+    mockInput.addEventListener('change', () => setMock(Array.from(mockInput.files || [])))
+    materialInput.addEventListener('change', () => {
+      const files = Array.from(materialInput.files || [])
+      if (files.length) addMaterials(files)
+    })
+    clearMockButton.addEventListener('click', () => setMock([]))
+    for (const id of fieldIds) byId(id).addEventListener('input', bumpText)
+    submit.addEventListener('click', onSubmit)
+    const formElement = document.getElementById('intake') || document.querySelector('form')
+    if (formElement) formElement.addEventListener('submit', (event) => { event.preventDefault(); onSubmit() })
+    saveDraftButton.addEventListener('click', saveNow)
+    retryRestore.addEventListener('click', restore)
+    retrySend.addEventListener('click', () => { if (lastResult) sendSaved(lastResult) })
+    resubmit.addEventListener('click', () => {
+      if (submitting) return
+      submitPhase = 'idle'
+      submissionId = ''
+      hideResult()
+      setSave('材料：待提交', '')
+      setSend('对话：等待提交', '')
+      onSubmit()
+    })
+    copy.addEventListener('click', copyReply)
+    window.addEventListener('message', onHostMessage)
+    window.addEventListener('beforeunload', (event) => {
+      if (restoring || submitting || flushPromise || dirtyText || dirtyAssets) {
+        event.preventDefault()
+        event.returnValue = ''
+      }
+    })
+    restore().then(() => {
+      setSave('材料：未保存', '')
+      hello()
+    })
+  }
+  init()
+})()
+</script>
+</body>
+</html>

@@ -28,6 +28,7 @@ import { startOpenInbox } from './openInbox.js'
 import { ensureActiveBridge } from './openBridge.js'
 import { installPlanTool } from './svnPlanTool.js'
 import { installNoteTool } from './pending/noteTool.js'
+import { installUiIntakeTool } from './uiIntakeTool.js'
 import { clearNotes } from './pending/notes.js'
 import { disposeIndex } from './treeIndex.js'
 import { sweepTreeCache } from './paths.js'
@@ -214,6 +215,8 @@ export async function apply(ctx: Ctx, config?: unknown): Promise<void> {
   await installSvnTools(ctx, runtime.svnRpc.api)
   // 只读编辑说明：模型可以给文件留一句「为什么改」，只展示、不参与差异判定
   await installNoteTool(ctx, (session) => cwdOfSession(ctx, session as never))
+  // UI 材料页：`/ui-builder 创建ui` 的默认入口，生成页面后由客户端在官方 HTML 预览布打开
+  await installUiIntakeTool(ctx, (session) => cwdOfSession(ctx, session as never))
   ctx.effect(mountInbox, 'vscode-mode:open-inbox')
   ctx.effect(() => shellMenuLifecycle(ctx), 'vscode-mode:integration')
   /** @author ddj 2026年10月12号 @returns Active-profile bridge disposer; failures never block boot. */

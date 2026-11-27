@@ -618,6 +618,14 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
   npm 实包与 Release asset SHA256 同为 `0946d6ec…`，`lib/index.js`+`lib/client.js` 入口齐全。
   未实机复验：HTML 预览/计划页/答复「回复并执行」、SVN 提交对话框；按用户要求记录缺口后发布。
 
+## HTML 预览自动打开（2026-11-26 实测）
+
+插件自己的 file claim 会接走 `dsh-resource://file/**`，所以 `ctx.sidebarRight.openResource` 传**绝对路径**时会被路由回插件编辑器显示源码。要打开官方 HTML 预览：
+
+1. 等 `hasOfficialHtmlPreview()` 为真（官方 documentpreviews 的 html body 可能晚于工具结果注册）；未就绪时用 lifecycle schedule 每秒重试，别立刻回退源码。
+2. 把文件折算成**会话相对路径**，用 `buildFileAddress(relativePath, sessionId)` 生成 session 域地址（官方 text 类型的 `canOpen` 只接受 session scope）。
+3. `openResource(address, { kind: 'text' })` 强制官方 text 页；documentpreviews 会按扩展名选 HTML body。传绝对地址或省略 kind 都会回到插件认领。
+
 ## 差异审查（DiffBox / 旁车）设计口径
 
 - 2026-10-28 坑（**两套差异栏互相冒充，v0.20.4 修**）：插件并存官方栏与侧车栏，`DiffBox.ts:69` `if (props.official) return OfficialDiffBar`，

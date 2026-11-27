@@ -1,0 +1,8 @@
+{
+  "maxFiles": 50,
+  "maxFileBytes": 8388608,
+  "maxTotalBytes": 33554432,
+  "maxPixels": 40000000,
+  "maxSide": 10000,
+  "mediaTypes": ["image/png", "image/jpeg", "image/webp", "image/gif"]
+}

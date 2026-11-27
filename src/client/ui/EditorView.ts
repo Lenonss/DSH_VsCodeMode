@@ -102,6 +102,7 @@ import { chordOf, useKeybindingsVersion } from '../keybindings.js'
 import { getSidebarMinWidth } from '../sidebarMin.js'
 import { navHistoryFor } from '../navHistory.js'
 import { navStateLoad, navStateSave } from '../state/navStateCache.js'
+import { applyRecentOpen, markRecentOpen, recentOpenOf } from '../state/recentOpen.js'
 import { statusOfAdd } from '../addToConversation.js'
 import { setSearchScope, setSearchSeed } from '../searchSeed.js'
 import { CACHE_KEY } from '../paths.js'
@@ -1735,6 +1736,9 @@ export function EditorView(props) {
     // G9：入口统一归一为工作区相对路径（差异栏/对话链接/LSP 跳转等都经此事件）
     const normalized = tabPath(p)
     if (!normalized) return
+    // 记为「最近打开」：随后触发的界面状态恢复要把这条算进去，否则滞后的存档会把刚点开的
+    // 文件顶掉（2026-11-26 实测：链接打开 BootText.cs 后立刻被恢复成 GameInitState.cs）
+    markRecentOpen(scope, normalized)
     if (e?.detail?.univer === true && (!e.detail.sessionId || e.detail.sessionId === sessionId)) {
       flushSave()
       setOfficeExplicit((previous) => new Set([...previous, normalized]))
@@ -1865,15 +1869,19 @@ export function EditorView(props) {
     setDiskActive(null)
     setContent(null)
     setContentPath(null)
+    // 恢复要把「刚发生的打开」算进来：存档滞后于事件，整份塞回会把刚点开的文件顶掉
+    //（2026-11-26 实测：链接打开 BootText.cs 后，恢复又把它换回 GameInitState.cs）
+    const pending = recentOpenOf(scope)
     try {
       const savedLayout = parseLayout(localStorage.getItem(CACHE_KEY.editorLayout + String(scope)), cwd)
       if (savedLayout) {
         const restored = savedLayout.groups.flatMap((group) => group.tabs)
         const selected = savedLayout.groups.find((group) => group.id === savedLayout.focused)?.active ?? null
+        const merged = applyRecentOpen(restored, selected, pending)
         setWorkbench(savedLayout)
-        setTabs(restored)
+        setTabs(merged.tabs)
         setPlanActive(null)
-        setDiskActive(selected)
+        setDiskActive(merged.active)
         return
       }
       setWorkbench(createLayout())
@@ -1895,16 +1903,28 @@ export function EditorView(props) {
           const plan = evictPlan(restored, limit, { active: activePath, used: {} })
           const dropped = new Set(plan)
           const kept = plan.length ? restored.filter((tab) => !dropped.has(tab.path)) : restored
-          setTabs(kept)
-          setActive(kept.some((tab) => tab.path === activePath) ? activePath : (kept[0]?.path ?? null))
+          const baseActive = kept.some((tab) => tab.path === activePath) ? activePath : (kept[0]?.path ?? null)
+          const merged = applyRecentOpen(kept, baseActive, pending)
+          setTabs(merged.tabs)
+          setActive(merged.active)
           reportUiStateEvent(
-            '页签恢复（scope=' + String(scope) + '）：存档 ' + restored.length + ' 个、保留 ' + kept.length
-            + ' 个、活动 ' + String(activePath),
+            '页签恢复（scope=' + String(scope) + '）：存档 ' + restored.length + ' 个、保留 ' + merged.tabs.length
+            + ' 个、活动 ' + String(merged.active),
           )
         } else {
+          // 存档归一化后没有页签：仍要保住刚发生的打开，别把编辑器清成空白
+          if (pending) {
+            setTabs(insertTab([], pending))
+            setActive(pending)
+          }
           reportUiStateEvent('页签恢复（scope=' + String(scope) + '）：存档非空但归一化后为 0 个')
         }
       } else {
+        // 无存档时同理：本次挂载期间被事件点开的文件就是唯一页签
+        if (pending) {
+          setTabs(insertTab([], pending))
+          setActive(pending)
+        }
         reportUiStateEvent('页签恢复（scope=' + String(scope) + '）：localStorage 无存档')
       }
     } catch (e) {

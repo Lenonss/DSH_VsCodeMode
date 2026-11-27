@@ -16,7 +16,7 @@ const SKILL_ROOT = resolve(HERE, '..')
 const CSS_DIR = join(HERE, 'css')
 const JS_DIR = join(HERE, 'js')
 
-export const RUNTIME_VERSION = '1.0.0'
+export const RUNTIME_VERSION = '1.2.0'
 const KINDS = new Set(['group', 'text', 'image', 'sprite', 'button', 'list', 'prefab'])
 const MIME = {
   '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
