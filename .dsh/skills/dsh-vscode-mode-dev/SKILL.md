@@ -5,8 +5,22 @@ description: dsh-vscode-mode 插件开发/发布强制经验集——发布必�
 
 # dsh-vscode-mode 开发/发布经验集（自我更新型技能）
 
-> updated: 2026-11-26 · 维护者：ddj（AI 会话按文末协议更新，保持精炼、去重）
+> updated: 2026-11-27 · 维护者：ddj（AI 会话按文末协议更新，保持精炼、去重）
 > **发布时先读「发布流程」与「失败恢复」**；下方实录是历史证据，不授权当前重跑发布、改 tag 或部署。冲突旧口径以更新后的规则为准。
+- 2026-11-27 实录（v0.44.0：UI 材料页 `ui_builder_intake` + 对话链接打开被界面状态恢复顶掉的修复；
+  基线 v0.43.0 @ `3f5ca84`，发布提交 `c72a4f7`，32 文件 / 7,027+）。三门：typecheck 0 / vitest
+  **375 文件（373 通过 + 2 跳过）、4616 用例（4594 通过 / 22 跳过）31.23s** / `node --test` 9/9 /
+  build `index.js` 1,674,841 B + `client.js` 1,387,909 B。main CI `45928557239` 绿；Release
+  `45928566907` 前 14 步全绿、**Verify 30/30 挂（15 分钟窗口内 registry 一直 404）**：publish 接受
+  02:31:57Z、registry 可读 03:29:58Z（**约 58 分钟**）→ 按「接受后待公开」处理，未重跑、未重打 tag。
+  四向闭环：`0.44.0` `gitHead=c72a4f7`、latest=0.44.0、shasum `08397dfb…`、SRI 与实包 sha512 一致、
+  **npm 实包与 GitHub asset sha256 同为 `d9505711…`（17,958,448 B / 832 条）**，`lib/index.js` +
+  `lib/client.js` + `src/client/state/recentOpen.ts` + `skills/…/runtime/intake/server.mjs` 齐全。
+  **新坑（等发布时别用会「假等待」的工具）**：`gh run watch` 在非 TTY 下不刷新输出，`job_output`
+  的 wait 在无输出时立即返回（看着像等了十分钟，实际一秒没等）→ 进度改用
+  `gh api …/runs/<id>/jobs --jq '.jobs[0].steps[]'` + `Start-Sleep` 有界轮询；运行中取 job 日志
+  会得 `BlobNotFound`，只能等运行结束后 `gh run view --log`。**Verify 15 分钟窗口对慢公开不够**，
+  失败不等于未上架，按 60 分钟预算独立核验。
 - 2026-11-26 实录（v0.40.0：`/test-check` 测试验收模式 + 侧栏「测试验收」面板；基线 v0.39.0 @ `aee6722`，
   发布提交 `64de5b4`，45 文件 / 29 新增）。本地三门：typecheck 0 / vitest **366 文件通过 + 2 跳过、
   4539 通过 / 22 跳过（34.83s）** / `node --test` 9/9 / build `index.js` 1,604,385 B + `client.js` 1,366,657 B。
